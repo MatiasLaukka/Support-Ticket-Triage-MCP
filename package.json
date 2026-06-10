@@ -4,11 +4,13 @@
   "private": true,
   "type": "module",
   "engines": {
-    "node": ">=20"
+    "node": ">=20.19.0"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
-    "pretest": "npm run build",
+    "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
+    "build": "npm run clean && tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json",
+    "pretest": "npm run build && npm run typecheck",
     "test": "vitest run --dir test",
     "test:watch": "vitest --dir test",
     "generate:fixtures": "node dist/scripts/generate-fixtures.js",
@@ -20,7 +22,7 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
-    "@types/node": "^25.9.2",
+    "@types/node": "^20.19.0",
     "typescript": "^6.0.3",
     "vitest": "^4.1.8"
   }

@@ -52,13 +52,29 @@ function makeRecommendation(
     recommendedNextAction: "Review API request logs.",
     escalationRequired: false,
     escalationReasons: [],
-    status: "pending",
+    resolution: "pending",
     createdAt: "2026-06-10T08:35:00.000Z",
     ...overrides,
   };
 }
 
 describe("evaluateEscalation", () => {
+  it("rejects an invalid current time with a stable domain error", () => {
+    expect(() =>
+      evaluateEscalation(
+        makeRecommendation(),
+        new Date(Number.NaN),
+        makeTicket(),
+      ),
+    ).toThrow(
+      expect.objectContaining({
+        name: "DomainError",
+        code: "INVALID_NOW",
+        message: "Escalation evaluation requires a valid current time.",
+      }),
+    );
+  });
+
   it("does not escalate an ordinary recommendation", () => {
     expect(evaluateEscalation(makeRecommendation(), now, makeTicket())).toEqual({
       required: false,
@@ -253,15 +269,22 @@ describe("evaluateEscalation", () => {
 describe("validateApprovedFields", () => {
   it("allows all seven explicitly approvable fields", () => {
     expect(() =>
-      validateApprovedFields(makeRecommendation(), [
-        "category",
-        "priority",
-        "team",
-        "assignee",
-        "status",
-        "tags",
-        "customerResponse",
-      ]),
+      validateApprovedFields(
+        makeRecommendation({
+          assignee: "operator@example.test",
+          ticketStatus: "in-progress",
+          tags: ["api", "incident"],
+        }),
+        [
+          "category",
+          "priority",
+          "team",
+          "assignee",
+          "status",
+          "tags",
+          "customerResponse",
+        ],
+      ),
     ).not.toThrow();
   });
 
@@ -270,8 +293,32 @@ describe("validateApprovedFields", () => {
     { approvedFields: ["priority", "priority"] },
     { approvedFields: ["description"] },
   ])("rejects empty, duplicate, or unknown fields", ({ approvedFields }) => {
-    expect(() =>
-      validateApprovedFields(makeRecommendation(), approvedFields),
-    ).toThrow(DomainError);
+    let thrown: unknown;
+    try {
+      validateApprovedFields(makeRecommendation(), approvedFields);
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(DomainError);
+    expect(thrown).toMatchObject({ code: "INVALID_APPROVAL_FIELDS" });
   });
+
+  it.each([
+    ["assignee", "assignee"],
+    ["status", "ticketStatus"],
+    ["tags", "tags"],
+  ] as const)(
+    "rejects approval of %s when recommendation.%s is absent",
+    (approvedField, proposalField) => {
+      expect(() =>
+        validateApprovedFields(makeRecommendation(), [approvedField]),
+      ).toThrow(
+        expect.objectContaining({
+          code: "INVALID_APPROVAL_FIELDS",
+          message: `Approved field has no proposal: ${approvedField}`,
+        }),
+      );
+    },
+  );
 });

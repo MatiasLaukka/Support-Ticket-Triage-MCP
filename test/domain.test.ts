@@ -7,6 +7,7 @@ import {
   ExpectedOutcomeSchema,
   KnowledgeArticleSchema,
   PrioritySchema,
+  RequiredEscalationSchema,
   TeamSchema,
   TicketIdSchema,
   TicketSchema,
@@ -66,7 +67,7 @@ const recommendation = {
   recommendedNextAction: "Correlate service telemetry and notify incident response.",
   escalationRequired: true,
   escalationReasons: ["outage"],
-  status: "pending",
+  resolution: "pending",
   createdAt: "2026-06-10T08:35:00.000Z",
 } as const;
 
@@ -83,6 +84,148 @@ describe("domain contracts", () => {
 
   it("parses a complete valid ticket", () => {
     expect(TicketSchema.parse(ticket)).toEqual(ticket);
+  });
+
+  it("defaults absent related ticket IDs to an empty array", () => {
+    const { relatedTicketIds: _relatedTicketIds, ...withoutRelatedTickets } = ticket;
+
+    expect(TicketSchema.parse(withoutRelatedTickets).relatedTicketIds).toEqual([]);
+  });
+
+  it("rejects duplicate related ticket IDs", () => {
+    expect(
+      TicketSchema.safeParse({
+        ...ticket,
+        relatedTicketIds: ["TKT-1002", "TKT-1002"],
+      }).success,
+    ).toBe(false);
+  });
+
+  it("rejects tickets updated before they were created with an updatedAt issue", () => {
+    const result = TicketSchema.safeParse({
+      ...ticket,
+      updatedAt: "2026-06-10T07:59:59.999Z",
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues).toContainEqual(
+        expect.objectContaining({
+          path: ["updatedAt"],
+          message: "updatedAt must be at or after createdAt.",
+        }),
+      );
+    }
+  });
+
+  it("represents all optional ticket proposals on a recommendation", () => {
+    expect(
+      TriageRecommendationSchema.parse({
+        ...recommendation,
+        assignee: "  operator@example.test  ",
+        ticketStatus: "in-progress",
+        tags: ["api", "incident"],
+      }),
+    ).toMatchObject({
+      assignee: "operator@example.test",
+      ticketStatus: "in-progress",
+      tags: ["api", "incident"],
+      resolution: "pending",
+    });
+  });
+
+  it.each([
+    [{ assignee: "   " }, ["assignee"]],
+    [{ tags: ["api", "   "] }, ["tags", 1]],
+    [{ tags: ["api", "api"] }, ["tags"]],
+  ] as const)(
+    "rejects invalid optional recommendation proposals",
+    (proposal, expectedPath) => {
+      const result = TriageRecommendationSchema.safeParse({
+        ...recommendation,
+        ...proposal,
+      });
+
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error.issues).toContainEqual(
+          expect.objectContaining({ path: expectedPath }),
+        );
+      }
+    },
+  );
+
+  it("rejects the old recommendation lifecycle status field", () => {
+    const { resolution: _resolution, ...withoutResolution } = recommendation;
+
+    expect(
+      TriageRecommendationSchema.safeParse({
+        ...withoutResolution,
+        status: "pending",
+      }).success,
+    ).toBe(false);
+  });
+
+  it.each([
+    {
+      escalationRequired: false,
+      escalationReasons: ["outage"],
+    },
+    {
+      escalationRequired: true,
+      escalationReasons: [],
+    },
+  ])(
+    "rejects contradictory escalation required state",
+    ({ escalationRequired, escalationReasons }) => {
+      const result = TriageRecommendationSchema.safeParse({
+        ...recommendation,
+        escalationRequired,
+        escalationReasons,
+      });
+
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error.issues).toContainEqual(
+          expect.objectContaining({
+            path: ["escalationRequired"],
+            message:
+              "escalationRequired must match whether escalationReasons is non-empty.",
+          }),
+        );
+      }
+    },
+  );
+
+  it("rejects unknown and duplicate escalation reasons", () => {
+    expect(RequiredEscalationSchema.safeParse("outtage").success).toBe(false);
+
+    const unknownResult = TriageRecommendationSchema.safeParse({
+      ...recommendation,
+      escalationReasons: ["outtage"],
+    });
+    expect(unknownResult.success).toBe(false);
+    if (!unknownResult.success) {
+      expect(
+        unknownResult.error.issues.some(
+          (issue) => issue.path[0] === "escalationReasons",
+        ),
+      ).toBe(true);
+    }
+
+    const duplicateResult = TriageRecommendationSchema.safeParse({
+      ...recommendation,
+      escalationReasons: ["outage", "outage"],
+    });
+    expect(duplicateResult.success).toBe(false);
+    if (!duplicateResult.success) {
+      expect(duplicateResult.error.issues).toContainEqual(
+        expect.objectContaining({
+          path: ["escalationReasons"],
+          message: "Escalation reasons must be unique.",
+        }),
+      );
+    }
   });
 
   it("parses valid knowledge, recommendation, approval, audit, and outcome records", () => {
@@ -194,8 +337,51 @@ describe("domain contracts", () => {
     ).toBe(false);
   });
 
+  it("allows a trimmed edited customer response when that field is approved", () => {
+    expect(
+      ApprovalSchema.parse({
+        recommendationId: recommendation.id,
+        ticketId: ticket.id,
+        expectedRevision: ticket.revision,
+        approvedFields: ["customerResponse"],
+        editedCustomerResponse: "  We are actively investigating.  ",
+        actor: "casey",
+        confirm: true,
+        approvedAt: "2026-06-10T08:40:00.000Z",
+      }).editedCustomerResponse,
+    ).toBe("We are actively investigating.");
+  });
+
+  it.each([
+    {
+      approvedFields: ["priority"],
+      editedCustomerResponse: "We are actively investigating.",
+    },
+    {
+      approvedFields: ["customerResponse"],
+      editedCustomerResponse: "   ",
+    },
+  ])(
+    "rejects invalid edited customer response coupling",
+    ({ approvedFields, editedCustomerResponse }) => {
+      expect(
+        ApprovalSchema.safeParse({
+          recommendationId: recommendation.id,
+          ticketId: ticket.id,
+          expectedRevision: ticket.revision,
+          approvedFields,
+          editedCustomerResponse,
+          actor: "casey",
+          confirm: true,
+          approvedAt: "2026-06-10T08:40:00.000Z",
+        }).success,
+      ).toBe(false);
+    },
+  );
+
   it.each([
     ["ticket createdAt", { ...ticket, createdAt: "2026-06-10T08:00:00" }],
+    ["ticket updatedAt", { ...ticket, updatedAt: "2026-06-10T08:30:00" }],
     [
       "SLA responseDueAt",
       { ...ticket, sla: { ...ticket.sla, responseDueAt: "2026-06-10T09:30:00" } },
@@ -204,6 +390,34 @@ describe("domain contracts", () => {
   ])("rejects naive timestamps for %s", (_name, value) => {
     const schema = "sourceRevision" in value ? TriageRecommendationSchema : TicketSchema;
     expect(schema.safeParse(value).success).toBe(false);
+  });
+
+  it("rejects naive approval and audit timestamps", () => {
+    expect(
+      ApprovalSchema.safeParse({
+        recommendationId: recommendation.id,
+        ticketId: ticket.id,
+        expectedRevision: ticket.revision,
+        approvedFields: ["priority"],
+        actor: "casey",
+        confirm: true,
+        approvedAt: "2026-06-10T08:40:00",
+      }).success,
+    ).toBe(false);
+    expect(
+      AuditEventSchema.safeParse({
+        id: "00c96411-a595-4e2a-8869-c219d7637980",
+        timestamp: "2026-06-10T08:40:01",
+        actor: "casey",
+        action: "recommendation-approved",
+        ticketId: ticket.id,
+        before: {},
+        after: {},
+        rationale: "Approved incident routing.",
+        knowledgeArticleIds: [],
+        result: "success",
+      }).success,
+    ).toBe(false);
   });
 
   it("rejects unknown fields on strict records", () => {
@@ -218,5 +432,13 @@ describe("domain contracts", () => {
       message: "Approval is stale.",
       code: "STALE_APPROVAL",
     });
+  });
+
+  it.each([
+    "INVALID_APPROVAL_FIELDS",
+    "INVALID_NOW",
+    "STALE_APPROVAL",
+  ] as const)("preserves the typed domain error code %s", (code) => {
+    expect(new DomainError("Domain failure.", code).code).toBe(code);
   });
 });

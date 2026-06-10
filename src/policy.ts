@@ -1,5 +1,6 @@
 import type {
   ApprovedField,
+  RequiredEscalation,
   Ticket,
   TriageRecommendation,
 } from "./domain.js";
@@ -7,7 +8,7 @@ import { DomainError } from "./errors.js";
 
 export interface EscalationDecision {
   required: boolean;
-  reasons: string[];
+  reasons: RequiredEscalation[];
   requiredTeam?: "security" | "incident-response";
 }
 
@@ -26,7 +27,14 @@ export function evaluateEscalation(
   now: Date,
   ticket: Ticket,
 ): EscalationDecision {
-  const reasons: string[] = [];
+  if (Number.isNaN(now.getTime())) {
+    throw new DomainError(
+      "Escalation evaluation requires a valid current time.",
+      "INVALID_NOW",
+    );
+  }
+
+  const reasons: RequiredEscalation[] = [];
   let requiredTeam: EscalationDecision["requiredTeam"];
 
   if (recommendation.securityRisk !== "none") {
@@ -76,20 +84,20 @@ export function evaluateEscalation(
 }
 
 export function validateApprovedFields(
-  _recommendation: TriageRecommendation,
+  recommendation: TriageRecommendation,
   approvedFields: readonly string[],
 ): void {
   if (approvedFields.length === 0) {
     throw new DomainError(
       "At least one approved field is required.",
-      "INVALID_APPROVED_FIELDS",
+      "INVALID_APPROVAL_FIELDS",
     );
   }
 
   if (new Set(approvedFields).size !== approvedFields.length) {
     throw new DomainError(
       "Approved fields must be unique.",
-      "INVALID_APPROVED_FIELDS",
+      "INVALID_APPROVAL_FIELDS",
     );
   }
 
@@ -99,7 +107,20 @@ export function validateApprovedFields(
   if (unknownField !== undefined) {
     throw new DomainError(
       `Field is not approvable: ${unknownField}`,
-      "INVALID_APPROVED_FIELDS",
+      "INVALID_APPROVAL_FIELDS",
+    );
+  }
+
+  const missingProposal = approvedFields.find(
+    (field) =>
+      (field === "assignee" && recommendation.assignee === undefined) ||
+      (field === "status" && recommendation.ticketStatus === undefined) ||
+      (field === "tags" && recommendation.tags === undefined),
+  );
+  if (missingProposal !== undefined) {
+    throw new DomainError(
+      `Approved field has no proposal: ${missingProposal}`,
+      "INVALID_APPROVAL_FIELDS",
     );
   }
 }

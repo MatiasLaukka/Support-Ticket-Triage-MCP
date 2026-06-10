@@ -47,6 +47,21 @@ export const RiskSchema = z.enum([
   "confirmed",
 ]);
 
+export const RequiredEscalationSchema = z.enum([
+  "security",
+  "outage",
+  "low-confidence",
+  "sla",
+  "missing-information",
+  "policy-conflict",
+]);
+
+const UniqueNonBlankStringsSchema = z
+  .array(NonBlankStringSchema)
+  .refine((values) => new Set(values).size === values.length, {
+    message: "Values must be unique.",
+  });
+
 export const CustomerSchema = z
   .object({
     name: NonBlankStringSchema,
@@ -78,10 +93,24 @@ export const TicketSchema = z
     assignee: NonBlankStringSchema.optional(),
     tags: z.array(NonBlankStringSchema),
     sla: SLASchema,
-    relatedTicketIds: z.array(TicketIdSchema),
+    relatedTicketIds: z
+      .array(TicketIdSchema)
+      .refine((ticketIds) => new Set(ticketIds).size === ticketIds.length, {
+        message: "Related ticket IDs must be unique.",
+      })
+      .default([]),
     revision: z.number().int().nonnegative(),
   })
-  .strict();
+  .strict()
+  .refine(
+    (ticket) =>
+      new Date(ticket.updatedAt).getTime() >=
+      new Date(ticket.createdAt).getTime(),
+    {
+      message: "updatedAt must be at or after createdAt.",
+      path: ["updatedAt"],
+    },
+  );
 
 export const KnowledgeArticleSchema = z
   .object({
@@ -108,6 +137,9 @@ export const TriageRecommendationSchema = z
     category: CategorySchema,
     priority: PrioritySchema,
     team: TeamSchema,
+    assignee: NonBlankStringSchema.optional(),
+    ticketStatus: TicketStatusSchema.optional(),
+    tags: UniqueNonBlankStringsSchema.optional(),
     duplicateCandidates: z.array(DuplicateCandidateSchema),
     outageRisk: RiskSchema,
     securityRisk: RiskSchema,
@@ -119,11 +151,25 @@ export const TriageRecommendationSchema = z
     confidence: z.number().min(0).max(1),
     recommendedNextAction: NonBlankStringSchema,
     escalationRequired: z.boolean(),
-    escalationReasons: z.array(NonBlankStringSchema),
-    status: z.enum(["pending", "approved", "rejected"]),
+    escalationReasons: z
+      .array(RequiredEscalationSchema)
+      .refine((reasons) => new Set(reasons).size === reasons.length, {
+        message: "Escalation reasons must be unique.",
+      }),
+    resolution: z.enum(["pending", "approved", "rejected"]),
     createdAt: IsoTimestampSchema,
   })
-  .strict();
+  .strict()
+  .refine(
+    (recommendation) =>
+      recommendation.escalationRequired ===
+      (recommendation.escalationReasons.length > 0),
+    {
+      message:
+        "escalationRequired must match whether escalationReasons is non-empty.",
+      path: ["escalationRequired"],
+    },
+  );
 
 export const RecommendationSchema = TriageRecommendationSchema;
 
@@ -155,7 +201,17 @@ export const ApprovalSchema = z
     confirm: z.literal(true),
     approvedAt: IsoTimestampSchema,
   })
-  .strict();
+  .strict()
+  .refine(
+    (approval) =>
+      approval.editedCustomerResponse === undefined ||
+      approval.approvedFields.includes("customerResponse"),
+    {
+      message:
+        "editedCustomerResponse requires customerResponse to be approved.",
+      path: ["editedCustomerResponse"],
+    },
+  );
 
 export const AuditActionSchema = z.enum([
   "recommendation-submitted",
@@ -181,15 +237,6 @@ export const AuditEventSchema = z
     rejectionReason: NonBlankStringSchema.optional(),
   })
   .strict();
-
-export const RequiredEscalationSchema = z.enum([
-  "security",
-  "outage",
-  "low-confidence",
-  "sla",
-  "missing-information",
-  "policy-conflict",
-]);
 
 export const ExpectedOutcomeSchema = z
   .object({

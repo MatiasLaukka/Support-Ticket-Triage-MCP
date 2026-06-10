@@ -2,18 +2,17 @@
 
 ## Purpose
 
-Build a portfolio-quality, fully local demonstration of governed AI automation
-for a B2B SaaS support queue. The project will show how Codex combines an MCP
-server with a reusable Skill to classify tickets, retrieve relevant knowledge,
-draft responses, recommend actions, require human approval, record an audit
-trail, and measure workflow quality.
+Build a fully local governed AI automation system for a B2B SaaS support queue.
+The project will show how Codex combines an MCP server with a reusable Skill to
+classify tickets, retrieve relevant knowledge, draft responses, recommend
+actions, require human approval, record an audit trail, and measure workflow
+quality.
 
 The repository will be public and use only synthetic data.
 
-## Portfolio Story
+## Engineering Goals
 
-The project should demonstrate capabilities expected of an AI automation
-engineer:
+The project should provide a concrete example of:
 
 - designing reliable agent workflows rather than one-shot prompts;
 - exposing business data and actions through typed MCP interfaces;
@@ -334,8 +333,8 @@ The public repository includes:
 - commands for build, test, evaluation, and local Codex setup;
 - screenshots or terminal transcripts added only after the workflow works;
 - a limitations and threat-model section;
-- CV-ready impact statements that describe demonstrated capabilities without
-  claiming production deployment.
+- clear capability and outcome statements that do not claim production
+  deployment or measured business impact.
 
 No personal, employer, customer, credential, or proprietary data is included.
 
@@ -348,5 +347,5 @@ No personal, employer, customer, credential, or proprietary data is included.
 - Security, outage, low-confidence, and SLA-risk cases escalate correctly.
 - Every recommendation decision and applied change is auditable.
 - Evaluation metrics are reproducible.
-- The documentation lets a reviewer understand the architecture, safety model,
-  business value, and extension path in under ten minutes.
+- The documentation lets a new contributor understand the architecture, safety
+  model, business value, and extension path in under ten minutes.

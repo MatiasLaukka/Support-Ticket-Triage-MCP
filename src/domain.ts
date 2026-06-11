@@ -110,6 +110,15 @@ export const TicketSchema = z
       message: "updatedAt must be at or after createdAt.",
       path: ["updatedAt"],
     },
+  )
+  .refine(
+    (ticket) =>
+      new Date(ticket.sla.responseDueAt).getTime() >=
+      new Date(ticket.createdAt).getTime(),
+    {
+      message: "sla.responseDueAt must be at or after createdAt.",
+      path: ["sla", "responseDueAt"],
+    },
   );
 
 export const KnowledgeArticleSchema = z
@@ -137,7 +146,7 @@ export const TriageRecommendationSchema = z
     category: CategorySchema,
     priority: PrioritySchema,
     team: TeamSchema,
-    assignee: NonBlankStringSchema.optional(),
+    assignee: NonBlankStringSchema.nullable().optional(),
     ticketStatus: TicketStatusSchema.optional(),
     tags: UniqueNonBlankStringsSchema.optional(),
     duplicateCandidates: z.array(DuplicateCandidateSchema),
@@ -236,7 +245,24 @@ export const AuditEventSchema = z
     result: z.enum(["success", "rejected"]),
     rejectionReason: NonBlankStringSchema.optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((event, context) => {
+    if (event.result === "rejected" && event.rejectionReason === undefined) {
+      context.addIssue({
+        code: "custom",
+        message: "Rejected audit events require a rejectionReason.",
+        path: ["rejectionReason"],
+      });
+    }
+
+    if (event.result === "success" && event.rejectionReason !== undefined) {
+      context.addIssue({
+        code: "custom",
+        message: "Successful audit events must not include rejectionReason.",
+        path: ["rejectionReason"],
+      });
+    }
+  });
 
 export const ExpectedOutcomeSchema = z
   .object({

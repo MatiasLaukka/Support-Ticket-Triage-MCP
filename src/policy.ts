@@ -113,9 +113,11 @@ export function validateApprovedFields(
 
   const missingProposal = approvedFields.find(
     (field) =>
-      (field === "assignee" && recommendation.assignee === undefined) ||
-      (field === "status" && recommendation.ticketStatus === undefined) ||
-      (field === "tags" && recommendation.tags === undefined),
+      (field === "assignee" &&
+        !Object.hasOwn(recommendation, "assignee")) ||
+      (field === "status" &&
+        !Object.hasOwn(recommendation, "ticketStatus")) ||
+      (field === "tags" && !Object.hasOwn(recommendation, "tags")),
   );
   if (missingProposal !== undefined) {
     throw new DomainError(

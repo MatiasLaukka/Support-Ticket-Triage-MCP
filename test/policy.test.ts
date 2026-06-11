@@ -267,6 +267,33 @@ describe("evaluateEscalation", () => {
 });
 
 describe("validateApprovedFields", () => {
+  it("allows approving an own null assignee proposal to unassign the ticket", () => {
+    const recommendation = {
+      ...makeRecommendation(),
+      assignee: null,
+    } as unknown as TriageRecommendation;
+
+    expect(() =>
+      validateApprovedFields(recommendation, ["assignee"]),
+    ).not.toThrow();
+  });
+
+  it("rejects an inherited assignee value as a missing proposal", () => {
+    const recommendation = Object.assign(
+      Object.create({ assignee: null }) as object,
+      makeRecommendation(),
+    ) as TriageRecommendation;
+
+    expect(() =>
+      validateApprovedFields(recommendation, ["assignee"]),
+    ).toThrow(
+      expect.objectContaining({
+        code: "INVALID_APPROVAL_FIELDS",
+        message: "Approved field has no proposal: assignee",
+      }),
+    );
+  });
+
   it("allows all seven explicitly approvable fields", () => {
     expect(() =>
       validateApprovedFields(

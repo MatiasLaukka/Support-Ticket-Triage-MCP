@@ -118,6 +118,26 @@ describe("domain contracts", () => {
     }
   });
 
+  it("rejects an SLA response deadline before ticket creation", () => {
+    const result = TicketSchema.safeParse({
+      ...ticket,
+      sla: {
+        ...ticket.sla,
+        responseDueAt: "2026-06-10T07:59:59.999Z",
+      },
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues).toContainEqual(
+        expect.objectContaining({
+          path: ["sla", "responseDueAt"],
+          message: "sla.responseDueAt must be at or after createdAt.",
+        }),
+      );
+    }
+  });
+
   it("represents all optional ticket proposals on a recommendation", () => {
     expect(
       TriageRecommendationSchema.parse({
@@ -131,6 +151,17 @@ describe("domain contracts", () => {
       ticketStatus: "in-progress",
       tags: ["api", "incident"],
       resolution: "pending",
+    });
+  });
+
+  it("represents null assignee as an explicit unassignment proposal", () => {
+    expect(
+      TriageRecommendationSchema.parse({
+        ...recommendation,
+        assignee: null,
+      }),
+    ).toMatchObject({
+      assignee: null,
     });
   });
 
@@ -418,6 +449,57 @@ describe("domain contracts", () => {
         result: "success",
       }).success,
     ).toBe(false);
+  });
+
+  it("requires a rejection reason for rejected audit events", () => {
+    const result = AuditEventSchema.safeParse({
+      id: "00c96411-a595-4e2a-8869-c219d7637980",
+      timestamp: "2026-06-10T08:40:01.000Z",
+      actor: "casey",
+      action: "approval-rejected",
+      ticketId: ticket.id,
+      before: {},
+      after: {},
+      rationale: "Approval could not be applied.",
+      knowledgeArticleIds: [],
+      result: "rejected",
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues).toContainEqual(
+        expect.objectContaining({
+          path: ["rejectionReason"],
+          message: "Rejected audit events require a rejectionReason.",
+        }),
+      );
+    }
+  });
+
+  it("forbids a rejection reason for successful audit events", () => {
+    const result = AuditEventSchema.safeParse({
+      id: "00c96411-a595-4e2a-8869-c219d7637980",
+      timestamp: "2026-06-10T08:40:01.000Z",
+      actor: "casey",
+      action: "ticket-updated",
+      ticketId: ticket.id,
+      before: {},
+      after: {},
+      rationale: "Ticket fields were updated.",
+      knowledgeArticleIds: [],
+      result: "success",
+      rejectionReason: "Not applicable.",
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues).toContainEqual(
+        expect.objectContaining({
+          path: ["rejectionReason"],
+          message: "Successful audit events must not include rejectionReason.",
+        }),
+      );
+    }
   });
 
   it("rejects unknown fields on strict records", () => {

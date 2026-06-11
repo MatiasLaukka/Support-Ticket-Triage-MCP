@@ -61,7 +61,8 @@
     ],
     "team": "security",
     "requiredEscalations": [
-      "security"
+      "security",
+      "missing-information"
     ],
     "knowledgeArticleIds": [
       "security-escalation"
@@ -69,15 +70,16 @@
   },
   {
     "ticketId": "TKT-1005",
-    "category": "other",
+    "category": "authentication",
     "acceptablePriorities": [
-      "P4"
+      "P2"
     ],
-    "team": "support",
+    "team": "identity",
     "requiredEscalations": [
       "policy-conflict"
     ],
     "knowledgeArticleIds": [
+      "account-access",
       "triage-policy"
     ]
   },
@@ -144,9 +146,7 @@
       "P3"
     ],
     "team": "support",
-    "requiredEscalations": [
-      "missing-information"
-    ],
+    "requiredEscalations": [],
     "knowledgeArticleIds": [
       "triage-policy"
     ]
@@ -262,7 +262,8 @@
     ],
     "team": "security",
     "requiredEscalations": [
-      "security"
+      "security",
+      "missing-information"
     ],
     "knowledgeArticleIds": [
       "security-escalation",
@@ -352,9 +353,7 @@
       "P3"
     ],
     "team": "support",
-    "requiredEscalations": [
-      "missing-information"
-    ],
+    "requiredEscalations": [],
     "knowledgeArticleIds": [
       "triage-policy"
     ]

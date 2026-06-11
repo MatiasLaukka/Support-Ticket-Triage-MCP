@@ -58,6 +58,37 @@ function readOutcomes(): ExpectedOutcome[] {
   );
 }
 
+function listFilesRecursively(
+  directory: string,
+  relativeDirectory = "",
+): string[] {
+  return readdirSync(resolve(directory, relativeDirectory), {
+    withFileTypes: true,
+  })
+    .flatMap((entry) => {
+      const relativePath =
+        relativeDirectory === ""
+          ? entry.name
+          : `${relativeDirectory}/${entry.name}`;
+      return entry.isDirectory()
+        ? listFilesRecursively(directory, relativePath)
+        : [relativePath];
+    })
+    .sort();
+}
+
+function isHighImpactMissingInformationOutcome(
+  outcome: ExpectedOutcome,
+): boolean {
+  return (
+    outcome.acceptablePriorities.every((priority) =>
+      ["P1", "P2"].includes(priority),
+    ) ||
+    outcome.requiredEscalations.includes("security") ||
+    outcome.requiredEscalations.includes("outage")
+  );
+}
+
 function ticketById(tickets: Ticket[], id: string): Ticket {
   const ticket = tickets.find((candidate) => candidate.id === id);
   expect(ticket, `Expected ticket ${id}`).toBeDefined();
@@ -260,17 +291,24 @@ describe("generated support fixtures", () => {
 
     expect(missingInformationOutcomes.length).toBeGreaterThanOrEqual(2);
     for (const outcome of missingInformationOutcomes) {
-      const highImpact =
-        outcome.acceptablePriorities.some((priority) =>
-          ["P1", "P2"].includes(priority),
-        ) ||
-        outcome.requiredEscalations.includes("security") ||
-        outcome.requiredEscalations.includes("outage");
       expect(
-        highImpact,
+        isHighImpactMissingInformationOutcome(outcome),
         `${outcome.ticketId} cannot require missing-information at low impact`,
       ).toBe(true);
     }
+
+    const mixedPriorityOutcome = ExpectedOutcomeSchema.parse({
+      ticketId: "TKT-1010",
+      category: "other",
+      acceptablePriorities: ["P2", "P3"],
+      team: "support",
+      requiredEscalations: ["missing-information"],
+      knowledgeArticleIds: ["triage-policy"],
+    });
+    expect(
+      isHighImpactMissingInformationOutcome(mixedPriorityOutcome),
+      "Mixed high/low acceptable priorities cannot require missing-information",
+    ).toBe(false);
 
     expect(
       outcomeById(outcomes, "TKT-1010").requiredEscalations,
@@ -355,12 +393,11 @@ describe("generated support fixtures", () => {
       );
 
       expect(result.status, result.stderr).toBe(0);
-      for (const artifactPath of generatedArtifactPaths) {
+      const generatedPaths = listFilesRecursively(isolatedOutputRoot);
+      expect(generatedPaths).toEqual([...generatedArtifactPaths].sort());
+
+      for (const artifactPath of generatedPaths) {
         const generatedPath = resolve(isolatedOutputRoot, artifactPath);
-        expect(
-          existsSync(generatedPath),
-          `Expected isolated generator output ${artifactPath}`,
-        ).toBe(true);
         expect(readFileSync(generatedPath)).toEqual(
           readFileSync(resolve(root, artifactPath)),
         );

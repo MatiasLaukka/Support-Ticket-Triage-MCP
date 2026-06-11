@@ -176,6 +176,21 @@ describe("TicketRepository", () => {
     );
   });
 
+  it("maps a missing seed file to a safe repository error", async () => {
+    const root = await temporaryRoot();
+    const runtimeRoot = resolve(root, "runtime");
+    const missingSeedFile = resolve(root, "missing-seed.json");
+
+    await expect(
+      new TicketRepository(runtimeRoot, missingSeedFile).initialize(),
+    ).rejects.toSatisfy(
+      expectDomainError(
+        "REPOSITORY_ERROR",
+        "Repository could not be initialized.",
+      ),
+    );
+  });
+
   it("initializes runtime tickets from seed without overwriting existing state", async () => {
     const root = await temporaryRoot();
     const runtimeRoot = resolve(root, "runtime");

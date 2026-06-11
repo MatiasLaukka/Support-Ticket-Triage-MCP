@@ -223,8 +223,7 @@ export class TicketRepository {
       }
     }
 
-    await assertSafeFile(this.seedFile);
-    const tickets = await this.readTicketsFrom(this.seedFile);
+    const tickets = await this.readSeedTickets();
     let handle;
     try {
       handle = await open(this.runtimeFile, "wx");
@@ -237,7 +236,14 @@ export class TicketRepository {
         "code" in error &&
         error.code === "EEXIST"
       ) {
-        await this.readTickets();
+        try {
+          await this.readTickets();
+        } catch (readError) {
+          if (readError instanceof DomainError) {
+            throw readError;
+          }
+          throw repositoryError("Repository could not be initialized.");
+        }
         return;
       }
       if (error instanceof DomainError) {
@@ -245,7 +251,11 @@ export class TicketRepository {
       }
       throw repositoryError("Repository could not be initialized.");
     } finally {
-      await handle?.close();
+      try {
+        await handle?.close();
+      } catch {
+        throw repositoryError("Repository could not be initialized.");
+      }
     }
   }
 
@@ -349,6 +359,17 @@ export class TicketRepository {
 
   private async readTickets(): Promise<Ticket[]> {
     return this.readTicketsFrom(this.runtimeFile);
+  }
+
+  private async readSeedTickets(): Promise<Ticket[]> {
+    try {
+      return await this.readTicketsFrom(this.seedFile);
+    } catch (error) {
+      if (error instanceof DomainError) {
+        throw error;
+      }
+      throw repositoryError("Repository could not be initialized.");
+    }
   }
 
   private async readTicketsFrom(path: string): Promise<Ticket[]> {

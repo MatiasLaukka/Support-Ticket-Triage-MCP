@@ -2,6 +2,7 @@ import {
   link,
   mkdir,
   mkdtemp,
+  open,
   readFile,
   readdir,
   rm,
@@ -150,6 +151,17 @@ function expectDomainError(
   };
 }
 
+function constructWithFileSystem<T>(
+  Repository: new (...args: never[]) => T,
+  args: unknown[],
+  fileSystem: Record<string, unknown>,
+): T {
+  const InjectableRepository = Repository as unknown as new (
+    ...constructorArgs: unknown[]
+  ) => T;
+  return new InjectableRepository(...args, fileSystem);
+}
+
 afterEach(async () => {
   await Promise.all(
     temporaryRoots.splice(0).map((root) =>
@@ -211,6 +223,39 @@ describe("TicketRepository", () => {
 
     expect(JSON.parse(await readFile(runtimeFile, "utf8"))).toEqual(existing);
   });
+
+  it.each([
+    [
+      "list",
+      (repository: TicketRepository) => repository.list({}),
+    ],
+    [
+      "get",
+      (repository: TicketRepository) => repository.get("TKT-1001"),
+    ],
+    [
+      "update",
+      (repository: TicketRepository) =>
+        repository.update("TKT-1001", 2, (current) => current),
+    ],
+  ])(
+    "maps missing runtime state during %s to a safe repository error",
+    async (_method, operation) => {
+      const root = await temporaryRoot();
+      const runtimeRoot = resolve(root, "runtime");
+      const seedFile = resolve(root, "tickets.seed.json");
+      await mkdir(runtimeRoot);
+      await writeJson(seedFile, [baseTicket]);
+      const repository = new TicketRepository(runtimeRoot, seedFile);
+
+      await expect(operation(repository)).rejects.toSatisfy(
+        expectDomainError(
+          "REPOSITORY_ERROR",
+          "Ticket repository is unavailable.",
+        ),
+      );
+    },
+  );
 
   it("filters tickets by status, category, priority, team, and SLA state", async () => {
     const { repository } = await createTicketRepository([
@@ -336,6 +381,35 @@ describe("TicketRepository", () => {
       ),
     );
     await expect(repository.get("TKT-1001")).resolves.toEqual(baseTicket);
+  });
+
+  it("does not let temporary-file cleanup override a safe update error", async () => {
+    const { runtimeRoot, seedFile } = await createTicketRepository([baseTicket]);
+    const repository = constructWithFileSystem(
+      TicketRepository,
+      [runtimeRoot, seedFile],
+      {
+        rename: async () => {
+          throw new Error(`rename failed at ${runtimeRoot}`);
+        },
+        rm: async () => {
+          throw new Error(`cleanup failed at ${runtimeRoot}`);
+        },
+      },
+    );
+
+    await expect(
+      repository.update("TKT-1001", 2, (current) => ({
+        ...current,
+        status: "in-progress",
+        updatedAt: "2026-06-10T08:45:00.000Z",
+      })),
+    ).rejects.toSatisfy(
+      expectDomainError(
+        "REPOSITORY_ERROR",
+        "Ticket update could not be persisted.",
+      ),
+    );
   });
 
   it("returns the stable not-found error for an unknown ticket", async () => {
@@ -522,6 +596,36 @@ describe("RecommendationRepository", () => {
     });
   });
 
+  it("ignores close cleanup failure after a successful create", async () => {
+    const root = await temporaryRoot();
+    const repositoryRoot = resolve(root, "recommendations");
+    let injectedOpenCalled = false;
+    const repository = constructWithFileSystem(
+      RecommendationRepository,
+      [repositoryRoot],
+      {
+        open: async (...args: Parameters<typeof open>) => {
+          injectedOpenCalled = true;
+          const handle = await open(...args);
+          return {
+            writeFile: handle.writeFile.bind(handle),
+            sync: handle.sync.bind(handle),
+            close: async () => {
+              await handle.close();
+              throw new Error(`close failed at ${repositoryRoot}`);
+            },
+          };
+        },
+      },
+    );
+
+    await expect(repository.create(recommendation)).resolves.toBeUndefined();
+    expect(injectedOpenCalled).toBe(true);
+    await expect(
+      new RecommendationRepository(repositoryRoot).get(recommendation.id),
+    ).resolves.toEqual(recommendation);
+  });
+
   it("rejects duplicate recommendation IDs", async () => {
     const root = await temporaryRoot();
     const repository = new RecommendationRepository(resolve(root, "recommendations"));
@@ -545,6 +649,34 @@ describe("RecommendationRepository", () => {
       expectDomainError(
         "RECOMMENDATION_NOT_FOUND",
         "Recommendation was not found.",
+      ),
+    );
+  });
+
+  it("does not let temporary-file cleanup override a safe resolution error", async () => {
+    const root = await temporaryRoot();
+    const repositoryRoot = resolve(root, "recommendations");
+    const setupRepository = new RecommendationRepository(repositoryRoot);
+    await setupRepository.create(recommendation);
+    const repository = constructWithFileSystem(
+      RecommendationRepository,
+      [repositoryRoot],
+      {
+        rename: async () => {
+          throw new Error(`rename failed at ${repositoryRoot}`);
+        },
+        rm: async () => {
+          throw new Error(`cleanup failed at ${repositoryRoot}`);
+        },
+      },
+    );
+
+    await expect(
+      repository.markResolved(recommendation.id, "approved"),
+    ).rejects.toSatisfy(
+      expectDomainError(
+        "REPOSITORY_ERROR",
+        "Recommendation could not be persisted.",
       ),
     );
   });
@@ -618,6 +750,34 @@ describe("AuditRepository", () => {
     expect((await readFile(file, "utf8")).trim().split("\n")).toHaveLength(2);
     await expect(repository.list()).resolves.toEqual([auditEvent, otherEvent]);
     await expect(repository.list("TKT-1001")).resolves.toEqual([auditEvent]);
+  });
+
+  it("ignores close cleanup failure after a successful append", async () => {
+    const root = await temporaryRoot();
+    const file = resolve(root, "audit", "events.jsonl");
+    let injectedOpenCalled = false;
+    const repository = constructWithFileSystem(
+      AuditRepository,
+      [file],
+      {
+        open: async (...args: Parameters<typeof open>) => {
+          injectedOpenCalled = true;
+          const handle = await open(...args);
+          return {
+            write: handle.write.bind(handle),
+            sync: handle.sync.bind(handle),
+            close: async () => {
+              await handle.close();
+              throw new Error(`close failed at ${file}`);
+            },
+          };
+        },
+      },
+    );
+
+    await expect(repository.append(auditEvent)).resolves.toBeUndefined();
+    expect(injectedOpenCalled).toBe(true);
+    await expect(new AuditRepository(file).list()).resolves.toEqual([auditEvent]);
   });
 
   it("detects malformed JSONL lines without leaking the file path", async () => {

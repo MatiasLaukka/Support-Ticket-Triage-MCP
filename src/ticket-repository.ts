@@ -48,6 +48,12 @@ export interface PaginatedTickets {
 const DEFAULT_LIMIT = 20;
 const MAX_LIMIT = 50;
 const AT_RISK_WINDOW_MS = 60 * 60 * 1000;
+const defaultFileSystem = { open, rename, rm };
+type TicketFileSystem = typeof defaultFileSystem;
+
+interface Closable {
+  close(): Promise<void>;
+}
 
 function repositoryError(message: string): DomainError {
   return new DomainError(message, "REPOSITORY_ERROR");
@@ -109,6 +115,25 @@ async function initializeDirectory(path: string): Promise<void> {
       throw error;
     }
     throw repositoryError("Repository could not be initialized.");
+  }
+}
+
+async function closeQuietly(handle: Closable | undefined): Promise<void> {
+  try {
+    await handle?.close();
+  } catch {
+    // Cleanup must not replace the repository operation's safe result.
+  }
+}
+
+async function removeQuietly(
+  remove: typeof rm,
+  path: string,
+): Promise<void> {
+  try {
+    await remove(path, { force: true });
+  } catch {
+    // Best-effort cleanup must not leak local filesystem details.
   }
 }
 
@@ -203,19 +228,25 @@ export class TicketRepository {
   private readonly runtimeRoot: string;
   private readonly seedFile: string;
   private readonly runtimeFile: string;
+  private readonly fileSystem: TicketFileSystem;
   private updateQueue: Promise<void> = Promise.resolve();
 
-  constructor(runtimeRoot: string, seedFile: string) {
+  constructor(
+    runtimeRoot: string,
+    seedFile: string,
+    fileSystem: Partial<TicketFileSystem> = {},
+  ) {
     this.runtimeRoot = resolve(runtimeRoot);
     this.seedFile = resolve(seedFile);
     this.runtimeFile = resolve(this.runtimeRoot, "tickets.json");
+    this.fileSystem = { ...defaultFileSystem, ...fileSystem };
   }
 
   async initialize(): Promise<void> {
     await initializeDirectory(this.runtimeRoot);
 
     try {
-      await this.readTickets();
+      await this.readTicketsFrom(this.runtimeFile);
       return;
     } catch (error) {
       if (!(isMissing(error))) {
@@ -226,7 +257,7 @@ export class TicketRepository {
     const tickets = await this.readSeedTickets();
     let handle;
     try {
-      handle = await open(this.runtimeFile, "wx");
+      handle = await this.fileSystem.open(this.runtimeFile, "wx");
       await handle.writeFile(`${JSON.stringify(tickets, null, 2)}\n`, "utf8");
       await handle.sync();
     } catch (error) {
@@ -251,11 +282,7 @@ export class TicketRepository {
       }
       throw repositoryError("Repository could not be initialized.");
     } finally {
-      try {
-        await handle?.close();
-      } catch {
-        throw repositoryError("Repository could not be initialized.");
-      }
+      await closeQuietly(handle);
     }
   }
 
@@ -358,7 +385,14 @@ export class TicketRepository {
   }
 
   private async readTickets(): Promise<Ticket[]> {
-    return this.readTicketsFrom(this.runtimeFile);
+    try {
+      return await this.readTicketsFrom(this.runtimeFile);
+    } catch (error) {
+      if (error instanceof DomainError) {
+        throw error;
+      }
+      throw repositoryError("Ticket repository is unavailable.");
+    }
   }
 
   private async readSeedTickets(): Promise<Ticket[]> {
@@ -385,20 +419,20 @@ export class TicketRepository {
   }
 
   private async writeTicketsAtomically(tickets: Ticket[]): Promise<void> {
-    await assertNoLinkedPath(this.runtimeRoot);
-    await assertSafeFile(this.runtimeFile);
     const temporaryFile = resolve(
       this.runtimeRoot,
       `.tickets.json.${randomUUID()}.tmp`,
     );
     let handle;
     try {
-      handle = await open(temporaryFile, "wx");
+      await assertNoLinkedPath(this.runtimeRoot);
+      await assertSafeFile(this.runtimeFile);
+      handle = await this.fileSystem.open(temporaryFile, "wx");
       await handle.writeFile(`${JSON.stringify(tickets, null, 2)}\n`, "utf8");
       await handle.sync();
       await handle.close();
       handle = undefined;
-      await rename(temporaryFile, this.runtimeFile);
+      await this.fileSystem.rename(temporaryFile, this.runtimeFile);
       await this.syncDirectory();
     } catch (error) {
       if (error instanceof DomainError) {
@@ -406,20 +440,20 @@ export class TicketRepository {
       }
       throw repositoryError("Ticket update could not be persisted.");
     } finally {
-      await handle?.close();
-      await rm(temporaryFile, { force: true });
+      await closeQuietly(handle);
+      await removeQuietly(this.fileSystem.rm, temporaryFile);
     }
   }
 
   private async syncDirectory(): Promise<void> {
     let handle;
     try {
-      handle = await open(this.runtimeRoot, "r");
+      handle = await this.fileSystem.open(this.runtimeRoot, "r");
       await handle.sync();
     } catch {
       // Directory fsync is not supported consistently on Windows.
     } finally {
-      await handle?.close();
+      await closeQuietly(handle);
     }
   }
 }

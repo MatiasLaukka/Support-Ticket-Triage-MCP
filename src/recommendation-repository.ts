@@ -16,6 +16,12 @@ import {
 import { DomainError } from "./errors.js";
 
 const RecommendationIdSchema = z.uuid();
+const defaultFileSystem = { open, rename, rm };
+type RecommendationFileSystem = typeof defaultFileSystem;
+
+interface Closable {
+  close(): Promise<void>;
+}
 
 function repositoryError(message: string): DomainError {
   return new DomainError(message, "REPOSITORY_ERROR");
@@ -79,11 +85,35 @@ async function initializeDirectory(path: string): Promise<void> {
   }
 }
 
+async function closeQuietly(handle: Closable | undefined): Promise<void> {
+  try {
+    await handle?.close();
+  } catch {
+    // Cleanup must not replace the repository operation's safe result.
+  }
+}
+
+async function removeQuietly(
+  remove: typeof rm,
+  path: string,
+): Promise<void> {
+  try {
+    await remove(path, { force: true });
+  } catch {
+    // Best-effort cleanup must not leak local filesystem details.
+  }
+}
+
 export class RecommendationRepository {
   private readonly root: string;
+  private readonly fileSystem: RecommendationFileSystem;
 
-  constructor(root: string) {
+  constructor(
+    root: string,
+    fileSystem: Partial<RecommendationFileSystem> = {},
+  ) {
     this.root = resolve(root);
+    this.fileSystem = { ...defaultFileSystem, ...fileSystem };
   }
 
   async create(value: TriageRecommendation): Promise<void> {
@@ -96,7 +126,7 @@ export class RecommendationRepository {
     const path = this.pathFor(parsed.data.id);
     let handle;
     try {
-      handle = await open(path, "wx");
+      handle = await this.fileSystem.open(path, "wx");
       await handle.writeFile(`${JSON.stringify(parsed.data, null, 2)}\n`, "utf8");
       await handle.sync();
     } catch (error) {
@@ -113,7 +143,7 @@ export class RecommendationRepository {
       }
       throw repositoryError("Recommendation could not be persisted.");
     } finally {
-      await handle?.close();
+      await closeQuietly(handle);
     }
   }
 
@@ -158,21 +188,21 @@ export class RecommendationRepository {
     );
     let handle;
     try {
-      handle = await open(temporaryFile, "wx");
+      handle = await this.fileSystem.open(temporaryFile, "wx");
       await handle.writeFile(`${JSON.stringify(updated, null, 2)}\n`, "utf8");
       await handle.sync();
       await handle.close();
       handle = undefined;
       await assertSafeFile(path);
-      await rename(temporaryFile, path);
+      await this.fileSystem.rename(temporaryFile, path);
     } catch (error) {
       if (error instanceof DomainError) {
         throw error;
       }
       throw repositoryError("Recommendation could not be persisted.");
     } finally {
-      await handle?.close();
-      await rm(temporaryFile, { force: true });
+      await closeQuietly(handle);
+      await removeQuietly(this.fileSystem.rm, temporaryFile);
     }
   }
 

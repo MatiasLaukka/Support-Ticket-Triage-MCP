@@ -8,6 +8,13 @@ import {
 } from "./domain.js";
 import { DomainError } from "./errors.js";
 
+const defaultFileSystem = { open };
+type AuditFileSystem = typeof defaultFileSystem;
+
+interface Closable {
+  close(): Promise<void>;
+}
+
 function repositoryError(message: string): DomainError {
   return new DomainError(message, "REPOSITORY_ERROR");
 }
@@ -70,12 +77,22 @@ async function initializeDirectory(path: string): Promise<void> {
   }
 }
 
+async function closeQuietly(handle: Closable | undefined): Promise<void> {
+  try {
+    await handle?.close();
+  } catch {
+    // Cleanup must not replace the repository operation's safe result.
+  }
+}
+
 export class AuditRepository {
   private readonly file: string;
+  private readonly fileSystem: AuditFileSystem;
   private appendQueue: Promise<void> = Promise.resolve();
 
-  constructor(file: string) {
+  constructor(file: string, fileSystem: Partial<AuditFileSystem> = {}) {
     this.file = resolve(file);
+    this.fileSystem = { ...defaultFileSystem, ...fileSystem };
   }
 
   async append(event: AuditEvent): Promise<void> {
@@ -104,7 +121,7 @@ export class AuditRepository {
 
       let handle;
       try {
-        handle = await open(this.file, "a");
+        handle = await this.fileSystem.open(this.file, "a");
         await handle.write(`${JSON.stringify(parsed.data)}\n`, undefined, "utf8");
         await handle.sync();
       } catch (error) {
@@ -113,7 +130,7 @@ export class AuditRepository {
         }
         throw repositoryError("Audit event could not be persisted.");
       } finally {
-        await handle?.close();
+        await closeQuietly(handle);
       }
     } finally {
       releaseAppend();

@@ -502,6 +502,40 @@ describe("domain contracts", () => {
     }
   });
 
+  it.each([
+    ["approval-rejected", "success"],
+    ["recommendation-submitted", "rejected"],
+    ["recommendation-approved", "rejected"],
+    ["recommendation-rejected", "rejected"],
+    ["ticket-updated", "rejected"],
+  ] as const)("rejects result %s/%s contradictions", (action, result) => {
+    const parsed = AuditEventSchema.safeParse({
+      id: "00c96411-a595-4e2a-8869-c219d7637980",
+      timestamp: "2026-06-10T08:40:01.000Z",
+      actor: "casey",
+      action,
+      ticketId: ticket.id,
+      before: {},
+      after: {},
+      rationale: "Audit action result consistency.",
+      knowledgeArticleIds: [],
+      result,
+      ...(result === "rejected"
+        ? { rejectionReason: "The operation was rejected." }
+        : {}),
+    });
+
+    expect(parsed.success).toBe(false);
+    if (!parsed.success) {
+      expect(parsed.error.issues).toContainEqual(
+        expect.objectContaining({
+          path: ["result"],
+          message: "Audit action and result are inconsistent.",
+        }),
+      );
+    }
+  });
+
   it("rejects unknown fields on strict records", () => {
     expect(TicketSchema.safeParse({ ...ticket, unexpected: true }).success).toBe(false);
   });

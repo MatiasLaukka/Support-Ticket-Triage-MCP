@@ -262,6 +262,16 @@ export const AuditEventSchema = z
         path: ["rejectionReason"],
       });
     }
+
+    const expectedResult =
+      event.action === "approval-rejected" ? "rejected" : "success";
+    if (event.result !== expectedResult) {
+      context.addIssue({
+        code: "custom",
+        message: "Audit action and result are inconsistent.",
+        path: ["result"],
+      });
+    }
   });
 
 export const ExpectedOutcomeSchema = z

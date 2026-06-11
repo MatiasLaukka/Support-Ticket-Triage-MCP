@@ -99,6 +99,19 @@ async function assertSafeFile(path: string): Promise<void> {
   }
 }
 
+async function initializeDirectory(path: string): Promise<void> {
+  try {
+    await assertNoLinkedPath(path);
+    await mkdir(path, { recursive: true });
+    await assertNoLinkedPath(path);
+  } catch (error) {
+    if (error instanceof DomainError) {
+      throw error;
+    }
+    throw repositoryError("Repository could not be initialized.");
+  }
+}
+
 function parseTickets(value: unknown): Ticket[] {
   const result = TicketSchema.array().safeParse(value);
   if (!result.success) {
@@ -199,9 +212,7 @@ export class TicketRepository {
   }
 
   async initialize(): Promise<void> {
-    await assertNoLinkedPath(this.runtimeRoot);
-    await mkdir(this.runtimeRoot, { recursive: true });
-    await assertNoLinkedPath(this.runtimeRoot);
+    await initializeDirectory(this.runtimeRoot);
 
     try {
       await this.readTickets();

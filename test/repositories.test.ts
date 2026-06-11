@@ -159,6 +159,23 @@ afterEach(async () => {
 });
 
 describe("TicketRepository", () => {
+  it("maps runtime directory creation failures to a safe repository error", async () => {
+    const root = await temporaryRoot();
+    const blockingFile = resolve(root, "blocked");
+    const seedFile = resolve(root, "tickets.seed.json");
+    await writeFile(blockingFile, "not a directory", "utf8");
+    await writeJson(seedFile, [baseTicket]);
+
+    await expect(
+      new TicketRepository(resolve(blockingFile, "runtime"), seedFile).initialize(),
+    ).rejects.toSatisfy(
+      expectDomainError(
+        "REPOSITORY_ERROR",
+        "Repository could not be initialized.",
+      ),
+    );
+  });
+
   it("initializes runtime tickets from seed without overwriting existing state", async () => {
     const root = await temporaryRoot();
     const runtimeRoot = resolve(root, "runtime");
@@ -356,6 +373,19 @@ describe("TicketRepository", () => {
 });
 
 describe("KnowledgeRepository", () => {
+  it("maps an unusable knowledge root to a safe repository error", async () => {
+    const root = await temporaryRoot();
+    const knowledgeRoot = resolve(root, "knowledge");
+    await writeFile(knowledgeRoot, "not a directory", "utf8");
+
+    await expect(new KnowledgeRepository(knowledgeRoot).list()).rejects.toSatisfy(
+      expectDomainError(
+        "REPOSITORY_ERROR",
+        "Knowledge repository is unavailable.",
+      ),
+    );
+  });
+
   it("parses Markdown frontmatter and searches case-insensitively", async () => {
     const root = await temporaryRoot();
     const knowledgeRoot = resolve(root, "knowledge");
@@ -447,6 +477,23 @@ describe("KnowledgeRepository", () => {
 });
 
 describe("RecommendationRepository", () => {
+  it("maps repository directory creation failures to a safe repository error", async () => {
+    const root = await temporaryRoot();
+    const blockingFile = resolve(root, "blocked");
+    await writeFile(blockingFile, "not a directory", "utf8");
+
+    await expect(
+      new RecommendationRepository(resolve(blockingFile, "recommendations")).create(
+        recommendation,
+      ),
+    ).rejects.toSatisfy(
+      expectDomainError(
+        "REPOSITORY_ERROR",
+        "Repository could not be initialized.",
+      ),
+    );
+  });
+
   it("creates, reads, and resolves a validated recommendation", async () => {
     const root = await temporaryRoot();
     const repository = new RecommendationRepository(resolve(root, "recommendations"));
@@ -523,6 +570,23 @@ describe("RecommendationRepository", () => {
 });
 
 describe("AuditRepository", () => {
+  it("maps audit directory creation failures to a safe repository error", async () => {
+    const root = await temporaryRoot();
+    const blockingFile = resolve(root, "blocked");
+    await writeFile(blockingFile, "not a directory", "utf8");
+
+    await expect(
+      new AuditRepository(resolve(blockingFile, "audit", "events.jsonl")).append(
+        auditEvent,
+      ),
+    ).rejects.toSatisfy(
+      expectDomainError(
+        "REPOSITORY_ERROR",
+        "Repository could not be initialized.",
+      ),
+    );
+  });
+
   it("appends one validated JSON object per line and filters by ticket", async () => {
     const root = await temporaryRoot();
     const file = resolve(root, "audit", "events.jsonl");

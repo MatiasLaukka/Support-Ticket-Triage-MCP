@@ -66,6 +66,19 @@ async function assertSafeFile(path: string): Promise<void> {
   }
 }
 
+async function initializeDirectory(path: string): Promise<void> {
+  try {
+    await assertNoLinkedPath(path);
+    await mkdir(path, { recursive: true });
+    await assertNoLinkedPath(path);
+  } catch (error) {
+    if (error instanceof DomainError) {
+      throw error;
+    }
+    throw repositoryError("Repository could not be initialized.");
+  }
+}
+
 export class RecommendationRepository {
   private readonly root: string;
 
@@ -78,9 +91,7 @@ export class RecommendationRepository {
     if (!parsed.success) {
       throw repositoryError("Repository data is invalid.");
     }
-    await assertNoLinkedPath(this.root);
-    await mkdir(this.root, { recursive: true });
-    await assertNoLinkedPath(this.root);
+    await initializeDirectory(this.root);
 
     const path = this.pathFor(parsed.data.id);
     let handle;

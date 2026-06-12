@@ -162,6 +162,17 @@ function constructWithFileSystem<T>(
   return new InjectableRepository(...args, fileSystem);
 }
 
+function deferred(): {
+  promise: Promise<void>;
+  resolve: () => void;
+} {
+  let resolvePromise = (): void => undefined;
+  const promise = new Promise<void>((resolve) => {
+    resolvePromise = resolve;
+  });
+  return { promise, resolve: resolvePromise };
+}
+
 afterEach(async () => {
   await Promise.all(
     temporaryRoots.splice(0).map((root) =>
@@ -222,6 +233,84 @@ describe("TicketRepository", () => {
     await repository.initialize();
 
     expect(JSON.parse(await readFile(runtimeFile, "utf8"))).toEqual(existing);
+  });
+
+  it("cleans a failed initial ticket write and allows retry", async () => {
+    const root = await temporaryRoot();
+    const runtimeRoot = resolve(root, "runtime");
+    const seedFile = resolve(root, "tickets.seed.json");
+    await writeJson(seedFile, [baseTicket]);
+    let failFirstWrite = true;
+    const repository = constructWithFileSystem(
+      TicketRepository,
+      [runtimeRoot, seedFile],
+      {
+        open: async (...args: Parameters<typeof open>) => {
+          const handle = await open(...args);
+          return {
+            readFile: handle.readFile.bind(handle),
+            writeFile: async (
+              value: Parameters<typeof handle.writeFile>[0],
+              options?: Parameters<typeof handle.writeFile>[1],
+            ) => {
+              if (failFirstWrite) {
+                failFirstWrite = false;
+                await handle.writeFile("partial", "utf8");
+                throw new Error(`write failed at ${runtimeRoot}`);
+              }
+              return handle.writeFile(value, options);
+            },
+            sync: handle.sync.bind(handle),
+            stat: handle.stat.bind(handle),
+            close: handle.close.bind(handle),
+          };
+        },
+      },
+    );
+
+    await expect(repository.initialize()).rejects.toSatisfy(
+      expectDomainError(
+        "REPOSITORY_ERROR",
+        "Repository could not be initialized.",
+      ),
+    );
+    expect(await readdir(runtimeRoot)).toEqual([]);
+
+    await expect(repository.initialize()).resolves.toBeUndefined();
+    await expect(repository.get("TKT-1001")).resolves.toEqual(baseTicket);
+    expect(await readdir(runtimeRoot)).toEqual(["tickets.json"]);
+  });
+
+  it("rolls back a ticket published when temporary-link cleanup fails", async () => {
+    const root = await temporaryRoot();
+    const runtimeRoot = resolve(root, "runtime");
+    const seedFile = resolve(root, "tickets.seed.json");
+    await writeJson(seedFile, [baseTicket]);
+    let failFirstRemove = true;
+    const repository = constructWithFileSystem(
+      TicketRepository,
+      [runtimeRoot, seedFile],
+      {
+        rm: async (...args: Parameters<typeof rm>) => {
+          if (failFirstRemove) {
+            failFirstRemove = false;
+            throw new Error(`remove failed at ${runtimeRoot}`);
+          }
+          return rm(...args);
+        },
+      },
+    );
+
+    await expect(repository.initialize()).rejects.toSatisfy(
+      expectDomainError(
+        "REPOSITORY_ERROR",
+        "Repository could not be initialized.",
+      ),
+    );
+    expect(await readdir(runtimeRoot)).toEqual([]);
+
+    await expect(repository.initialize()).resolves.toBeUndefined();
+    await expect(repository.get("TKT-1001")).resolves.toEqual(baseTicket);
   });
 
   it.each([
@@ -383,6 +472,37 @@ describe("TicketRepository", () => {
     await expect(repository.get("TKT-1001")).resolves.toEqual(baseTicket);
   });
 
+  it("serializes revision-checked updates across repository instances", async () => {
+    const { runtimeRoot, seedFile } = await createTicketRepository([baseTicket]);
+    const first = new TicketRepository(runtimeRoot, seedFile);
+    const second = new TicketRepository(runtimeRoot, seedFile);
+
+    const results = await Promise.allSettled([
+      first.update("TKT-1001", 2, (current) => ({
+        ...current,
+        status: "in-progress",
+        updatedAt: "2026-06-10T08:45:00.000Z",
+      })),
+      second.update("TKT-1001", 2, (current) => ({
+        ...current,
+        status: "resolved",
+        updatedAt: "2026-06-10T08:46:00.000Z",
+      })),
+    ]);
+
+    expect(results.filter(({ status }) => status === "fulfilled")).toHaveLength(1);
+    const rejection = results.find(({ status }) => status === "rejected");
+    expect(rejection).toMatchObject({
+      status: "rejected",
+      reason: expect.objectContaining({
+        name: "DomainError",
+        code: "REVISION_CONFLICT",
+        message: "Ticket revision does not match.",
+      }),
+    });
+    await expect(first.get("TKT-1001")).resolves.toMatchObject({ revision: 3 });
+  });
+
   it("does not let temporary-file cleanup override a safe update error", async () => {
     const { runtimeRoot, seedFile } = await createTicketRepository([baseTicket]);
     const repository = constructWithFileSystem(
@@ -459,6 +579,34 @@ describe("TicketRepository", () => {
       ),
     );
   });
+
+  it("rejects a linked opened ticket handle after preflight validation", async () => {
+    const { runtimeRoot, seedFile } = await createTicketRepository([baseTicket]);
+    const repository = constructWithFileSystem(
+      TicketRepository,
+      [runtimeRoot, seedFile],
+      {
+        open: async (...args: Parameters<typeof open>) => {
+          const handle = await open(...args);
+          return {
+            readFile: handle.readFile.bind(handle),
+            stat: async () => ({
+              isFile: () => true,
+              nlink: 2,
+            }),
+            close: handle.close.bind(handle),
+          };
+        },
+      },
+    );
+
+    await expect(repository.get("TKT-1001")).rejects.toSatisfy(
+      expectDomainError(
+        "REPOSITORY_ERROR",
+        "Repository contains an unsupported linked path.",
+      ),
+    );
+  });
 });
 
 describe("KnowledgeRepository", () => {
@@ -495,7 +643,7 @@ describe("KnowledgeRepository", () => {
       "utf8",
     );
     await writeFile(
-      resolve(knowledgeRoot, "billing.md"),
+      resolve(knowledgeRoot, "billing-refunds.md"),
       [
         "---",
         "id: billing-refunds",
@@ -525,6 +673,77 @@ describe("KnowledgeRepository", () => {
     await expect(repository.search("BILLING", 1)).resolves.toEqual([
       expect.objectContaining({ id: "billing-refunds" }),
     ]);
+  });
+
+  it("requires frontmatter IDs to match filename stems", async () => {
+    const root = await temporaryRoot();
+    const knowledgeRoot = resolve(root, "knowledge");
+    await mkdir(knowledgeRoot);
+    await writeFile(
+      resolve(knowledgeRoot, "api-errors.md"),
+      "---\nid: wrong-id\ntitle: API Errors\ntags: api\n---\nBody.\n",
+      "utf8",
+    );
+
+    await expect(new KnowledgeRepository(knowledgeRoot).list()).rejects.toSatisfy(
+      expectDomainError("REPOSITORY_ERROR", "Repository data is invalid."),
+    );
+  });
+
+  it("rejects duplicate knowledge article IDs", async () => {
+    const root = await temporaryRoot();
+    const knowledgeRoot = resolve(root, "knowledge");
+    await mkdir(knowledgeRoot);
+    await writeFile(
+      resolve(knowledgeRoot, "first.md"),
+      "---\nid: duplicate\ntitle: First\ntags: test\n---\nFirst body.\n",
+      "utf8",
+    );
+    await writeFile(
+      resolve(knowledgeRoot, "second.md"),
+      "---\nid: duplicate\ntitle: Second\ntags: test\n---\nSecond body.\n",
+      "utf8",
+    );
+
+    await expect(new KnowledgeRepository(knowledgeRoot).list()).rejects.toSatisfy(
+      expectDomainError("REPOSITORY_ERROR", "Repository data is invalid."),
+    );
+  });
+
+  it("rejects a linked opened knowledge handle after preflight validation", async () => {
+    const root = await temporaryRoot();
+    const knowledgeRoot = resolve(root, "knowledge");
+    await mkdir(knowledgeRoot);
+    await writeFile(
+      resolve(knowledgeRoot, "article.md"),
+      "---\nid: article\ntitle: Article\ntags: test\n---\nBody.\n",
+      "utf8",
+    );
+    const repository = constructWithFileSystem(
+      KnowledgeRepository,
+      [knowledgeRoot],
+      {
+        open: async (...args: Parameters<typeof open>) => {
+          const handle = await open(...args);
+          return {
+            readFile: handle.readFile.bind(handle),
+            stat: async () => ({
+              isFile: () => true,
+              nlink: 2,
+            }),
+            close: handle.close.bind(handle),
+          };
+        },
+      },
+    );
+
+    // Node pathname APIs cannot eliminate a hostile concurrent parent-junction swap.
+    await expect(repository.list()).rejects.toSatisfy(
+      expectDomainError(
+        "REPOSITORY_ERROR",
+        "Repository contains an unsupported linked path.",
+      ),
+    );
   });
 
   it("rejects traversal and linked knowledge roots or files", async () => {
@@ -596,6 +815,80 @@ describe("RecommendationRepository", () => {
     });
   });
 
+  it("cleans a failed recommendation create and allows retry", async () => {
+    const root = await temporaryRoot();
+    const repositoryRoot = resolve(root, "recommendations");
+    let failFirstWrite = true;
+    const repository = constructWithFileSystem(
+      RecommendationRepository,
+      [repositoryRoot],
+      {
+        open: async (...args: Parameters<typeof open>) => {
+          const handle = await open(...args);
+          return {
+            readFile: handle.readFile.bind(handle),
+            writeFile: async (
+              value: Parameters<typeof handle.writeFile>[0],
+              options?: Parameters<typeof handle.writeFile>[1],
+            ) => {
+              if (failFirstWrite) {
+                failFirstWrite = false;
+                await handle.writeFile("partial", "utf8");
+                throw new Error(`write failed at ${repositoryRoot}`);
+              }
+              return handle.writeFile(value, options);
+            },
+            sync: handle.sync.bind(handle),
+            stat: handle.stat.bind(handle),
+            close: handle.close.bind(handle),
+          };
+        },
+      },
+    );
+
+    await expect(repository.create(recommendation)).rejects.toSatisfy(
+      expectDomainError(
+        "REPOSITORY_ERROR",
+        "Recommendation could not be persisted.",
+      ),
+    );
+    expect(await readdir(repositoryRoot)).toEqual([]);
+
+    await expect(repository.create(recommendation)).resolves.toBeUndefined();
+    await expect(repository.get(recommendation.id)).resolves.toEqual(recommendation);
+    expect(await readdir(repositoryRoot)).toEqual([`${recommendation.id}.json`]);
+  });
+
+  it("rolls back a recommendation published when temporary-link cleanup fails", async () => {
+    const root = await temporaryRoot();
+    const repositoryRoot = resolve(root, "recommendations");
+    let failFirstRemove = true;
+    const repository = constructWithFileSystem(
+      RecommendationRepository,
+      [repositoryRoot],
+      {
+        rm: async (...args: Parameters<typeof rm>) => {
+          if (failFirstRemove) {
+            failFirstRemove = false;
+            throw new Error(`remove failed at ${repositoryRoot}`);
+          }
+          return rm(...args);
+        },
+      },
+    );
+
+    await expect(repository.create(recommendation)).rejects.toSatisfy(
+      expectDomainError(
+        "REPOSITORY_ERROR",
+        "Recommendation could not be persisted.",
+      ),
+    );
+    expect(await readdir(repositoryRoot)).toEqual([]);
+
+    await expect(repository.create(recommendation)).resolves.toBeUndefined();
+    await expect(repository.get(recommendation.id)).resolves.toEqual(recommendation);
+  });
+
   it("ignores close cleanup failure after a successful create", async () => {
     const root = await temporaryRoot();
     const repositoryRoot = resolve(root, "recommendations");
@@ -609,6 +902,7 @@ describe("RecommendationRepository", () => {
           const handle = await open(...args);
           return {
             writeFile: handle.writeFile.bind(handle),
+            stat: handle.stat.bind(handle),
             sync: handle.sync.bind(handle),
             close: async () => {
               await handle.close();
@@ -681,6 +975,34 @@ describe("RecommendationRepository", () => {
     );
   });
 
+  it("serializes conflicting resolution across repository instances", async () => {
+    const root = await temporaryRoot();
+    const repositoryRoot = resolve(root, "recommendations");
+    const first = new RecommendationRepository(repositoryRoot);
+    const second = new RecommendationRepository(repositoryRoot);
+    await first.create(recommendation);
+
+    const results = await Promise.allSettled([
+      first.markResolved(recommendation.id, "approved"),
+      second.markResolved(recommendation.id, "rejected"),
+    ]);
+
+    expect(results.filter(({ status }) => status === "fulfilled")).toHaveLength(1);
+    const rejection = results.find(({ status }) => status === "rejected");
+    expect(rejection).toMatchObject({
+      status: "rejected",
+      reason: expect.objectContaining({
+        name: "DomainError",
+        code: "REPOSITORY_ERROR",
+        message: "Recommendation is already resolved.",
+      }),
+    });
+    const finalValue = await first.get(recommendation.id);
+    const successfulResolution =
+      results[0]?.status === "fulfilled" ? "approved" : "rejected";
+    expect(finalValue.resolution).toBe(successfulResolution);
+  });
+
   it("rejects traversal and linked recommendation roots or files", async () => {
     const root = await temporaryRoot();
     const actualRoot = resolve(root, "actual");
@@ -713,6 +1035,72 @@ describe("RecommendationRepository", () => {
         "Repository path is not allowed.",
       ),
     );
+  });
+
+  it("rejects a linked opened recommendation handle after preflight validation", async () => {
+    const root = await temporaryRoot();
+    const repositoryRoot = resolve(root, "recommendations");
+    const setupRepository = new RecommendationRepository(repositoryRoot);
+    await setupRepository.create(recommendation);
+    const repository = constructWithFileSystem(
+      RecommendationRepository,
+      [repositoryRoot],
+      {
+        open: async (...args: Parameters<typeof open>) => {
+          const handle = await open(...args);
+          return {
+            readFile: handle.readFile.bind(handle),
+            stat: async () => ({
+              isFile: () => true,
+              nlink: 2,
+            }),
+            close: handle.close.bind(handle),
+          };
+        },
+      },
+    );
+
+    await expect(repository.get(recommendation.id)).rejects.toSatisfy(
+      expectDomainError(
+        "REPOSITORY_ERROR",
+        "Repository contains an unsupported linked path.",
+      ),
+    );
+  });
+
+  it("rejects a linked newly opened recommendation write handle", async () => {
+    const root = await temporaryRoot();
+    const repositoryRoot = resolve(root, "recommendations");
+    let wrote = false;
+    const repository = constructWithFileSystem(
+      RecommendationRepository,
+      [repositoryRoot],
+      {
+        open: async (...args: Parameters<typeof open>) => {
+          const handle = await open(...args);
+          return {
+            writeFile: async (...writeArgs: Parameters<typeof handle.writeFile>) => {
+              wrote = true;
+              return handle.writeFile(...writeArgs);
+            },
+            sync: handle.sync.bind(handle),
+            stat: async () => ({
+              isFile: () => true,
+              nlink: 2,
+            }),
+            close: handle.close.bind(handle),
+          };
+        },
+      },
+    );
+
+    await expect(repository.create(recommendation)).rejects.toSatisfy(
+      expectDomainError(
+        "REPOSITORY_ERROR",
+        "Repository contains an unsupported linked path.",
+      ),
+    );
+    expect(wrote).toBe(false);
   });
 });
 
@@ -752,6 +1140,57 @@ describe("AuditRepository", () => {
     await expect(repository.list("TKT-1001")).resolves.toEqual([auditEvent]);
   });
 
+  it("rejects and rolls back a simulated partial audit write", async () => {
+    const root = await temporaryRoot();
+    const file = resolve(root, "audit", "events.jsonl");
+    let injectFirstAppend = true;
+    let appendWriteReached = false;
+    let rollbackOpenReached = false;
+    const repository = constructWithFileSystem(
+      AuditRepository,
+      [file],
+      {
+        open: async (...args: Parameters<typeof open>) => {
+          const handle = await open(...args);
+          if (!injectFirstAppend) {
+            if (args[1] === "r+") {
+              rollbackOpenReached = true;
+            }
+            return handle;
+          }
+          injectFirstAppend = false;
+          return {
+            readFile: handle.readFile.bind(handle),
+            writeFile: async (
+              value: Parameters<typeof handle.writeFile>[0],
+            ) => {
+              appendWriteReached = true;
+              const buffer = Buffer.from(String(value));
+              await handle.writeFile(buffer.subarray(0, buffer.length - 1));
+              throw new Error(`short write at ${file}`);
+            },
+            sync: handle.sync.bind(handle),
+            stat: handle.stat.bind(handle),
+            close: handle.close.bind(handle),
+          };
+        },
+      },
+    );
+
+    await expect(repository.append(auditEvent)).rejects.toSatisfy(
+      expectDomainError(
+        "REPOSITORY_ERROR",
+        "Audit event could not be persisted.",
+      ),
+    );
+    expect(appendWriteReached).toBe(true);
+    expect(rollbackOpenReached).toBe(true);
+    await expect(repository.list()).resolves.toEqual([]);
+
+    await expect(repository.append(auditEvent)).resolves.toBeUndefined();
+    await expect(repository.list()).resolves.toEqual([auditEvent]);
+  });
+
   it("ignores close cleanup failure after a successful append", async () => {
     const root = await temporaryRoot();
     const file = resolve(root, "audit", "events.jsonl");
@@ -765,6 +1204,8 @@ describe("AuditRepository", () => {
           const handle = await open(...args);
           return {
             write: handle.write.bind(handle),
+            writeFile: handle.writeFile.bind(handle),
+            stat: handle.stat.bind(handle),
             sync: handle.sync.bind(handle),
             close: async () => {
               await handle.close();
@@ -778,6 +1219,54 @@ describe("AuditRepository", () => {
     await expect(repository.append(auditEvent)).resolves.toBeUndefined();
     expect(injectedOpenCalled).toBe(true);
     await expect(new AuditRepository(file).list()).resolves.toEqual([auditEvent]);
+  });
+
+  it("makes list wait for an active append from another instance", async () => {
+    const root = await temporaryRoot();
+    const file = resolve(root, "audit", "events.jsonl");
+    const writeStarted = deferred();
+    const allowWrite = deferred();
+    const writer = constructWithFileSystem(
+      AuditRepository,
+      [file],
+      {
+        open: async (...args: Parameters<typeof open>) => {
+          const handle = await open(...args);
+          return {
+            write: async (...writeArgs: Parameters<typeof handle.write>) => {
+              writeStarted.resolve();
+              await allowWrite.promise;
+              return handle.write(...writeArgs);
+            },
+            writeFile: async (...writeArgs: Parameters<typeof handle.writeFile>) => {
+              writeStarted.resolve();
+              await allowWrite.promise;
+              return handle.writeFile(...writeArgs);
+            },
+            sync: handle.sync.bind(handle),
+            stat: handle.stat.bind(handle),
+            close: handle.close.bind(handle),
+          };
+        },
+      },
+    );
+    const reader = new AuditRepository(file);
+
+    const appendPromise = writer.append(auditEvent);
+    await writeStarted.promise;
+    const listPromise = reader.list();
+    await expect(
+      Promise.race([
+        listPromise.then(() => "listed"),
+        new Promise<string>((resolveRace) =>
+          setTimeout(() => resolveRace("waiting"), 25),
+        ),
+      ]),
+    ).resolves.toBe("waiting");
+
+    allowWrite.resolve();
+    await appendPromise;
+    await expect(listPromise).resolves.toEqual([auditEvent]);
   });
 
   it("detects malformed JSONL lines without leaking the file path", async () => {
@@ -805,6 +1294,37 @@ describe("AuditRepository", () => {
     await link(file, linkedFile);
 
     await expect(new AuditRepository(file).append(auditEvent)).rejects.toSatisfy(
+      expectDomainError(
+        "REPOSITORY_ERROR",
+        "Repository contains an unsupported linked path.",
+      ),
+    );
+  });
+
+  it("rejects a linked opened audit handle after preflight validation", async () => {
+    const root = await temporaryRoot();
+    const file = resolve(root, "events.jsonl");
+    await writeFile(file, `${JSON.stringify(auditEvent)}\n`, "utf8");
+    const repository = constructWithFileSystem(
+      AuditRepository,
+      [file],
+      {
+        open: async (...args: Parameters<typeof open>) => {
+          const handle = await open(...args);
+          return {
+            readFile: handle.readFile.bind(handle),
+            stat: async () => ({
+              isFile: () => true,
+              nlink: 2,
+              size: 0,
+            }),
+            close: handle.close.bind(handle),
+          };
+        },
+      },
+    );
+
+    await expect(repository.list()).rejects.toSatisfy(
       expectDomainError(
         "REPOSITORY_ERROR",
         "Repository contains an unsupported linked path.",

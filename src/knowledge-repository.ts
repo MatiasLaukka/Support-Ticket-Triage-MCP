@@ -1,4 +1,9 @@
-import { lstat, readdir, readFile } from "node:fs/promises";
+import {
+  lstat,
+  open,
+  readdir,
+  type FileHandle,
+} from "node:fs/promises";
 import { dirname, parse, resolve } from "node:path";
 import {
   KnowledgeArticleSchema,
@@ -9,6 +14,12 @@ import { DomainError } from "./errors.js";
 const ARTICLE_ID_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const DEFAULT_SEARCH_LIMIT = 10;
 const MAX_SEARCH_LIMIT = 50;
+const defaultFileSystem = { open, readdir };
+type KnowledgeFileSystem = typeof defaultFileSystem;
+
+interface Closable {
+  close(): Promise<void>;
+}
 
 function repositoryError(message: string): DomainError {
   return new DomainError(message, "REPOSITORY_ERROR");
@@ -56,6 +67,30 @@ async function assertSafeFile(path: string): Promise<void> {
       throw error;
     }
     throw repositoryError("Repository path could not be inspected.");
+  }
+}
+
+async function assertSafeOpenedFile(
+  handle: Pick<FileHandle, "stat">,
+): Promise<void> {
+  try {
+    const stats = await handle.stat();
+    if (!stats.isFile() || stats.nlink !== 1) {
+      throw repositoryError("Repository contains an unsupported linked path.");
+    }
+  } catch (error) {
+    if (error instanceof DomainError) {
+      throw error;
+    }
+    throw repositoryError("Repository path could not be inspected.");
+  }
+}
+
+async function closeQuietly(handle: Closable | undefined): Promise<void> {
+  try {
+    await handle?.close();
+  } catch {
+    // Cleanup must not replace the repository operation's safe result.
   }
 }
 
@@ -108,21 +143,29 @@ function parseArticle(content: string): KnowledgeArticle {
 
 export class KnowledgeRepository {
   private readonly root: string;
+  private readonly fileSystem: KnowledgeFileSystem;
 
-  constructor(root: string) {
+  constructor(
+    root: string,
+    fileSystem: Partial<KnowledgeFileSystem> = {},
+  ) {
     this.root = resolve(root);
+    this.fileSystem = { ...defaultFileSystem, ...fileSystem };
   }
 
   async list(): Promise<KnowledgeArticle[]> {
     await assertNoLinkedPath(this.root);
     let entries;
     try {
-      entries = await readdir(this.root, { withFileTypes: true });
+      entries = await this.fileSystem.readdir(this.root, { withFileTypes: true });
     } catch {
       throw repositoryError("Knowledge repository is unavailable.");
     }
 
-    const articles: KnowledgeArticle[] = [];
+    const parsedArticles: Array<{
+      article: KnowledgeArticle;
+      filenameStem: string;
+    }> = [];
     for (const entry of entries.sort((left, right) =>
       left.name.localeCompare(right.name),
     )) {
@@ -132,16 +175,37 @@ export class KnowledgeRepository {
         continue;
       }
       await assertSafeFile(path);
+      let handle;
       try {
-        articles.push(parseArticle(await readFile(path, "utf8")));
+        handle = await this.fileSystem.open(path, "r");
+        await assertSafeOpenedFile(handle);
+        parsedArticles.push({
+          article: parseArticle(await handle.readFile("utf8")),
+          filenameStem: entry.name.slice(0, -3),
+        });
       } catch (error) {
         if (error instanceof DomainError) {
           throw error;
         }
         throw repositoryError("Repository data is invalid.");
+      } finally {
+        await closeQuietly(handle);
       }
     }
-    return articles;
+
+    const ids = new Set<string>();
+    for (const { article } of parsedArticles) {
+      if (ids.has(article.id)) {
+        throw repositoryError("Repository data is invalid.");
+      }
+      ids.add(article.id);
+    }
+    for (const { article, filenameStem } of parsedArticles) {
+      if (article.id !== filenameStem) {
+        throw repositoryError("Repository data is invalid.");
+      }
+    }
+    return parsedArticles.map(({ article }) => article);
   }
 
   async get(id: string): Promise<KnowledgeArticle> {

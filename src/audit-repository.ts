@@ -1,4 +1,9 @@
-import { lstat, mkdir, open, readFile } from "node:fs/promises";
+import {
+  lstat,
+  mkdir,
+  open,
+  type FileHandle,
+} from "node:fs/promises";
 import { dirname, parse, resolve } from "node:path";
 import {
   AuditEventSchema,
@@ -10,6 +15,7 @@ import { DomainError } from "./errors.js";
 
 const defaultFileSystem = { open };
 type AuditFileSystem = typeof defaultFileSystem;
+const auditOperations = new Map<string, Promise<void>>();
 
 interface Closable {
   close(): Promise<void>;
@@ -64,6 +70,22 @@ async function assertSafeFile(path: string): Promise<void> {
   }
 }
 
+async function assertSafeOpenedFile(
+  handle: Pick<FileHandle, "stat">,
+): Promise<void> {
+  try {
+    const stats = await handle.stat();
+    if (!stats.isFile() || stats.nlink !== 1) {
+      throw repositoryError("Repository contains an unsupported linked path.");
+    }
+  } catch (error) {
+    if (error instanceof DomainError) {
+      throw error;
+    }
+    throw repositoryError("Repository path could not be inspected.");
+  }
+}
+
 async function initializeDirectory(path: string): Promise<void> {
   try {
     await assertNoLinkedPath(path);
@@ -85,10 +107,34 @@ async function closeQuietly(handle: Closable | undefined): Promise<void> {
   }
 }
 
+async function serializeByPath<T>(
+  path: string,
+  operation: () => Promise<T>,
+): Promise<T> {
+  const previous = auditOperations.get(path) ?? Promise.resolve();
+  let release = (): void => undefined;
+  const current = new Promise<void>((resolveOperation) => {
+    release = resolveOperation;
+  });
+  auditOperations.set(path, current);
+  await previous;
+  try {
+    return await operation();
+  } finally {
+    release();
+    if (auditOperations.get(path) === current) {
+      auditOperations.delete(path);
+    }
+  }
+}
+
+async function waitForPath(path: string): Promise<void> {
+  await auditOperations.get(path);
+}
+
 export class AuditRepository {
   private readonly file: string;
   private readonly fileSystem: AuditFileSystem;
-  private appendQueue: Promise<void> = Promise.resolve();
 
   constructor(file: string, fileSystem: Partial<AuditFileSystem> = {}) {
     this.file = resolve(file);
@@ -101,14 +147,7 @@ export class AuditRepository {
       throw repositoryError("Repository data is invalid.");
     }
 
-    const previousAppend = this.appendQueue;
-    let releaseAppend = (): void => undefined;
-    this.appendQueue = new Promise<void>((resolveQueue) => {
-      releaseAppend = resolveQueue;
-    });
-    await previousAppend;
-
-    try {
+    return serializeByPath(this.file, async () => {
       const root = dirname(this.file);
       await initializeDirectory(root);
       try {
@@ -120,11 +159,31 @@ export class AuditRepository {
       }
 
       let handle;
+      let originalSize = 0;
+      let appendStarted = false;
       try {
-        handle = await this.fileSystem.open(this.file, "a");
-        await handle.write(`${JSON.stringify(parsed.data)}\n`, undefined, "utf8");
+        handle = await this.fileSystem.open(this.file, "a+");
+        await assertSafeOpenedFile(handle);
+        originalSize = (await handle.stat()).size;
+        appendStarted = true;
+        await handle.writeFile(`${JSON.stringify(parsed.data)}\n`, "utf8");
         await handle.sync();
       } catch (error) {
+        if (appendStarted) {
+          await closeQuietly(handle);
+          handle = undefined;
+          let rollbackHandle;
+          try {
+            rollbackHandle = await this.fileSystem.open(this.file, "r+");
+            await assertSafeOpenedFile(rollbackHandle);
+            await rollbackHandle.truncate(originalSize);
+            await rollbackHandle.sync();
+          } catch {
+            // Preserve the safe append error even if rollback cannot complete.
+          } finally {
+            await closeQuietly(rollbackHandle);
+          }
+        }
         if (error instanceof DomainError) {
           throw error;
         }
@@ -132,12 +191,11 @@ export class AuditRepository {
       } finally {
         await closeQuietly(handle);
       }
-    } finally {
-      releaseAppend();
-    }
+    });
   }
 
   async list(ticketId?: TicketId): Promise<AuditEvent[]> {
+    await waitForPath(this.file);
     let parsedTicketId: TicketId | undefined;
     if (ticketId !== undefined) {
       const result = TicketIdSchema.safeParse(ticketId);
@@ -157,10 +215,18 @@ export class AuditRepository {
     }
 
     let content: string;
+    let handle;
     try {
-      content = await readFile(this.file, "utf8");
-    } catch {
+      handle = await this.fileSystem.open(this.file, "r");
+      await assertSafeOpenedFile(handle);
+      content = await handle.readFile("utf8");
+    } catch (error) {
+      if (error instanceof DomainError) {
+        throw error;
+      }
       throw repositoryError("Audit log could not be read.");
+    } finally {
+      await closeQuietly(handle);
     }
     if (content === "") {
       return [];

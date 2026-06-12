@@ -1,10 +1,11 @@
 import {
   lstat,
+  link,
   mkdir,
   open,
-  readFile,
   rename,
   rm,
+  type FileHandle,
 } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { dirname, parse, resolve } from "node:path";
@@ -48,8 +49,9 @@ export interface PaginatedTickets {
 const DEFAULT_LIMIT = 20;
 const MAX_LIMIT = 50;
 const AT_RISK_WINDOW_MS = 60 * 60 * 1000;
-const defaultFileSystem = { open, rename, rm };
+const defaultFileSystem = { link, open, rename, rm };
 type TicketFileSystem = typeof defaultFileSystem;
+const ticketOperations = new Map<string, Promise<void>>();
 
 interface Closable {
   close(): Promise<void>;
@@ -105,6 +107,22 @@ async function assertSafeFile(path: string): Promise<void> {
   }
 }
 
+async function assertSafeOpenedFile(
+  handle: Pick<FileHandle, "stat">,
+): Promise<void> {
+  try {
+    const stats = await handle.stat();
+    if (!stats.isFile() || stats.nlink !== 1) {
+      throw repositoryError("Repository contains an unsupported linked path.");
+    }
+  } catch (error) {
+    if (error instanceof DomainError) {
+      throw error;
+    }
+    throw repositoryError("Repository path could not be inspected.");
+  }
+}
+
 async function initializeDirectory(path: string): Promise<void> {
   try {
     await assertNoLinkedPath(path);
@@ -135,6 +153,31 @@ async function removeQuietly(
   } catch {
     // Best-effort cleanup must not leak local filesystem details.
   }
+}
+
+async function serializeByPath<T>(
+  path: string,
+  operation: () => Promise<T>,
+): Promise<T> {
+  const previous = ticketOperations.get(path) ?? Promise.resolve();
+  let release = (): void => undefined;
+  const current = new Promise<void>((resolveOperation) => {
+    release = resolveOperation;
+  });
+  ticketOperations.set(path, current);
+  await previous;
+  try {
+    return await operation();
+  } finally {
+    release();
+    if (ticketOperations.get(path) === current) {
+      ticketOperations.delete(path);
+    }
+  }
+}
+
+async function waitForPath(path: string): Promise<void> {
+  await ticketOperations.get(path);
 }
 
 function parseTickets(value: unknown): Ticket[] {
@@ -229,7 +272,6 @@ export class TicketRepository {
   private readonly seedFile: string;
   private readonly runtimeFile: string;
   private readonly fileSystem: TicketFileSystem;
-  private updateQueue: Promise<void> = Promise.resolve();
 
   constructor(
     runtimeRoot: string,
@@ -243,52 +285,71 @@ export class TicketRepository {
   }
 
   async initialize(): Promise<void> {
-    await initializeDirectory(this.runtimeRoot);
+    return serializeByPath(this.runtimeFile, async () => {
+      await initializeDirectory(this.runtimeRoot);
 
-    try {
-      await this.readTicketsFrom(this.runtimeFile);
-      return;
-    } catch (error) {
-      if (!(isMissing(error))) {
-        throw error;
-      }
-    }
-
-    const tickets = await this.readSeedTickets();
-    let handle;
-    try {
-      handle = await this.fileSystem.open(this.runtimeFile, "wx");
-      await handle.writeFile(`${JSON.stringify(tickets, null, 2)}\n`, "utf8");
-      await handle.sync();
-    } catch (error) {
-      if (
-        typeof error === "object" &&
-        error !== null &&
-        "code" in error &&
-        error.code === "EEXIST"
-      ) {
-        try {
-          await this.readTickets();
-        } catch (readError) {
-          if (readError instanceof DomainError) {
-            throw readError;
-          }
-          throw repositoryError("Repository could not be initialized.");
-        }
+      try {
+        await this.readTicketsFrom(this.runtimeFile);
         return;
+      } catch (error) {
+        if (!(isMissing(error))) {
+          throw error;
+        }
       }
-      if (error instanceof DomainError) {
-        throw error;
+
+      const tickets = await this.readSeedTickets();
+      const temporaryFile = resolve(
+        this.runtimeRoot,
+        `.tickets.json.${randomUUID()}.tmp`,
+      );
+      let handle;
+      let published = false;
+      try {
+        handle = await this.fileSystem.open(temporaryFile, "wx");
+        await assertSafeOpenedFile(handle);
+        await handle.writeFile(`${JSON.stringify(tickets, null, 2)}\n`, "utf8");
+        await handle.sync();
+        await closeQuietly(handle);
+        handle = undefined;
+        await this.fileSystem.link(temporaryFile, this.runtimeFile);
+        published = true;
+        await this.fileSystem.rm(temporaryFile, { force: true });
+        published = false;
+      } catch (error) {
+        if (published) {
+          await removeQuietly(this.fileSystem.rm, this.runtimeFile);
+        }
+        if (
+          typeof error === "object" &&
+          error !== null &&
+          "code" in error &&
+          error.code === "EEXIST"
+        ) {
+          try {
+            await this.readTicketsUnlocked();
+          } catch (readError) {
+            if (readError instanceof DomainError) {
+              throw readError;
+            }
+            throw repositoryError("Repository could not be initialized.");
+          }
+          return;
+        }
+        if (error instanceof DomainError) {
+          throw error;
+        }
+        throw repositoryError("Repository could not be initialized.");
+      } finally {
+        await closeQuietly(handle);
+        await removeQuietly(this.fileSystem.rm, temporaryFile);
       }
-      throw repositoryError("Repository could not be initialized.");
-    } finally {
-      await closeQuietly(handle);
-    }
+    });
   }
 
   async list(filter: TicketFilter): Promise<PaginatedTickets> {
+    await waitForPath(this.runtimeFile);
     const parsedFilter = parseFilter(filter);
-    const tickets = (await this.readTickets()).filter(
+    const tickets = (await this.readTicketsUnlocked()).filter(
       (candidate) =>
         (parsedFilter.status === undefined ||
           candidate.status === parsedFilter.status) &&
@@ -314,11 +375,12 @@ export class TicketRepository {
   }
 
   async get(id: TicketId): Promise<Ticket> {
+    await waitForPath(this.runtimeFile);
     const parsedId = TicketIdSchema.safeParse(id);
     if (!parsedId.success) {
       throw repositoryError("Repository path is not allowed.");
     }
-    const result = (await this.readTickets()).find(
+    const result = (await this.readTicketsUnlocked()).find(
       (candidate) => candidate.id === parsedId.data,
     );
     if (result === undefined) {
@@ -332,19 +394,12 @@ export class TicketRepository {
     expectedRevision: number,
     mutate: (ticket: Ticket) => Ticket,
   ): Promise<Ticket> {
-    const previousUpdate = this.updateQueue;
-    let releaseUpdate = (): void => undefined;
-    this.updateQueue = new Promise<void>((resolveQueue) => {
-      releaseUpdate = resolveQueue;
-    });
-    await previousUpdate;
-
-    try {
+    return serializeByPath(this.runtimeFile, async () => {
       const parsedId = TicketIdSchema.safeParse(id);
       if (!parsedId.success) {
         throw repositoryError("Repository path is not allowed.");
       }
-      const tickets = await this.readTickets();
+      const tickets = await this.readTicketsUnlocked();
       const index = tickets.findIndex(
         (candidate) => candidate.id === parsedId.data,
       );
@@ -379,12 +434,10 @@ export class TicketRepository {
       tickets[index] = parsed.data;
       await this.writeTicketsAtomically(tickets);
       return parsed.data;
-    } finally {
-      releaseUpdate();
-    }
+    });
   }
 
-  private async readTickets(): Promise<Ticket[]> {
+  private async readTicketsUnlocked(): Promise<Ticket[]> {
     try {
       return await this.readTicketsFrom(this.runtimeFile);
     } catch (error) {
@@ -408,13 +461,20 @@ export class TicketRepository {
 
   private async readTicketsFrom(path: string): Promise<Ticket[]> {
     await assertSafeFile(path);
+    let handle;
     try {
-      return parseTickets(JSON.parse(await readFile(path, "utf8")));
+      // This narrows local check/use races. Node pathname APIs cannot prevent
+      // a hostile concurrent parent-junction swap without native openat APIs.
+      handle = await this.fileSystem.open(path, "r");
+      await assertSafeOpenedFile(handle);
+      return parseTickets(JSON.parse(await handle.readFile("utf8")));
     } catch (error) {
       if (error instanceof DomainError || isMissing(error)) {
         throw error;
       }
       throw repositoryError("Repository data is invalid.");
+    } finally {
+      await closeQuietly(handle);
     }
   }
 
@@ -428,6 +488,7 @@ export class TicketRepository {
       await assertNoLinkedPath(this.runtimeRoot);
       await assertSafeFile(this.runtimeFile);
       handle = await this.fileSystem.open(temporaryFile, "wx");
+      await assertSafeOpenedFile(handle);
       await handle.writeFile(`${JSON.stringify(tickets, null, 2)}\n`, "utf8");
       await handle.sync();
       await handle.close();

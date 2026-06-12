@@ -1,11 +1,12 @@
 import { randomUUID } from "node:crypto";
 import {
   lstat,
+  link,
   mkdir,
   open,
-  readFile,
   rename,
   rm,
+  type FileHandle,
 } from "node:fs/promises";
 import { dirname, parse, resolve } from "node:path";
 import { z } from "zod";
@@ -16,8 +17,9 @@ import {
 import { DomainError } from "./errors.js";
 
 const RecommendationIdSchema = z.uuid();
-const defaultFileSystem = { open, rename, rm };
+const defaultFileSystem = { link, open, rename, rm };
 type RecommendationFileSystem = typeof defaultFileSystem;
+const recommendationOperations = new Map<string, Promise<void>>();
 
 interface Closable {
   close(): Promise<void>;
@@ -72,6 +74,22 @@ async function assertSafeFile(path: string): Promise<void> {
   }
 }
 
+async function assertSafeOpenedFile(
+  handle: Pick<FileHandle, "stat">,
+): Promise<void> {
+  try {
+    const stats = await handle.stat();
+    if (!stats.isFile() || stats.nlink !== 1) {
+      throw repositoryError("Repository contains an unsupported linked path.");
+    }
+  } catch (error) {
+    if (error instanceof DomainError) {
+      throw error;
+    }
+    throw repositoryError("Repository path could not be inspected.");
+  }
+}
+
 async function initializeDirectory(path: string): Promise<void> {
   try {
     await assertNoLinkedPath(path);
@@ -104,6 +122,31 @@ async function removeQuietly(
   }
 }
 
+async function serializeByPath<T>(
+  path: string,
+  operation: () => Promise<T>,
+): Promise<T> {
+  const previous = recommendationOperations.get(path) ?? Promise.resolve();
+  let release = (): void => undefined;
+  const current = new Promise<void>((resolveOperation) => {
+    release = resolveOperation;
+  });
+  recommendationOperations.set(path, current);
+  await previous;
+  try {
+    return await operation();
+  } finally {
+    release();
+    if (recommendationOperations.get(path) === current) {
+      recommendationOperations.delete(path);
+    }
+  }
+}
+
+async function waitForPath(path: string): Promise<void> {
+  await recommendationOperations.get(path);
+}
+
 export class RecommendationRepository {
   private readonly root: string;
   private readonly fileSystem: RecommendationFileSystem;
@@ -121,38 +164,63 @@ export class RecommendationRepository {
     if (!parsed.success) {
       throw repositoryError("Repository data is invalid.");
     }
-    await initializeDirectory(this.root);
-
     const path = this.pathFor(parsed.data.id);
-    let handle;
-    try {
-      handle = await this.fileSystem.open(path, "wx");
-      await handle.writeFile(`${JSON.stringify(parsed.data, null, 2)}\n`, "utf8");
-      await handle.sync();
-    } catch (error) {
-      if (
-        typeof error === "object" &&
-        error !== null &&
-        "code" in error &&
-        error.code === "EEXIST"
-      ) {
-        throw repositoryError("Recommendation already exists.");
+    return serializeByPath(path, async () => {
+      await initializeDirectory(this.root);
+      const temporaryFile = resolve(
+        this.root,
+        `.${parsed.data.id}.${randomUUID()}.tmp`,
+      );
+      let handle;
+      let published = false;
+      try {
+        handle = await this.fileSystem.open(temporaryFile, "wx");
+        await assertSafeOpenedFile(handle);
+        await handle.writeFile(`${JSON.stringify(parsed.data, null, 2)}\n`, "utf8");
+        await handle.sync();
+        await closeQuietly(handle);
+        handle = undefined;
+        await this.fileSystem.link(temporaryFile, path);
+        published = true;
+        await this.fileSystem.rm(temporaryFile, { force: true });
+        published = false;
+      } catch (error) {
+        if (published) {
+          await removeQuietly(this.fileSystem.rm, path);
+        }
+        if (
+          typeof error === "object" &&
+          error !== null &&
+          "code" in error &&
+          error.code === "EEXIST"
+        ) {
+          throw repositoryError("Recommendation already exists.");
+        }
+        if (error instanceof DomainError) {
+          throw error;
+        }
+        throw repositoryError("Recommendation could not be persisted.");
+      } finally {
+        await closeQuietly(handle);
+        await removeQuietly(this.fileSystem.rm, temporaryFile);
       }
-      if (error instanceof DomainError) {
-        throw error;
-      }
-      throw repositoryError("Recommendation could not be persisted.");
-    } finally {
-      await closeQuietly(handle);
-    }
+    });
   }
 
   async get(id: string): Promise<TriageRecommendation> {
     const path = this.pathFor(id);
+    await waitForPath(path);
+    return this.getUnlocked(path);
+  }
+
+  private async getUnlocked(path: string): Promise<TriageRecommendation> {
+    let handle;
     try {
       await assertSafeFile(path);
+      handle = await this.fileSystem.open(path, "r");
+      await assertSafeOpenedFile(handle);
       const result = TriageRecommendationSchema.safeParse(
-        JSON.parse(await readFile(path, "utf8")),
+        JSON.parse(await handle.readFile("utf8")),
       );
       if (!result.success) {
         throw repositoryError("Repository data is invalid.");
@@ -169,6 +237,8 @@ export class RecommendationRepository {
         );
       }
       throw repositoryError("Repository data is invalid.");
+    } finally {
+      await closeQuietly(handle);
     }
   }
 
@@ -176,34 +246,40 @@ export class RecommendationRepository {
     id: string,
     resolution: "approved" | "rejected",
   ): Promise<void> {
-    const recommendation = await this.get(id);
-    const updated = TriageRecommendationSchema.parse({
-      ...recommendation,
-      resolution,
-    });
     const path = this.pathFor(id);
-    const temporaryFile = resolve(
-      this.root,
-      `.${updated.id}.${randomUUID()}.tmp`,
-    );
-    let handle;
-    try {
-      handle = await this.fileSystem.open(temporaryFile, "wx");
-      await handle.writeFile(`${JSON.stringify(updated, null, 2)}\n`, "utf8");
-      await handle.sync();
-      await handle.close();
-      handle = undefined;
-      await assertSafeFile(path);
-      await this.fileSystem.rename(temporaryFile, path);
-    } catch (error) {
-      if (error instanceof DomainError) {
-        throw error;
+    return serializeByPath(path, async () => {
+      const recommendation = await this.getUnlocked(path);
+      if (recommendation.resolution !== "pending") {
+        throw repositoryError("Recommendation is already resolved.");
       }
-      throw repositoryError("Recommendation could not be persisted.");
-    } finally {
-      await closeQuietly(handle);
-      await removeQuietly(this.fileSystem.rm, temporaryFile);
-    }
+      const updated = TriageRecommendationSchema.parse({
+        ...recommendation,
+        resolution,
+      });
+      const temporaryFile = resolve(
+        this.root,
+        `.${updated.id}.${randomUUID()}.tmp`,
+      );
+      let handle;
+      try {
+        handle = await this.fileSystem.open(temporaryFile, "wx");
+        await assertSafeOpenedFile(handle);
+        await handle.writeFile(`${JSON.stringify(updated, null, 2)}\n`, "utf8");
+        await handle.sync();
+        await handle.close();
+        handle = undefined;
+        await assertSafeFile(path);
+        await this.fileSystem.rename(temporaryFile, path);
+      } catch (error) {
+        if (error instanceof DomainError) {
+          throw error;
+        }
+        throw repositoryError("Recommendation could not be persisted.");
+      } finally {
+        await closeQuietly(handle);
+        await removeQuietly(this.fileSystem.rm, temporaryFile);
+      }
+    });
   }
 
   private pathFor(id: string): string {

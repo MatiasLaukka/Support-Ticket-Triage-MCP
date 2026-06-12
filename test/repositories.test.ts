@@ -650,6 +650,85 @@ describe("TicketRepository", () => {
     );
   });
 
+  it.each([
+    [
+      "get",
+      (repository: TicketRepository) => repository.get("TKT-1001"),
+    ],
+    [
+      "list",
+      (repository: TicketRepository) => repository.list({}),
+    ],
+    [
+      "update",
+      (repository: TicketRepository) =>
+        repository.update("TKT-1001", 3, (ticket) => ticket),
+    ],
+    [
+      "updateWithCommit",
+      (repository: TicketRepository) =>
+        repository.updateWithCommit(
+          "TKT-1001",
+          3,
+          (ticket) => ticket,
+          async () => undefined,
+        ),
+    ],
+  ])(
+    "rejects same-path %s reentry from a transaction callback without deadlocking",
+    async (_operationName, operation) => {
+      const { repository } = await createTicketRepository([baseTicket]);
+
+      await expect(
+        repository.updateWithCommit(
+          "TKT-1001",
+          2,
+          (current) => ({
+            ...current,
+            priority: "P2",
+            updatedAt: "2026-06-10T08:45:00.000Z",
+          }),
+          async () =>
+            Promise.race([
+              operation(repository),
+              new Promise((_, reject) =>
+                setTimeout(
+                  () => reject(new Error("reentrant operation timed out")),
+                  100,
+                ),
+              ),
+            ]),
+        ),
+      ).rejects.toSatisfy(
+        expectDomainError(
+          "REPOSITORY_ERROR",
+          "Ticket transaction callback cannot reenter the same repository.",
+        ),
+      );
+      await expect(repository.get("TKT-1001")).resolves.toEqual(baseTicket);
+    },
+  );
+
+  it("allows a transaction callback to access an unrelated ticket repository path", async () => {
+    const first = await createTicketRepository([baseTicket]);
+    const otherTicket = ticket("TKT-1002");
+    const second = await createTicketRepository([otherTicket]);
+
+    const result = await first.repository.updateWithCommit(
+      "TKT-1001",
+      2,
+      (current) => ({
+        ...current,
+        priority: "P2",
+        updatedAt: "2026-06-10T08:45:00.000Z",
+      }),
+      async () => second.repository.get("TKT-1002"),
+    );
+
+    expect(result.result).toEqual(otherTicket);
+    expect(result.ticket).toMatchObject({ priority: "P2", revision: 3 });
+  });
+
   it("rejects a stale revision without changing persisted state", async () => {
     const { repository } = await createTicketRepository([baseTicket]);
 
@@ -1146,6 +1225,69 @@ describe("RecommendationRepository", () => {
     await expect(repository.get(recommendation.id)).resolves.toMatchObject({
       resolution: "pending",
     });
+  });
+
+  it("deletes a pending recommendation", async () => {
+    const root = await temporaryRoot();
+    const repository = new RecommendationRepository(resolve(root, "recommendations"));
+    await repository.create(recommendation);
+
+    await repository.deletePending(recommendation.id);
+
+    await expect(repository.get(recommendation.id)).rejects.toSatisfy(
+      expectDomainError(
+        "RECOMMENDATION_NOT_FOUND",
+        "Recommendation was not found.",
+      ),
+    );
+  });
+
+  it.each(["approved", "rejected"] as const)(
+    "does not delete a %s recommendation",
+    async (resolution) => {
+      const root = await temporaryRoot();
+      const repository = new RecommendationRepository(
+        resolve(root, "recommendations"),
+      );
+      await repository.create(recommendation);
+      await repository.transitionResolution(
+        recommendation.id,
+        "pending",
+        resolution,
+      );
+
+      await expect(repository.deletePending(recommendation.id)).rejects.toSatisfy(
+        expectDomainError(
+          "REPOSITORY_ERROR",
+          "Only pending recommendations can be deleted.",
+        ),
+      );
+      await expect(repository.get(recommendation.id)).resolves.toMatchObject({
+        resolution,
+      });
+    },
+  );
+
+  it("serializes pending deletion against resolution transitions across instances", async () => {
+    const root = await temporaryRoot();
+    const repositoryRoot = resolve(root, "recommendations");
+    const first = new RecommendationRepository(repositoryRoot);
+    const second = new RecommendationRepository(repositoryRoot);
+    await first.create(recommendation);
+
+    const results = await Promise.allSettled([
+      first.deletePending(recommendation.id),
+      second.transitionResolution(recommendation.id, "pending", "approved"),
+    ]);
+
+    expect(results.filter(({ status }) => status === "fulfilled")).toHaveLength(1);
+    expect(results.filter(({ status }) => status === "rejected")).toHaveLength(1);
+    const finalRead = await first.get(recommendation.id).catch((error) => error);
+    if (finalRead instanceof DomainError) {
+      expect(finalRead).toMatchObject({ code: "RECOMMENDATION_NOT_FOUND" });
+    } else {
+      expect(finalRead).toMatchObject({ resolution: "approved" });
+    }
   });
 
   it("serializes compare-and-set transitions across repository instances", async () => {

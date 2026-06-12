@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import {
   lstat,
   link,
@@ -52,6 +53,7 @@ const AT_RISK_WINDOW_MS = 60 * 60 * 1000;
 const defaultFileSystem = { link, open, rename, rm };
 type TicketFileSystem = typeof defaultFileSystem;
 const ticketOperations = new Map<string, Promise<void>>();
+const activeTicketOperations = new AsyncLocalStorage<ReadonlySet<string>>();
 
 interface Closable {
   close(): Promise<void>;
@@ -160,6 +162,12 @@ async function serializeByPath<T>(
   operation: () => Promise<T>,
 ): Promise<T> {
   const key = operationKey(path);
+  const active = activeTicketOperations.getStore();
+  if (active?.has(key)) {
+    throw repositoryError(
+      "Ticket transaction callback cannot reenter the same repository.",
+    );
+  }
   const previous = ticketOperations.get(key) ?? Promise.resolve();
   let release = (): void => undefined;
   const current = new Promise<void>((resolveOperation) => {
@@ -168,7 +176,10 @@ async function serializeByPath<T>(
   ticketOperations.set(key, current);
   await previous;
   try {
-    return await operation();
+    return await activeTicketOperations.run(
+      new Set([...(active ?? []), key]),
+      operation,
+    );
   } finally {
     release();
     if (ticketOperations.get(key) === current) {
@@ -415,6 +426,8 @@ export class TicketRepository {
     mutate: (ticket: Ticket) => Ticket,
     commit: (updated: Ticket, previous: Ticket) => Promise<T>,
   ): Promise<{ ticket: Ticket; result: T }> {
+    // The callback runs under this runtime file's in-process lock and must not
+    // reenter it. This is best-effort exact rollback, not cross-process ACID.
     return serializeByPath(this.runtimeFile, async () => {
       const parsedId = TicketIdSchema.safeParse(id);
       if (!parsedId.success) {

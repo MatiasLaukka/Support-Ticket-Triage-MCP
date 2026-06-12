@@ -312,6 +312,25 @@ export class RecommendationRepository {
     });
   }
 
+  async deletePending(id: string): Promise<void> {
+    const path = this.pathFor(id);
+    return serializeByPath(path, async () => {
+      const recommendation = await this.getUnlocked(path);
+      if (recommendation.resolution !== "pending") {
+        throw repositoryError("Only pending recommendations can be deleted.");
+      }
+      try {
+        await assertSafeFile(path);
+        await this.fileSystem.rm(path);
+      } catch (error) {
+        if (error instanceof DomainError) {
+          throw error;
+        }
+        throw repositoryError("Recommendation could not be deleted.");
+      }
+    });
+  }
+
   private pathFor(id: string): string {
     const parsed = RecommendationIdSchema.safeParse(id);
     if (!parsed.success) {

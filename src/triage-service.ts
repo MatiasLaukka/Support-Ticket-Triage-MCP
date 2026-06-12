@@ -117,6 +117,11 @@ export interface TicketStore {
 export interface RecommendationStore {
   create(value: TriageRecommendation): Promise<void>;
   get(id: string): Promise<TriageRecommendation>;
+  transitionResolution(
+    id: string,
+    expected: TriageRecommendation["resolution"],
+    next: TriageRecommendation["resolution"],
+  ): Promise<void>;
   markResolved(
     id: string,
     resolution: "approved" | "rejected",
@@ -293,8 +298,12 @@ export class TriageService {
     );
 
     try {
-      await this.dependencies.audit.append(auditEvent);
-    } catch {
+      await this.dependencies.recommendations.transitionResolution(
+        recommendation.id,
+        "pending",
+        "approved",
+      );
+    } catch (error) {
       try {
         await this.dependencies.tickets.update(
           ticketBefore.id,
@@ -302,6 +311,51 @@ export class TriageService {
           () => structuredClone(ticketBefore),
         );
       } catch {
+        throw new DomainError(
+          "Approval resolution failed and ticket rollback was not safe.",
+          "REPOSITORY_ERROR",
+        );
+      }
+      throw error;
+    }
+
+    try {
+      await this.dependencies.audit.append(auditEvent);
+    } catch {
+      let recommendationRollbackSafe = true;
+      let ticketRollbackSafe = true;
+      try {
+        await this.dependencies.recommendations.transitionResolution(
+          recommendation.id,
+          "approved",
+          "pending",
+        );
+      } catch {
+        recommendationRollbackSafe = false;
+      }
+      try {
+        await this.dependencies.tickets.update(
+          ticketBefore.id,
+          updated.revision,
+          () => structuredClone(ticketBefore),
+        );
+      } catch {
+        ticketRollbackSafe = false;
+      }
+
+      if (!recommendationRollbackSafe && !ticketRollbackSafe) {
+        throw new DomainError(
+          "Approval audit failed and lifecycle rollback was not safe.",
+          "REPOSITORY_ERROR",
+        );
+      }
+      if (!recommendationRollbackSafe) {
+        throw new DomainError(
+          "Approval audit failed and recommendation rollback was not safe.",
+          "REPOSITORY_ERROR",
+        );
+      }
+      if (!ticketRollbackSafe) {
         throw new DomainError(
           "Approval audit failed and ticket rollback was not safe.",
           "REPOSITORY_ERROR",
@@ -313,10 +367,6 @@ export class TriageService {
       );
     }
 
-    await this.dependencies.recommendations.markResolved(
-      recommendation.id,
-      "approved",
-    );
     return { ticket: updated, auditEvent };
   }
 
@@ -348,11 +398,31 @@ export class TriageService {
       result: "success",
     });
 
-    await this.dependencies.recommendations.markResolved(
+    await this.dependencies.recommendations.transitionResolution(
       recommendation.id,
+      "pending",
       "rejected",
     );
-    await this.dependencies.audit.append(auditEvent);
+    try {
+      await this.dependencies.audit.append(auditEvent);
+    } catch {
+      try {
+        await this.dependencies.recommendations.transitionResolution(
+          recommendation.id,
+          "rejected",
+          "pending",
+        );
+      } catch {
+        throw new DomainError(
+          "Rejection audit failed and recommendation rollback was not safe.",
+          "REPOSITORY_ERROR",
+        );
+      }
+      throw new DomainError(
+        "Rejection audit failed; recommendation was compensated.",
+        "REPOSITORY_ERROR",
+      );
+    }
     return auditEvent;
   }
 }

@@ -236,6 +236,60 @@ describe("TriageService", () => {
     );
   });
 
+  it("restores the ticket and leaves no success audit when approval resolution fails", async () => {
+    const harness = makeHarness();
+    await harness.service.submit(makeSubmitInput({ priority: "P1" }));
+    const before = structuredClone(await harness.tickets.get("TKT-1001"));
+    const eventCount = harness.audit.events.length;
+    harness.recommendations.failNextResolution = true;
+
+    await expect(
+      harness.service.approve(makeApproval({ approvedFields: ["priority"] })),
+    ).rejects.toMatchObject({
+      name: "DomainError",
+      code: "REPOSITORY_ERROR",
+      message: "Recommendation could not be persisted.",
+    });
+
+    expect(await harness.tickets.get("TKT-1001")).toEqual({
+      ...before,
+      revision: 4,
+    });
+    expect(harness.audit.events).toHaveLength(eventCount);
+    expect((await harness.recommendations.get(recommendationId)).resolution).toBe(
+      "pending",
+    );
+  });
+
+  it("does not overwrite a concurrent ticket update when approval resolution compensation is unsafe", async () => {
+    const harness = makeHarness();
+    await harness.service.submit(makeSubmitInput({ priority: "P1" }));
+    harness.recommendations.beforeNextTransition = async () => {
+      await harness.tickets.update("TKT-1001", 3, (ticket) => ({
+        ...ticket,
+        assignee: "concurrent@example.test",
+      }));
+    };
+    harness.recommendations.failNextResolution = true;
+
+    await expect(
+      harness.service.approve(makeApproval({ approvedFields: ["priority"] })),
+    ).rejects.toMatchObject({
+      name: "DomainError",
+      code: "REPOSITORY_ERROR",
+      message: "Approval resolution failed and ticket rollback was not safe.",
+    });
+
+    expect(await harness.tickets.get("TKT-1001")).toMatchObject({
+      priority: "P1",
+      assignee: "concurrent@example.test",
+      revision: 4,
+    });
+    expect((await harness.recommendations.get(recommendationId)).resolution).toBe(
+      "pending",
+    );
+  });
+
   it("records rejection feedback and leaves the ticket unchanged", async () => {
     const harness = makeHarness();
     await harness.service.submit(makeSubmitInput());
@@ -252,6 +306,46 @@ describe("TriageService", () => {
       rationale: "Routing needs more investigation.",
       result: "success",
     });
+    expect((await harness.recommendations.get(recommendationId)).resolution).toBe(
+      "rejected",
+    );
+  });
+
+  it("leaves a recommendation pending when rejection audit append fails", async () => {
+    const harness = makeHarness();
+    await harness.service.submit(makeSubmitInput());
+    const before = structuredClone(await harness.tickets.get("TKT-1001"));
+    const eventCount = harness.audit.events.length;
+    harness.audit.failNext = true;
+
+    await expect(harness.service.reject(makeRejectInput())).rejects.toMatchObject({
+      name: "DomainError",
+      code: "REPOSITORY_ERROR",
+      message: "Rejection audit failed; recommendation was compensated.",
+    });
+
+    expect(await harness.tickets.get("TKT-1001")).toEqual(before);
+    expect(harness.audit.events).toHaveLength(eventCount);
+    expect((await harness.recommendations.get(recommendationId)).resolution).toBe(
+      "pending",
+    );
+  });
+
+  it("reports unsafe recommendation compensation after rejection audit failure", async () => {
+    const harness = makeHarness();
+    await harness.service.submit(makeSubmitInput());
+    harness.recommendations.failTransition = {
+      expected: "rejected",
+      next: "pending",
+    };
+    harness.audit.failNext = true;
+
+    await expect(harness.service.reject(makeRejectInput())).rejects.toMatchObject({
+      name: "DomainError",
+      code: "REPOSITORY_ERROR",
+      message: "Rejection audit failed and recommendation rollback was not safe.",
+    });
+
     expect((await harness.recommendations.get(recommendationId)).resolution).toBe(
       "rejected",
     );
@@ -303,6 +397,33 @@ describe("TriageService", () => {
       assignee: "concurrent@example.test",
       revision: 4,
     });
+  });
+
+  it("reports unsafe recommendation compensation after approval audit failure", async () => {
+    const harness = makeHarness();
+    await harness.service.submit(makeSubmitInput({ priority: "P1" }));
+    harness.recommendations.failTransition = {
+      expected: "approved",
+      next: "pending",
+    };
+    harness.audit.failNext = true;
+
+    await expect(
+      harness.service.approve(makeApproval({ approvedFields: ["priority"] })),
+    ).rejects.toMatchObject({
+      name: "DomainError",
+      code: "REPOSITORY_ERROR",
+      message:
+        "Approval audit failed and recommendation rollback was not safe.",
+    });
+
+    expect(await harness.tickets.get("TKT-1001")).toMatchObject({
+      priority: "P3",
+      revision: 4,
+    });
+    expect((await harness.recommendations.get(recommendationId)).resolution).toBe(
+      "approved",
+    );
   });
 
   it("serializes approval and rejection for the same recommendation", async () => {
@@ -381,6 +502,12 @@ class MemoryTicketStore implements TicketStore {
 
 class MemoryRecommendationStore implements RecommendationStore {
   values: TriageRecommendation[] = [];
+  failNextResolution = false;
+  beforeNextTransition?: () => Promise<void>;
+  failTransition?: {
+    expected: TriageRecommendation["resolution"];
+    next: TriageRecommendation["resolution"];
+  };
 
   async create(value: TriageRecommendation): Promise<void> {
     this.values.push(structuredClone(value));
@@ -401,17 +528,45 @@ class MemoryRecommendationStore implements RecommendationStore {
     id: string,
     resolution: "approved" | "rejected",
   ): Promise<void> {
+    return this.transitionResolution(id, "pending", resolution);
+  }
+
+  async transitionResolution(
+    id: string,
+    expected: TriageRecommendation["resolution"],
+    next: TriageRecommendation["resolution"],
+  ): Promise<void> {
+    const beforeTransition = this.beforeNextTransition;
+    this.beforeNextTransition = undefined;
+    await beforeTransition?.();
+    if (this.failNextResolution) {
+      this.failNextResolution = false;
+      throw new DomainError(
+        "Recommendation could not be persisted.",
+        "REPOSITORY_ERROR",
+      );
+    }
+    if (
+      this.failTransition?.expected === expected &&
+      this.failTransition.next === next
+    ) {
+      this.failTransition = undefined;
+      throw new DomainError(
+        "Recommendation could not be persisted.",
+        "REPOSITORY_ERROR",
+      );
+    }
     const index = this.values.findIndex((candidate) => candidate.id === id);
     const value = this.values[index];
-    if (value === undefined || value.resolution !== "pending") {
+    if (value === undefined || value.resolution !== expected) {
       throw new DomainError(
-        "Recommendation is already resolved.",
+        "Recommendation resolution does not match expected state.",
         "REPOSITORY_ERROR",
       );
     }
     this.values[index] = TriageRecommendationSchema.parse({
       ...value,
-      resolution,
+      resolution: next,
     });
   }
 }

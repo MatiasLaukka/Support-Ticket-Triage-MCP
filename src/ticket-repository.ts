@@ -177,10 +177,6 @@ async function serializeByPath<T>(
   }
 }
 
-async function waitForPath(path: string): Promise<void> {
-  await ticketOperations.get(operationKey(path));
-}
-
 function operationKey(path: string): string {
   const resolvedPath = resolve(path);
   return process.platform === "win32"
@@ -355,46 +351,48 @@ export class TicketRepository {
   }
 
   async list(filter: TicketFilter): Promise<PaginatedTickets> {
-    await waitForPath(this.runtimeFile);
     const parsedFilter = parseFilter(filter);
-    const tickets = (await this.readTicketsUnlocked()).filter(
-      (candidate) =>
-        (parsedFilter.status === undefined ||
-          candidate.status === parsedFilter.status) &&
-        (parsedFilter.category === undefined ||
-          candidate.category === parsedFilter.category) &&
-        (parsedFilter.priority === undefined ||
-          candidate.priority === parsedFilter.priority) &&
-        (parsedFilter.team === undefined ||
-          candidate.team === parsedFilter.team) &&
-        (parsedFilter.slaState === undefined ||
-          slaState(candidate, parsedFilter.asOf) === parsedFilter.slaState),
-    );
+    return serializeByPath(this.runtimeFile, async () => {
+      const tickets = (await this.readTicketsUnlocked()).filter(
+        (candidate) =>
+          (parsedFilter.status === undefined ||
+            candidate.status === parsedFilter.status) &&
+          (parsedFilter.category === undefined ||
+            candidate.category === parsedFilter.category) &&
+          (parsedFilter.priority === undefined ||
+            candidate.priority === parsedFilter.priority) &&
+          (parsedFilter.team === undefined ||
+            candidate.team === parsedFilter.team) &&
+          (parsedFilter.slaState === undefined ||
+            slaState(candidate, parsedFilter.asOf) === parsedFilter.slaState),
+      );
 
-    return {
-      items: tickets.slice(
-        parsedFilter.offset,
-        parsedFilter.offset + parsedFilter.limit,
-      ),
-      total: tickets.length,
-      offset: parsedFilter.offset,
-      limit: parsedFilter.limit,
-    };
+      return {
+        items: tickets.slice(
+          parsedFilter.offset,
+          parsedFilter.offset + parsedFilter.limit,
+        ),
+        total: tickets.length,
+        offset: parsedFilter.offset,
+        limit: parsedFilter.limit,
+      };
+    });
   }
 
   async get(id: TicketId): Promise<Ticket> {
-    await waitForPath(this.runtimeFile);
     const parsedId = TicketIdSchema.safeParse(id);
     if (!parsedId.success) {
       throw repositoryError("Repository path is not allowed.");
     }
-    const result = (await this.readTicketsUnlocked()).find(
-      (candidate) => candidate.id === parsedId.data,
-    );
-    if (result === undefined) {
-      throw new DomainError("Ticket was not found.", "TICKET_NOT_FOUND");
-    }
-    return result;
+    return serializeByPath(this.runtimeFile, async () => {
+      const result = (await this.readTicketsUnlocked()).find(
+        (candidate) => candidate.id === parsedId.data,
+      );
+      if (result === undefined) {
+        throw new DomainError("Ticket was not found.", "TICKET_NOT_FOUND");
+      }
+      return result;
+    });
   }
 
   async update(
@@ -402,6 +400,21 @@ export class TicketRepository {
     expectedRevision: number,
     mutate: (ticket: Ticket) => Ticket,
   ): Promise<Ticket> {
+    const { ticket } = await this.updateWithCommit(
+      id,
+      expectedRevision,
+      mutate,
+      async () => undefined,
+    );
+    return ticket;
+  }
+
+  async updateWithCommit<T>(
+    id: TicketId,
+    expectedRevision: number,
+    mutate: (ticket: Ticket) => Ticket,
+    commit: (updated: Ticket, previous: Ticket) => Promise<T>,
+  ): Promise<{ ticket: Ticket; result: T }> {
     return serializeByPath(this.runtimeFile, async () => {
       const parsedId = TicketIdSchema.safeParse(id);
       if (!parsedId.success) {
@@ -441,7 +454,22 @@ export class TicketRepository {
       }
       tickets[index] = parsed.data;
       await this.writeTicketsAtomically(tickets);
-      return parsed.data;
+
+      try {
+        const result = await commit(
+          structuredClone(parsed.data),
+          structuredClone(current),
+        );
+        return { ticket: parsed.data, result };
+      } catch (error) {
+        tickets[index] = current;
+        try {
+          await this.writeTicketsAtomically(tickets);
+        } catch {
+          throw repositoryError("Ticket transaction rollback was not safe.");
+        }
+        throw error;
+      }
     });
   }
 

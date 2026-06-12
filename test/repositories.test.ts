@@ -5,6 +5,7 @@ import {
   open,
   readFile,
   readdir,
+  rename,
   rm,
   symlink,
   writeFile,
@@ -453,6 +454,200 @@ describe("TicketRepository", () => {
     expect(updated).toMatchObject({ status: "in-progress", revision: 3 });
     await expect(repository.get("TKT-1001")).resolves.toEqual(updated);
     expect(await readdir(runtimeRoot)).toEqual(["tickets.json"]);
+  });
+
+  it("updates a ticket and returns the commit callback result", async () => {
+    const { repository } = await createTicketRepository([baseTicket]);
+
+    const result = await repository.updateWithCommit(
+      "TKT-1001",
+      2,
+      (current) => ({
+        ...current,
+        status: "in-progress",
+        updatedAt: "2026-06-10T08:45:00.000Z",
+      }),
+      async (updated, previous) => ({
+        updatedRevision: updated.revision,
+        previousRevision: previous.revision,
+      }),
+    );
+
+    expect(result).toEqual({
+      ticket: expect.objectContaining({
+        status: "in-progress",
+        revision: 3,
+      }),
+      result: {
+        updatedRevision: 3,
+        previousRevision: 2,
+      },
+    });
+  });
+
+  it("restores the exact previous ticket collection when the commit callback fails", async () => {
+    const { repository } = await createTicketRepository([baseTicket]);
+    const callbackError = new DomainError(
+      "Recommendation transition failed.",
+      "REPOSITORY_ERROR",
+    );
+
+    await expect(
+      repository.updateWithCommit(
+        "TKT-1001",
+        2,
+        (current) => ({
+          ...current,
+          priority: "P2",
+          updatedAt: "2026-06-10T08:45:00.000Z",
+        }),
+        async () => {
+          throw callbackError;
+        },
+      ),
+    ).rejects.toBe(callbackError);
+
+    await expect(repository.get("TKT-1001")).resolves.toEqual(baseTicket);
+    await expect(
+      repository.update("TKT-1001", 2, (current) => ({
+        ...current,
+        status: "in-progress",
+        updatedAt: "2026-06-10T08:46:00.000Z",
+      })),
+    ).resolves.toMatchObject({
+      status: "in-progress",
+      revision: 3,
+    });
+  });
+
+  it("holds concurrent updates until rollback completes and then applies to restored state", async () => {
+    const { runtimeRoot, seedFile } = await createTicketRepository([baseTicket]);
+    const first = new TicketRepository(runtimeRoot, seedFile);
+    const second = new TicketRepository(runtimeRoot, seedFile);
+    const commitStarted = deferred();
+    const allowCommitFailure = deferred();
+
+    const transaction = first.updateWithCommit(
+      "TKT-1001",
+      2,
+      (current) => ({
+        ...current,
+        priority: "P2",
+        updatedAt: "2026-06-10T08:45:00.000Z",
+      }),
+      async () => {
+        commitStarted.resolve();
+        await allowCommitFailure.promise;
+        throw new DomainError("Commit failed.", "REPOSITORY_ERROR");
+      },
+    );
+    await commitStarted.promise;
+    const concurrentUpdate = second.update("TKT-1001", 2, (current) => ({
+      ...current,
+      assignee: "concurrent@example.test",
+      updatedAt: "2026-06-10T08:46:00.000Z",
+    }));
+    const concurrentState = await Promise.race([
+      concurrentUpdate.then(
+        () => "completed",
+        () => "completed",
+      ),
+      new Promise<string>((resolveRace) =>
+        setTimeout(() => resolveRace("waiting"), 25),
+      ),
+    ]);
+    allowCommitFailure.resolve();
+
+    expect(concurrentState).toBe("waiting");
+    await expect(transaction).rejects.toMatchObject({
+      message: "Commit failed.",
+    });
+    await expect(concurrentUpdate).resolves.toMatchObject({
+      priority: "P1",
+      assignee: "concurrent@example.test",
+      revision: 3,
+    });
+  });
+
+  it("does not let get or list observe an intermediate transactional ticket", async () => {
+    const { runtimeRoot, seedFile } = await createTicketRepository([baseTicket]);
+    const writer = new TicketRepository(runtimeRoot, seedFile);
+    const reader = new TicketRepository(runtimeRoot, seedFile);
+    const commitStarted = deferred();
+    const allowCommitFailure = deferred();
+
+    const transaction = writer.updateWithCommit(
+      "TKT-1001",
+      2,
+      (current) => ({
+        ...current,
+        priority: "P2",
+        updatedAt: "2026-06-10T08:45:00.000Z",
+      }),
+      async () => {
+        commitStarted.resolve();
+        await allowCommitFailure.promise;
+        throw new DomainError("Commit failed.", "REPOSITORY_ERROR");
+      },
+    );
+    await commitStarted.promise;
+    const getResult = reader.get("TKT-1001");
+    const listResult = reader.list({});
+    const readState = await Promise.race([
+      Promise.all([getResult, listResult]).then(() => "completed"),
+      new Promise<string>((resolveRace) =>
+        setTimeout(() => resolveRace("waiting"), 25),
+      ),
+    ]);
+    allowCommitFailure.resolve();
+
+    expect(readState).toBe("waiting");
+    await expect(transaction).rejects.toMatchObject({
+      message: "Commit failed.",
+    });
+    await expect(getResult).resolves.toEqual(baseTicket);
+    await expect(listResult).resolves.toMatchObject({
+      items: [baseTicket],
+      total: 1,
+    });
+  });
+
+  it("returns a stable unsafe rollback error when exact restoration cannot be persisted", async () => {
+    const { runtimeRoot, seedFile } = await createTicketRepository([baseTicket]);
+    let renameCount = 0;
+    const repository = constructWithFileSystem(
+      TicketRepository,
+      [runtimeRoot, seedFile],
+      {
+        rename: async (...args: Parameters<typeof rename>) => {
+          renameCount += 1;
+          if (renameCount === 2) {
+            throw new Error(`rollback rename failed at ${runtimeRoot}`);
+          }
+          return rename(...args);
+        },
+      },
+    );
+
+    await expect(
+      repository.updateWithCommit(
+        "TKT-1001",
+        2,
+        (current) => ({
+          ...current,
+          priority: "P2",
+          updatedAt: "2026-06-10T08:45:00.000Z",
+        }),
+        async () => {
+          throw new DomainError("Commit failed.", "REPOSITORY_ERROR");
+        },
+      ),
+    ).rejects.toSatisfy(
+      expectDomainError(
+        "REPOSITORY_ERROR",
+        "Ticket transaction rollback was not safe.",
+      ),
+    );
   });
 
   it("rejects a stale revision without changing persisted state", async () => {

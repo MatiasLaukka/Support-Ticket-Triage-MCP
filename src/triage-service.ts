@@ -123,6 +123,7 @@ export interface TicketStore {
 export interface RecommendationStore {
   create(value: TriageRecommendation): Promise<void>;
   get(id: string): Promise<TriageRecommendation>;
+  deletePending(id: string): Promise<void>;
   transitionResolution(
     id: string,
     expected: TriageRecommendation["resolution"],
@@ -198,29 +199,44 @@ export class TriageService {
       escalationReasons: decision.reasons,
     });
 
+    const auditEvent = AuditEventSchema.parse({
+      id: this.uuid(),
+      timestamp: parsed.submittedAt,
+      actor: parsed.actor,
+      action: "recommendation-submitted",
+      ticketId: ticket.id,
+      recommendationId: recommendation.id,
+      before: {},
+      after: {
+        sourceRevision: recommendation.sourceRevision,
+        category: recommendation.category,
+        priority: recommendation.priority,
+        team: recommendation.team,
+        escalationRequired: recommendation.escalationRequired,
+        escalationReasons: recommendation.escalationReasons,
+      },
+      rationale: recommendation.rationale,
+      knowledgeArticleIds: recommendation.knowledgeArticleIds,
+      result: "success",
+    });
+
     await this.dependencies.recommendations.create(recommendation);
-    await this.dependencies.audit.append(
-      AuditEventSchema.parse({
-        id: this.uuid(),
-        timestamp: parsed.submittedAt,
-        actor: parsed.actor,
-        action: "recommendation-submitted",
-        ticketId: ticket.id,
-        recommendationId: recommendation.id,
-        before: {},
-        after: {
-          sourceRevision: recommendation.sourceRevision,
-          category: recommendation.category,
-          priority: recommendation.priority,
-          team: recommendation.team,
-          escalationRequired: recommendation.escalationRequired,
-          escalationReasons: recommendation.escalationReasons,
-        },
-        rationale: recommendation.rationale,
-        knowledgeArticleIds: recommendation.knowledgeArticleIds,
-        result: "success",
-      }),
-    );
+    try {
+      await this.dependencies.audit.append(auditEvent);
+    } catch (auditError) {
+      try {
+        await this.dependencies.recommendations.deletePending(recommendation.id);
+      } catch {
+        throw domainErrorWithCause(
+          "Submission audit failed and recommendation rollback was not safe.",
+          auditError,
+        );
+      }
+      throw domainErrorWithCause(
+        "Submission audit failed; recommendation was compensated.",
+        auditError,
+      );
+    }
     return recommendation;
   }
 
@@ -267,12 +283,15 @@ export class TriageService {
       this.now(),
       ticketBefore,
     );
+    const resultingTeam = approval.approvedFields.includes("team")
+      ? recommendation.team
+      : ticketBefore.team;
     if (
       decision.requiredTeam !== undefined &&
-      recommendation.team !== decision.requiredTeam
+      resultingTeam !== decision.requiredTeam
     ) {
       throw new DomainError(
-        `Recommendation must route to ${decision.requiredTeam}.`,
+        `Resulting ticket must route to ${decision.requiredTeam}.`,
         "INVALID_APPROVAL_FIELDS",
       );
     }
@@ -315,7 +334,7 @@ export class TriageService {
           );
           try {
             await this.dependencies.audit.append(auditEvent);
-          } catch {
+          } catch (auditError) {
             try {
               await this.dependencies.recommendations.transitionResolution(
                 recommendation.id,
@@ -323,14 +342,14 @@ export class TriageService {
                 "pending",
               );
             } catch {
-              throw new DomainError(
+              throw domainErrorWithCause(
                 "Approval audit failed and recommendation rollback was not safe.",
-                "REPOSITORY_ERROR",
+                auditError,
               );
             }
-            throw new DomainError(
+            throw domainErrorWithCause(
               "Approval audit failed; recommendation was compensated.",
-              "REPOSITORY_ERROR",
+              auditError,
             );
           }
           return auditEvent;
@@ -375,7 +394,7 @@ export class TriageService {
     );
     try {
       await this.dependencies.audit.append(auditEvent);
-    } catch {
+    } catch (auditError) {
       try {
         await this.dependencies.recommendations.transitionResolution(
           recommendation.id,
@@ -383,14 +402,14 @@ export class TriageService {
           "pending",
         );
       } catch {
-        throw new DomainError(
+        throw domainErrorWithCause(
           "Rejection audit failed and recommendation rollback was not safe.",
-          "REPOSITORY_ERROR",
+          auditError,
         );
       }
-      throw new DomainError(
+      throw domainErrorWithCause(
         "Rejection audit failed; recommendation was compensated.",
-        "REPOSITORY_ERROR",
+        auditError,
       );
     }
     return auditEvent;
@@ -421,6 +440,15 @@ async function serializeRecommendation<T>(
 
 function stale(message: string): DomainError {
   return new DomainError(message, "STALE_APPROVAL");
+}
+
+function domainErrorWithCause(message: string, cause: unknown): DomainError {
+  const error = new DomainError(message, "REPOSITORY_ERROR");
+  Object.defineProperty(error, "cause", {
+    value: cause,
+    configurable: true,
+  });
+  return error;
 }
 
 function approvedValues(

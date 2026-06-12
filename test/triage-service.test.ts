@@ -1,4 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { mkdtemp, open, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   ApprovalSchema,
   TicketSchema,
@@ -9,6 +12,9 @@ import {
   type TriageRecommendation,
 } from "../src/domain.js";
 import { DomainError } from "../src/errors.js";
+import { AuditRepository } from "../src/audit-repository.js";
+import { RecommendationRepository } from "../src/recommendation-repository.js";
+import { TicketRepository } from "../src/ticket-repository.js";
 import {
   TriageService,
   type AuditStore,
@@ -21,6 +27,15 @@ import {
 const recommendationId = "11111111-1111-4111-8111-111111111111";
 const auditId = "22222222-2222-4222-8222-222222222222";
 const fixedNow = new Date("2026-06-10T09:00:00.000Z");
+const temporaryRoots: string[] = [];
+
+afterEach(async () => {
+  await Promise.all(
+    temporaryRoots.splice(0).map((root) =>
+      rm(root, { recursive: true, force: true }),
+    ),
+  );
+});
 
 describe("TriageService", () => {
   it("submits a recommendation without mutating the ticket and recomputes escalation", async () => {
@@ -43,6 +58,47 @@ describe("TriageService", () => {
       escalationReasons: ["outage"],
       resolution: "pending",
       rationale: "Multiple customers report the same API failure.",
+    });
+    expect(harness.recommendations.values).toHaveLength(1);
+  });
+
+  it("deletes a pending recommendation and remains retryable when submission audit fails", async () => {
+    const harness = makeHarness();
+    const auditFailure = new DomainError(
+      "Audit event could not be persisted.",
+      "REPOSITORY_ERROR",
+    );
+    harness.audit.nextFailure = auditFailure;
+
+    await expect(harness.service.submit(makeSubmitInput())).rejects.toMatchObject({
+      name: "DomainError",
+      code: "REPOSITORY_ERROR",
+      message: "Submission audit failed; recommendation was compensated.",
+      cause: auditFailure,
+    });
+    expect(harness.recommendations.values).toEqual([]);
+
+    await expect(harness.service.submit(makeSubmitInput())).resolves.toMatchObject({
+      resolution: "pending",
+    });
+    expect(harness.recommendations.values).toHaveLength(1);
+  });
+
+  it("reports unsafe pending recommendation cleanup after submission audit failure", async () => {
+    const harness = makeHarness();
+    const auditFailure = new DomainError(
+      "Audit event could not be persisted.",
+      "REPOSITORY_ERROR",
+    );
+    harness.audit.nextFailure = auditFailure;
+    harness.recommendations.failNextDelete = true;
+
+    await expect(harness.service.submit(makeSubmitInput())).rejects.toMatchObject({
+      name: "DomainError",
+      code: "REPOSITORY_ERROR",
+      message:
+        "Submission audit failed and recommendation rollback was not safe.",
+      cause: auditFailure,
     });
     expect(harness.recommendations.values).toHaveLength(1);
   });
@@ -152,6 +208,62 @@ describe("TriageService", () => {
     });
     expect((await harness.tickets.get("TKT-1001")).team).toBe("api-platform");
   });
+
+  it.each([
+    ["security", { securityRisk: "possible" as const }, "security" as const],
+    [
+      "outage",
+      { outageRisk: "likely" as const },
+      "incident-response" as const,
+    ],
+  ])(
+    "rejects a %s partial approval when the resulting ticket team is not required routing",
+    async (_risk, proposal, requiredTeam) => {
+      const harness = makeHarness();
+      await harness.service.submit(
+        makeSubmitInput({ ...proposal, team: requiredTeam }),
+      );
+      const before = structuredClone(await harness.tickets.get("TKT-1001"));
+      const eventCount = harness.audit.events.length;
+
+      await expect(
+        harness.service.approve(
+          makeApproval({ approvedFields: ["priority"] }),
+        ),
+      ).rejects.toMatchObject({
+        code: "INVALID_APPROVAL_FIELDS",
+        message: `Resulting ticket must route to ${requiredTeam}.`,
+      });
+
+      expect(await harness.tickets.get("TKT-1001")).toEqual(before);
+      expect(harness.audit.events).toHaveLength(eventCount);
+    },
+  );
+
+  it.each([
+    ["security", { securityRisk: "possible" as const }, "security" as const],
+    [
+      "outage",
+      { outageRisk: "likely" as const },
+      "incident-response" as const,
+    ],
+  ])(
+    "allows a %s partial approval when the current ticket already has required routing",
+    async (_risk, proposal, requiredTeam) => {
+      const harness = makeHarness(makeTicket({ team: requiredTeam }));
+      await harness.service.submit(
+        makeSubmitInput({ ...proposal, team: "api-platform" }),
+      );
+
+      await expect(
+        harness.service.approve(
+          makeApproval({ approvedFields: ["priority"] }),
+        ),
+      ).resolves.toMatchObject({
+        ticket: { team: requiredTeam, priority: "P2", revision: 3 },
+      });
+    },
+  );
 
   it("does not let prompt-injection ticket text bypass policy or confirmation", async () => {
     const harness = makeHarness(
@@ -352,12 +464,17 @@ describe("TriageService", () => {
     await harness.service.submit(makeSubmitInput());
     const before = structuredClone(await harness.tickets.get("TKT-1001"));
     const eventCount = harness.audit.events.length;
-    harness.audit.failNext = true;
+    const auditFailure = new DomainError(
+      "Audit event could not be persisted.",
+      "REPOSITORY_ERROR",
+    );
+    harness.audit.nextFailure = auditFailure;
 
     await expect(harness.service.reject(makeRejectInput())).rejects.toMatchObject({
       name: "DomainError",
       code: "REPOSITORY_ERROR",
       message: "Rejection audit failed; recommendation was compensated.",
+      cause: auditFailure,
     });
 
     expect(await harness.tickets.get("TKT-1001")).toEqual(before);
@@ -390,7 +507,11 @@ describe("TriageService", () => {
   it("compensates the ticket update when audit append fails", async () => {
     const harness = makeHarness();
     await harness.service.submit(makeSubmitInput({ priority: "P1" }));
-    harness.audit.failNext = true;
+    const auditFailure = new DomainError(
+      "Audit event could not be persisted.",
+      "REPOSITORY_ERROR",
+    );
+    harness.audit.nextFailure = auditFailure;
 
     await expect(
       harness.service.approve(makeApproval({ approvedFields: ["priority"] })),
@@ -398,6 +519,7 @@ describe("TriageService", () => {
       name: "DomainError",
       code: "REPOSITORY_ERROR",
       message: "Approval audit failed; recommendation was compensated.",
+      cause: auditFailure,
     });
 
     expect(await harness.tickets.get("TKT-1001")).toMatchObject({
@@ -517,6 +639,63 @@ describe("TriageService", () => {
       "approved",
     );
   });
+
+  it("approves with real repositories and persists the ticket and audit event", async () => {
+    const harness = await makeRealRepositoryHarness();
+    await harness.service.submit(makeSubmitInput({ priority: "P1" }));
+
+    const result = await harness.service.approve(
+      makeApproval({ approvedFields: ["priority"] }),
+    );
+
+    expect(result.ticket).toMatchObject({ priority: "P1", revision: 3 });
+    await expect(harness.tickets.get("TKT-1001")).resolves.toEqual(result.ticket);
+    await expect(harness.recommendations.get(recommendationId)).resolves.toMatchObject({
+      resolution: "approved",
+    });
+    await expect(harness.audit.list("TKT-1001")).resolves.toHaveLength(2);
+  });
+
+  it("restores the exact real ticket and recommendation when approval audit persistence fails", async () => {
+    const harness = await makeRealRepositoryHarness();
+    await harness.service.submit(makeSubmitInput({ priority: "P1" }));
+    const before = await harness.tickets.get("TKT-1001");
+    const failingAudit = new AuditRepository(harness.auditFile, {
+      open: (async (...args: Parameters<typeof open>) => {
+        const handle = await open(...args);
+        if (args[1] !== "a+") {
+          return handle;
+        }
+        return {
+          writeFile: async () => {
+            throw new Error(`audit write failed at ${harness.auditFile}`);
+          },
+          stat: handle.stat.bind(handle),
+          sync: handle.sync.bind(handle),
+          close: handle.close.bind(handle),
+        } as unknown as Awaited<ReturnType<typeof open>>;
+      }) as typeof open,
+    });
+    const service = new TriageService({
+      tickets: harness.tickets,
+      recommendations: harness.recommendations,
+      audit: failingAudit,
+      now: () => fixedNow,
+      uuid: () => "33333333-3333-4333-8333-333333333333",
+    });
+
+    await expect(
+      service.approve(makeApproval({ approvedFields: ["priority"] })),
+    ).rejects.toMatchObject({
+      message: "Approval audit failed; recommendation was compensated.",
+    });
+
+    await expect(harness.tickets.get("TKT-1001")).resolves.toEqual(before);
+    await expect(harness.recommendations.get(recommendationId)).resolves.toMatchObject({
+      resolution: "pending",
+    });
+    await expect(harness.audit.list("TKT-1001")).resolves.toHaveLength(1);
+  });
 });
 
 class MemoryTicketStore implements TicketStore {
@@ -606,6 +785,7 @@ class MemoryTicketStore implements TicketStore {
 class MemoryRecommendationStore implements RecommendationStore {
   values: TriageRecommendation[] = [];
   failNextResolution = false;
+  failNextDelete = false;
   beforeNextTransition?: () => Promise<void>;
   failTransition?: {
     expected: TriageRecommendation["resolution"];
@@ -672,11 +852,37 @@ class MemoryRecommendationStore implements RecommendationStore {
       resolution: next,
     });
   }
+
+  async deletePending(id: string): Promise<void> {
+    if (this.failNextDelete) {
+      this.failNextDelete = false;
+      throw new DomainError(
+        "Recommendation could not be deleted.",
+        "REPOSITORY_ERROR",
+      );
+    }
+    const index = this.values.findIndex((candidate) => candidate.id === id);
+    const value = this.values[index];
+    if (value === undefined) {
+      throw new DomainError(
+        "Recommendation was not found.",
+        "RECOMMENDATION_NOT_FOUND",
+      );
+    }
+    if (value.resolution !== "pending") {
+      throw new DomainError(
+        "Only pending recommendations can be deleted.",
+        "REPOSITORY_ERROR",
+      );
+    }
+    this.values.splice(index, 1);
+  }
 }
 
 class MemoryAuditStore implements AuditStore {
   events: AuditEvent[] = [];
   failNext = false;
+  nextFailure?: Error;
   beforeFailure?: () => Promise<void>;
   beforeNextAppend?: () => Promise<void>;
 
@@ -684,6 +890,11 @@ class MemoryAuditStore implements AuditStore {
     const beforeAppend = this.beforeNextAppend;
     this.beforeNextAppend = undefined;
     await beforeAppend?.();
+    if (this.nextFailure !== undefined) {
+      const failure = this.nextFailure;
+      this.nextFailure = undefined;
+      throw failure;
+    }
     if (this.failNext) {
       this.failNext = false;
       await this.beforeFailure?.();
@@ -694,6 +905,35 @@ class MemoryAuditStore implements AuditStore {
     }
     this.events.push(structuredClone(event));
   }
+}
+
+async function makeRealRepositoryHarness() {
+  const root = await mkdtemp(join(tmpdir(), "triage-service-"));
+  temporaryRoots.push(root);
+  const runtimeRoot = resolve(root, "runtime");
+  const seedFile = resolve(root, "tickets.seed.json");
+  const recommendationRoot = resolve(root, "recommendations");
+  const auditFile = resolve(root, "audit", "events.jsonl");
+  await writeFile(seedFile, `${JSON.stringify([makeTicket()], null, 2)}\n`, "utf8");
+  const tickets = new TicketRepository(runtimeRoot, seedFile);
+  const recommendations = new RecommendationRepository(recommendationRoot);
+  const audit = new AuditRepository(auditFile);
+  await tickets.initialize();
+  const ids = [recommendationId, auditId];
+  const service = new TriageService({
+    tickets,
+    recommendations,
+    audit,
+    now: () => fixedNow,
+    uuid: () => ids.shift() ?? auditId,
+  });
+  return {
+    service,
+    tickets,
+    recommendations,
+    audit,
+    auditFile,
+  };
 }
 
 function deferred() {

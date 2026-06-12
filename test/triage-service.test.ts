@@ -251,24 +251,39 @@ describe("TriageService", () => {
       message: "Recommendation could not be persisted.",
     });
 
-    expect(await harness.tickets.get("TKT-1001")).toEqual({
-      ...before,
-      revision: 4,
-    });
+    expect(await harness.tickets.get("TKT-1001")).toEqual(before);
     expect(harness.audit.events).toHaveLength(eventCount);
     expect((await harness.recommendations.get(recommendationId)).resolution).toBe(
       "pending",
     );
+
+    await expect(
+      harness.service.approve(makeApproval({ approvedFields: ["priority"] })),
+    ).resolves.toMatchObject({
+      ticket: { priority: "P1", revision: 3 },
+    });
   });
 
-  it("does not overwrite a concurrent ticket update when approval resolution compensation is unsafe", async () => {
+  it("holds a concurrent ticket update until failed approval resolution restores the ticket", async () => {
     const harness = makeHarness();
     await harness.service.submit(makeSubmitInput({ priority: "P1" }));
+    let concurrentUpdate: Promise<Ticket> | undefined;
+    let concurrentState: string | undefined;
     harness.recommendations.beforeNextTransition = async () => {
-      await harness.tickets.update("TKT-1001", 3, (ticket) => ({
+      concurrentUpdate = harness.tickets.update("TKT-1001", 2, (ticket) => ({
         ...ticket,
         assignee: "concurrent@example.test",
+        updatedAt: "2026-06-10T09:06:00.000Z",
       }));
+      concurrentState = await Promise.race([
+        concurrentUpdate.then(
+          () => "completed",
+          () => "completed",
+        ),
+        new Promise<string>((resolve) =>
+          setTimeout(() => resolve("waiting"), 25),
+        ),
+      ]);
     };
     harness.recommendations.failNextResolution = true;
 
@@ -277,17 +292,38 @@ describe("TriageService", () => {
     ).rejects.toMatchObject({
       name: "DomainError",
       code: "REPOSITORY_ERROR",
-      message: "Approval resolution failed and ticket rollback was not safe.",
+      message: "Recommendation could not be persisted.",
     });
 
-    expect(await harness.tickets.get("TKT-1001")).toMatchObject({
-      priority: "P1",
+    expect(concurrentState).toBe("waiting");
+    await expect(concurrentUpdate).resolves.toMatchObject({
+      priority: "P3",
       assignee: "concurrent@example.test",
-      revision: 4,
+      revision: 3,
     });
     expect((await harness.recommendations.get(recommendationId)).resolution).toBe(
       "pending",
     );
+  });
+
+  it("surfaces unsafe exact ticket rollback after approval resolution failure", async () => {
+    const harness = makeHarness();
+    await harness.service.submit(makeSubmitInput({ priority: "P1" }));
+    harness.tickets.failRollback = true;
+    harness.recommendations.failNextResolution = true;
+
+    await expect(
+      harness.service.approve(makeApproval({ approvedFields: ["priority"] })),
+    ).rejects.toMatchObject({
+      name: "DomainError",
+      code: "REPOSITORY_ERROR",
+      message: "Ticket transaction rollback was not safe.",
+    });
+
+    expect(await harness.tickets.get("TKT-1001")).toMatchObject({
+      priority: "P1",
+      revision: 3,
+    });
   });
 
   it("records rejection feedback and leaves the ticket unchanged", async () => {
@@ -361,26 +397,38 @@ describe("TriageService", () => {
     ).rejects.toMatchObject({
       name: "DomainError",
       code: "REPOSITORY_ERROR",
-      message: "Approval audit failed; ticket changes were compensated.",
+      message: "Approval audit failed; recommendation was compensated.",
     });
 
     expect(await harness.tickets.get("TKT-1001")).toMatchObject({
       priority: "P3",
-      revision: 4,
+      revision: 2,
     });
     expect((await harness.recommendations.get(recommendationId)).resolution).toBe(
       "pending",
     );
   });
 
-  it("does not overwrite a concurrent update when audit compensation cannot safely apply", async () => {
+  it("holds a concurrent ticket update until failed approval audit restores the ticket", async () => {
     const harness = makeHarness();
     await harness.service.submit(makeSubmitInput({ priority: "P1" }));
+    let concurrentUpdate: Promise<Ticket> | undefined;
+    let concurrentState: string | undefined;
     harness.audit.beforeFailure = async () => {
-      await harness.tickets.update("TKT-1001", 3, (ticket) => ({
+      concurrentUpdate = harness.tickets.update("TKT-1001", 2, (ticket) => ({
         ...ticket,
         assignee: "concurrent@example.test",
+        updatedAt: "2026-06-10T09:06:00.000Z",
       }));
+      concurrentState = await Promise.race([
+        concurrentUpdate.then(
+          () => "completed",
+          () => "completed",
+        ),
+        new Promise<string>((resolve) =>
+          setTimeout(() => resolve("waiting"), 25),
+        ),
+      ]);
     };
     harness.audit.failNext = true;
 
@@ -389,13 +437,14 @@ describe("TriageService", () => {
     ).rejects.toMatchObject({
       name: "DomainError",
       code: "REPOSITORY_ERROR",
-      message: "Approval audit failed and ticket rollback was not safe.",
+      message: "Approval audit failed; recommendation was compensated.",
     });
 
-    expect(await harness.tickets.get("TKT-1001")).toMatchObject({
-      priority: "P1",
+    expect(concurrentState).toBe("waiting");
+    await expect(concurrentUpdate).resolves.toMatchObject({
+      priority: "P3",
       assignee: "concurrent@example.test",
-      revision: 4,
+      revision: 3,
     });
   });
 
@@ -419,7 +468,7 @@ describe("TriageService", () => {
 
     expect(await harness.tickets.get("TKT-1001")).toMatchObject({
       priority: "P3",
-      revision: 4,
+      revision: 2,
     });
     expect((await harness.recommendations.get(recommendationId)).resolution).toBe(
       "approved",
@@ -471,13 +520,18 @@ describe("TriageService", () => {
 });
 
 class MemoryTicketStore implements TicketStore {
+  failRollback = false;
+  private operation = Promise.resolve();
+
   constructor(private value: Ticket) {}
 
   async get(id: Ticket["id"]): Promise<Ticket> {
-    if (id !== this.value.id) {
-      throw new DomainError("Ticket was not found.", "TICKET_NOT_FOUND");
-    }
-    return structuredClone(this.value);
+    return this.serialize(async () => {
+      if (id !== this.value.id) {
+        throw new DomainError("Ticket was not found.", "TICKET_NOT_FOUND");
+      }
+      return structuredClone(this.value);
+    });
   }
 
   async update(
@@ -485,18 +539,67 @@ class MemoryTicketStore implements TicketStore {
     expectedRevision: number,
     mutate: (ticket: Ticket) => Ticket,
   ): Promise<Ticket> {
-    if (id !== this.value.id) {
-      throw new DomainError("Ticket was not found.", "TICKET_NOT_FOUND");
-    }
-    if (this.value.revision !== expectedRevision) {
-      throw new DomainError("Ticket revision does not match.", "REVISION_CONFLICT");
-    }
-    this.value = TicketSchema.parse({
-      ...mutate(structuredClone(this.value)),
+    const { ticket } = await this.updateWithCommit(
       id,
-      revision: expectedRevision + 1,
+      expectedRevision,
+      mutate,
+      async () => undefined,
+    );
+    return ticket;
+  }
+
+  async updateWithCommit<T>(
+    id: Ticket["id"],
+    expectedRevision: number,
+    mutate: (ticket: Ticket) => Ticket,
+    commit: (updated: Ticket, previous: Ticket) => Promise<T>,
+  ): Promise<{ ticket: Ticket; result: T }> {
+    return this.serialize(async () => {
+      if (id !== this.value.id) {
+        throw new DomainError("Ticket was not found.", "TICKET_NOT_FOUND");
+      }
+      if (this.value.revision !== expectedRevision) {
+        throw new DomainError(
+          "Ticket revision does not match.",
+          "REVISION_CONFLICT",
+        );
+      }
+      const previous = structuredClone(this.value);
+      this.value = TicketSchema.parse({
+        ...mutate(structuredClone(this.value)),
+        id,
+        revision: expectedRevision + 1,
+      });
+      const updated = structuredClone(this.value);
+      try {
+        const result = await commit(updated, previous);
+        return { ticket: updated, result };
+      } catch (error) {
+        if (this.failRollback) {
+          this.failRollback = false;
+          throw new DomainError(
+            "Ticket transaction rollback was not safe.",
+            "REPOSITORY_ERROR",
+          );
+        }
+        this.value = previous;
+        throw error;
+      }
     });
-    return structuredClone(this.value);
+  }
+
+  private async serialize<T>(operation: () => Promise<T>): Promise<T> {
+    const previous = this.operation;
+    let release = (): void => undefined;
+    this.operation = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await previous;
+    try {
+      return await operation();
+    } finally {
+      release();
+    }
   }
 }
 

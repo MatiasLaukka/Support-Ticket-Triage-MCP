@@ -111,25 +111,29 @@ async function serializeByPath<T>(
   path: string,
   operation: () => Promise<T>,
 ): Promise<T> {
-  const previous = auditOperations.get(path) ?? Promise.resolve();
+  const key = operationKey(path);
+  const previous = auditOperations.get(key) ?? Promise.resolve();
   let release = (): void => undefined;
   const current = new Promise<void>((resolveOperation) => {
     release = resolveOperation;
   });
-  auditOperations.set(path, current);
+  auditOperations.set(key, current);
   await previous;
   try {
     return await operation();
   } finally {
     release();
-    if (auditOperations.get(path) === current) {
-      auditOperations.delete(path);
+    if (auditOperations.get(key) === current) {
+      auditOperations.delete(key);
     }
   }
 }
 
-async function waitForPath(path: string): Promise<void> {
-  await auditOperations.get(path);
+function operationKey(path: string): string {
+  const resolvedPath = resolve(path);
+  return process.platform === "win32"
+    ? resolvedPath.toLowerCase()
+    : resolvedPath;
 }
 
 export class AuditRepository {
@@ -195,66 +199,67 @@ export class AuditRepository {
   }
 
   async list(ticketId?: TicketId): Promise<AuditEvent[]> {
-    await waitForPath(this.file);
-    let parsedTicketId: TicketId | undefined;
-    if (ticketId !== undefined) {
-      const result = TicketIdSchema.safeParse(ticketId);
-      if (!result.success) {
-        throw repositoryError("Repository path is not allowed.");
+    return serializeByPath(this.file, async () => {
+      let parsedTicketId: TicketId | undefined;
+      if (ticketId !== undefined) {
+        const result = TicketIdSchema.safeParse(ticketId);
+        if (!result.success) {
+          throw repositoryError("Repository path is not allowed.");
+        }
+        parsedTicketId = result.data;
       }
-      parsedTicketId = result.data;
-    }
 
-    try {
-      await assertSafeFile(this.file);
-    } catch (error) {
-      if (isMissing(error)) {
-        return [];
-      }
-      throw error;
-    }
-
-    let content: string;
-    let handle;
-    try {
-      handle = await this.fileSystem.open(this.file, "r");
-      await assertSafeOpenedFile(handle);
-      content = await handle.readFile("utf8");
-    } catch (error) {
-      if (error instanceof DomainError) {
+      try {
+        await assertSafeFile(this.file);
+      } catch (error) {
+        if (isMissing(error)) {
+          return [];
+        }
         throw error;
       }
-      throw repositoryError("Audit log could not be read.");
-    } finally {
-      await closeQuietly(handle);
-    }
-    if (content === "") {
-      return [];
-    }
 
-    const lines = content.endsWith("\n")
-      ? content.slice(0, -1).split("\n")
-      : content.split("\n");
-    const events: AuditEvent[] = [];
-    for (const line of lines) {
-      if (line.trim() === "") {
-        throw repositoryError("Audit log contains malformed data.");
-      }
+      let content: string;
+      let handle;
       try {
-        const result = AuditEventSchema.safeParse(JSON.parse(line));
-        if (!result.success) {
-          throw repositoryError("Audit log contains malformed data.");
-        }
-        events.push(result.data);
+        handle = await this.fileSystem.open(this.file, "r");
+        await assertSafeOpenedFile(handle);
+        content = await handle.readFile("utf8");
       } catch (error) {
         if (error instanceof DomainError) {
           throw error;
         }
-        throw repositoryError("Audit log contains malformed data.");
+        throw repositoryError("Audit log could not be read.");
+      } finally {
+        await closeQuietly(handle);
       }
-    }
-    return parsedTicketId === undefined
-      ? events
-      : events.filter((event) => event.ticketId === parsedTicketId);
+      if (content === "") {
+        return [];
+      }
+
+      const lines = content.endsWith("\n")
+        ? content.slice(0, -1).split("\n")
+        : content.split("\n");
+      const events: AuditEvent[] = [];
+      for (const line of lines) {
+        if (line.trim() === "") {
+          throw repositoryError("Audit log contains malformed data.");
+        }
+        try {
+          const result = AuditEventSchema.safeParse(JSON.parse(line));
+          if (!result.success) {
+            throw repositoryError("Audit log contains malformed data.");
+          }
+          events.push(result.data);
+        } catch (error) {
+          if (error instanceof DomainError) {
+            throw error;
+          }
+          throw repositoryError("Audit log contains malformed data.");
+        }
+      }
+      return parsedTicketId === undefined
+        ? events
+        : events.filter((event) => event.ticketId === parsedTicketId);
+    });
   }
 }

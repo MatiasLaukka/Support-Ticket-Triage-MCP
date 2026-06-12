@@ -503,6 +503,80 @@ describe("TicketRepository", () => {
     await expect(first.get("TKT-1001")).resolves.toMatchObject({ revision: 3 });
   });
 
+  it("serializes Windows path aliases for revision-checked updates", async () => {
+    if (process.platform !== "win32") {
+      return;
+    }
+
+    const { runtimeRoot, seedFile } = await createTicketRepository([baseTicket]);
+    const runtimeFile = resolve(runtimeRoot, "tickets.json");
+    const readStarted = deferred();
+    const allowRead = deferred();
+    let pauseFirstRuntimeRead = true;
+    const first = constructWithFileSystem(
+      TicketRepository,
+      [runtimeRoot, seedFile],
+      {
+        open: async (...args: Parameters<typeof open>) => {
+          const handle = await open(...args);
+          if (
+            pauseFirstRuntimeRead &&
+            args[1] === "r" &&
+            String(args[0]).toLowerCase() === runtimeFile.toLowerCase()
+          ) {
+            pauseFirstRuntimeRead = false;
+            return {
+              readFile: async (...readArgs: Parameters<typeof handle.readFile>) => {
+                const content = await handle.readFile(...readArgs);
+                readStarted.resolve();
+                await allowRead.promise;
+                return content;
+              },
+              stat: handle.stat.bind(handle),
+              close: handle.close.bind(handle),
+            };
+          }
+          return handle;
+        },
+      },
+    );
+    const second = new TicketRepository(
+      runtimeRoot.toUpperCase(),
+      seedFile.toUpperCase(),
+    );
+
+    const firstUpdate = first.update("TKT-1001", 2, (current) => ({
+      ...current,
+      status: "in-progress",
+      updatedAt: "2026-06-10T08:45:00.000Z",
+    }));
+    await readStarted.promise;
+    const secondUpdate = second.update("TKT-1001", 2, (current) => ({
+      ...current,
+      status: "resolved",
+      updatedAt: "2026-06-10T08:46:00.000Z",
+    }));
+    const secondState = await Promise.race([
+      secondUpdate.then(
+        () => "completed",
+        () => "completed",
+      ),
+      new Promise<string>((resolveRace) =>
+        setTimeout(() => resolveRace("waiting"), 25),
+      ),
+    ]);
+    allowRead.resolve();
+    const results = await Promise.allSettled([firstUpdate, secondUpdate]);
+
+    expect(secondState).toBe("waiting");
+    expect(results.filter(({ status }) => status === "fulfilled")).toHaveLength(1);
+    expect(results.filter(({ status }) => status === "rejected")).toEqual([
+      expect.objectContaining({
+        reason: expect.objectContaining({ code: "REVISION_CONFLICT" }),
+      }),
+    ]);
+  });
+
   it("does not let temporary-file cleanup override a safe update error", async () => {
     const { runtimeRoot, seedFile } = await createTicketRepository([baseTicket]);
     const repository = constructWithFileSystem(
@@ -1003,6 +1077,81 @@ describe("RecommendationRepository", () => {
     expect(finalValue.resolution).toBe(successfulResolution);
   });
 
+  it("serializes Windows path aliases for conflicting resolution", async () => {
+    if (process.platform !== "win32") {
+      return;
+    }
+
+    const root = await temporaryRoot();
+    const repositoryRoot = resolve(root, "recommendations");
+    const setupRepository = new RecommendationRepository(repositoryRoot);
+    await setupRepository.create(recommendation);
+    const recommendationFile = resolve(
+      repositoryRoot,
+      `${recommendation.id}.json`,
+    );
+    const readStarted = deferred();
+    const allowRead = deferred();
+    let pauseFirstRead = true;
+    const first = constructWithFileSystem(
+      RecommendationRepository,
+      [repositoryRoot],
+      {
+        open: async (...args: Parameters<typeof open>) => {
+          const handle = await open(...args);
+          if (
+            pauseFirstRead &&
+            args[1] === "r" &&
+            String(args[0]).toLowerCase() === recommendationFile.toLowerCase()
+          ) {
+            pauseFirstRead = false;
+            return {
+              readFile: async (...readArgs: Parameters<typeof handle.readFile>) => {
+                const content = await handle.readFile(...readArgs);
+                readStarted.resolve();
+                await allowRead.promise;
+                return content;
+              },
+              stat: handle.stat.bind(handle),
+              close: handle.close.bind(handle),
+            };
+          }
+          return handle;
+        },
+      },
+    );
+    const second = new RecommendationRepository(repositoryRoot.toUpperCase());
+
+    const firstResolution = first.markResolved(recommendation.id, "approved");
+    await readStarted.promise;
+    const secondResolution = second.markResolved(recommendation.id, "rejected");
+    const secondState = await Promise.race([
+      secondResolution.then(
+        () => "completed",
+        () => "completed",
+      ),
+      new Promise<string>((resolveRace) =>
+        setTimeout(() => resolveRace("waiting"), 25),
+      ),
+    ]);
+    allowRead.resolve();
+    const results = await Promise.allSettled([
+      firstResolution,
+      secondResolution,
+    ]);
+
+    expect(secondState).toBe("waiting");
+    expect(results.filter(({ status }) => status === "fulfilled")).toHaveLength(1);
+    expect(results.filter(({ status }) => status === "rejected")).toEqual([
+      expect.objectContaining({
+        reason: expect.objectContaining({
+          code: "REPOSITORY_ERROR",
+          message: "Recommendation is already resolved.",
+        }),
+      }),
+    ]);
+  });
+
   it("rejects traversal and linked recommendation roots or files", async () => {
     const root = await temporaryRoot();
     const actualRoot = resolve(root, "actual");
@@ -1267,6 +1416,124 @@ describe("AuditRepository", () => {
     allowWrite.resolve();
     await appendPromise;
     await expect(listPromise).resolves.toEqual([auditEvent]);
+  });
+
+  it("reserves the audit path for the entire list snapshot", async () => {
+    const root = await temporaryRoot();
+    const file = resolve(root, "audit", "events.jsonl");
+    const setupRepository = new AuditRepository(file);
+    await setupRepository.append(auditEvent);
+    const otherEvent = AuditEventSchema.parse({
+      ...auditEvent,
+      id: "19632c22-405e-4b70-8b84-0cd15f3ba7e1",
+      ticketId: "TKT-1002",
+    });
+    const readStarted = deferred();
+    const allowRead = deferred();
+    let pauseFirstRead = true;
+    const reader = constructWithFileSystem(
+      AuditRepository,
+      [file],
+      {
+        open: async (...args: Parameters<typeof open>) => {
+          const handle = await open(...args);
+          if (pauseFirstRead && args[1] === "r") {
+            pauseFirstRead = false;
+            return {
+              readFile: async (...readArgs: Parameters<typeof handle.readFile>) => {
+                readStarted.resolve();
+                await allowRead.promise;
+                return handle.readFile(...readArgs);
+              },
+              stat: handle.stat.bind(handle),
+              close: handle.close.bind(handle),
+            };
+          }
+          return handle;
+        },
+      },
+    );
+    const writer = new AuditRepository(file);
+
+    const listPromise = reader.list();
+    await readStarted.promise;
+    const appendPromise = writer.append(otherEvent);
+    const appendState = await Promise.race([
+      appendPromise.then(
+        () => "completed",
+        () => "completed",
+      ),
+      new Promise<string>((resolveRace) =>
+        setTimeout(() => resolveRace("waiting"), 25),
+      ),
+    ]);
+    allowRead.resolve();
+
+    expect(appendState).toBe("waiting");
+    await expect(listPromise).resolves.toEqual([auditEvent]);
+    await appendPromise;
+    await expect(writer.list()).resolves.toEqual([auditEvent, otherEvent]);
+  });
+
+  it("serializes Windows path aliases for audit list and append", async () => {
+    if (process.platform !== "win32") {
+      return;
+    }
+
+    const root = await temporaryRoot();
+    const file = resolve(root, "audit", "events.jsonl");
+    const setupRepository = new AuditRepository(file);
+    await setupRepository.append(auditEvent);
+    const otherEvent = AuditEventSchema.parse({
+      ...auditEvent,
+      id: "19632c22-405e-4b70-8b84-0cd15f3ba7e1",
+      ticketId: "TKT-1002",
+    });
+    const readStarted = deferred();
+    const allowRead = deferred();
+    let pauseFirstRead = true;
+    const reader = constructWithFileSystem(
+      AuditRepository,
+      [file],
+      {
+        open: async (...args: Parameters<typeof open>) => {
+          const handle = await open(...args);
+          if (pauseFirstRead && args[1] === "r") {
+            pauseFirstRead = false;
+            return {
+              readFile: async (...readArgs: Parameters<typeof handle.readFile>) => {
+                readStarted.resolve();
+                await allowRead.promise;
+                return handle.readFile(...readArgs);
+              },
+              stat: handle.stat.bind(handle),
+              close: handle.close.bind(handle),
+            };
+          }
+          return handle;
+        },
+      },
+    );
+    const writer = new AuditRepository(file.toUpperCase());
+
+    const listPromise = reader.list();
+    await readStarted.promise;
+    const appendPromise = writer.append(otherEvent);
+    const appendState = await Promise.race([
+      appendPromise.then(
+        () => "completed",
+        () => "completed",
+      ),
+      new Promise<string>((resolveRace) =>
+        setTimeout(() => resolveRace("waiting"), 25),
+      ),
+    ]);
+    allowRead.resolve();
+
+    expect(appendState).toBe("waiting");
+    await expect(listPromise).resolves.toEqual([auditEvent]);
+    await appendPromise;
+    await expect(reader.list()).resolves.toEqual([auditEvent, otherEvent]);
   });
 
   it("detects malformed JSONL lines without leaking the file path", async () => {

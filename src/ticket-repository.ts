@@ -159,25 +159,33 @@ async function serializeByPath<T>(
   path: string,
   operation: () => Promise<T>,
 ): Promise<T> {
-  const previous = ticketOperations.get(path) ?? Promise.resolve();
+  const key = operationKey(path);
+  const previous = ticketOperations.get(key) ?? Promise.resolve();
   let release = (): void => undefined;
   const current = new Promise<void>((resolveOperation) => {
     release = resolveOperation;
   });
-  ticketOperations.set(path, current);
+  ticketOperations.set(key, current);
   await previous;
   try {
     return await operation();
   } finally {
     release();
-    if (ticketOperations.get(path) === current) {
-      ticketOperations.delete(path);
+    if (ticketOperations.get(key) === current) {
+      ticketOperations.delete(key);
     }
   }
 }
 
 async function waitForPath(path: string): Promise<void> {
-  await ticketOperations.get(path);
+  await ticketOperations.get(operationKey(path));
+}
+
+function operationKey(path: string): string {
+  const resolvedPath = resolve(path);
+  return process.platform === "win32"
+    ? resolvedPath.toLowerCase()
+    : resolvedPath;
 }
 
 function parseTickets(value: unknown): Ticket[] {

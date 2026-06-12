@@ -126,25 +126,33 @@ async function serializeByPath<T>(
   path: string,
   operation: () => Promise<T>,
 ): Promise<T> {
-  const previous = recommendationOperations.get(path) ?? Promise.resolve();
+  const key = operationKey(path);
+  const previous = recommendationOperations.get(key) ?? Promise.resolve();
   let release = (): void => undefined;
   const current = new Promise<void>((resolveOperation) => {
     release = resolveOperation;
   });
-  recommendationOperations.set(path, current);
+  recommendationOperations.set(key, current);
   await previous;
   try {
     return await operation();
   } finally {
     release();
-    if (recommendationOperations.get(path) === current) {
-      recommendationOperations.delete(path);
+    if (recommendationOperations.get(key) === current) {
+      recommendationOperations.delete(key);
     }
   }
 }
 
 async function waitForPath(path: string): Promise<void> {
-  await recommendationOperations.get(path);
+  await recommendationOperations.get(operationKey(path));
+}
+
+function operationKey(path: string): string {
+  const resolvedPath = resolve(path);
+  return process.platform === "win32"
+    ? resolvedPath.toLowerCase()
+    : resolvedPath;
 }
 
 export class RecommendationRepository {

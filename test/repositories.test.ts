@@ -889,6 +889,96 @@ describe("RecommendationRepository", () => {
     });
   });
 
+  it("transitions recommendation resolution with compare-and-set semantics", async () => {
+    const root = await temporaryRoot();
+    const repository = new RecommendationRepository(resolve(root, "recommendations"));
+    await repository.create(recommendation);
+
+    await repository.transitionResolution(
+      recommendation.id,
+      "pending",
+      "approved",
+    );
+
+    await expect(repository.get(recommendation.id)).resolves.toMatchObject({
+      resolution: "approved",
+    });
+  });
+
+  it("returns a stable conflict when recommendation resolution does not match expected state", async () => {
+    const root = await temporaryRoot();
+    const repository = new RecommendationRepository(resolve(root, "recommendations"));
+    await repository.create(recommendation);
+    await repository.transitionResolution(
+      recommendation.id,
+      "pending",
+      "approved",
+    );
+
+    await expect(
+      repository.transitionResolution(
+        recommendation.id,
+        "pending",
+        "rejected",
+      ),
+    ).rejects.toSatisfy(
+      expectDomainError(
+        "REPOSITORY_ERROR",
+        "Recommendation resolution does not match expected state.",
+      ),
+    );
+    await expect(repository.get(recommendation.id)).resolves.toMatchObject({
+      resolution: "approved",
+    });
+  });
+
+  it("rolls recommendation resolution back from final to pending", async () => {
+    const root = await temporaryRoot();
+    const repository = new RecommendationRepository(resolve(root, "recommendations"));
+    await repository.create(recommendation);
+    await repository.transitionResolution(
+      recommendation.id,
+      "pending",
+      "rejected",
+    );
+
+    await repository.transitionResolution(
+      recommendation.id,
+      "rejected",
+      "pending",
+    );
+
+    await expect(repository.get(recommendation.id)).resolves.toMatchObject({
+      resolution: "pending",
+    });
+  });
+
+  it("serializes compare-and-set transitions across repository instances", async () => {
+    const root = await temporaryRoot();
+    const repositoryRoot = resolve(root, "recommendations");
+    const first = new RecommendationRepository(repositoryRoot);
+    const second = new RecommendationRepository(repositoryRoot);
+    await first.create(recommendation);
+
+    const results = await Promise.allSettled([
+      first.transitionResolution(recommendation.id, "pending", "approved"),
+      second.transitionResolution(recommendation.id, "pending", "rejected"),
+    ]);
+
+    expect(results.filter(({ status }) => status === "fulfilled")).toHaveLength(1);
+    expect(results.filter(({ status }) => status === "rejected")).toEqual([
+      expect.objectContaining({
+        reason: expect.objectContaining({
+          name: "DomainError",
+          code: "REPOSITORY_ERROR",
+          message: "Recommendation resolution does not match expected state.",
+        }),
+      }),
+    ]);
+    const finalValue = await first.get(recommendation.id);
+    expect(["approved", "rejected"]).toContain(finalValue.resolution);
+  });
+
   it("cleans a failed recommendation create and allows retry", async () => {
     const root = await temporaryRoot();
     const repositoryRoot = resolve(root, "recommendations");

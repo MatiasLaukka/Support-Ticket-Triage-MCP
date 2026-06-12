@@ -254,15 +254,37 @@ export class RecommendationRepository {
     id: string,
     resolution: "approved" | "rejected",
   ): Promise<void> {
+    try {
+      await this.transitionResolution(id, "pending", resolution);
+    } catch (error) {
+      if (
+        error instanceof DomainError &&
+        error.code === "REPOSITORY_ERROR" &&
+        error.message ===
+          "Recommendation resolution does not match expected state."
+      ) {
+        throw repositoryError("Recommendation is already resolved.");
+      }
+      throw error;
+    }
+  }
+
+  async transitionResolution(
+    id: string,
+    expected: TriageRecommendation["resolution"],
+    next: TriageRecommendation["resolution"],
+  ): Promise<void> {
     const path = this.pathFor(id);
     return serializeByPath(path, async () => {
       const recommendation = await this.getUnlocked(path);
-      if (recommendation.resolution !== "pending") {
-        throw repositoryError("Recommendation is already resolved.");
+      if (recommendation.resolution !== expected) {
+        throw repositoryError(
+          "Recommendation resolution does not match expected state.",
+        );
       }
       const updated = TriageRecommendationSchema.parse({
         ...recommendation,
-        resolution,
+        resolution: next,
       });
       const temporaryFile = resolve(
         this.root,

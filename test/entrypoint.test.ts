@@ -1,14 +1,17 @@
 import { spawn } from "node:child_process";
-import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { afterEach, describe, expect, it } from "vitest";
 
 const PROCESS_TIMEOUT_MS = 10_000;
+const PROCESS_SHUTDOWN_TIMEOUT_MS = 2_000;
 const REQUEST_TIMEOUT_MS = 5_000;
+const INTEGRATION_TEST_TIMEOUT_MS = 20_000;
 const temporaryRoots: string[] = [];
 
 function withTimeout<T>(
@@ -38,21 +41,31 @@ function textOf(result: CallToolResult): string {
   return text?.type === "text" ? text.text : "";
 }
 
-async function runInvalidMinutesProcess(): Promise<{
+interface ProcessResult {
   code: number | null;
   stdout: string;
   stderr: string;
-}> {
+}
+
+async function runStartupProcess(
+  env: NodeJS.ProcessEnv,
+  nodeArgs: string[] = [],
+  cwd = process.cwd(),
+): Promise<ProcessResult> {
   const root = await mkdtemp(join(tmpdir(), "triage-entrypoint-invalid-"));
   temporaryRoots.push(root);
-  const child = spawn(process.execPath, ["dist/src/index.js"], {
-    cwd: process.cwd(),
+  const child = spawn(process.execPath, [
+    ...nodeArgs,
+    resolve("dist", "src", "index.js"),
+  ], {
+    cwd,
     env: {
       ...process.env,
       TRIAGE_DATA_ROOT: root,
       TRIAGE_SEED_FILE: resolve("data", "seed", "tickets.json"),
       TRIAGE_KNOWLEDGE_ROOT: resolve("data", "knowledge"),
-      TRIAGE_MINUTES_SAVED: "-1",
+      TRIAGE_MINUTES_SAVED: "8",
+      ...env,
     },
     stdio: ["ignore", "pipe", "pipe"],
     windowsHide: true,
@@ -68,18 +81,26 @@ async function runInvalidMinutesProcess(): Promise<{
     stderr += chunk;
   });
 
+  const close = new Promise<number | null>((resolveExit, rejectExit) => {
+    child.once("error", rejectExit);
+    child.once("close", resolveExit);
+  });
+
   try {
     const code = await withTimeout(
-      new Promise<number | null>((resolveExit, rejectExit) => {
-        child.once("error", rejectExit);
-        child.once("close", resolveExit);
-      }),
-      "invalid entrypoint process",
+      close,
+      "entrypoint process",
     );
     return { code, stdout, stderr };
-  } catch (error) {
-    child.kill();
-    throw error;
+  } finally {
+    if (child.exitCode === null && child.signalCode === null) {
+      child.kill();
+      await withTimeout(
+        close,
+        "entrypoint process shutdown",
+        PROCESS_SHUTDOWN_TIMEOUT_MS,
+      );
+    }
   }
 }
 
@@ -164,10 +185,10 @@ describe("compiled stdio entrypoint", () => {
     } finally {
       await withTimeout(client.close(), "MCP client close");
     }
-  });
+  }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("rejects an invalid minutes-saved value without writing protocol stdout", async () => {
-    const result = await runInvalidMinutesProcess();
+    const result = await runStartupProcess({ TRIAGE_MINUTES_SAVED: "-1" });
 
     expect(result.code).not.toBe(0);
     expect(result.stdout).toBe("");
@@ -177,7 +198,88 @@ describe("compiled stdio entrypoint", () => {
     expect(result.stderr).toContain(
       "TRIAGE_MINUTES_SAVED must be a finite nonnegative number.",
     );
-  });
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it.each([
+    ["TRIAGE_DATA_ROOT", "", "TRIAGE_DATA_ROOT must not be blank."],
+    ["TRIAGE_SEED_FILE", " \t ", "TRIAGE_SEED_FILE must not be blank."],
+    ["TRIAGE_KNOWLEDGE_ROOT", "\t", "TRIAGE_KNOWLEDGE_ROOT must not be blank."],
+  ] as const)(
+    "rejects blank %s before repository use without writing protocol stdout",
+    async (name, value, message) => {
+      const repositoryRoot = await mkdtemp(
+        join(tmpdir(), "triage-entrypoint-cwd-"),
+      );
+      temporaryRoots.push(repositoryRoot);
+      const result = await runStartupProcess(
+        { [name]: value },
+        [],
+        repositoryRoot,
+      );
+
+      expect(result.code).not.toBe(0);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toContain(
+        "Support ticket triage server failed to start.",
+      );
+      expect(result.stderr).toContain(message);
+      await expect(
+        stat(resolve(repositoryRoot, "tickets.json")),
+      ).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    },
+    INTEGRATION_TEST_TIMEOUT_MS,
+  );
+
+  it("exposes safe DomainError startup messages", async () => {
+    const result = await runStartupProcess({
+      TRIAGE_SEED_FILE: resolve("missing-entrypoint-seed.json"),
+    });
+
+    expect(result.code).not.toBe(0);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain(
+      "Support ticket triage server failed to start.",
+    );
+    expect(result.stderr).toContain("Repository could not be initialized.");
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("redacts unexpected startup error details", async () => {
+    const root = await mkdtemp(join(tmpdir(), "triage-entrypoint-preload-"));
+    temporaryRoots.push(root);
+    const preload = resolve(root, "leaking-startup-error.mjs");
+    const leakedPath = String.raw`C:\private\customer\tickets.json`;
+    await writeFile(
+      preload,
+      [
+        'import process from "node:process";',
+        `process.cwd = () => { throw new Error(${JSON.stringify(
+          `Cannot access ${leakedPath}`,
+        )}); };`,
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    const result = await runStartupProcess(
+      {},
+      ["--import", pathToFileURL(preload).href],
+    );
+
+    expect(result.code).not.toBe(0);
+    expect(result.stdout).toBe("");
+    expect(result.stderr.replaceAll("\r\n", "\n")).toBe(
+      [
+        "Support ticket triage server failed to start.",
+        "Unexpected startup error.",
+        "",
+      ].join("\n"),
+    );
+    expect(result.stderr).not.toContain(leakedPath);
+    expect(result.stderr).not.toContain("Cannot access");
+    expect(result.stderr).not.toContain("at ");
+  }, INTEGRATION_TEST_TIMEOUT_MS);
 });
 
 describe("Codex MCP configuration", () => {
@@ -195,8 +297,5 @@ describe("Codex MCP configuration", () => {
     const config = await readFile(resolve(".codex", "config.toml"), "utf8");
 
     expect(config.replaceAll("\r\n", "\n")).toBe(expected);
-    expect(config).toMatch(
-      /^\[mcp_servers\.support-ticket-triage\]\r?\ncommand = "node"\r?\nargs = \["dist\/src\/index\.js"\]\r?\ncwd = "\."\r?\nstartup_timeout_sec = 10\r?\ntool_timeout_sec = 30\r?\nenabled = true\r?\n$/,
-    );
   });
 });

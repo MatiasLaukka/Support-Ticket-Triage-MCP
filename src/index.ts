@@ -2,6 +2,7 @@ import process from "node:process";
 import { resolve } from "node:path";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { AuditRepository } from "./audit-repository.js";
+import { DomainError } from "./errors.js";
 import { KnowledgeRepository } from "./knowledge-repository.js";
 import { RecommendationRepository } from "./recommendation-repository.js";
 import { createTriageServer } from "./server.js";
@@ -9,9 +10,28 @@ import { TicketRepository } from "./ticket-repository.js";
 import { TriageService } from "./triage-service.js";
 
 const DEFAULT_MINUTES_SAVED = 8;
+const STARTUP_PATH_MESSAGES = {
+  TRIAGE_DATA_ROOT: "TRIAGE_DATA_ROOT must not be blank.",
+  TRIAGE_SEED_FILE: "TRIAGE_SEED_FILE must not be blank.",
+  TRIAGE_KNOWLEDGE_ROOT: "TRIAGE_KNOWLEDGE_ROOT must not be blank.",
+} as const;
 
-function environmentPath(name: string, fallback: string): string {
-  return resolve(process.cwd(), process.env[name] ?? fallback);
+class StartupConfigError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "StartupConfigError";
+  }
+}
+
+function environmentPath(
+  name: keyof typeof STARTUP_PATH_MESSAGES,
+  fallback: string,
+): string {
+  const configured = process.env[name];
+  if (configured !== undefined && configured.trim() === "") {
+    throw new StartupConfigError(STARTUP_PATH_MESSAGES[name]);
+  }
+  return resolve(process.cwd(), configured ?? fallback);
 }
 
 function minutesSaved(): number {
@@ -20,13 +40,13 @@ function minutesSaved(): number {
     return DEFAULT_MINUTES_SAVED;
   }
   if (configured.trim() === "") {
-    throw new Error(
+    throw new StartupConfigError(
       "TRIAGE_MINUTES_SAVED must be a finite nonnegative number.",
     );
   }
   const parsed = Number(configured);
   if (!Number.isFinite(parsed) || parsed < 0) {
-    throw new Error(
+    throw new StartupConfigError(
       "TRIAGE_MINUTES_SAVED must be a finite nonnegative number.",
     );
   }
@@ -34,9 +54,10 @@ function minutesSaved(): number {
 }
 
 function safeErrorDetail(error: unknown): string {
-  return error instanceof Error && error.message.trim() !== ""
-    ? error.message
-    : "Unexpected startup error.";
+  if (error instanceof StartupConfigError || error instanceof DomainError) {
+    return error.message;
+  }
+  return "Unexpected startup error.";
 }
 
 async function main(): Promise<void> {

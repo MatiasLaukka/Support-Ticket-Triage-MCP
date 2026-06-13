@@ -390,6 +390,12 @@ export class TicketRepository {
     });
   }
 
+  async snapshot(): Promise<Ticket[]> {
+    return serializeByPath(this.runtimeFile, async () =>
+      structuredClone(await this.readTicketsUnlocked()),
+    );
+  }
+
   async get(id: TicketId): Promise<Ticket> {
     const parsedId = TicketIdSchema.safeParse(id);
     if (!parsedId.success) {

@@ -16,6 +16,21 @@ import { DomainError } from "./errors.js";
 const defaultFileSystem = { open };
 type AuditFileSystem = typeof defaultFileSystem;
 const auditOperations = new Map<string, Promise<void>>();
+const DEFAULT_PAGE_LIMIT = 20;
+const MAX_PAGE_LIMIT = 50;
+
+export interface AuditPageInput {
+  ticketId?: TicketId;
+  offset: number;
+  limit: number;
+}
+
+export interface AuditPage {
+  events: AuditEvent[];
+  total: number;
+  offset: number;
+  limit: number;
+}
 
 interface Closable {
   close(): Promise<void>;
@@ -136,6 +151,47 @@ function operationKey(path: string): string {
     : resolvedPath;
 }
 
+function parseTicketId(ticketId: TicketId | undefined): TicketId | undefined {
+  if (ticketId === undefined) {
+    return undefined;
+  }
+  const result = TicketIdSchema.safeParse(ticketId);
+  if (!result.success) {
+    throw repositoryError("Repository path is not allowed.");
+  }
+  return result.data;
+}
+
+function boundedInteger(
+  value: number,
+  minimum: number,
+  maximum: number,
+  fallback: number,
+): number {
+  if (!Number.isFinite(value)) {
+    return fallback;
+  }
+  return Math.min(maximum, Math.max(minimum, Math.floor(value)));
+}
+
+function parseAuditLine(line: string): AuditEvent {
+  if (line.trim() === "") {
+    throw repositoryError("Audit log contains malformed data.");
+  }
+  try {
+    const result = AuditEventSchema.safeParse(JSON.parse(line));
+    if (!result.success) {
+      throw repositoryError("Audit log contains malformed data.");
+    }
+    return result.data;
+  } catch (error) {
+    if (error instanceof DomainError) {
+      throw error;
+    }
+    throw repositoryError("Audit log contains malformed data.");
+  }
+}
+
 export class AuditRepository {
   private readonly file: string;
   private readonly fileSystem: AuditFileSystem;
@@ -200,14 +256,7 @@ export class AuditRepository {
 
   async list(ticketId?: TicketId): Promise<AuditEvent[]> {
     return serializeByPath(this.file, async () => {
-      let parsedTicketId: TicketId | undefined;
-      if (ticketId !== undefined) {
-        const result = TicketIdSchema.safeParse(ticketId);
-        if (!result.success) {
-          throw repositoryError("Repository path is not allowed.");
-        }
-        parsedTicketId = result.data;
-      }
+      const parsedTicketId = parseTicketId(ticketId);
 
       try {
         await assertSafeFile(this.file);
@@ -241,25 +290,63 @@ export class AuditRepository {
         : content.split("\n");
       const events: AuditEvent[] = [];
       for (const line of lines) {
-        if (line.trim() === "") {
-          throw repositoryError("Audit log contains malformed data.");
-        }
-        try {
-          const result = AuditEventSchema.safeParse(JSON.parse(line));
-          if (!result.success) {
-            throw repositoryError("Audit log contains malformed data.");
-          }
-          events.push(result.data);
-        } catch (error) {
-          if (error instanceof DomainError) {
-            throw error;
-          }
-          throw repositoryError("Audit log contains malformed data.");
-        }
+        events.push(parseAuditLine(line));
       }
       return parsedTicketId === undefined
         ? events
         : events.filter((event) => event.ticketId === parsedTicketId);
+    });
+  }
+
+  async listPage(input: AuditPageInput): Promise<AuditPage> {
+    const parsedTicketId = parseTicketId(input.ticketId);
+    const offset = boundedInteger(input.offset, 0, Number.MAX_SAFE_INTEGER, 0);
+    const limit = boundedInteger(
+      input.limit,
+      1,
+      MAX_PAGE_LIMIT,
+      DEFAULT_PAGE_LIMIT,
+    );
+
+    return serializeByPath(this.file, async () => {
+      try {
+        await assertSafeFile(this.file);
+      } catch (error) {
+        if (isMissing(error)) {
+          return { events: [], total: 0, offset, limit };
+        }
+        throw error;
+      }
+
+      const events: AuditEvent[] = [];
+      let total = 0;
+      let handle;
+      try {
+        handle = await this.fileSystem.open(this.file, "r");
+        await assertSafeOpenedFile(handle);
+        for await (const line of handle.readLines()) {
+          const event = parseAuditLine(line);
+          if (
+            parsedTicketId !== undefined &&
+            event.ticketId !== parsedTicketId
+          ) {
+            continue;
+          }
+          if (total >= offset && events.length < limit) {
+            events.push(event);
+          }
+          total += 1;
+        }
+      } catch (error) {
+        if (error instanceof DomainError) {
+          throw error;
+        }
+        throw repositoryError("Audit log could not be read.");
+      } finally {
+        await closeQuietly(handle);
+      }
+
+      return { events, total, offset, limit };
     });
   }
 }

@@ -4,6 +4,7 @@ import {
   link,
   mkdir,
   open,
+  readdir,
   rename,
   rm,
   type FileHandle,
@@ -17,7 +18,7 @@ import {
 import { DomainError } from "./errors.js";
 
 const RecommendationIdSchema = z.uuid();
-const defaultFileSystem = { link, open, rename, rm };
+const defaultFileSystem = { link, open, readdir, rename, rm };
 type RecommendationFileSystem = typeof defaultFileSystem;
 const recommendationOperations = new Map<string, Promise<void>>();
 
@@ -173,52 +174,99 @@ export class RecommendationRepository {
       throw repositoryError("Repository data is invalid.");
     }
     const path = this.pathFor(parsed.data.id);
-    return serializeByPath(path, async () => {
-      await initializeDirectory(this.root);
-      const temporaryFile = resolve(
-        this.root,
-        `.${parsed.data.id}.${randomUUID()}.tmp`,
-      );
-      let handle;
-      let published = false;
-      try {
-        handle = await this.fileSystem.open(temporaryFile, "wx");
-        await assertSafeOpenedFile(handle);
-        await handle.writeFile(`${JSON.stringify(parsed.data, null, 2)}\n`, "utf8");
-        await handle.sync();
-        await closeQuietly(handle);
-        handle = undefined;
-        await this.fileSystem.link(temporaryFile, path);
-        published = true;
-        await this.fileSystem.rm(temporaryFile, { force: true });
-        published = false;
-      } catch (error) {
-        if (published) {
-          await removeQuietly(this.fileSystem.rm, path);
+    return serializeByPath(this.root, () =>
+      serializeByPath(path, async () => {
+        await initializeDirectory(this.root);
+        const temporaryFile = resolve(
+          this.root,
+          `.${parsed.data.id}.${randomUUID()}.tmp`,
+        );
+        let handle;
+        let published = false;
+        try {
+          handle = await this.fileSystem.open(temporaryFile, "wx");
+          await assertSafeOpenedFile(handle);
+          await handle.writeFile(
+            `${JSON.stringify(parsed.data, null, 2)}\n`,
+            "utf8",
+          );
+          await handle.sync();
+          await closeQuietly(handle);
+          handle = undefined;
+          await this.fileSystem.link(temporaryFile, path);
+          published = true;
+          await this.fileSystem.rm(temporaryFile, { force: true });
+          published = false;
+        } catch (error) {
+          if (published) {
+            await removeQuietly(this.fileSystem.rm, path);
+          }
+          if (
+            typeof error === "object" &&
+            error !== null &&
+            "code" in error &&
+            error.code === "EEXIST"
+          ) {
+            throw repositoryError("Recommendation already exists.");
+          }
+          if (error instanceof DomainError) {
+            throw error;
+          }
+          throw repositoryError("Recommendation could not be persisted.");
+        } finally {
+          await closeQuietly(handle);
+          await removeQuietly(this.fileSystem.rm, temporaryFile);
         }
-        if (
-          typeof error === "object" &&
-          error !== null &&
-          "code" in error &&
-          error.code === "EEXIST"
-        ) {
-          throw repositoryError("Recommendation already exists.");
-        }
-        if (error instanceof DomainError) {
-          throw error;
-        }
-        throw repositoryError("Recommendation could not be persisted.");
-      } finally {
-        await closeQuietly(handle);
-        await removeQuietly(this.fileSystem.rm, temporaryFile);
-      }
-    });
+      }),
+    );
   }
 
   async get(id: string): Promise<TriageRecommendation> {
     const path = this.pathFor(id);
-    await waitForPath(path);
-    return this.getUnlocked(path);
+    return serializeByPath(this.root, async () => {
+      await waitForPath(path);
+      return this.getUnlocked(path);
+    });
+  }
+
+  async list(): Promise<TriageRecommendation[]> {
+    return serializeByPath(this.root, async () => {
+      await assertNoLinkedPath(this.root);
+      let entries;
+      try {
+        entries = await this.fileSystem.readdir(this.root, {
+          withFileTypes: true,
+        });
+      } catch (error) {
+        if (isMissing(error)) {
+          return [];
+        }
+        throw repositoryError("Recommendation repository is unavailable.");
+      }
+
+      const recommendations: TriageRecommendation[] = [];
+      for (const entry of entries) {
+        const match = /^([0-9a-f-]{36})\.json$/i.exec(entry.name);
+        if (
+          match === null ||
+          !RecommendationIdSchema.safeParse(match[1]).success
+        ) {
+          continue;
+        }
+        const path = resolve(this.root, entry.name);
+        const value = await this.getUnlocked(path);
+        if (`${value.id}.json`.toLowerCase() !== entry.name.toLowerCase()) {
+          throw repositoryError("Repository data is invalid.");
+        }
+        recommendations.push(value);
+      }
+
+      return recommendations.sort(
+        (left, right) =>
+          left.createdAt.localeCompare(right.createdAt) ||
+          left.id.localeCompare(right.id),
+      );
+    });
   }
 
   private async getUnlocked(path: string): Promise<TriageRecommendation> {
@@ -275,7 +323,7 @@ export class RecommendationRepository {
     next: TriageRecommendation["resolution"],
   ): Promise<void> {
     const path = this.pathFor(id);
-    return serializeByPath(path, async () => {
+    return serializeByPath(this.root, () => serializeByPath(path, async () => {
       const recommendation = await this.getUnlocked(path);
       if (recommendation.resolution !== expected) {
         throw repositoryError(
@@ -309,12 +357,12 @@ export class RecommendationRepository {
         await closeQuietly(handle);
         await removeQuietly(this.fileSystem.rm, temporaryFile);
       }
-    });
+    }));
   }
 
   async deletePending(id: string): Promise<void> {
     const path = this.pathFor(id);
-    return serializeByPath(path, async () => {
+    return serializeByPath(this.root, () => serializeByPath(path, async () => {
       const recommendation = await this.getUnlocked(path);
       if (recommendation.resolution !== "pending") {
         throw repositoryError("Only pending recommendations can be deleted.");
@@ -328,7 +376,7 @@ export class RecommendationRepository {
         }
         throw repositoryError("Recommendation could not be deleted.");
       }
-    });
+    }));
   }
 
   private pathFor(id: string): string {

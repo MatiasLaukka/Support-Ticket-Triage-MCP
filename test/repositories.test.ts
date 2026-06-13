@@ -92,6 +92,31 @@ const auditEvent = AuditEventSchema.parse({
   result: "success",
 });
 
+function auditEventAt(index: number, ticketId: Ticket["id"]): AuditEvent {
+  return AuditEventSchema.parse({
+    ...auditEvent,
+    id: `00000000-0000-4000-8000-${String(index).padStart(12, "0")}`,
+    timestamp: new Date(
+      Date.parse("2026-06-10T08:40:01.000Z") + index * 1_000,
+    ).toISOString(),
+    ticketId,
+  });
+}
+
+function recommendationAt(
+  index: number,
+  overrides: Partial<TriageRecommendation> = {},
+): TriageRecommendation {
+  return TriageRecommendationSchema.parse({
+    ...recommendation,
+    id: `10000000-0000-4000-8000-${String(index).padStart(12, "0")}`,
+    createdAt: new Date(
+      Date.parse("2026-06-10T08:35:00.000Z") + index * 1_000,
+    ).toISOString(),
+    ...overrides,
+  });
+}
+
 async function temporaryRoot(): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), "support-repositories-"));
   temporaryRoots.push(root);
@@ -439,6 +464,52 @@ describe("TicketRepository", () => {
     expect(firstPage.items).toHaveLength(50);
     expect(secondPage).toMatchObject({ total: 55, offset: 50, limit: 50 });
     expect(secondPage.items).toHaveLength(5);
+  });
+
+  it("returns one cloned validated ticket snapshot", async () => {
+    const values = [baseTicket, ticket("TKT-1002")];
+    const { repository } = await createTicketRepository(values);
+
+    const snapshot = await repository.snapshot();
+    snapshot[0]!.subject = "mutated caller copy";
+
+    await expect(repository.snapshot()).resolves.toEqual(values);
+  });
+
+  it("waits for an active transaction before reading a ticket snapshot", async () => {
+    const { runtimeRoot, seedFile } = await createTicketRepository([baseTicket]);
+    const writer = new TicketRepository(runtimeRoot, seedFile);
+    const reader = new TicketRepository(runtimeRoot, seedFile);
+    const commitStarted = deferred();
+    const allowCommitFailure = deferred();
+
+    const transaction = writer.updateWithCommit(
+      "TKT-1001",
+      2,
+      (current) => ({
+        ...current,
+        priority: "P2",
+        updatedAt: "2026-06-10T08:45:00.000Z",
+      }),
+      async () => {
+        commitStarted.resolve();
+        await allowCommitFailure.promise;
+        throw new DomainError("Commit failed.", "REPOSITORY_ERROR");
+      },
+    );
+    await commitStarted.promise;
+    const snapshot = reader.snapshot();
+    const snapshotState = await Promise.race([
+      snapshot.then(() => "completed"),
+      new Promise<string>((resolveRace) =>
+        setTimeout(() => resolveRace("waiting"), 25),
+      ),
+    ]);
+    allowCommitFailure.resolve();
+
+    expect(snapshotState).toBe("waiting");
+    await expect(transaction).rejects.toMatchObject({ message: "Commit failed." });
+    await expect(snapshot).resolves.toEqual([baseTicket]);
   });
 
   it("reads and atomically updates a ticket when its revision matches", async () => {
@@ -1163,6 +1234,62 @@ describe("RecommendationRepository", () => {
     });
   });
 
+  it("lists every recommendation sorted by creation time and ID", async () => {
+    const root = await temporaryRoot();
+    const repository = new RecommendationRepository(resolve(root, "recommendations"));
+    const later = recommendationAt(3);
+    const sameTimeSecond = recommendationAt(2, {
+      createdAt: "2026-06-10T08:35:01.000Z",
+    });
+    const sameTimeFirst = recommendationAt(1, {
+      createdAt: "2026-06-10T08:35:01.000Z",
+      resolution: "pending",
+    });
+
+    await repository.create(later);
+    await repository.create(sameTimeSecond);
+    await repository.create(sameTimeFirst);
+
+    await expect(repository.list()).resolves.toEqual([
+      sameTimeFirst,
+      sameTimeSecond,
+      later,
+    ]);
+  });
+
+  it("rejects malformed and linked recommendation files while listing", async () => {
+    const root = await temporaryRoot();
+    const repositoryRoot = resolve(root, "recommendations");
+    await mkdir(repositoryRoot);
+    const malformed = recommendationAt(10);
+    await writeFile(
+      resolve(repositoryRoot, `${malformed.id}.json`),
+      '{"not":"a recommendation"}\n',
+      "utf8",
+    );
+
+    await expect(
+      new RecommendationRepository(repositoryRoot).list(),
+    ).rejects.toSatisfy(
+      expectDomainError("REPOSITORY_ERROR", "Repository data is invalid."),
+    );
+
+    await rm(resolve(repositoryRoot, `${malformed.id}.json`));
+    const target = resolve(root, "outside.json");
+    const linked = recommendationAt(11);
+    await writeJson(target, linked);
+    await link(target, resolve(repositoryRoot, `${linked.id}.json`));
+
+    await expect(
+      new RecommendationRepository(repositoryRoot).list(),
+    ).rejects.toSatisfy(
+      expectDomainError(
+        "REPOSITORY_ERROR",
+        "Repository contains an unsupported linked path.",
+      ),
+    );
+  });
+
   it("transitions recommendation resolution with compare-and-set semantics", async () => {
     const root = await temporaryRoot();
     const repository = new RecommendationRepository(resolve(root, "recommendations"));
@@ -1714,6 +1841,92 @@ describe("AuditRepository", () => {
     expect((await readFile(file, "utf8")).trim().split("\n")).toHaveLength(2);
     await expect(repository.list()).resolves.toEqual([auditEvent, otherEvent]);
     await expect(repository.list("TKT-1001")).resolves.toEqual([auditEvent]);
+  });
+
+  it("pages more than 50 audit events with offset and bounded retention", async () => {
+    const root = await temporaryRoot();
+    const file = resolve(root, "audit", "events.jsonl");
+    await mkdir(resolve(root, "audit"));
+    const events = Array.from({ length: 70 }, (_, index) =>
+      auditEventAt(
+        index + 1,
+        index % 2 === 0 ? "TKT-1001" : "TKT-1002",
+      ),
+    );
+    await writeFile(
+      file,
+      `${events.map((event) => JSON.stringify(event)).join("\n")}\n`,
+      "utf8",
+    );
+    const repository = new AuditRepository(file);
+
+    await expect(
+      repository.listPage({ offset: 10, limit: 500 }),
+    ).resolves.toEqual({
+      events: events.slice(10, 60),
+      total: 70,
+      offset: 10,
+      limit: 50,
+    });
+    await expect(
+      repository.listPage({ offset: 65, limit: 50 }),
+    ).resolves.toEqual({
+      events: events.slice(65),
+      total: 70,
+      offset: 65,
+      limit: 50,
+    });
+  });
+
+  it("pages and counts only audit events matching the ticket filter", async () => {
+    const root = await temporaryRoot();
+    const file = resolve(root, "events.jsonl");
+    const events = Array.from({ length: 12 }, (_, index) =>
+      auditEventAt(
+        index + 1,
+        index % 2 === 0 ? "TKT-1001" : "TKT-1002",
+      ),
+    );
+    await writeFile(
+      file,
+      `${events.map((event) => JSON.stringify(event)).join("\n")}\n`,
+      "utf8",
+    );
+
+    await expect(
+      new AuditRepository(file).listPage({
+        ticketId: "TKT-1002",
+        offset: 2,
+        limit: 3,
+      }),
+    ).resolves.toEqual({
+      events: events.filter(({ ticketId }) => ticketId === "TKT-1002").slice(2, 5),
+      total: 6,
+      offset: 2,
+      limit: 3,
+    });
+  });
+
+  it("rejects a malformed audit line after the retained page", async () => {
+    const root = await temporaryRoot();
+    const file = resolve(root, "events.jsonl");
+    const events = Array.from({ length: 60 }, (_, index) =>
+      auditEventAt(index + 1, "TKT-1001"),
+    );
+    await writeFile(
+      file,
+      `${events.map((event) => JSON.stringify(event)).join("\n")}\n{"late":"malformed"}\n`,
+      "utf8",
+    );
+
+    await expect(
+      new AuditRepository(file).listPage({ offset: 0, limit: 1 }),
+    ).rejects.toSatisfy(
+      expectDomainError(
+        "REPOSITORY_ERROR",
+        "Audit log contains malformed data.",
+      ),
+    );
   });
 
   it("rejects and rolls back a simulated partial audit write", async () => {

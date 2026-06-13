@@ -265,7 +265,7 @@ afterEach(async () => {
         .flatMap(({ client, server }) => [client.close(), server.close()]),
     );
   } finally {
-    await Promise.allSettled(
+    await Promise.all(
       temporaryRoots
         .splice(0)
         .map((root) => rm(root, { recursive: true, force: true })),
@@ -321,7 +321,7 @@ describe("createTriageServer read protocol", () => {
     )!;
     expect(getAuditEvents.inputSchema.properties?.offset).toMatchObject({
       minimum: 0,
-      maximum: 10_000,
+      maximum: Number.MAX_SAFE_INTEGER,
     });
     expect(getAuditEvents.inputSchema.properties?.limit).toMatchObject({
       minimum: 1,
@@ -455,10 +455,6 @@ describe("createTriageServer read protocol", () => {
       },
       {
         name: "get_audit_events",
-        arguments: { offset: 10_001 },
-      },
-      {
-        name: "get_audit_events",
         arguments: { limit: 51 },
       },
     ]) {
@@ -466,6 +462,23 @@ describe("createTriageServer read protocol", () => {
       expect(result.isError).toBe(true);
       expect(textOf(result)).toContain("Input validation error");
     }
+  });
+
+  it("accepts audit offsets beyond 10,000 and returns a bounded empty page", async () => {
+    const client = await connect(await createFixture());
+
+    const result = await callTool(client, {
+      name: "get_audit_events",
+      arguments: { offset: 10_001, limit: 50 },
+    });
+
+    expect(result.isError).not.toBe(true);
+    expect(result.structuredContent).toEqual({
+      events: [],
+      total: 1,
+      offset: 10_001,
+      limit: 50,
+    });
   });
 
   it("maps DomainError safely and unexpected errors to one generic tool error", async () => {

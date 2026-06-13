@@ -222,7 +222,12 @@ export function createTriageServer(
       inputSchema: z
         .object({
           ticketId: TicketIdSchema.optional(),
-          offset: z.number().int().min(0).max(MAX_OFFSET).default(0),
+          offset: z
+            .number()
+            .int()
+            .nonnegative()
+            .max(Number.MAX_SAFE_INTEGER)
+            .default(0),
           limit: z.number().int().min(1).max(PAGE_SIZE).default(20),
         })
         .strict(),

@@ -61,11 +61,26 @@ const FinalizingAnnotations = {
 } as const;
 
 const NonBlankStringSchema = z.string().trim().min(1);
+const UniqueNonBlankStringsSchema = z
+  .array(NonBlankStringSchema)
+  .refine((values) => new Set(values).size === values.length, {
+    message: "Values must be unique.",
+  });
 const KnowledgeArticleIdSchema = z
   .string()
   .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/);
 
-const SubmitRecommendationInputSchema: z.ZodType<SubmitRecommendationInput> = z
+type SubmitRecommendationToolInput = Omit<
+  SubmitRecommendationInput,
+  "submittedAt"
+>;
+type RejectRecommendationToolInput = Omit<
+  RejectRecommendationInput,
+  "rejectedAt"
+>;
+type ApprovalToolInput = Omit<Approval, "approvedAt">;
+
+const SubmitRecommendationInputSchema: z.ZodType<SubmitRecommendationToolInput> = z
   .object({
     ticketId: TicketIdSchema,
     sourceRevision: z.number().int().nonnegative(),
@@ -74,7 +89,7 @@ const SubmitRecommendationInputSchema: z.ZodType<SubmitRecommendationInput> = z
     team: TeamSchema,
     assignee: NonBlankStringSchema.nullable().optional(),
     ticketStatus: TicketStatusSchema.optional(),
-    tags: z.array(NonBlankStringSchema).optional(),
+    tags: UniqueNonBlankStringsSchema.optional(),
     duplicateCandidates: z.array(DuplicateCandidateSchema),
     outageRisk: RiskSchema,
     securityRisk: RiskSchema,
@@ -86,17 +101,37 @@ const SubmitRecommendationInputSchema: z.ZodType<SubmitRecommendationInput> = z
     confidence: z.number().min(0).max(1),
     recommendedNextAction: NonBlankStringSchema,
     actor: NonBlankStringSchema,
-    submittedAt: IsoTimestampSchema,
   })
   .strict();
 
-const RejectRecommendationInputSchema: z.ZodType<RejectRecommendationInput> = z
+const ApprovalInputSchema: z.ZodType<ApprovalToolInput> = z
+  .object({
+    recommendationId: ApprovalSchema.shape.recommendationId,
+    ticketId: ApprovalSchema.shape.ticketId,
+    expectedRevision: ApprovalSchema.shape.expectedRevision,
+    approvedFields: ApprovalSchema.shape.approvedFields,
+    editedCustomerResponse: ApprovalSchema.shape.editedCustomerResponse,
+    actor: ApprovalSchema.shape.actor,
+    confirm: ApprovalSchema.shape.confirm,
+  })
+  .strict()
+  .refine(
+    (approval) =>
+      approval.editedCustomerResponse === undefined ||
+      approval.approvedFields.includes("customerResponse"),
+    {
+      message:
+        "editedCustomerResponse requires customerResponse to be approved.",
+      path: ["editedCustomerResponse"],
+    },
+  );
+
+const RejectRecommendationInputSchema: z.ZodType<RejectRecommendationToolInput> = z
   .object({
     recommendationId: z.uuid(),
     ticketId: TicketIdSchema,
     actor: NonBlankStringSchema,
     feedback: NonBlankStringSchema,
-    rejectedAt: IsoTimestampSchema,
   })
   .strict();
 
@@ -322,7 +357,10 @@ export function createTriageServer(
     },
     async (input) =>
       toolResult(async () => ({
-        recommendation: await deps.service.submit(input),
+        recommendation: await deps.service.submit({
+          ...input,
+          submittedAt: deps.now().toISOString(),
+        }),
       })),
   );
 
@@ -331,11 +369,17 @@ export function createTriageServer(
     {
       description:
         "Apply only explicitly approved recommendation fields to the ticket.",
-      inputSchema: ApprovalSchema,
+      inputSchema: ApprovalInputSchema,
       outputSchema: ApprovalOutputSchema,
       annotations: FinalizingAnnotations,
     },
-    async (input: Approval) => toolResult(() => deps.service.approve(input)),
+    async (input) =>
+      toolResult(() =>
+        deps.service.approve({
+          ...input,
+          approvedAt: deps.now().toISOString(),
+        }),
+      ),
   );
 
   server.registerTool(
@@ -349,7 +393,10 @@ export function createTriageServer(
     },
     async (input) =>
       toolResult(async () => ({
-        auditEvent: await deps.service.reject(input),
+        auditEvent: await deps.service.reject({
+          ...input,
+          rejectedAt: deps.now().toISOString(),
+        }),
       })),
   );
 

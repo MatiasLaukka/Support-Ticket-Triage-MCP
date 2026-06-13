@@ -27,6 +27,9 @@ import {
 const now = new Date("2026-06-10T10:00:00.000Z");
 const temporaryRoots: string[] = [];
 const connections: Array<{ client: Client; server: McpServer }> = [];
+type SubmitToolInput = Omit<SubmitRecommendationInput, "submittedAt">;
+type ApprovalToolInput = Omit<Approval, "approvedAt">;
+type RejectToolInput = Omit<RejectRecommendationInput, "rejectedAt">;
 
 const triageTicketText = (ticketId: string): string =>
   [
@@ -86,8 +89,8 @@ function makeTicket(overrides: Partial<Ticket> = {}): Ticket {
 }
 
 function makeSubmitInput(
-  overrides: Partial<SubmitRecommendationInput> = {},
-): SubmitRecommendationInput {
+  overrides: Partial<SubmitToolInput> = {},
+): SubmitToolInput {
   return {
     ticketId: "TKT-1001",
     sourceRevision: 2,
@@ -108,15 +111,14 @@ function makeSubmitInput(
     confidence: 0.9,
     recommendedNextAction: "Inspect API telemetry and incident status.",
     actor: "triage-agent",
-    submittedAt: "2026-06-10T10:01:00+00:00",
     ...overrides,
   };
 }
 
 function makeApproval(
   recommendationId: string,
-  overrides: Partial<Approval> = {},
-): Approval {
+  overrides: Partial<ApprovalToolInput> = {},
+): ApprovalToolInput {
   return {
     recommendationId,
     ticketId: "TKT-1001",
@@ -125,21 +127,19 @@ function makeApproval(
     editedCustomerResponse: "We are actively investigating the API outage.",
     actor: "casey",
     confirm: true,
-    approvedAt: "2026-06-10T10:05:00+00:00",
     ...overrides,
   };
 }
 
 function makeRejectInput(
   recommendationId: string,
-  overrides: Partial<RejectRecommendationInput> = {},
-): RejectRecommendationInput {
+  overrides: Partial<RejectToolInput> = {},
+): RejectToolInput {
   return {
     recommendationId,
     ticketId: "TKT-1001",
     actor: "casey",
     feedback: "The outage evidence needs more investigation.",
-    rejectedAt: "2026-06-10T10:05:00+00:00",
     ...overrides,
   };
 }
@@ -323,10 +323,7 @@ describe("createTriageServer action protocol", () => {
     expect(submission.inputSchema.properties).not.toHaveProperty(
       "escalationReasons",
     );
-    expect(submission.inputSchema.properties?.submittedAt).toMatchObject({
-      type: "string",
-      format: "date-time",
-    });
+    expect(submission.inputSchema.properties).not.toHaveProperty("submittedAt");
     const approval = actions.find(
       ({ name }) => name === "approve_triage_recommendation",
     )!;
@@ -339,10 +336,7 @@ describe("createTriageServer action protocol", () => {
       type: "string",
       format: "uuid",
     });
-    expect(approval.inputSchema.properties?.approvedAt).toMatchObject({
-      type: "string",
-      format: "date-time",
-    });
+    expect(approval.inputSchema.properties).not.toHaveProperty("approvedAt");
     const rejection = actions.find(
       ({ name }) => name === "reject_triage_recommendation",
     )!;
@@ -350,10 +344,7 @@ describe("createTriageServer action protocol", () => {
       type: "string",
       format: "uuid",
     });
-    expect(rejection.inputSchema.properties?.rejectedAt).toMatchObject({
-      type: "string",
-      format: "date-time",
-    });
+    expect(rejection.inputSchema.properties).not.toHaveProperty("rejectedAt");
     for (const action of actions) {
       expect(action.inputSchema.additionalProperties).toBe(false);
       expect(action.outputSchema?.type).toBe("object");
@@ -378,6 +369,7 @@ describe("createTriageServer action protocol", () => {
       escalationRequired: true,
       escalationReasons: ["outage"],
       resolution: "pending",
+      createdAt: now.toISOString(),
     });
     expect(recommendation.id).toMatch(
       /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
@@ -385,7 +377,65 @@ describe("createTriageServer action protocol", () => {
     await expect(fixture.recommendations.get(recommendation.id)).resolves.toEqual(
       recommendation,
     );
+    const auditPage = await fixture.audits.listPage({
+      ticketId: "TKT-1001",
+      offset: 0,
+      limit: 20,
+    });
+    expect(auditPage.events).toEqual([
+      expect.objectContaining({
+        action: "recommendation-submitted",
+        recommendationId: recommendation.id,
+        timestamp: now.toISOString(),
+      }),
+    ]);
     await expect(fixture.tickets.get("TKT-1001")).resolves.toEqual(before);
+  });
+
+  it("rejects duplicate submission tags during MCP input validation", async () => {
+    const fixture = await createFixture();
+    const client = await connect(fixture);
+
+    const result = await submit(client, { tags: ["api", "api"] });
+
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toContain("Input validation error");
+    expect(textOf(result)).toContain("tags");
+    expect(textOf(result)).not.toBe("Unexpected local triage error.");
+    await expect(fixture.recommendations.list()).resolves.toEqual([]);
+  });
+
+  it("rejects caller-owned timestamps for every MCP action", async () => {
+    const fixture = await createFixture();
+    const recommendation = await fixture.service.submit({
+      ...makeSubmitInput(),
+      submittedAt: "2026-06-10T09:00:00.000Z",
+    });
+    const client = await connect(fixture);
+
+    const results = await Promise.all([
+      callTool(client, "submit_triage_recommendation", {
+        ...makeSubmitInput(),
+        submittedAt: "2026-06-10T10:01:00.000Z",
+      }),
+      callTool(client, "approve_triage_recommendation", {
+        ...makeApproval(recommendation.id),
+        approvedAt: "2026-06-10T10:05:00.000Z",
+      }),
+      callTool(client, "reject_triage_recommendation", {
+        ...makeRejectInput(recommendation.id),
+        rejectedAt: "2026-06-10T10:05:00.000Z",
+      }),
+    ]);
+
+    for (const result of results) {
+      expect(result.isError).toBe(true);
+      expect(textOf(result)).toContain("Input validation error");
+    }
+    await expect(fixture.recommendations.get(recommendation.id)).resolves.toMatchObject(
+      { resolution: "pending" },
+    );
+    expect((await fixture.tickets.get("TKT-1001")).revision).toBe(2);
   });
 
   it("requires confirm true and applies an explicit partial approval with edited response", async () => {
@@ -426,6 +476,7 @@ describe("createTriageServer action protocol", () => {
       status: "triage",
       tags: ["existing"],
       revision: 3,
+      updatedAt: now.toISOString(),
     });
     expect(auditEvent.before).toEqual({
       priority: "P3",
@@ -439,7 +490,19 @@ describe("createTriageServer action protocol", () => {
       action: "recommendation-approved",
       ticketId: "TKT-1001",
       recommendationId: recommendation.id,
+      timestamp: now.toISOString(),
     });
+    await expect(fixture.tickets.get("TKT-1001")).resolves.toEqual(ticket);
+    const auditPage = await fixture.audits.listPage({
+      ticketId: "TKT-1001",
+      offset: 0,
+      limit: 20,
+    });
+    expect(
+      auditPage.events.find(
+        ({ action }) => action === "recommendation-approved",
+      ),
+    ).toEqual(auditEvent);
   });
 
   it("returns stale and replayed approvals as MCP tool errors", async () => {
@@ -513,10 +576,21 @@ describe("createTriageServer action protocol", () => {
       rationale: "The outage evidence needs more investigation.",
       before: { resolution: "pending" },
       after: { resolution: "rejected" },
+      timestamp: now.toISOString(),
     });
     await expect(fixture.recommendations.get(recommendation.id)).resolves.toMatchObject(
       { resolution: "rejected" },
     );
+    const auditPage = await fixture.audits.listPage({
+      ticketId: "TKT-1001",
+      offset: 0,
+      limit: 20,
+    });
+    expect(
+      auditPage.events.find(
+        ({ action }) => action === "recommendation-rejected",
+      ),
+    ).toEqual(event);
     await expect(fixture.tickets.get("TKT-1001")).resolves.toEqual(before);
   });
 

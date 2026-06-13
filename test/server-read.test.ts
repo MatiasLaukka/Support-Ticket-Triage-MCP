@@ -164,6 +164,16 @@ async function createFixture(): Promise<{
     createdAt: "2026-06-10T09:00:00.000Z",
   });
   await recommendations.create(recommendation);
+  await recommendations.create(
+    TriageRecommendationSchema.parse({
+      ...recommendation,
+      id: "19632c22-405e-4b70-8b84-0cd15f3ba7e1",
+      ticketId: "TKT-1002",
+      resolution: "pending",
+      confidence: 0.7,
+      createdAt: "2026-06-10T09:01:00.000Z",
+    }),
+  );
   await audits.append(
     AuditEventSchema.parse({
       id: "00c96411-a595-4e2a-8869-c219d7637980",
@@ -212,8 +222,8 @@ async function connect(
   const [clientTransport, serverTransport] =
     InMemoryTransport.createLinkedPair();
   await server.connect(serverTransport);
-  await client.connect(clientTransport);
   connections.push({ client, server });
+  await client.connect(clientTransport);
   return client;
 }
 
@@ -248,17 +258,19 @@ function expectStableJson(text: string): unknown {
 
 afterEach(async () => {
   vi.restoreAllMocks();
-  await Promise.all(
-    connections.splice(0).map(async ({ client, server }) => {
-      await client.close();
-      await server.close();
-    }),
-  );
-  await Promise.all(
-    temporaryRoots
-      .splice(0)
-      .map((root) => rm(root, { recursive: true, force: true })),
-  );
+  try {
+    await Promise.allSettled(
+      connections
+        .splice(0)
+        .flatMap(({ client, server }) => [client.close(), server.close()]),
+    );
+  } finally {
+    await Promise.allSettled(
+      temporaryRoots
+        .splice(0)
+        .map((root) => rm(root, { recursive: true, force: true })),
+    );
+  }
 });
 
 describe("createTriageServer read protocol", () => {
@@ -301,6 +313,17 @@ describe("createTriageServer read protocol", () => {
       ({ name }) => name === "search_knowledge",
     )!;
     expect(searchKnowledge.inputSchema.properties?.limit).toMatchObject({
+      minimum: 1,
+      maximum: 50,
+    });
+    const getAuditEvents = discovery.tools.find(
+      ({ name }) => name === "get_audit_events",
+    )!;
+    expect(getAuditEvents.inputSchema.properties?.offset).toMatchObject({
+      minimum: 0,
+      maximum: 10_000,
+    });
+    expect(getAuditEvents.inputSchema.properties?.limit).toMatchObject({
       minimum: 1,
       maximum: 50,
     });
@@ -376,7 +399,8 @@ describe("createTriageServer read protocol", () => {
     expect(metrics.structuredContent).toMatchObject({
       generatedAt: now.toISOString(),
       openTickets: 3,
-      submittedRecommendations: 1,
+      submittedRecommendations: 2,
+      pendingRecommendations: 1,
       approvedRecommendations: 1,
       acceptanceRate: 1,
       minutesPerAcceptedRecommendation: 12,
@@ -385,15 +409,20 @@ describe("createTriageServer read protocol", () => {
 
     const audits = await callTool(client, {
       name: "get_audit_events",
-      arguments: { ticketId: "TKT-1001" },
+      arguments: { ticketId: "TKT-1001", offset: 0, limit: 10 },
     });
     expectStableJson(textOf(audits));
-    expect(structured(audits).events).toEqual([
-      expect.objectContaining({
-        ticketId: "TKT-1001",
-        action: "recommendation-submitted",
-      }),
-    ]);
+    expect(audits.structuredContent).toMatchObject({
+      events: [
+        expect.objectContaining({
+          ticketId: "TKT-1001",
+          action: "recommendation-submitted",
+        }),
+      ],
+      total: 1,
+      offset: 0,
+      limit: 10,
+    });
 
     for (const result of [listed, ticket, knowledge, similar, metrics, audits]) {
       expect(JSON.stringify(result)).not.toContain(fixture.root);
@@ -423,6 +452,14 @@ describe("createTriageServer read protocol", () => {
       {
         name: "get_audit_events",
         arguments: { ticketId: "TKT-1" },
+      },
+      {
+        name: "get_audit_events",
+        arguments: { offset: 10_001 },
+      },
+      {
+        name: "get_audit_events",
+        arguments: { limit: 51 },
       },
     ]) {
       const result = await callTool(client, request);
@@ -489,26 +526,12 @@ describe("createTriageServer read protocol", () => {
     ]);
 
     const listed = await client.listResources();
-    expect(listed.resources).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          uri: "ticket://TKT-1001",
-          mimeType: "application/json",
-        }),
-        expect.objectContaining({
-          uri: "knowledge://integration-webhooks",
-          mimeType: "text/markdown",
-        }),
-        expect.objectContaining({
-          uri: "audit://ticket/TKT-1001",
-          mimeType: "application/json",
-        }),
-        expect.objectContaining({
-          uri: "metrics://queue",
-          mimeType: "application/json",
-        }),
-      ]),
-    );
+    expect(listed.resources).toEqual([
+      expect.objectContaining({
+        uri: "metrics://queue",
+        mimeType: "application/json",
+      }),
+    ]);
 
     const ticket = await client.readResource({ uri: "ticket://TKT-1001" });
     expect(ticket.contents[0]).toMatchObject({
@@ -538,6 +561,9 @@ describe("createTriageServer read protocol", () => {
         : "";
     expect(expectStableJson(auditText)).toMatchObject({
       events: [expect.objectContaining({ ticketId: "TKT-1001" })],
+      total: 1,
+      offset: 0,
+      limit: 50,
     });
 
     const metrics = await client.readResource({ uri: "metrics://queue" });
@@ -547,11 +573,105 @@ describe("createTriageServer read protocol", () => {
         : "";
     expect(expectStableJson(metricsText)).toMatchObject({
       generatedAt: now.toISOString(),
-      submittedRecommendations: 1,
+      submittedRecommendations: 2,
+      pendingRecommendations: 1,
     });
 
     for (const result of [templates, listed, ticket, knowledge, audits, metrics]) {
       expect(JSON.stringify(result)).not.toContain(fixture.root);
     }
+  });
+
+  it("bounds audit resources to 50 events while reporting the full total", async () => {
+    const fixture = await createFixture();
+    for (let index = 0; index < 55; index += 1) {
+      await fixture.audits.append(
+        AuditEventSchema.parse({
+          id: `20000000-0000-4000-8000-${String(index).padStart(12, "0")}`,
+          timestamp: new Date(now.getTime() + index * 1_000).toISOString(),
+          actor: "casey",
+          action: "ticket-updated",
+          ticketId: "TKT-1001",
+          before: {},
+          after: { index },
+          rationale: "Recorded a bounded audit resource fixture.",
+          knowledgeArticleIds: [],
+          result: "success",
+        }),
+      );
+    }
+    const client = await connect(fixture);
+
+    const result = await client.readResource({
+      uri: "audit://ticket/TKT-1001",
+    });
+    const text =
+      result.contents[0] && "text" in result.contents[0]
+        ? result.contents[0].text
+        : "";
+    const page = expectStableJson(text) as {
+      events: unknown[];
+      total: number;
+      offset: number;
+      limit: number;
+    };
+
+    expect(page.events).toHaveLength(50);
+    expect(page).toMatchObject({ total: 56, offset: 0, limit: 50 });
+  });
+
+  it("uses ticket and recommendation snapshots for similarity and metrics", async () => {
+    const fixture = await createFixture();
+    const ticketSnapshot = vi.spyOn(fixture.tickets, "snapshot");
+    const recommendationSnapshot = vi.spyOn(fixture.recommendations, "list");
+    const client = await connect(fixture);
+
+    await callTool(client, {
+      name: "find_similar_tickets",
+      arguments: { id: "TKT-1001" },
+    });
+    await callTool(client, {
+      name: "get_queue_metrics",
+      arguments: {},
+    });
+
+    expect(ticketSnapshot).toHaveBeenCalledTimes(2);
+    expect(recommendationSnapshot).toHaveBeenCalledTimes(1);
+  });
+
+  it("maps resource domain, malformed ID, and unexpected failures safely", async () => {
+    const fixture = await createFixture();
+    const client = await connect(fixture);
+
+    const missingError = await client
+      .readResource({ uri: "ticket://TKT-9999" })
+      .catch((error: unknown) => error);
+    expect(String(missingError)).toContain(
+      "TICKET_NOT_FOUND: Ticket was not found.",
+    );
+    expect(String(missingError)).not.toContain(fixture.root);
+
+    const malformedError = await client
+      .readResource({ uri: "ticket://not-a-ticket" })
+      .catch((error: unknown) => error);
+    expect(String(malformedError)).toContain(
+      "REPOSITORY_ERROR: Repository path is not allowed.",
+    );
+    expect(String(malformedError)).not.toContain(fixture.root);
+
+    const secretPath = resolve(fixture.root, "private", "tickets.json");
+    vi.spyOn(fixture.tickets, "get").mockRejectedValueOnce(
+      new Error(`resource read failed at ${secretPath}`),
+    );
+    const stderr = vi.spyOn(console, "error").mockImplementation(() => {});
+    const unexpectedError = await client
+      .readResource({ uri: "ticket://TKT-1001" })
+      .catch((error: unknown) => error);
+    expect(String(unexpectedError)).toContain("Unexpected local triage error.");
+    expect(String(unexpectedError)).not.toContain(secretPath);
+    expect(String(unexpectedError)).not.toContain("resource read failed");
+    const diagnostics = stderr.mock.calls.flat().map(String).join("\n");
+    expect(diagnostics).toContain(secretPath);
+    expect(diagnostics).not.toBe("");
   });
 });

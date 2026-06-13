@@ -16,18 +16,14 @@ import {
   TicketIdSchema,
   TicketSchema,
   TicketStatusSchema,
-  TriageRecommendationSchema,
-  type Ticket,
+  type TicketId,
 } from "./domain.js";
 import { DomainError } from "./errors.js";
 import type { KnowledgeRepository } from "./knowledge-repository.js";
 import { calculateQueueMetrics } from "./metrics.js";
 import type { RecommendationRepository } from "./recommendation-repository.js";
 import { findSimilarTickets } from "./similarity.js";
-import type {
-  TicketFilter,
-  TicketRepository,
-} from "./ticket-repository.js";
+import type { TicketRepository } from "./ticket-repository.js";
 import type { TriageService } from "./triage-service.js";
 
 const PAGE_SIZE = 50;
@@ -75,7 +71,12 @@ const SimilarTicketsOutputSchema = z
   })
   .strict();
 const AuditEventsOutputSchema = z
-  .object({ events: z.array(AuditEventSchema) })
+  .object({
+    events: z.array(AuditEventSchema),
+    total: z.number().int().nonnegative(),
+    offset: z.number().int().nonnegative(),
+    limit: z.number().int().min(1).max(PAGE_SIZE),
+  })
   .strict();
 const QueueMetricsOutputSchema = z
   .object({
@@ -190,10 +191,11 @@ export function createTriageServer(
     },
     async ({ id }) =>
       toolResult(async () => {
-        const [source, tickets] = await Promise.all([
-          deps.tickets.get(id),
-          listAllTickets(deps.tickets),
-        ]);
+        const tickets = await deps.tickets.snapshot();
+        const source = tickets.find((ticket) => ticket.id === id);
+        if (source === undefined) {
+          throw new DomainError("Ticket was not found.", "TICKET_NOT_FOUND");
+        }
         return {
           sourceTicketId: source.id,
           candidates: findSimilarTickets(source, tickets),
@@ -218,15 +220,17 @@ export function createTriageServer(
     {
       description: "Read all audit events or events for one ticket.",
       inputSchema: z
-        .object({ ticketId: TicketIdSchema.optional() })
+        .object({
+          ticketId: TicketIdSchema.optional(),
+          offset: z.number().int().min(0).max(MAX_OFFSET).default(0),
+          limit: z.number().int().min(1).max(PAGE_SIZE).default(20),
+        })
         .strict(),
       outputSchema: AuditEventsOutputSchema,
       annotations: ReadOnlyAnnotations,
     },
-    async ({ ticketId }) =>
-      toolResult(async () => ({
-        events: await deps.audits.list(ticketId),
-      })),
+    async ({ ticketId, offset, limit }) =>
+      toolResult(() => deps.audits.listPage({ ticketId, offset, limit })),
   );
 
   registerResources(server, deps);
@@ -240,14 +244,7 @@ function registerResources(
   server.registerResource(
     "ticket",
     new ResourceTemplate("ticket://{id}", {
-      list: async () =>
-        resourceOperation(async () => ({
-          resources: (await listAllTickets(deps.tickets)).map((ticket) => ({
-            uri: `ticket://${ticket.id}`,
-            name: `Ticket ${ticket.id}`,
-            mimeType: "application/json",
-          })),
-        })),
+      list: undefined,
     }),
     {
       description: "A support ticket as stable JSON.",
@@ -255,21 +252,14 @@ function registerResources(
     },
     async (uri, { id }) =>
       resourceOperation(async () =>
-        jsonResource(uri, await deps.tickets.get(TicketIdSchema.parse(id))),
+        jsonResource(uri, await deps.tickets.get(parseTicketId(id))),
       ),
   );
 
   server.registerResource(
     "knowledge",
     new ResourceTemplate("knowledge://{id}", {
-      list: async () =>
-        resourceOperation(async () => ({
-          resources: (await deps.knowledge.list()).map((article) => ({
-            uri: `knowledge://${article.id}`,
-            name: `Knowledge ${article.id}`,
-            mimeType: "text/markdown",
-          })),
-        })),
+      list: undefined,
     }),
     {
       description: "A local support knowledge article.",
@@ -277,7 +267,7 @@ function registerResources(
     },
     async (uri, { id }) =>
       resourceOperation(async () => {
-        const article = await deps.knowledge.get(String(id));
+        const article = await deps.knowledge.get(parseKnowledgeId(id));
         return {
           contents: [
             {
@@ -293,14 +283,7 @@ function registerResources(
   server.registerResource(
     "ticket-audit",
     new ResourceTemplate("audit://ticket/{id}", {
-      list: async () =>
-        resourceOperation(async () => ({
-          resources: (await listAllTickets(deps.tickets)).map((ticket) => ({
-            uri: `audit://ticket/${ticket.id}`,
-            name: `Audit events for ${ticket.id}`,
-            mimeType: "application/json",
-          })),
-        })),
+      list: undefined,
     }),
     {
       description: "Ticket-specific audit events as stable JSON.",
@@ -308,9 +291,14 @@ function registerResources(
     },
     async (uri, { id }) =>
       resourceOperation(async () =>
-        jsonResource(uri, {
-          events: await deps.audits.list(TicketIdSchema.parse(id)),
-        }),
+        jsonResource(
+          uri,
+          await deps.audits.listPage({
+            ticketId: parseTicketId(id),
+            offset: 0,
+            limit: PAGE_SIZE,
+          }),
+        ),
       ),
   );
 
@@ -326,49 +314,13 @@ function registerResources(
   );
 }
 
-async function listAllTickets(
-  tickets: TicketRepository,
-  filter: Omit<TicketFilter, "offset" | "limit"> = {},
-): Promise<Ticket[]> {
-  const items: Ticket[] = [];
-  let offset = 0;
-  let total = Number.POSITIVE_INFINITY;
-
-  while (offset < total) {
-    const page = await tickets.list({
-      ...filter,
-      offset,
-      limit: PAGE_SIZE,
-    });
-    items.push(...page.items);
-    total = page.total;
-    if (page.items.length === 0) {
-      break;
-    }
-    offset += page.items.length;
-  }
-  return items;
-}
-
 async function queueMetrics(
   deps: TriageServerDependencies,
 ): Promise<ReturnType<typeof calculateQueueMetrics>> {
-  const [tickets, events] = await Promise.all([
-    listAllTickets(deps.tickets),
-    deps.audits.list(),
+  const [tickets, recommendations] = await Promise.all([
+    deps.tickets.snapshot(),
+    deps.recommendations.list(),
   ]);
-  const recommendationIds = [
-    ...new Set(
-      events.flatMap((event) =>
-        event.recommendationId === undefined ? [] : [event.recommendationId],
-      ),
-    ),
-  ];
-  const recommendations = TriageRecommendationSchema.array().parse(
-    await Promise.all(
-      recommendationIds.map((id) => deps.recommendations.get(id)),
-    ),
-  );
   return calculateQueueMetrics({
     tickets,
     recommendations,
@@ -377,6 +329,30 @@ async function queueMetrics(
       deps.minutesPerAcceptedRecommendation ??
       DEFAULT_MINUTES_PER_ACCEPTED_RECOMMENDATION,
   });
+}
+
+function parseTicketId(value: string | string[]): TicketId {
+  const result = TicketIdSchema.safeParse(value);
+  if (!result.success) {
+    throw new DomainError(
+      "Repository path is not allowed.",
+      "REPOSITORY_ERROR",
+    );
+  }
+  return result.data;
+}
+
+function parseKnowledgeId(value: string | string[]): string {
+  if (
+    typeof value !== "string" ||
+    !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(value)
+  ) {
+    throw new DomainError(
+      "Repository path is not allowed.",
+      "REPOSITORY_ERROR",
+    );
+  }
+  return value;
 }
 
 async function toolResult<T extends object>(

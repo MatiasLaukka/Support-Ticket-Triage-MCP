@@ -279,7 +279,10 @@ describe("createTriageServer read protocol", () => {
     const client = await connect(fixture);
 
     const discovery = await client.listTools();
-    expect(discovery.tools.map(({ name }) => name).sort()).toEqual([
+    const readTools = discovery.tools.filter(
+      ({ annotations }) => annotations?.readOnlyHint === true,
+    );
+    expect(readTools.map(({ name }) => name).sort()).toEqual([
       "find_similar_tickets",
       "get_audit_events",
       "get_queue_metrics",
@@ -287,7 +290,7 @@ describe("createTriageServer read protocol", () => {
       "list_tickets",
       "search_knowledge",
     ]);
-    for (const tool of discovery.tools) {
+    for (const tool of readTools) {
       expect(tool.annotations).toMatchObject({
         readOnlyHint: true,
         destructiveHint: false,

@@ -854,7 +854,7 @@ Document:
 
 - [ ] **Step 4: Verify documentation**
 
-Run: `rg -n "TODO|TBD|CV|portfolio|production deployment" README.md docs SECURITY.md`
+Run: `rg -n "TODO|TBD|CV|portfolio|production deployment" README.md docs/demo-script.md SECURITY.md`
 
 Run: `npm test`
 

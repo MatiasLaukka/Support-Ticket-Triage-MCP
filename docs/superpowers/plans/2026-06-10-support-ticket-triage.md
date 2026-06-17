@@ -690,7 +690,9 @@ Run `skill-creator/scripts/init_skill.py` with:
 - interface:
   - display name: `Triage Support Tickets`;
   - short description: `Safely triage B2B SaaS support tickets`;
-  - default prompt: `Triage this support ticket using the local MCP server and wait for my approval before applying changes.`
+  - default prompt: `Use $triaging-support-tickets to triage this support ticket using the local MCP server and wait for my approval before applying changes.`
+
+The explicit `$skill-name` mention is required by current Codex `openai.yaml` guidance.
 
 - [ ] **Step 3: Write structural tests before content**
 
@@ -852,7 +854,7 @@ Document:
 
 - [ ] **Step 4: Verify documentation**
 
-Run: `rg -n "TODO|TBD|CV|portfolio|production deployment" README.md docs SECURITY.md`
+Run: `rg -n "TODO|TBD|CV|portfolio|production deployment" README.md docs/demo-script.md SECURITY.md`
 
 Run: `npm test`
 

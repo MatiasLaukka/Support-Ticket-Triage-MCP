@@ -204,6 +204,40 @@ describe("createApprovalDeskHttpServer", () => {
     });
   });
 
+  it("rejects customer response approval without edited customer text", async () => {
+    const { deps, json } = await startFixture();
+    const created = await json("/api/tickets/TKT-1005/recommendations", {
+      method: "POST",
+      body: JSON.stringify({ actor: "approval-desk" }),
+    });
+
+    const rejected = await json(
+      `/api/recommendations/${created.body.recommendation.id}/approve`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          ticketId: "TKT-1005",
+          expectedRevision: 0,
+          approvedFields: ["customerResponse"],
+          actor: "matias-reviewer",
+          confirm: true,
+        }),
+      },
+    );
+
+    expect(rejected.status).toBe(400);
+    expect(rejected.body).toEqual({
+      error: {
+        code: "INVALID_REQUEST",
+        message: "editedCustomerResponse is required when customerResponse is approved.",
+      },
+    });
+    expect((await deps.recommendations.get(created.body.recommendation.id))).toMatchObject({
+      resolution: "pending",
+    });
+    expect((await deps.tickets.get("TKT-1005")).revision).toBe(0);
+  });
+
   it("rejects with feedback and leaves the ticket unchanged", async () => {
     const { deps, json } = await startFixture();
     const created = await json("/api/tickets/TKT-1005/recommendations", {

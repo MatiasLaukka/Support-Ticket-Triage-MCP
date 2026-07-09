@@ -13,26 +13,26 @@ import type { SubmitRecommendationInput } from "../triage-service.js";
 
 const SlugSchema = z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/);
 const CUSTOMER_RESPONSE_TEMPLATES: Readonly<Record<string, string>> = {
-  "account-access":
-    "Please confirm the affected user, workspace, sign-in method, last successful login time, and whether SSO or identity-provider settings changed recently.",
-  "api-errors":
-    "Please share the affected endpoint, status code, request identifier, region, timestamp, and whether the same request fails repeatedly or only intermittently.",
-  "billing-refunds":
-    "Please share the invoice identifier, charge timestamp, payment status, and any duplicate charge references so we can match the billing records before proposing a refund action.",
-  "incident-response":
-    "We are correlating related reports by service, region, status code, and time window, and we will keep the update focused on confirmed customer-safe status details.",
-  "integration-webhooks":
-    "Please share the affected endpoint URL, delivery ID, failure timestamp, and any recent changes to the signing secret, signature verification, or raw body handling. We will compare the event creation time with the delivery timing and check whether signature validation is rejecting the payload.",
-  performance:
-    "Please share the affected workflow, dataset size, observed duration, normal baseline, and time window so we can distinguish a broad degradation from a single expensive operation.",
-  "security-escalation":
-    "Please avoid sending secrets in the ticket. Share the suspected exposure time, affected accounts or tokens, and any access-scope evidence so we can route the case safely.",
-  "sla-policy":
-    "We are checking the response deadline and current SLA risk so the next action is prioritized consistently.",
-  "triage-policy":
-    "Please include the expected behavior, actual behavior, timestamps, and reproduction steps for the reported issue.",
-  "vip-communications":
-    "Please share the business impact and preferred update cadence so we can acknowledge urgency while keeping the technical severity tied to evidence.",
+  "campaign-send-failures":
+    "Please share the campaign name, scheduled send time, expected audience size, and any error banner shown in the campaign status. We will check the audience snapshot, template validation, sender profile, and suppression summary before recommending the next send action.",
+  "coupon-catalog-sync":
+    "Please share the store URL, product SKU, coupon pool name, last catalog sync time, and whether unused coupon codes remain available. We will compare the catalog import history with the campaign content before recommending a coupon or product update.",
+  "email-deliverability":
+    "Please share the campaign name, send time, sending domain, affected recipient domains, bounce samples, and whether the audience was recently imported. We will compare bounce type, complaint rate, suppression growth, and sender alignment with prior sends.",
+  "event-tracking-debugging":
+    "Please share the profile email or customer ID, event name, event timestamp with time zone, request ID if available, and a sample payload with secrets removed. We will compare the event payload, API accepted time, profile timeline, and downstream qualification.",
+  "flow-trigger-troubleshooting":
+    "Please share the flow name, profile email, trigger event, event timestamp, flow filters, consent state, smart sending status, and the profile's flow history. We will compare the trigger event, profile qualification, and message eligibility before recommending the next update.",
+  "profile-sync-issues":
+    "Please share the profile email, external customer ID, import filename or API request ID, update timestamp, and the field that should have changed. We will check duplicate profiles, matching identifiers, and consent state before recommending a merge or update.",
+  "segmentation-audience-rules":
+    "Please share the segment name, expected count, observed count, rule definition, a sample profile that should qualify, and when the segment was last edited. We will compare profile attributes, event recency, consent filters, and recalculation state.",
+  "shopify-integration-sync":
+    "Please share the Shopify store URL, affected object ID, SKU or order number, expected field, and last update time in Shopify. We will compare the source object with integration scopes and import history before recommending a sync action.",
+  "sms-compliance":
+    "Please share the campaign or flow name, masked recipient phone number, recipient region, consent source, opt-in timestamp, opt-out history, scheduled send time, and the compliance banner shown in the UI. We will verify channel eligibility before recommending any SMS send action.",
+  "webhook-signature-validation":
+    "Please share the delivery ID, endpoint URL, failure timestamp, signing secret rotation time, timestamp tolerance, endpoint response code, and whether raw body handling changed recently. We will compare the signed payload, delivery headers, and retry history before recommending a code or configuration change.",
 };
 
 const ExpectedOutcomeSchema = z

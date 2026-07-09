@@ -25,9 +25,12 @@ describe("Approval Desk recommendation builder", () => {
     );
 
     expect(outcomes.get("TKT-1005")).toMatchObject({
-      category: "authentication",
-      team: "identity",
-      knowledgeArticleIds: ["account-access", "triage-policy"],
+      category: "integration",
+      team: "integrations",
+      knowledgeArticleIds: [
+        "flow-trigger-troubleshooting",
+        "event-tracking-debugging",
+      ],
     });
   });
 
@@ -46,10 +49,13 @@ describe("Approval Desk recommendation builder", () => {
     expect(input).toMatchObject({
       ticketId: "TKT-1005",
       sourceRevision: 0,
-      category: "authentication",
+      category: "integration",
       priority: "P2",
-      team: "identity",
-      knowledgeArticleIds: ["account-access", "triage-policy"],
+      team: "integrations",
+      knowledgeArticleIds: [
+        "flow-trigger-troubleshooting",
+        "event-tracking-debugging",
+      ],
       actor: "approval-desk",
     });
     expect(input.tags).toContain("prompt-injection");
@@ -69,40 +75,48 @@ describe("Approval Desk recommendation builder", () => {
       actor: "approval-desk",
     });
 
-    expect(input.knowledgeArticleIds).toEqual(["integration-webhooks"]);
+    expect(input.knowledgeArticleIds).toEqual([
+      "webhook-signature-validation",
+    ]);
     expect(input.draftCustomerResponse).toContain("endpoint URL");
     expect(input.draftCustomerResponse).toContain("delivery ID");
     expect(input.draftCustomerResponse).toContain("failure timestamp");
-    expect(input.draftCustomerResponse).toContain("signing secret");
+    expect(input.draftCustomerResponse).toContain("signing secret rotation");
     expect(input.draftCustomerResponse).toContain("raw body handling");
-    expect(input.draftCustomerResponse).toContain("event creation time");
-    expect(input.draftCustomerResponse).not.toContain("integration-webhooks");
+    expect(input.draftCustomerResponse).toContain("timestamp tolerance");
+    expect(input.draftCustomerResponse).not.toContain(
+      "webhook-signature-validation",
+    );
   });
 
   it("keeps multiple knowledge IDs internal while combining customer guidance", async () => {
     const outcomes = await loadExpectedOutcomes(
       resolve("data/seed/expected-outcomes.json"),
     );
-    const ticket = await loadSeedTicket("TKT-1005");
+    const ticket = await loadSeedTicket("TKT-1011");
 
     const input = buildApprovalDeskRecommendationInput({
       ticket,
-      outcome: outcomes.get("TKT-1005")!,
+      outcome: outcomes.get("TKT-1011")!,
       actor: "approval-desk",
     });
 
     expect(input.knowledgeArticleIds).toEqual([
-      "account-access",
-      "triage-policy",
+      "flow-trigger-troubleshooting",
+      "event-tracking-debugging",
     ]);
-    expect(input.draftCustomerResponse).toContain("affected user");
-    expect(input.draftCustomerResponse).toContain("workspace");
-    expect(input.draftCustomerResponse).toContain("sign-in method");
-    expect(input.draftCustomerResponse).toContain("last successful login");
-    expect(input.draftCustomerResponse).toContain("expected behavior");
-    expect(input.draftCustomerResponse).toContain("actual behavior");
-    expect(input.draftCustomerResponse).not.toContain("account-access");
-    expect(input.draftCustomerResponse).not.toContain("triage-policy");
+    expect(input.draftCustomerResponse).toContain("profile email");
+    expect(input.draftCustomerResponse).toContain("trigger event");
+    expect(input.draftCustomerResponse).toContain("event timestamp");
+    expect(input.draftCustomerResponse).toContain("flow filters");
+    expect(input.draftCustomerResponse).toContain("consent state");
+    expect(input.draftCustomerResponse).toContain("smart sending");
+    expect(input.draftCustomerResponse).not.toContain(
+      "flow-trigger-troubleshooting",
+    );
+    expect(input.draftCustomerResponse).not.toContain(
+      "event-tracking-debugging",
+    );
   });
 
   it("throws when no expected outcome exists for the ticket", async () => {
@@ -141,9 +155,9 @@ describe("Approval Desk recommendation builder", () => {
         ticketId: "TKT-1005",
         category: "authentication",
         acceptablePriorities: ["P2"],
-        team: "identity",
+        team: "integrations",
         requiredEscalations: [],
-        knowledgeArticleIds: ["account-access"],
+        knowledgeArticleIds: ["flow-trigger-troubleshooting"],
       },
       {
         ticketId: "TKT-1005",
@@ -151,7 +165,7 @@ describe("Approval Desk recommendation builder", () => {
         acceptablePriorities: ["P3"],
         team: "billing",
         requiredEscalations: [],
-        knowledgeArticleIds: ["billing-refunds"],
+        knowledgeArticleIds: ["coupon-catalog-sync"],
       },
     ]);
 

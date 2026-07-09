@@ -12,27 +12,27 @@ import {
 import type { SubmitRecommendationInput } from "../triage-service.js";
 
 const SlugSchema = z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/);
-const CUSTOMER_KNOWLEDGE_GUIDANCE: Readonly<Record<string, string>> = {
+const CUSTOMER_RESPONSE_TEMPLATES: Readonly<Record<string, string>> = {
   "account-access":
-    "affected account, workspace, sign-in details, and recent login history",
+    "Please confirm the affected user, workspace, sign-in method, last successful login time, and whether SSO or identity-provider settings changed recently.",
   "api-errors":
-    "the affected endpoint, status code, request identifier, region, and timestamp",
+    "Please share the affected endpoint, status code, request identifier, region, timestamp, and whether the same request fails repeatedly or only intermittently.",
   "billing-refunds":
-    "invoice identifiers, charge status, and any duplicate billing records",
+    "Please share the invoice identifier, charge timestamp, payment status, and any duplicate charge references so we can match the billing records before proposing a refund action.",
   "incident-response":
-    "related service reports, affected region, time window, and customer-safe status details",
+    "We are correlating related reports by service, region, status code, and time window, and we will keep the update focused on confirmed customer-safe status details.",
   "integration-webhooks":
-    "webhook signing, delivery timing, and endpoint configuration",
+    "Please share the affected endpoint URL, delivery ID, failure timestamp, and any recent changes to the signing secret, signature verification, or raw body handling. We will compare the event creation time with the delivery timing and check whether signature validation is rejecting the payload.",
   performance:
-    "affected workflow, dataset size, observed duration, and baseline performance",
+    "Please share the affected workflow, dataset size, observed duration, normal baseline, and time window so we can distinguish a broad degradation from a single expensive operation.",
   "security-escalation":
-    "potential credential exposure, access scope, and evidence needed for safe security routing",
+    "Please avoid sending secrets in the ticket. Share the suspected exposure time, affected accounts or tokens, and any access-scope evidence so we can route the case safely.",
   "sla-policy":
-    "response deadlines and SLA risk so the next action is prioritized correctly",
+    "We are checking the response deadline and current SLA risk so the next action is prioritized consistently.",
   "triage-policy":
-    "the reported behavior, expected behavior, timestamps, and reproduction details",
+    "Please include the expected behavior, actual behavior, timestamps, and reproduction steps for the reported issue.",
   "vip-communications":
-    "business impact, next action, and update cadence",
+    "Please share the business impact and preferred update cadence so we can acknowledge urgency while keeping the technical severity tied to evidence.",
 };
 
 const ExpectedOutcomeSchema = z
@@ -127,18 +127,18 @@ function buildDraftCustomerResponse(
   ticketId: string,
   knowledgeArticleIds: readonly string[],
 ): string {
-  return `We are investigating ${ticketId}. We are checking ${formatCustomerGuidance(
+  return `We are investigating ${ticketId}. ${formatCustomerGuidance(
     knowledgeArticleIds,
-  )} and will share the next update once we have confirmed the details.`;
+  )} We will share the next update once we have confirmed the details.`;
 }
 
 function formatCustomerGuidance(knowledgeArticleIds: readonly string[]): string {
   const guidance = knowledgeArticleIds.map(
     (id) =>
-      CUSTOMER_KNOWLEDGE_GUIDANCE[id] ??
-      "the support details relevant to this request",
+      CUSTOMER_RESPONSE_TEMPLATES[id] ??
+      "Please share the support details relevant to this request.",
   );
-  return unique(guidance).join("; ");
+  return unique(guidance).join(" ");
 }
 
 function unique(values: string[]): string[] {

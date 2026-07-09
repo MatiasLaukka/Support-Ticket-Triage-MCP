@@ -70,8 +70,12 @@ describe("Approval Desk recommendation builder", () => {
     });
 
     expect(input.knowledgeArticleIds).toEqual(["integration-webhooks"]);
-    expect(input.draftCustomerResponse).toContain("webhook signing");
-    expect(input.draftCustomerResponse).toContain("delivery timing");
+    expect(input.draftCustomerResponse).toContain("endpoint URL");
+    expect(input.draftCustomerResponse).toContain("delivery ID");
+    expect(input.draftCustomerResponse).toContain("failure timestamp");
+    expect(input.draftCustomerResponse).toContain("signing secret");
+    expect(input.draftCustomerResponse).toContain("raw body handling");
+    expect(input.draftCustomerResponse).toContain("event creation time");
     expect(input.draftCustomerResponse).not.toContain("integration-webhooks");
   });
 
@@ -91,8 +95,12 @@ describe("Approval Desk recommendation builder", () => {
       "account-access",
       "triage-policy",
     ]);
-    expect(input.draftCustomerResponse).toContain("sign-in details");
-    expect(input.draftCustomerResponse).toContain("reported behavior");
+    expect(input.draftCustomerResponse).toContain("affected user");
+    expect(input.draftCustomerResponse).toContain("workspace");
+    expect(input.draftCustomerResponse).toContain("sign-in method");
+    expect(input.draftCustomerResponse).toContain("last successful login");
+    expect(input.draftCustomerResponse).toContain("expected behavior");
+    expect(input.draftCustomerResponse).toContain("actual behavior");
     expect(input.draftCustomerResponse).not.toContain("account-access");
     expect(input.draftCustomerResponse).not.toContain("triage-policy");
   });

@@ -39,6 +39,7 @@ type ResponseStyle =
   | "known-cause"
   | "incident-or-escalation"
   | "needs-diagnostics";
+type CustomerAudience = "merchant-admin" | "developer";
 
 const ExpectedOutcomeSchema = z
   .object({
@@ -149,6 +150,13 @@ function buildDraftCustomerResponse(input: {
     return buildEscalationResponse(ticket, escalationReasons);
   }
 
+  if (
+    classifyCustomerAudience(ticket) === "merchant-admin" &&
+    isFlowEventGuidance(knowledgeArticleIds)
+  ) {
+    return buildMerchantFlowResponse(ticket);
+  }
+
   return `We are investigating ${ticket.id}. ${formatCustomerGuidance(
     knowledgeArticleIds,
   )} We will share the next update once we have confirmed the details.`;
@@ -200,6 +208,43 @@ function buildEscalationResponse(
   }
 
   return `We are escalating ${ticket.id} for review and will share the next update after confirming impact, risk, and the safest next action.`;
+}
+
+function classifyCustomerAudience(ticket: Ticket): CustomerAudience {
+  const text = ticketText(ticket);
+  return [
+    "api",
+    "payload",
+    "webhook",
+    "endpoint",
+    "request id",
+    "logs",
+    "hmac",
+    "signature",
+  ].some((technicalTerm) => text.includes(technicalTerm))
+    ? "developer"
+    : "merchant-admin";
+}
+
+function isFlowEventGuidance(knowledgeArticleIds: readonly string[]): boolean {
+  return (
+    knowledgeArticleIds.includes("flow-trigger-troubleshooting") &&
+    knowledgeArticleIds.includes("event-tracking-debugging")
+  );
+}
+
+function buildMerchantFlowResponse(ticket: Ticket): string {
+  const flowLabel = ticketText(ticket).includes("browse abandonment")
+    ? "Browse Abandonment flow"
+    : "Abandoned Cart flow";
+  const eventLabel = ticketText(ticket).includes("viewed product")
+    ? "Viewed Product"
+    : "Added to Cart";
+  const productReference = eventLabel === "Viewed Product"
+    ? "product URL or product ID"
+    : "product or cart URL";
+
+  return `We are checking why ${eventLabel} events did not place customers into the ${flowLabel}. Please send the flow name or flow ID, the ecommerce platform you use such as Shopify, Magento, WooCommerce, or a custom store, one affected customer email, the ${eventLabel} event ID or event time, and the ${productReference}. We will compare the storefront event with the flow setup and let you know what needs to be corrected.`;
 }
 
 function ticketText(ticket: Ticket): string {

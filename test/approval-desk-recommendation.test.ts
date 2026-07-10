@@ -119,6 +119,46 @@ describe("Approval Desk recommendation builder", () => {
     );
   });
 
+  it("answers known-cause SMS quiet-hour blocks without asking for diagnostics", async () => {
+    const outcomes = await loadExpectedOutcomes(
+      resolve("data/seed/expected-outcomes.json"),
+    );
+    const ticket = await loadSeedTicket("TKT-1017");
+
+    const input = buildApprovalDeskRecommendationInput({
+      ticket,
+      outcome: outcomes.get("TKT-1017")!,
+      actor: "approval-desk",
+    });
+
+    expect(input.knowledgeArticleIds).toEqual(["sms-compliance"]);
+    expect(input.draftCustomerResponse).toContain("quiet-hour protection");
+    expect(input.draftCustomerResponse).toContain("blocked delivery");
+    expect(input.draftCustomerResponse).toContain("expected compliance");
+    expect(input.draftCustomerResponse).toContain("eligible sending window");
+    expect(input.draftCustomerResponse).not.toContain("masked recipient phone");
+    expect(input.draftCustomerResponse).not.toContain("consent source");
+    expect(input.draftCustomerResponse).not.toContain("opt-in timestamp");
+  });
+
+  it("uses escalation-aware wording for likely outage recommendations", async () => {
+    const outcomes = await loadExpectedOutcomes(
+      resolve("data/seed/expected-outcomes.json"),
+    );
+    const ticket = await loadSeedTicket("TKT-1001");
+
+    const input = buildApprovalDeskRecommendationInput({
+      ticket,
+      outcome: outcomes.get("TKT-1001")!,
+      actor: "approval-desk",
+    });
+
+    expect(input.outageRisk).toBe("likely");
+    expect(input.draftCustomerResponse).toContain("possible service impact");
+    expect(input.draftCustomerResponse).toContain("incident review");
+    expect(input.draftCustomerResponse).toContain("event-ingestion");
+  });
+
   it("throws when no expected outcome exists for the ticket", async () => {
     const ticket = TicketSchema.parse({
       ...(await loadSeedTicket("TKT-1005")),

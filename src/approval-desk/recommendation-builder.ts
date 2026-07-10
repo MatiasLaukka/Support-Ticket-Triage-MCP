@@ -204,7 +204,7 @@ function buildEscalationResponse(
   }
 
   if (escalationReasons.includes("outage")) {
-    return `We are investigating ${ticket.id} as possible service impact. The event-ingestion delay is under incident review, and we are correlating affected regions, event timing, and profile activity timelines. We will share the next update after confirming impact and mitigation.`;
+    return `We are investigating ${ticket.id} as a possible platform delay affecting event processing. The event-ingestion delay is under incident review, and we are correlating affected regions, event timing, and profile activity timelines. We will share the next update after confirming impact and mitigation.`;
   }
 
   return `We are escalating ${ticket.id} for review and will share the next update after confirming impact, risk, and the safest next action.`;

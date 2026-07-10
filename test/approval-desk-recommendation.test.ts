@@ -194,7 +194,9 @@ describe("Approval Desk recommendation builder", () => {
     });
 
     expect(input.outageRisk).toBe("likely");
-    expect(input.draftCustomerResponse).toContain("possible service impact");
+    expect(input.draftCustomerResponse).toContain(
+      "possible platform delay affecting event processing",
+    );
     expect(input.draftCustomerResponse).toContain("incident review");
     expect(input.draftCustomerResponse).toContain("event-ingestion");
   });

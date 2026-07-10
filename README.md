@@ -124,6 +124,12 @@ deterministic local code.
 - The same local demo can show success, fallback, stale-approval rejection, and
   audit evidence in a repeatable way.
 
+For a shorter narrative version, see [docs/case-study.md](docs/case-study.md).
+For sample outputs and demo talking points, see
+[docs/demo-results.md](docs/demo-results.md). For screenshot and GIF planning,
+see [docs/capture-guide.md](docs/capture-guide.md). For next build ideas, see
+[docs/roadmap.md](docs/roadmap.md).
+
 The stdio entry point is `dist/src/index.js`. Its defaults are:
 
 | Setting | Default |
@@ -604,7 +610,11 @@ webhook payloads, provider comments, and imported macros remain untrusted.
 
 ## Repository Guide
 
+- [Case study](docs/case-study.md)
 - [Demo script](docs/demo-script.md)
+- [Demo results and examples](docs/demo-results.md)
+- [Screenshot and demo capture guide](docs/capture-guide.md)
+- [Project roadmap](docs/roadmap.md)
 - [Security policy](SECURITY.md)
 - `src/server.ts`: MCP tools, resources, prompts, annotations, and safe errors
 - `src/triage-service.ts`: submission, approval, rejection, and compensation

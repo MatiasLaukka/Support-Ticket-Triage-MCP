@@ -26,6 +26,13 @@ const ticket = {
     region: "eu-west",
     vip: false,
   },
+  requester: {
+    name: "Maya Chen",
+    role: "Marketing Coordinator",
+    department: "Marketing",
+    technicalLevel: "non-technical",
+    seniority: "individual-contributor",
+  },
   subject: "API requests return 503",
   description: "Production requests fail consistently.",
   status: "triage",
@@ -84,6 +91,18 @@ describe("domain contracts", () => {
 
   it("parses a complete valid ticket", () => {
     expect(TicketSchema.parse(ticket)).toEqual(ticket);
+  });
+
+  it("rejects invalid requester metadata", () => {
+    expect(
+      TicketSchema.safeParse({
+        ...ticket,
+        requester: {
+          ...ticket.requester,
+          technicalLevel: "wizard",
+        },
+      }).success,
+    ).toBe(false);
   });
 
   it("defaults absent related ticket IDs to an empty array", () => {
@@ -163,6 +182,71 @@ describe("domain contracts", () => {
     ).toMatchObject({
       assignee: null,
     });
+  });
+
+  it("represents bounded GPT assist material on a recommendation", () => {
+    expect(
+      TriageRecommendationSchema.parse({
+        ...recommendation,
+        gptAssist: {
+          source: "openai",
+          missingInfoSuggestions: [
+            "Share one affected profile email or customer ID.",
+            "Share the event timestamp with time zone.",
+          ],
+          investigationSteps: [
+            "Compare storefront event time with ingestion time.",
+            "Check whether the profile timeline has delayed updates.",
+          ],
+          tone: "empathetic",
+          recommendedTone: "empathetic",
+          selectedTone: "empathetic",
+          toneReason:
+            "Requester is a non-technical marketing user reporting business impact.",
+          audience: "merchant-admin",
+          checks: [
+            {
+              id: "no-secret-requests",
+              label: "No secret requests",
+              status: "pass",
+              message: "Passed.",
+            },
+          ],
+        },
+      }),
+    ).toMatchObject({
+      gptAssist: {
+        source: "openai",
+        tone: "empathetic",
+        audience: "merchant-admin",
+      },
+    });
+  });
+
+  it("rejects empty GPT assist suggestion lists", () => {
+    const result = TriageRecommendationSchema.safeParse({
+      ...recommendation,
+      gptAssist: {
+        source: "openai",
+        missingInfoSuggestions: [],
+        investigationSteps: ["Check the profile timeline."],
+        tone: "balanced",
+        recommendedTone: "balanced",
+        selectedTone: "balanced",
+        toneReason: "Balanced tone fits the requester context.",
+        audience: "merchant-admin",
+        checks: [],
+      },
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues).toContainEqual(
+        expect.objectContaining({
+          path: ["gptAssist", "missingInfoSuggestions"],
+        }),
+      );
+    }
   });
 
   it.each([

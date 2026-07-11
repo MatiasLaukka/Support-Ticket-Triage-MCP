@@ -61,12 +61,47 @@ export const DraftCustomerResponseStyleSchema = z.enum([
   "executive-update",
 ]);
 
+export const DraftCustomerResponseStyleInputSchema = z.enum([
+  "auto",
+  "balanced",
+  "concise",
+  "empathetic",
+  "technical",
+  "executive-update",
+]);
+
 export const DraftCustomerResponseCheckSchema = z
   .object({
     id: SlugSchema,
     label: NonBlankStringSchema,
     status: z.enum(["pass", "warn"]),
     message: NonBlankStringSchema,
+  })
+  .strict();
+
+const UniqueNonBlankStringsSchema = z
+  .array(NonBlankStringSchema)
+  .refine((values) => new Set(values).size === values.length, {
+    message: "Values must be unique.",
+  });
+
+export const GptAssistAudienceSchema = z.enum([
+  "merchant-admin",
+  "developer",
+  "executive",
+]);
+
+export const GptAssistSchema = z
+  .object({
+    source: DraftCustomerResponseSourceSchema,
+    missingInfoSuggestions: UniqueNonBlankStringsSchema.min(1),
+    investigationSteps: UniqueNonBlankStringsSchema.min(1),
+    tone: DraftCustomerResponseStyleSchema,
+    recommendedTone: DraftCustomerResponseStyleSchema,
+    selectedTone: DraftCustomerResponseStyleSchema,
+    toneReason: NonBlankStringSchema,
+    audience: GptAssistAudienceSchema,
+    checks: z.array(DraftCustomerResponseCheckSchema),
   })
   .strict();
 
@@ -79,18 +114,34 @@ export const RequiredEscalationSchema = z.enum([
   "policy-conflict",
 ]);
 
-const UniqueNonBlankStringsSchema = z
-  .array(NonBlankStringSchema)
-  .refine((values) => new Set(values).size === values.length, {
-    message: "Values must be unique.",
-  });
-
 export const CustomerSchema = z
   .object({
     name: NonBlankStringSchema,
     plan: NonBlankStringSchema,
     region: NonBlankStringSchema,
     vip: z.boolean(),
+  })
+  .strict();
+
+export const RequesterTechnicalLevelSchema = z.enum([
+  "non-technical",
+  "technical",
+  "developer",
+]);
+
+export const RequesterSenioritySchema = z.enum([
+  "individual-contributor",
+  "manager",
+  "executive",
+]);
+
+export const RequesterSchema = z
+  .object({
+    name: NonBlankStringSchema,
+    role: NonBlankStringSchema,
+    department: NonBlankStringSchema,
+    technicalLevel: RequesterTechnicalLevelSchema,
+    seniority: RequesterSenioritySchema,
   })
   .strict();
 
@@ -107,6 +158,7 @@ export const TicketSchema = z
     createdAt: IsoTimestampSchema,
     updatedAt: IsoTimestampSchema,
     customer: CustomerSchema,
+    requester: RequesterSchema.optional(),
     subject: NonBlankStringSchema,
     description: NonBlankStringSchema,
     status: TicketStatusSchema,
@@ -184,6 +236,7 @@ export const TriageRecommendationSchema = z
     draftCustomerResponseChecks: z
       .array(DraftCustomerResponseCheckSchema)
       .optional(),
+    gptAssist: GptAssistSchema.optional(),
     rationale: NonBlankStringSchema,
     confidence: z.number().min(0).max(1),
     recommendedNextAction: NonBlankStringSchema,
@@ -360,10 +413,20 @@ export type DraftCustomerResponseSource = z.infer<
 export type DraftCustomerResponseStyle = z.infer<
   typeof DraftCustomerResponseStyleSchema
 >;
+export type DraftCustomerResponseStyleInput = z.infer<
+  typeof DraftCustomerResponseStyleInputSchema
+>;
 export type DraftCustomerResponseCheck = z.infer<
   typeof DraftCustomerResponseCheckSchema
 >;
+export type GptAssistAudience = z.infer<typeof GptAssistAudienceSchema>;
+export type GptAssist = z.infer<typeof GptAssistSchema>;
 export type Customer = z.infer<typeof CustomerSchema>;
+export type RequesterTechnicalLevel = z.infer<
+  typeof RequesterTechnicalLevelSchema
+>;
+export type RequesterSeniority = z.infer<typeof RequesterSenioritySchema>;
+export type Requester = z.infer<typeof RequesterSchema>;
 export type SLA = z.infer<typeof SLASchema>;
 export type Ticket = z.infer<typeof TicketSchema>;
 export type KnowledgeArticle = z.infer<typeof KnowledgeArticleSchema>;

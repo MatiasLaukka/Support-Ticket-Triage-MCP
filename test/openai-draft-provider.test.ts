@@ -26,6 +26,19 @@ describe("OpenAiCustomerResponseDraftProvider", () => {
                       text: JSON.stringify({
                         draftCustomerResponse:
                           "We are checking the storefront event and flow setup.",
+                        missingInfoSuggestions: [
+                          "Share the ecommerce platform.",
+                          "Share the flow ID and event ID.",
+                        ],
+                        investigationSteps: [
+                          "Compare the storefront event with the profile timeline.",
+                          "Review flow filters before recommending a setup change.",
+                        ],
+                        tone: "empathetic",
+                        recommendedTone: "empathetic",
+                        toneReason:
+                          "Requester is a non-technical marketing coordinator reporting flow impact.",
+                        audience: "merchant-admin",
                       }),
                     },
                   ],
@@ -41,12 +54,30 @@ describe("OpenAiCustomerResponseDraftProvider", () => {
       outcome,
       knowledgeArticles: [article],
       deterministicDraft: "Fallback draft.",
-      responseStyle: "balanced",
+      responseStyle: "auto",
     });
 
     expect(draft).toEqual({
       source: "openai",
       response: "We are checking the storefront event and flow setup.",
+      assist: {
+        source: "openai",
+        missingInfoSuggestions: [
+          "Share the ecommerce platform.",
+          "Share the flow ID and event ID.",
+        ],
+        investigationSteps: [
+          "Compare the storefront event with the profile timeline.",
+          "Review flow filters before recommending a setup change.",
+        ],
+        tone: "empathetic",
+        recommendedTone: "empathetic",
+        selectedTone: "empathetic",
+        toneReason:
+          "Requester is a non-technical marketing coordinator reporting flow impact.",
+        audience: "merchant-admin",
+        checks: [],
+      },
     });
     expect(requests).toHaveLength(1);
     expect(requests[0]!.url).toBe("https://api.openai.com/v1/responses");
@@ -64,6 +95,10 @@ describe("OpenAiCustomerResponseDraftProvider", () => {
       },
     });
     expect(requests[0]!.init.body).toContain(article.body);
+    expect(requests[0]!.init.body).toContain("Marketing Coordinator");
+    expect(JSON.parse(requests[0]!.init.body).instructions).toContain(
+      "recommend the best support tone",
+    );
   });
 
   it("includes the selected response style in the drafting instructions", async () => {
@@ -87,6 +122,17 @@ describe("OpenAiCustomerResponseDraftProvider", () => {
                       text: JSON.stringify({
                         draftCustomerResponse:
                           "We are treating this as a priority investigation.",
+                        missingInfoSuggestions: [
+                          "Share the affected account or store.",
+                        ],
+                        investigationSteps: [
+                          "Confirm impact and owner before the next update.",
+                        ],
+                        tone: "executive-update",
+                        recommendedTone: "empathetic",
+                        toneReason:
+                          "Manual reviewer override selected executive update.",
+                        audience: "executive",
                       }),
                     },
                   ],
@@ -107,6 +153,9 @@ describe("OpenAiCustomerResponseDraftProvider", () => {
 
     expect(JSON.parse(requests[0]!.init.body).instructions).toContain(
       "executive update",
+    );
+    expect(JSON.parse(requests[0]!.init.body).instructions).toContain(
+      "manual override",
     );
   });
 
@@ -168,6 +217,13 @@ const ticket: Ticket = {
     plan: "enterprise",
     region: "eu-west",
     vip: true,
+  },
+  requester: {
+    name: "Avery Brooks",
+    role: "Marketing Coordinator",
+    department: "Marketing",
+    technicalLevel: "non-technical",
+    seniority: "individual-contributor",
   },
   subject: "Browse Abandonment flow not starting",
   description: "Viewed Product events are visible but the flow does not start.",

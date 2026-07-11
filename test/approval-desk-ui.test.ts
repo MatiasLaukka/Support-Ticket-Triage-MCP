@@ -18,7 +18,10 @@ describe("approvalDeskHtml", () => {
     expect(approvalDeskHtml).toContain("Approve proposed changes");
     expect(approvalDeskHtml).toContain("Recommended value");
     expect(approvalDeskHtml).toContain("Why this draft is safe");
+    expect(approvalDeskHtml).toContain("GPT Assist");
     expect(approvalDeskHtml).toContain("Draft style");
+    expect(approvalDeskHtml).toContain("Auto recommended");
+    expect(approvalDeskHtml).toContain("Generating GPT draft and assist");
     expect(approvalDeskHtml).toContain("Executive update");
   });
 
@@ -180,6 +183,45 @@ describe("approvalDeskHtml", () => {
     });
   });
 
+  it("defaults recommendation creation to auto draft style and shows loading copy", async () => {
+    const app = await startApprovalDeskApp({
+      recommendationDelayTicks: 2,
+    });
+    await app.selectFirstTicket();
+
+    expect(app.el("draftStyle").value).toBe("auto");
+    const pending = app.createRecommendationWithoutSettling();
+    await settle(1);
+
+    expect(app.el("recommendationPanel").innerHTML).toContain(
+      "Generating GPT draft and assist",
+    );
+
+    await pending;
+    await settle(20);
+    const recommendationRequest = app.requests.find((request) =>
+      request.path.endsWith("/recommendations"),
+    );
+    expect(JSON.parse(String(recommendationRequest?.init?.body))).toMatchObject({
+      actor: "approval-desk",
+      responseStyle: "auto",
+    });
+  });
+
+  it("re-enables recommendation creation when generation fails", async () => {
+    const app = await startApprovalDeskApp({
+      failRecommendation: true,
+    });
+    await app.selectFirstTicket();
+
+    await app.createRecommendation();
+
+    expect(app.el("createRecommendation").disabled).toBe(false);
+    expect(app.parsedResult()).toMatchObject({
+      error: "Draft provider unavailable.",
+    });
+  });
+
   it("clears finalized approval state and keeps action results visible with metrics", async () => {
     const app = await startApprovalDeskApp();
     await app.selectFirstTicket();
@@ -246,6 +288,17 @@ describe("approvalDeskHtml", () => {
     expect(html).toContain("Style: empathetic");
     expect(html).toContain("Human approval");
     expect(html).toContain("Reviewer must approve or edit before use.");
+    expect(html).toContain("GPT Assist");
+    expect(html).toContain("Recommended: empathetic");
+    expect(html).toContain("Selected: empathetic");
+    expect(html).toContain("Audience: merchant-admin");
+    expect(html).toContain(
+      "Requester is a non-technical marketing user reporting login impact.",
+    );
+    expect(html).toContain("Ask for the account owner email.");
+    expect(html).toContain("Review identity events");
+    expect(html).toContain("&lt;script&gt;assist&lt;/script&gt;");
+    expect(html).not.toContain("<script>assist</script>");
     expect(html).toContain("Recommended Triage");
     expect(html).toContain("Evidence and internal details");
     expect(html).toContain("knowledgeArticleIds");
@@ -327,6 +380,30 @@ const fixtureRecommendation = {
       message: "Passed.",
     },
   ],
+  gptAssist: {
+    source: "openai",
+    missingInfoSuggestions: [
+      "Ask for the account owner email.",
+      "<script>assist</script>",
+    ],
+    investigationSteps: [
+      "Review identity events and account access history.",
+    ],
+    tone: "empathetic",
+    recommendedTone: "empathetic",
+    selectedTone: "empathetic",
+    toneReason:
+      "Requester is a non-technical marketing user reporting login impact.",
+    audience: "merchant-admin",
+    checks: [
+      {
+        id: "no-secret-requests",
+        label: "No secret requests",
+        status: "pass",
+        message: "Passed.",
+      },
+    ],
+  },
   rationale: "Matches account access routing.",
   confidence: 0.87,
   recommendedNextAction: "Review evidence before approval.",
@@ -370,7 +447,9 @@ const fixtureEvidence = {
 
 async function startApprovalDeskApp(options: {
   failEvidenceAfter?: number;
+  failRecommendation?: boolean;
   recommendation?: typeof fixtureRecommendation;
+  recommendationDelayTicks?: number;
 } = {}) {
   const elements = createElements();
   const requests: Array<{ path: string; init?: RequestInit }> = [];
@@ -407,6 +486,15 @@ async function startApprovalDeskApp(options: {
       return jsonResponse({ ticket: fixtureTicket, audits: { events: [] } });
     }
     if (path === "/api/tickets/TKT-1001/recommendations") {
+      if (options.recommendationDelayTicks !== undefined) {
+        await settle(options.recommendationDelayTicks);
+      }
+      if (options.failRecommendation === true) {
+        return jsonResponse(
+          { error: { message: "Draft provider unavailable." } },
+          503,
+        );
+      }
       return jsonResponse({ recommendation }, 201);
     }
     if (path === "/api/recommendations/11111111-1111-4111-8111-111111111111/approve") {
@@ -446,6 +534,10 @@ async function startApprovalDeskApp(options: {
     createRecommendation: async () => {
       elements.createRecommendation.dispatch("click");
       await settle();
+    },
+    createRecommendationWithoutSettling: async () => {
+      elements.createRecommendation.dispatch("click");
+      await settle(0);
     },
     refreshQueue: async () => {
       elements.refreshQueue.dispatch("click");
@@ -493,7 +585,7 @@ function createElements(): Record<string, FakeElement> {
     ].map((id) => [id, new FakeElement()]),
   );
   elements.actor.value = "approval-desk";
-  elements.draftStyle.value = "balanced";
+  elements.draftStyle.value = "auto";
   elements.approveButton.disabled = true;
   elements.rejectButton.disabled = true;
   elements.fieldChoices.children = [
@@ -560,8 +652,8 @@ function jsonResponse(body: unknown, status = 200): Response {
   } as Response;
 }
 
-async function settle(): Promise<void> {
-  for (let tick = 0; tick < 10; tick += 1) {
+async function settle(ticks = 10): Promise<void> {
+  for (let tick = 0; tick < ticks; tick += 1) {
     await Promise.resolve();
   }
 }

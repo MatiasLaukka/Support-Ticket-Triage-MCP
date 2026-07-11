@@ -62,6 +62,49 @@ describe("TriageService", () => {
     expect(harness.recommendations.values).toHaveLength(1);
   });
 
+  it("preserves GPT assist material on submitted recommendations", async () => {
+    const harness = makeHarness();
+
+    const recommendation = await harness.service.submit(
+      makeSubmitInput({
+        gptAssist: {
+          source: "openai",
+          missingInfoSuggestions: [
+            "Share one affected profile email or customer ID.",
+          ],
+          investigationSteps: [
+            "Compare the event timestamp with the profile timeline.",
+          ],
+          tone: "technical",
+          recommendedTone: "technical",
+          selectedTone: "technical",
+          toneReason: "Requester can use technical troubleshooting details.",
+          audience: "developer",
+          checks: [
+            {
+              id: "no-secret-requests",
+              label: "No secret requests",
+              status: "pass",
+              message: "Passed.",
+            },
+          ],
+        },
+      }),
+    );
+
+    expect(recommendation.gptAssist).toMatchObject({
+      source: "openai",
+      tone: "technical",
+      audience: "developer",
+      missingInfoSuggestions: [
+        "Share one affected profile email or customer ID.",
+      ],
+    });
+    expect(harness.recommendations.values[0]?.gptAssist).toEqual(
+      recommendation.gptAssist,
+    );
+  });
+
   it("deletes a pending recommendation and remains retryable when submission audit fails", async () => {
     const harness = makeHarness();
     const auditFailure = new DomainError(

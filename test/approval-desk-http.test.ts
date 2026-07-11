@@ -130,6 +130,23 @@ describe("createApprovalDeskHttpServer", () => {
             source: "openai",
             response:
               "We are checking the webhook delivery timestamp, endpoint response, and signing configuration before recommending the next update.",
+            assist: {
+              source: "openai",
+              missingInfoSuggestions: [
+                "Share the delivery ID.",
+                "Share the endpoint URL.",
+              ],
+              investigationSteps: [
+                "Compare the signed payload with delivery headers.",
+              ],
+              tone: "technical",
+              recommendedTone: "technical",
+              selectedTone: "technical",
+              toneReason:
+                "Requester is a developer working on webhook verification.",
+              audience: "developer",
+              checks: [],
+            },
           };
         },
       },
@@ -150,6 +167,19 @@ describe("createApprovalDeskHttpServer", () => {
       draftCustomerResponseStyle: "technical",
       draftCustomerResponse:
         "We are checking the webhook delivery timestamp, endpoint response, and signing configuration before recommending the next update.",
+      gptAssist: {
+        source: "openai",
+        tone: "technical",
+        recommendedTone: "technical",
+        selectedTone: "technical",
+        toneReason:
+          "Requester is a developer working on webhook verification.",
+        audience: "developer",
+        missingInfoSuggestions: [
+          "Share the delivery ID.",
+          "Share the endpoint URL.",
+        ],
+      },
     });
     expect(created.body.recommendation.draftCustomerResponseChecks).toContainEqual(
       expect.objectContaining({
@@ -159,6 +189,29 @@ describe("createApprovalDeskHttpServer", () => {
     );
     expect(seenArticleBodies.join("\n")).toContain("webhook");
     expect(seenResponseStyles).toEqual(["technical"]);
+  });
+
+  it("accepts auto draft style and returns the resolved recommended style", async () => {
+    const { json } = await startFixture();
+
+    const created = await json("/api/tickets/TKT-1005/recommendations", {
+      method: "POST",
+      body: JSON.stringify({
+        actor: "approval-desk",
+        responseStyle: "auto",
+      }),
+    });
+
+    expect(created.status).toBe(201);
+    expect(created.body.recommendation).toMatchObject({
+      ticketId: "TKT-1005",
+      draftCustomerResponseStyle: "empathetic",
+      gptAssist: {
+        recommendedTone: "empathetic",
+        selectedTone: "empathetic",
+        toneReason: expect.stringContaining("Marketing Coordinator"),
+      },
+    });
   });
 
   it("reports automation evidence after recommendation submission", async () => {

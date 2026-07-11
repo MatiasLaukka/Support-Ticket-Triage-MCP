@@ -64,6 +64,17 @@ describe("Approval Desk recommendation builder", () => {
     expect(input.draftCustomerResponse).toContain(
       "We are checking why Viewed Product events",
     );
+    expect(input.gptAssist).toMatchObject({
+      source: "deterministic",
+      tone: "balanced",
+      audience: "merchant-admin",
+      missingInfoSuggestions: expect.arrayContaining([
+        expect.stringContaining("ecommerce platform"),
+      ]),
+      investigationSteps: expect.arrayContaining([
+        expect.stringContaining("flow setup"),
+      ]),
+    });
   });
 
   it("uses customer-facing knowledge guidance in draft responses", async () => {
@@ -225,12 +236,35 @@ describe("Approval Desk recommendation builder", () => {
           source: "openai",
           response:
             "We are checking why Viewed Product events did not place customers into the Browse Abandonment flow. Please send the ecommerce platform, flow ID, event ID, and one affected customer email so we can compare the storefront event with the flow setup.",
+          assist: {
+            source: "openai",
+            missingInfoSuggestions: [
+              "Share the ecommerce platform.",
+              "Share the flow ID and event ID.",
+            ],
+            investigationSteps: [
+              "Compare the storefront event with the flow setup.",
+            ],
+            tone: "balanced",
+            audience: "merchant-admin",
+            checks: [],
+          },
         }),
       },
     });
 
     expect(input.draftCustomerResponseSource).toBe("openai");
     expect(input.draftCustomerResponse).toContain("Viewed Product events");
+    expect(input.gptAssist).toMatchObject({
+      source: "openai",
+      missingInfoSuggestions: [
+        "Share the ecommerce platform.",
+        "Share the flow ID and event ID.",
+      ],
+      investigationSteps: [
+        "Compare the storefront event with the flow setup.",
+      ],
+    });
     expect(input.draftCustomerResponseChecks).toContainEqual(
       expect.objectContaining({
         id: "no-internal-article-ids",
@@ -255,6 +289,14 @@ describe("Approval Desk recommendation builder", () => {
           source: "openai",
           response:
             "We approved this using flow-trigger-troubleshooting and will close the ticket.",
+          assist: {
+            source: "openai",
+            missingInfoSuggestions: ["Share your API secret."],
+            investigationSteps: ["Close the ticket as approved."],
+            tone: "balanced",
+            audience: "developer",
+            checks: [],
+          },
         }),
       },
     });
@@ -272,6 +314,12 @@ describe("Approval Desk recommendation builder", () => {
         status: "warn",
       }),
     );
+    expect(input.gptAssist).toMatchObject({
+      source: "fallback",
+      missingInfoSuggestions: expect.arrayContaining([
+        expect.stringContaining("ecommerce platform"),
+      ]),
+    });
   });
 
   it("throws when no expected outcome exists for the ticket", async () => {

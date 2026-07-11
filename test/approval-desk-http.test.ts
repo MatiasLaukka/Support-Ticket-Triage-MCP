@@ -130,6 +130,19 @@ describe("createApprovalDeskHttpServer", () => {
             source: "openai",
             response:
               "We are checking the webhook delivery timestamp, endpoint response, and signing configuration before recommending the next update.",
+            assist: {
+              source: "openai",
+              missingInfoSuggestions: [
+                "Share the delivery ID.",
+                "Share the endpoint URL.",
+              ],
+              investigationSteps: [
+                "Compare the signed payload with delivery headers.",
+              ],
+              tone: "technical",
+              audience: "developer",
+              checks: [],
+            },
           };
         },
       },
@@ -150,6 +163,15 @@ describe("createApprovalDeskHttpServer", () => {
       draftCustomerResponseStyle: "technical",
       draftCustomerResponse:
         "We are checking the webhook delivery timestamp, endpoint response, and signing configuration before recommending the next update.",
+      gptAssist: {
+        source: "openai",
+        tone: "technical",
+        audience: "developer",
+        missingInfoSuggestions: [
+          "Share the delivery ID.",
+          "Share the endpoint URL.",
+        ],
+      },
     });
     expect(created.body.recommendation.draftCustomerResponseChecks).toContainEqual(
       expect.objectContaining({

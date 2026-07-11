@@ -598,6 +598,7 @@ export const approvalDeskHtml = `<!doctype html>
             '<p class="meta"><strong>Retrieved context</strong> ' + escapeHtml(formatList(recommendation.knowledgeArticleIds)) + '</p>' +
             '<p class="meta"><strong>Human approval</strong> Reviewer must approve or edit before use.</p>' +
           '</div>' +
+          renderGptAssistCard(recommendation.gptAssist) +
           '<div class="hero-card"><strong>Recommended Triage</strong>' +
             '<div class="chips">' +
               chip('Category: ' + recommendation.category) +
@@ -943,6 +944,27 @@ export const approvalDeskHtml = `<!doctype html>
           return 'Deterministic local draft was generated without an external model call.';
         }
         return 'Draft is held for reviewer approval before any ticket update.';
+      }
+
+      function renderGptAssistCard(assist) {
+        if (assist === undefined || assist === null) {
+          return '';
+        }
+        return '<div class="hero-card description"><strong>GPT Assist</strong>' +
+          '<div class="chips">' +
+            chip('Source: ' + (assist.source ?? 'unknown')) +
+            chip('Tone: ' + (assist.tone ?? 'balanced')) +
+            chip('Audience: ' + (assist.audience ?? 'merchant-admin')) +
+            chip('Checks: ' + formatDraftCheckSummary(assist.checks)) +
+          '</div>' +
+          '<p class="meta"><strong>Likely missing info</strong> ' + escapeHtml(formatAssistList(assist.missingInfoSuggestions)) + '</p>' +
+          '<p class="meta"><strong>Investigation steps</strong> ' + escapeHtml(formatAssistList(assist.investigationSteps)) + '</p>' +
+          '<p class="meta">Advisory only. The customer response still requires reviewer approval.</p>' +
+        '</div>';
+      }
+
+      function formatAssistList(values) {
+        return Array.isArray(values) && values.length > 0 ? values.join(' | ') : 'none';
       }
 
       function formatDraftChecks(checks) {

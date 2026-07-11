@@ -70,6 +70,29 @@ export const DraftCustomerResponseCheckSchema = z
   })
   .strict();
 
+const UniqueNonBlankStringsSchema = z
+  .array(NonBlankStringSchema)
+  .refine((values) => new Set(values).size === values.length, {
+    message: "Values must be unique.",
+  });
+
+export const GptAssistAudienceSchema = z.enum([
+  "merchant-admin",
+  "developer",
+  "executive",
+]);
+
+export const GptAssistSchema = z
+  .object({
+    source: DraftCustomerResponseSourceSchema,
+    missingInfoSuggestions: UniqueNonBlankStringsSchema.min(1),
+    investigationSteps: UniqueNonBlankStringsSchema.min(1),
+    tone: DraftCustomerResponseStyleSchema,
+    audience: GptAssistAudienceSchema,
+    checks: z.array(DraftCustomerResponseCheckSchema),
+  })
+  .strict();
+
 export const RequiredEscalationSchema = z.enum([
   "security",
   "outage",
@@ -78,12 +101,6 @@ export const RequiredEscalationSchema = z.enum([
   "missing-information",
   "policy-conflict",
 ]);
-
-const UniqueNonBlankStringsSchema = z
-  .array(NonBlankStringSchema)
-  .refine((values) => new Set(values).size === values.length, {
-    message: "Values must be unique.",
-  });
 
 export const CustomerSchema = z
   .object({
@@ -184,6 +201,7 @@ export const TriageRecommendationSchema = z
     draftCustomerResponseChecks: z
       .array(DraftCustomerResponseCheckSchema)
       .optional(),
+    gptAssist: GptAssistSchema.optional(),
     rationale: NonBlankStringSchema,
     confidence: z.number().min(0).max(1),
     recommendedNextAction: NonBlankStringSchema,
@@ -363,6 +381,8 @@ export type DraftCustomerResponseStyle = z.infer<
 export type DraftCustomerResponseCheck = z.infer<
   typeof DraftCustomerResponseCheckSchema
 >;
+export type GptAssistAudience = z.infer<typeof GptAssistAudienceSchema>;
+export type GptAssist = z.infer<typeof GptAssistSchema>;
 export type Customer = z.infer<typeof CustomerSchema>;
 export type SLA = z.infer<typeof SLASchema>;
 export type Ticket = z.infer<typeof TicketSchema>;

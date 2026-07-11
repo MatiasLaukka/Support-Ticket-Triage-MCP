@@ -18,6 +18,7 @@ describe("approvalDeskHtml", () => {
     expect(approvalDeskHtml).toContain("Approve proposed changes");
     expect(approvalDeskHtml).toContain("Recommended value");
     expect(approvalDeskHtml).toContain("Why this draft is safe");
+    expect(approvalDeskHtml).toContain("GPT Assist");
     expect(approvalDeskHtml).toContain("Draft style");
     expect(approvalDeskHtml).toContain("Executive update");
   });
@@ -246,6 +247,13 @@ describe("approvalDeskHtml", () => {
     expect(html).toContain("Style: empathetic");
     expect(html).toContain("Human approval");
     expect(html).toContain("Reviewer must approve or edit before use.");
+    expect(html).toContain("GPT Assist");
+    expect(html).toContain("Tone: empathetic");
+    expect(html).toContain("Audience: merchant-admin");
+    expect(html).toContain("Ask for the account owner email.");
+    expect(html).toContain("Review identity events");
+    expect(html).toContain("&lt;script&gt;assist&lt;/script&gt;");
+    expect(html).not.toContain("<script>assist</script>");
     expect(html).toContain("Recommended Triage");
     expect(html).toContain("Evidence and internal details");
     expect(html).toContain("knowledgeArticleIds");
@@ -327,6 +335,26 @@ const fixtureRecommendation = {
       message: "Passed.",
     },
   ],
+  gptAssist: {
+    source: "openai",
+    missingInfoSuggestions: [
+      "Ask for the account owner email.",
+      "<script>assist</script>",
+    ],
+    investigationSteps: [
+      "Review identity events and account access history.",
+    ],
+    tone: "empathetic",
+    audience: "merchant-admin",
+    checks: [
+      {
+        id: "no-secret-requests",
+        label: "No secret requests",
+        status: "pass",
+        message: "Passed.",
+      },
+    ],
+  },
   rationale: "Matches account access routing.",
   confidence: 0.87,
   recommendedNextAction: "Review evidence before approval.",

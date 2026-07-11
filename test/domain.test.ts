@@ -165,6 +165,64 @@ describe("domain contracts", () => {
     });
   });
 
+  it("represents bounded GPT assist material on a recommendation", () => {
+    expect(
+      TriageRecommendationSchema.parse({
+        ...recommendation,
+        gptAssist: {
+          source: "openai",
+          missingInfoSuggestions: [
+            "Share one affected profile email or customer ID.",
+            "Share the event timestamp with time zone.",
+          ],
+          investigationSteps: [
+            "Compare storefront event time with ingestion time.",
+            "Check whether the profile timeline has delayed updates.",
+          ],
+          tone: "empathetic",
+          audience: "merchant-admin",
+          checks: [
+            {
+              id: "no-secret-requests",
+              label: "No secret requests",
+              status: "pass",
+              message: "Passed.",
+            },
+          ],
+        },
+      }),
+    ).toMatchObject({
+      gptAssist: {
+        source: "openai",
+        tone: "empathetic",
+        audience: "merchant-admin",
+      },
+    });
+  });
+
+  it("rejects empty GPT assist suggestion lists", () => {
+    const result = TriageRecommendationSchema.safeParse({
+      ...recommendation,
+      gptAssist: {
+        source: "openai",
+        missingInfoSuggestions: [],
+        investigationSteps: ["Check the profile timeline."],
+        tone: "balanced",
+        audience: "merchant-admin",
+        checks: [],
+      },
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues).toContainEqual(
+        expect.objectContaining({
+          path: ["gptAssist", "missingInfoSuggestions"],
+        }),
+      );
+    }
+  });
+
   it.each([
     [{ assignee: "   " }, ["assignee"]],
     [{ tags: ["api", "   "] }, ["tags", 1]],

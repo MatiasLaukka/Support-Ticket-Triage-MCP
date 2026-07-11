@@ -13,6 +13,7 @@ import {
 } from "../domain.js";
 import type { SubmitRecommendationInput } from "../triage-service.js";
 import {
+  buildDeterministicGptAssist,
   draftCustomerResponseWithFallback,
   type CustomerResponseDraftProvider,
 } from "./draft-response-provider.js";
@@ -99,6 +100,14 @@ export function buildApprovalDeskRecommendationInput(input: {
     knowledgeArticleIds,
     escalationReasons,
   });
+  const deterministicDraftChecks = [
+    {
+      id: "deterministic-local-draft",
+      label: "Deterministic local draft",
+      status: "pass" as const,
+      message: "Built from local rules without an external model call.",
+    },
+  ];
 
   return {
     ticketId: ticket.id,
@@ -118,14 +127,18 @@ export function buildApprovalDeskRecommendationInput(input: {
     draftCustomerResponse,
     draftCustomerResponseSource: "deterministic",
     draftCustomerResponseStyle: "balanced",
-    draftCustomerResponseChecks: [
+    draftCustomerResponseChecks: deterministicDraftChecks,
+    gptAssist: buildDeterministicGptAssist(
       {
-        id: "deterministic-local-draft",
-        label: "Deterministic local draft",
-        status: "pass",
-        message: "Built from local rules without an external model call.",
+        ticket,
+        outcome,
+        knowledgeArticles: [],
+        deterministicDraft: draftCustomerResponse,
+        responseStyle: "balanced",
       },
-    ],
+      "deterministic",
+      deterministicDraftChecks,
+    ),
     rationale: `${ticket.id} matches expected ${outcome.category} routing to ${outcome.team} with knowledge ${knowledgeArticleIds.join(
       ", ",
     )}.`,
@@ -169,6 +182,7 @@ export async function buildApprovalDeskRecommendationInputWithDrafting(input: {
     draftCustomerResponseSource: draft.source,
     draftCustomerResponseStyle: input.responseStyle ?? "balanced",
     draftCustomerResponseChecks: draft.checks,
+    gptAssist: draft.assist,
   };
 }
 

@@ -4,10 +4,12 @@ import type {
   DraftCustomerResponseCheck,
   DraftCustomerResponseSource,
   ExpectedOutcome,
+  GptAssist,
   KnowledgeArticle,
   Ticket,
   DraftCustomerResponseStyle,
 } from "../domain.js";
+import { GptAssistAudienceSchema } from "../domain.js";
 
 const DEFAULT_OPENAI_MODEL = "gpt-5.6-luna";
 const OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses";
@@ -15,6 +17,10 @@ const DraftProviderSchema = z.enum(["deterministic", "openai"]);
 const OpenAiDraftResponseSchema = z
   .object({
     draftCustomerResponse: z.string().trim().min(1),
+    missingInfoSuggestions: z.array(z.string().trim().min(1)).min(1),
+    investigationSteps: z.array(z.string().trim().min(1)).min(1),
+    tone: DraftCustomerResponseStyleSchema,
+    audience: GptAssistAudienceSchema,
   })
   .strict();
 
@@ -29,6 +35,7 @@ export interface CustomerResponseDraftInput {
 export interface CustomerResponseDraft {
   source: DraftCustomerResponseSource;
   response: string;
+  assist: GptAssist;
 }
 
 export interface CustomerResponseDraftProvider {
@@ -39,6 +46,7 @@ export interface ValidatedCustomerResponseDraft {
   source: DraftCustomerResponseSource;
   response: string;
   checks: DraftCustomerResponseCheck[];
+  assist: GptAssist;
 }
 
 export type FetchLike = (
@@ -61,6 +69,14 @@ export class DeterministicCustomerResponseDraftProvider
     return {
       source: "deterministic",
       response: input.deterministicDraft,
+      assist: buildDeterministicGptAssist(input, "deterministic", [
+        {
+          id: "deterministic-local-assist",
+          label: "Deterministic local assist",
+          status: "pass",
+          message: "Built from local rules without an external model call.",
+        },
+      ]),
     };
   }
 }
@@ -116,8 +132,44 @@ export class OpenAiCustomerResponseDraftProvider
                   description:
                     "Customer-facing support response ready for human review.",
                 },
+                missingInfoSuggestions: {
+                  type: "array",
+                  minItems: 1,
+                  items: { type: "string" },
+                  description:
+                    "Customer-safe details the reviewer may ask for.",
+                },
+                investigationSteps: {
+                  type: "array",
+                  minItems: 1,
+                  items: { type: "string" },
+                  description:
+                    "Reviewer-facing checks to perform before the next update.",
+                },
+                tone: {
+                  type: "string",
+                  enum: [
+                    "balanced",
+                    "concise",
+                    "empathetic",
+                    "technical",
+                    "executive-update",
+                  ],
+                  description: "Tone used for the draft response.",
+                },
+                audience: {
+                  type: "string",
+                  enum: ["merchant-admin", "developer", "executive"],
+                  description: "Likely reviewer/customer audience.",
+                },
               },
-              required: ["draftCustomerResponse"],
+              required: [
+                "draftCustomerResponse",
+                "missingInfoSuggestions",
+                "investigationSteps",
+                "tone",
+                "audience",
+              ],
             },
           },
         },
@@ -139,6 +191,14 @@ export class OpenAiCustomerResponseDraftProvider
     return {
       source: "openai",
       response: parsed.draftCustomerResponse,
+      assist: {
+        source: "openai",
+        missingInfoSuggestions: parsed.missingInfoSuggestions,
+        investigationSteps: parsed.investigationSteps,
+        tone: parsed.tone,
+        audience: parsed.audience,
+        checks: [],
+      },
     };
   }
 }
@@ -180,6 +240,7 @@ export async function draftCustomerResponseWithFallback(input: {
     const candidate = await provider.draft(input.draftInput);
     const validation = validateCustomerResponseDraft({
       response: candidate.response,
+      assist: candidate.assist,
       knowledgeArticleIds: input.draftInput.outcome.knowledgeArticleIds,
     });
     if (validation.blockingMessages.length === 0) {
@@ -187,6 +248,10 @@ export async function draftCustomerResponseWithFallback(input: {
         source: candidate.source,
         response: candidate.response.trim(),
         checks: validation.checks,
+        assist: {
+          ...candidate.assist,
+          checks: validation.checks,
+        },
       };
     }
 
@@ -211,32 +276,48 @@ function fallbackDraft(input: {
   draftInput: CustomerResponseDraftInput;
   reason: string;
 }): ValidatedCustomerResponseDraft {
+  const fallbackAssist = buildDeterministicGptAssist(
+    input.draftInput,
+    "fallback",
+    [],
+  );
   const validation = validateCustomerResponseDraft({
     response: input.draftInput.deterministicDraft,
+    assist: fallbackAssist,
     knowledgeArticleIds: input.draftInput.outcome.knowledgeArticleIds,
   });
+  const checks: DraftCustomerResponseCheck[] = [
+    {
+      id: "fallback-used",
+      label: "Fallback used",
+      status: "warn",
+      message: sanitizeValidationMessage(input.reason),
+    },
+    ...validation.checks,
+  ];
   return {
     source: "fallback",
     response: input.draftInput.deterministicDraft,
-    checks: [
-      {
-        id: "fallback-used",
-        label: "Fallback used",
-        status: "warn",
-        message: sanitizeValidationMessage(input.reason),
-      },
-      ...validation.checks,
-    ],
+    checks,
+    assist: {
+      ...fallbackAssist,
+      checks,
+    },
   };
 }
 
 function validateCustomerResponseDraft(input: {
   response: string;
+  assist: GptAssist;
   knowledgeArticleIds: readonly string[];
 }): { checks: DraftCustomerResponseCheck[]; blockingMessages: string[] } {
   const response = input.response.trim();
   const checks: DraftCustomerResponseCheck[] = [];
   const blockingMessages: string[] = [];
+  const assistText = [
+    ...input.assist.missingInfoSuggestions,
+    ...input.assist.investigationSteps,
+  ].join(" ");
 
   pushCheck({
     checks,
@@ -254,7 +335,10 @@ function validateCustomerResponseDraft(input: {
     label: "No internal article IDs",
     passed: !input.knowledgeArticleIds.some((id) =>
       response.toLowerCase().includes(id.toLowerCase()),
-    ),
+    ) &&
+      !input.knowledgeArticleIds.some((id) =>
+        assistText.toLowerCase().includes(id.toLowerCase()),
+      ),
     failMessage: "The draft exposed internal knowledge article IDs.",
   });
 
@@ -266,6 +350,9 @@ function validateCustomerResponseDraft(input: {
     passed:
       !/\b(approved|approval|skip approval|skip review|close the ticket|closed the ticket|mark resolved|marked resolved)\b/i.test(
         response,
+      ) &&
+      !/\b(approved|approval|skip approval|skip review|close the ticket|closed the ticket|mark resolved|marked resolved)\b/i.test(
+        assistText,
       ),
     failMessage: "The draft implied approval, closure, or review bypass.",
   });
@@ -278,11 +365,131 @@ function validateCustomerResponseDraft(input: {
     passed:
       !/\b(guarantee|guaranteed|fixed|resolved|sent successfully|will be fixed)\b/i.test(
         response,
+      ) &&
+      !/\b(guarantee|guaranteed|fixed|resolved|sent successfully|will be fixed)\b/i.test(
+        assistText,
       ),
     failMessage: "The draft promised a resolution that has not been verified.",
   });
 
+  pushCheck({
+    checks,
+    blockingMessages,
+    id: "no-secret-requests",
+    label: "No secret requests",
+    passed:
+      !/\b(api secret|secret key|private key|password|token|access token|signing secret value)\b/i.test(
+        `${response} ${assistText}`,
+      ),
+    failMessage: "The draft asked for secrets or sensitive credentials.",
+  });
+
   return { checks, blockingMessages };
+}
+
+export function buildDeterministicGptAssist(
+  input: CustomerResponseDraftInput,
+  source: DraftCustomerResponseSource,
+  checks: DraftCustomerResponseCheck[],
+): GptAssist {
+  return {
+    source,
+    missingInfoSuggestions: buildMissingInfoSuggestions(input),
+    investigationSteps: buildInvestigationSteps(input),
+    tone: input.responseStyle,
+    audience: classifyAssistAudience(input),
+    checks,
+  };
+}
+
+function buildMissingInfoSuggestions(
+  input: CustomerResponseDraftInput,
+): string[] {
+  const knowledgeIds = input.outcome.knowledgeArticleIds;
+  if (
+    knowledgeIds.includes("flow-trigger-troubleshooting") &&
+    knowledgeIds.includes("event-tracking-debugging")
+  ) {
+    return [
+      "Share the ecommerce platform such as Shopify, Magento, WooCommerce, or custom.",
+      "Share the flow ID, event ID or event time, and one affected customer email.",
+    ];
+  }
+
+  if (knowledgeIds.includes("webhook-signature-validation")) {
+    return [
+      "Share the delivery ID, endpoint URL, and failure timestamp.",
+      "Confirm whether signing secret rotation or raw body handling changed recently.",
+    ];
+  }
+
+  if (knowledgeIds.includes("sms-compliance")) {
+    return [
+      "Share the campaign or flow name and scheduled send time.",
+      "Share the recipient region and the compliance banner shown in the dashboard.",
+    ];
+  }
+
+  const fromRecommendation = input.deterministicDraft
+    .split("Please share ")
+    .at(1)
+    ?.split(".")[0]
+    ?.trim();
+  return [
+    fromRecommendation === undefined || fromRecommendation === ""
+      ? `Share one affected example for ${input.ticket.id}.`
+      : `Share ${fromRecommendation}.`,
+  ];
+}
+
+function buildInvestigationSteps(input: CustomerResponseDraftInput): string[] {
+  const knowledgeIds = input.outcome.knowledgeArticleIds;
+  if (
+    knowledgeIds.includes("flow-trigger-troubleshooting") &&
+    knowledgeIds.includes("event-tracking-debugging")
+  ) {
+    return [
+      "Compare the storefront event with the flow setup and profile timeline.",
+      "Check event eligibility, flow filters, and customer qualification before recommending a setup change.",
+    ];
+  }
+
+  if (knowledgeIds.includes("webhook-signature-validation")) {
+    return [
+      "Compare the signed payload, delivery headers, endpoint response, and retry history.",
+    ];
+  }
+
+  if (input.outcome.requiredEscalations.includes("outage")) {
+    return [
+      "Correlate event timing, affected region, ingestion delay, and profile timeline updates.",
+    ];
+  }
+
+  return [
+    "Review the ticket details against retrieved knowledge before recommending the next update.",
+  ];
+}
+
+function classifyAssistAudience(
+  input: CustomerResponseDraftInput,
+): GptAssist["audience"] {
+  if (input.responseStyle === "executive-update") {
+    return "executive";
+  }
+  const text = [
+    input.ticket.subject,
+    input.ticket.description,
+    ...input.ticket.tags,
+    ...input.knowledgeArticles.flatMap((article) => article.tags),
+  ]
+    .join(" ")
+    .toLowerCase();
+  return /\b(api|payload|webhook|endpoint|request id|logs|hmac|signature)\b/.test(
+    text,
+  )
+    ? "developer"
+    : "merchant-admin";
 }
 
 function pushCheck(input: {

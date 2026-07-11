@@ -8,6 +8,7 @@ import {
   DraftCustomerResponseSourceSchema,
   DraftCustomerResponseStyleSchema,
   DuplicateCandidateSchema,
+  GptAssistSchema,
   IsoTimestampSchema,
   PrioritySchema,
   RequiredEscalationSchema,
@@ -21,6 +22,7 @@ import {
   type AuditEvent,
   type Category,
   type DuplicateCandidate,
+  type GptAssist,
   type Priority,
   type RequiredEscalation,
   type Risk,
@@ -60,6 +62,7 @@ const SubmitRecommendationInputSchema = z
     draftCustomerResponseChecks: z
       .array(DraftCustomerResponseCheckSchema)
       .optional(),
+    gptAssist: GptAssistSchema.optional(),
     rationale: NonBlankStringSchema.max(500),
     confidence: z.number().min(0).max(1),
     recommendedNextAction: NonBlankStringSchema,
@@ -105,6 +108,7 @@ export interface SubmitRecommendationInput {
   draftCustomerResponseChecks?: z.infer<
     typeof DraftCustomerResponseCheckSchema
   >[];
+  gptAssist?: GptAssist;
   rationale: string;
   confidence: number;
   recommendedNextAction: string;
@@ -210,6 +214,7 @@ export class TriageService {
       ...(parsed.draftCustomerResponseChecks === undefined
         ? {}
         : { draftCustomerResponseChecks: parsed.draftCustomerResponseChecks }),
+      ...(parsed.gptAssist === undefined ? {} : { gptAssist: parsed.gptAssist }),
       rationale: parsed.rationale,
       confidence: parsed.confidence,
       recommendedNextAction: parsed.recommendedNextAction,

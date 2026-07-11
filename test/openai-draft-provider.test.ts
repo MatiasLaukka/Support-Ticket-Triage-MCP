@@ -26,6 +26,16 @@ describe("OpenAiCustomerResponseDraftProvider", () => {
                       text: JSON.stringify({
                         draftCustomerResponse:
                           "We are checking the storefront event and flow setup.",
+                        missingInfoSuggestions: [
+                          "Share the ecommerce platform.",
+                          "Share the flow ID and event ID.",
+                        ],
+                        investigationSteps: [
+                          "Compare the storefront event with the profile timeline.",
+                          "Review flow filters before recommending a setup change.",
+                        ],
+                        tone: "balanced",
+                        audience: "merchant-admin",
                       }),
                     },
                   ],
@@ -47,6 +57,20 @@ describe("OpenAiCustomerResponseDraftProvider", () => {
     expect(draft).toEqual({
       source: "openai",
       response: "We are checking the storefront event and flow setup.",
+      assist: {
+        source: "openai",
+        missingInfoSuggestions: [
+          "Share the ecommerce platform.",
+          "Share the flow ID and event ID.",
+        ],
+        investigationSteps: [
+          "Compare the storefront event with the profile timeline.",
+          "Review flow filters before recommending a setup change.",
+        ],
+        tone: "balanced",
+        audience: "merchant-admin",
+        checks: [],
+      },
     });
     expect(requests).toHaveLength(1);
     expect(requests[0]!.url).toBe("https://api.openai.com/v1/responses");
@@ -87,6 +111,14 @@ describe("OpenAiCustomerResponseDraftProvider", () => {
                       text: JSON.stringify({
                         draftCustomerResponse:
                           "We are treating this as a priority investigation.",
+                        missingInfoSuggestions: [
+                          "Share the affected account or store.",
+                        ],
+                        investigationSteps: [
+                          "Confirm impact and owner before the next update.",
+                        ],
+                        tone: "executive-update",
+                        audience: "executive",
                       }),
                     },
                   ],

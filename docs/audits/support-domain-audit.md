@@ -2,6 +2,10 @@
 
 Date: 2026-07-13
 
+Status update: the main evidence and known-cause gaps from this audit were
+implemented after the initial review. The historical findings below are kept so
+future classifier work can see why the evidence model was changed.
+
 This audit compares representative seed tickets and expected outcomes against
 `data/knowledge/support-operations-playbook.md`. It focuses on four questions:
 
@@ -83,9 +87,10 @@ identity.
 
 ## Suggested Next Implementation Order
 
-1. Add a dedicated security knowledge article and security evidence set.
-2. Add missing known causes from the playbook.
-3. Split webhook signature evidence from webhook latency evidence.
-4. Add incident-specific event-ingestion evidence.
-5. Add SMS opt-out evidence separate from SMS campaign-send evidence.
-6. Re-run this audit and only then build the classifier.
+1. Done: add a dedicated security knowledge article and security evidence set.
+2. Done: add missing known causes from the playbook.
+3. Done: split webhook signature evidence from webhook latency evidence.
+4. Done: add incident-specific event-ingestion evidence.
+5. Done: add SMS opt-out evidence separate from SMS campaign-send evidence.
+6. Next: build the classifier against the cleaned-up domain labels and evidence
+   model.

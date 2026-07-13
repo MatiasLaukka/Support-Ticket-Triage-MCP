@@ -31,6 +31,25 @@ const EVIDENCE_CATALOG: Readonly<Record<string, Omit<EvidenceRequirement, "sourc
     customerQuestion: "Expected audience size",
     aliases: ["audience size", "expected recipients"],
   },
+  "affected-scope": {
+    id: "affected-scope",
+    label: "Affected scope",
+    customerQuestion:
+      "affected scope, such as profiles, logs, accounts, or actions that may have been exposed",
+    aliases: ["affected scope", "affected profiles", "profiles were accessed"],
+  },
+  "api-response-status": {
+    id: "api-response-status",
+    label: "API response status",
+    customerQuestion: "API response status or validation error",
+    aliases: ["api response", "response status", "validation error", "400"],
+  },
+  "audit-source": {
+    id: "audit-source",
+    label: "Audit source",
+    customerQuestion: "audit source, source IP, or actor if available",
+    aliases: ["audit source", "source address", "source ip", "actor"],
+  },
   "bounce-samples": {
     id: "bounce-samples",
     label: "Bounce samples",
@@ -67,6 +86,12 @@ const EVIDENCE_CATALOG: Readonly<Record<string, Omit<EvidenceRequirement, "sourc
     customerQuestion: "delivery ID",
     aliases: ["delivery id", "webhook delivery"],
   },
+  "delivery-attempt-time": {
+    id: "delivery-attempt-time",
+    label: "Delivery attempt time",
+    customerQuestion: "webhook delivery attempt time with time zone",
+    aliases: ["delivery attempt", "delivery timestamp", "delivered at"],
+  },
   "endpoint-response-code": {
     id: "endpoint-response-code",
     label: "Endpoint response code",
@@ -78,6 +103,24 @@ const EVIDENCE_CATALOG: Readonly<Record<string, Omit<EvidenceRequirement, "sourc
     label: "Endpoint URL",
     customerQuestion: "endpoint URL",
     aliases: ["endpoint url", "webhook url"],
+  },
+  "event-created-time": {
+    id: "event-created-time",
+    label: "Event creation time",
+    customerQuestion: "source event creation time with time zone",
+    aliases: ["event creation time", "event created", "source event time"],
+  },
+  "expected-field": {
+    id: "expected-field",
+    label: "Expected field",
+    customerQuestion: "expected custom field name",
+    aliases: ["expected field", "custom field", "material field"],
+  },
+  "exposure-location": {
+    id: "exposure-location",
+    label: "Exposure location",
+    customerQuestion: "where the key or credential was shared",
+    aliases: ["shared", "log bundle", "pasted", "exposed"],
   },
   "error-banner": {
     id: "error-banner",
@@ -103,11 +146,35 @@ const EVIDENCE_CATALOG: Readonly<Record<string, Omit<EvidenceRequirement, "sourc
     customerQuestion: "flow name or flow ID",
     aliases: ["flow id", "flow name"],
   },
+  "key-identifier": {
+    id: "key-identifier",
+    label: "Key identifier",
+    customerQuestion: "key identifier or last four characters, not the secret value",
+    aliases: ["api key", "private key", "key id", "key identifier"],
+  },
+  "key-usage-status": {
+    id: "key-usage-status",
+    label: "Key usage status",
+    customerQuestion: "whether the key was used after exposure",
+    aliases: ["was used", "used", "actions taken"],
+  },
+  "masked-recipient": {
+    id: "masked-recipient",
+    label: "Masked recipient",
+    customerQuestion: "masked recipient phone number or profile identifier",
+    aliases: ["masked recipient", "recipient", "subscriber"],
+  },
   "object-id": {
     id: "object-id",
     label: "Affected object ID",
     customerQuestion: "Affected object ID, SKU, order number, or profile ID",
     aliases: ["object id", "sku", "order number", "profile id"],
+  },
+  "opt-out-timestamp": {
+    id: "opt-out-timestamp",
+    label: "Opt-out timestamp",
+    customerQuestion: "STOP reply or opt-out timestamp with time zone",
+    aliases: ["stop timestamp", "opt-out timestamp"],
   },
   "platform": {
     id: "platform",
@@ -121,6 +188,12 @@ const EVIDENCE_CATALOG: Readonly<Record<string, Omit<EvidenceRequirement, "sourc
     label: "Affected profile email or customer ID",
     customerQuestion: "One affected profile email or customer ID",
     aliases: ["profile email", "customer id", "affected customer"],
+  },
+  "consent-timeline": {
+    id: "consent-timeline",
+    label: "Consent timeline",
+    customerQuestion: "profile consent timeline or opt-out history",
+    aliases: ["consent timeline", "consent state", "opt-out history"],
   },
   "product-reference": {
     id: "product-reference",
@@ -146,6 +219,18 @@ const EVIDENCE_CATALOG: Readonly<Record<string, Omit<EvidenceRequirement, "sourc
     label: "Request ID",
     customerQuestion: "request ID if available",
     aliases: ["request id", "api request"],
+  },
+  "retry-history": {
+    id: "retry-history",
+    label: "Retry history",
+    customerQuestion: "webhook retry history",
+    aliases: ["retry history", "retries", "eventually succeed"],
+  },
+  "rotation-status": {
+    id: "rotation-status",
+    label: "Rotation status",
+    customerQuestion: "whether the exposed key has been rotated or revoked",
+    aliases: ["rotated", "rotation", "revoked"],
   },
   "sample-payload": {
     id: "sample-payload",
@@ -184,11 +269,24 @@ const EVIDENCE_CATALOG: Readonly<Record<string, Omit<EvidenceRequirement, "sourc
     customerQuestion: "Affected store URL",
     aliases: ["store url", "site url", "store domain"],
   },
+  "source-update-time": {
+    id: "source-update-time",
+    label: "Source update time",
+    customerQuestion: "source-system update time with time zone",
+    aliases: ["source update", "last update", "updated in shopify"],
+  },
   "timestamp-tolerance": {
     id: "timestamp-tolerance",
     label: "Timestamp tolerance",
     customerQuestion: "timestamp tolerance configured for verification",
     aliases: ["timestamp tolerance", "clock skew"],
+  },
+  "timeline-visibility": {
+    id: "timeline-visibility",
+    label: "Timeline visibility",
+    customerQuestion:
+      "whether the API accepted events are still missing from profile timelines",
+    aliases: ["activity timeline", "profile timeline", "missing from timelines"],
   },
   "unused-coupon-status": {
     id: "unused-coupon-status",
@@ -239,6 +337,14 @@ const KNOWLEDGE_EVIDENCE: Readonly<Record<string, readonly string[]>> = {
     "request-id",
     "catalog-sync-time",
   ],
+  "security-incident-response": [
+    "key-identifier",
+    "exposure-location",
+    "key-usage-status",
+    "rotation-status",
+    "audit-source",
+    "affected-scope",
+  ],
   "segmentation-audience-rules": [
     "segment-name",
     "audience-size",
@@ -277,7 +383,8 @@ export function analyzeEvidenceReadiness(input: {
   const requiredEvidence =
     knownCauseDefinition !== undefined
       ? evidenceForKnownCause(knownCauseDefinition.requiredEvidenceIds)
-      : evidenceForKnowledge(
+      : evidenceForIssuePattern(input) ??
+        evidenceForKnowledge(
           relevantKnowledgeArticleIds(input.ticket, input.outcome),
           "knowledge",
         );
@@ -307,6 +414,32 @@ export function analyzeEvidenceReadiness(input: {
   };
 }
 
+function evidenceForIssuePattern(input: {
+  ticket: Ticket;
+  outcome: ExpectedOutcome;
+}): EvidenceRequirement[] | undefined {
+  if (input.outcome.knowledgeArticleIds.includes("security-incident-response")) {
+    return evidenceForKnowledge(["security-incident-response"], "policy");
+  }
+  if (
+    input.outcome.requiredEscalations.includes("outage") &&
+    input.outcome.knowledgeArticleIds.includes("event-tracking-debugging")
+  ) {
+    return evidenceForIds(
+      [
+      "store-url",
+      "profile-email",
+      "event-id",
+      "request-id",
+      "api-response-status",
+      "timeline-visibility",
+      ],
+      "policy",
+    );
+  }
+  return undefined;
+}
+
 function relevantKnowledgeArticleIds(
   ticket: Ticket,
   outcome: ExpectedOutcome,
@@ -334,7 +467,14 @@ function evidenceForKnowledge(
 }
 
 function evidenceForKnownCause(ids: readonly string[]): EvidenceRequirement[] {
-  return unique(ids).map((id) => evidenceRequirement(id, "known-cause"));
+  return evidenceForIds(ids, "known-cause");
+}
+
+function evidenceForIds(
+  ids: readonly string[],
+  source: EvidenceSource,
+): EvidenceRequirement[] {
+  return unique(ids).map((id) => evidenceRequirement(id, source));
 }
 
 function evidenceRequirement(id: string, source: EvidenceSource): EvidenceRequirement {
@@ -401,6 +541,11 @@ function isEvidenceProvided(
 ): boolean {
   const text = ticketText(ticket);
   switch (requirement.id) {
+    case "api-response-status":
+    case "endpoint-response-code":
+      return /\b(api response|response status|response code|http status|400|401|403|404|429|500|validation error|accepted by the api)\b/i.test(
+        text,
+      );
     case "platform":
       if (accountFacts.ecommercePlatform !== undefined) {
         return true;
@@ -431,7 +576,14 @@ function isEvidenceProvided(
       );
     case "scheduled-send-time":
     case "catalog-sync-time":
+    case "source-update-time":
+    case "event-created-time":
+    case "delivery-attempt-time":
       return /\b\d{1,2}:\d{2}\b|\b\d{4}-\d{2}-\d{2}\b|\b(am|pm|utc|gmt|eet|est|pst)\b/i.test(
+        text,
+      );
+    case "opt-out-timestamp":
+      return /\b(stop|opt-out).*(\d{1,2}:\d{2}|\d{4}-\d{2}-\d{2}|am|pm|utc|gmt|eet|est|pst)\b/i.test(
         text,
       );
     default:

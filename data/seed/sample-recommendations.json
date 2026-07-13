@@ -131,8 +131,7 @@
       "Confirm missing evidence for TKT-1004."
     ],
     "knowledgeArticleIds": [
-      "profile-sync-issues",
-      "webhook-signature-validation"
+      "security-incident-response"
     ],
     "draftCustomerResponse": "We are reviewing this ticket.",
     "rationale": "The recommendation matches the expected synthetic outcome.",
@@ -541,8 +540,7 @@
       "Confirm missing evidence for TKT-1019."
     ],
     "knowledgeArticleIds": [
-      "profile-sync-issues",
-      "webhook-signature-validation"
+      "security-incident-response"
     ],
     "draftCustomerResponse": "We are reviewing this ticket.",
     "rationale": "The recommendation matches the expected synthetic outcome.",

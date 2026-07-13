@@ -114,6 +114,180 @@ describe("analyzeEvidenceReadiness", () => {
       "platform",
     );
   });
+
+  it("uses API timestamp evidence for Track API local-time timestamp tickets", async () => {
+    const ticket = await loadSeedTicket("TKT-1027");
+    const readiness = analyzeEvidenceReadiness({
+      ticket,
+      outcome: {
+        ticketId: "TKT-1027",
+        category: "api",
+        acceptablePriorities: ["P3"],
+        team: "api-platform",
+        requiredEscalations: [],
+        knowledgeArticleIds: ["event-tracking-debugging"],
+      },
+    });
+
+    expect(readiness.knownCause).toBe("track-api-local-time-timestamp");
+    expect(readiness.requiredEvidence.map((requirement) => requirement.id)).toEqual([
+      "event-id",
+      "api-response-status",
+      "sample-payload",
+    ]);
+    expect(readiness.providedEvidence.map((requirement) => requirement.id)).toEqual(
+      expect.arrayContaining(["event-id", "api-response-status"]),
+    );
+    expect(readiness.missingEvidence.map((requirement) => requirement.id)).toEqual([
+      "sample-payload",
+    ]);
+  });
+
+  it("uses custom field evidence for Shopify field mapping tickets", async () => {
+    const ticket = await loadSeedTicket("TKT-1018");
+    const readiness = analyzeEvidenceReadiness({
+      ticket,
+      outcome: {
+        ticketId: "TKT-1018",
+        category: "integration",
+        acceptablePriorities: ["P3"],
+        team: "integrations",
+        requiredEscalations: [],
+        knowledgeArticleIds: ["shopify-integration-sync"],
+      },
+    });
+
+    expect(readiness.knownCause).toBe("shopify-custom-field-mapping");
+    expect(readiness.requiredEvidence.map((requirement) => requirement.id)).toEqual([
+      "store-url",
+      "object-id",
+      "expected-field",
+      "source-update-time",
+      "catalog-sync-time",
+    ]);
+    expect(readiness.providedEvidence.map((requirement) => requirement.id)).toContain(
+      "expected-field",
+    );
+  });
+
+  it("uses SMS opt-out evidence instead of campaign send evidence for STOP sync tickets", async () => {
+    const ticket = await loadSeedTicket("TKT-1030");
+    const readiness = analyzeEvidenceReadiness({
+      ticket,
+      outcome: {
+        ticketId: "TKT-1030",
+        category: "account-access",
+        acceptablePriorities: ["P3"],
+        team: "identity",
+        requiredEscalations: [],
+        knowledgeArticleIds: ["sms-compliance", "profile-sync-issues"],
+      },
+    });
+
+    expect(readiness.knownCause).toBe("sms-stop-sync-delay");
+    expect(readiness.requiredEvidence.map((requirement) => requirement.id)).toEqual([
+      "masked-recipient",
+      "opt-out-timestamp",
+      "profile-email",
+      "consent-timeline",
+    ]);
+    expect(readiness.requiredEvidence.map((requirement) => requirement.id)).not.toContain(
+      "campaign-name",
+    );
+    expect(readiness.requiredEvidence.map((requirement) => requirement.id)).not.toContain(
+      "catalog-sync-time",
+    );
+  });
+
+  it("uses webhook latency evidence instead of signature evidence for delayed deliveries", async () => {
+    const ticket = await loadSeedTicket("TKT-1028");
+    const readiness = analyzeEvidenceReadiness({
+      ticket,
+      outcome: {
+        ticketId: "TKT-1028",
+        category: "integration",
+        acceptablePriorities: ["P2", "P3"],
+        team: "integrations",
+        requiredEscalations: [],
+        knowledgeArticleIds: ["webhook-signature-validation"],
+      },
+    });
+
+    expect(readiness.knownCause).toBe("webhook-delivery-latency");
+    expect(readiness.requiredEvidence.map((requirement) => requirement.id)).toEqual([
+      "delivery-id",
+      "event-created-time",
+      "delivery-attempt-time",
+      "endpoint-response-code",
+      "retry-history",
+    ]);
+    expect(readiness.requiredEvidence.map((requirement) => requirement.id)).not.toContain(
+      "signing-secret-rotation-time",
+    );
+    expect(readiness.requiredEvidence.map((requirement) => requirement.id)).not.toContain(
+      "timestamp-tolerance",
+    );
+  });
+
+  it("uses incident-specific evidence for regional event ingestion incidents", async () => {
+    const ticket = await loadSeedTicket("TKT-1001");
+    const readiness = analyzeEvidenceReadiness({
+      ticket,
+      outcome: {
+        ticketId: "TKT-1001",
+        category: "incident",
+        acceptablePriorities: ["P1"],
+        team: "incident-response",
+        requiredEscalations: ["outage", "sla"],
+        knowledgeArticleIds: [
+          "event-tracking-debugging",
+          "shopify-integration-sync",
+        ],
+      },
+    });
+
+    expect(readiness.requiredEvidence.map((requirement) => requirement.id)).toEqual([
+      "store-url",
+      "profile-email",
+      "event-id",
+      "request-id",
+      "api-response-status",
+      "timeline-visibility",
+    ]);
+    expect(readiness.requiredEvidence.map((requirement) => requirement.id)).not.toContain(
+      "catalog-sync-time",
+    );
+  });
+
+  it("uses security containment evidence for API key exposure tickets", async () => {
+    const ticket = await loadSeedTicket("TKT-1004");
+    const readiness = analyzeEvidenceReadiness({
+      ticket,
+      outcome: {
+        ticketId: "TKT-1004",
+        category: "security",
+        acceptablePriorities: ["P1"],
+        team: "security",
+        requiredEscalations: ["security", "missing-information"],
+        knowledgeArticleIds: ["security-incident-response"],
+      },
+    });
+
+    expect(readiness.requiredEvidence.map((requirement) => requirement.id)).toEqual([
+      "key-identifier",
+      "exposure-location",
+      "key-usage-status",
+      "rotation-status",
+      "audit-source",
+      "affected-scope",
+    ]);
+    expect(readiness.requiredEvidence.map((requirement) => requirement.id)).not.toContain(
+      "delivery-id",
+    );
+    expect(readiness.requiredEvidence.map((requirement) => requirement.id)).not.toContain(
+      "catalog-sync-time",
+    );
+  });
 });
 
 async function loadSeedTicket(ticketId: string): Promise<Ticket> {

@@ -34,6 +34,10 @@ Priority should increase when the issue is active, broad, security-sensitive,
 SLA-breached, executive-visible, or blocks a launch. Priority should not
 increase only because a customer asks for urgency.
 
+In this demo organization, SMS campaign execution and compliance blocking route
+to API Platform. SMS consent, opt-out, and profile-state issues route to
+Identity.
+
 ## Evidence Rules
 
 Ask only for evidence that changes the next support action. Do not ask for the

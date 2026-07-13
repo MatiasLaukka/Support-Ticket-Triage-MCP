@@ -25,6 +25,7 @@ import {
 } from "./draft-response-provider.js";
 import { buildAutomationEvidenceReport } from "./evidence-report.js";
 import { approvalDeskHtml } from "./ui.js";
+import { buildConversationHistory } from "./conversation-history.js";
 
 const DEFAULT_EXPECTED_OUTCOMES_PATH = resolve(
   "data/seed/expected-outcomes.json",
@@ -295,6 +296,7 @@ async function getTicketDetail(
   return {
     ticket,
     audits,
+    conversationHistory: buildConversationHistory(audits.events),
     recommendationSummary: recommendation.summary,
     latestRecommendation: recommendation.latest,
   };

@@ -64,6 +64,7 @@ describe("createApprovalDeskHttpServer", () => {
       limit: 10,
       events: [],
     });
+    expect(detail.body.conversationHistory).toEqual([]);
   });
 
   it("includes recommendation summaries in ticket list responses", async () => {
@@ -104,6 +105,14 @@ describe("createApprovalDeskHttpServer", () => {
       ticketId: "TKT-1005",
       resolution: "pending",
     });
+    expect(detail.body.conversationHistory).toEqual([
+      expect.objectContaining({
+        action: "recommendation-submitted",
+        actor: "approval-desk",
+        summary: "Recommendation prepared for review.",
+        recommendationId: created.body.recommendation.id,
+      }),
+    ]);
   });
 
   it("maps missing tickets to 404", async () => {

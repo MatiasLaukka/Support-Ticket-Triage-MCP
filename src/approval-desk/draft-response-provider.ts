@@ -14,6 +14,7 @@ import type {
   DraftCustomerResponseStyleInput,
 } from "../domain.js";
 import { GptAssistAudienceSchema } from "../domain.js";
+import type { EvidenceReadiness } from "./evidence-readiness.js";
 
 const DEFAULT_OPENAI_MODEL = "gpt-5.6-luna";
 export const DEFAULT_SUPPORT_COMPANY_NAME = "Northstar Marketing Support";
@@ -40,6 +41,7 @@ export interface CustomerResponseDraftInput {
   responseStyle: DraftCustomerResponseStyleInput;
   actor: string;
   companyName: string;
+  evidenceReadiness?: EvidenceReadiness;
 }
 
 export interface CustomerResponseDraft {
@@ -486,6 +488,14 @@ function buildMissingInfoSuggestions(
   input: CustomerResponseDraftInput,
 ): string[] {
   const knowledgeIds = input.outcome.knowledgeArticleIds;
+  if (input.evidenceReadiness !== undefined) {
+    if (input.evidenceReadiness.missingEvidence.length === 0) {
+      return ["No additional customer evidence is needed before the next update."];
+    }
+    return input.evidenceReadiness.missingEvidence.map(
+      (requirement) => `Share ${requirement.customerQuestion}.`,
+    );
+  }
   if (
     knowledgeIds.includes("flow-trigger-troubleshooting") &&
     knowledgeIds.includes("event-tracking-debugging")
@@ -524,6 +534,9 @@ function buildMissingInfoSuggestions(
 
 function buildInvestigationSteps(input: CustomerResponseDraftInput): string[] {
   const knowledgeIds = input.outcome.knowledgeArticleIds;
+  if (input.evidenceReadiness !== undefined) {
+    return input.evidenceReadiness.nextInvestigationSteps;
+  }
   if (
     knowledgeIds.includes("flow-trigger-troubleshooting") &&
     knowledgeIds.includes("event-tracking-debugging")
@@ -637,6 +650,7 @@ function buildDraftInstructions(
     "Do not mention internal article IDs, internal risk labels, model behavior, approval state, or audit systems.",
     "Do not promise a fix, completion, delivery, refund, or closure unless the trusted context explicitly proves it.",
     "Use plain merchant-friendly language. Ask only for information needed to diagnose or safely resolve the issue.",
+    "When evidenceReadiness is present, ask only for its missingEvidence items and do not duplicate equivalent questions.",
     `End the draft exactly with this sign-off on separate lines: ${signOff}`,
     responseStyleInstruction(style),
     "Return only JSON matching the requested schema.",
@@ -678,6 +692,20 @@ function buildDraftInput(input: CustomerResponseDraftInput): string {
         team: input.outcome.team,
         requiredEscalations: input.outcome.requiredEscalations,
       },
+      evidenceReadiness: input.evidenceReadiness === undefined
+        ? undefined
+        : {
+            supportState: input.evidenceReadiness.supportState,
+            knownCause: input.evidenceReadiness.knownCause,
+            missingEvidence: input.evidenceReadiness.missingEvidence.map(
+              (requirement) => ({
+                id: requirement.id,
+                label: requirement.label,
+                customerQuestion: requirement.customerQuestion,
+              }),
+            ),
+            nextInvestigationSteps: input.evidenceReadiness.nextInvestigationSteps,
+          },
       knowledgeArticles: input.knowledgeArticles.map((article) => ({
         title: article.title,
         tags: article.tags,

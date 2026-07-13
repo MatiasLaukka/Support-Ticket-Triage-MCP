@@ -4,6 +4,7 @@ import type {
   SupportState,
   Ticket,
 } from "../domain.js";
+import { extractAccountFacts, type AccountFacts } from "./account-facts.js";
 import { detectKnownCause, getKnownCause } from "./known-cause-catalog.js";
 
 type EvidenceSource = EvidenceRequirement["source"];
@@ -272,6 +273,7 @@ export function analyzeEvidenceReadiness(input: {
 }): EvidenceReadiness {
   const knownCauseDefinition = detectKnownCause(input);
   const knownCause = knownCauseDefinition?.id ?? null;
+  const accountFacts = extractAccountFacts(input.ticket);
   const requiredEvidence =
     knownCauseDefinition !== undefined
       ? evidenceForKnownCause(knownCauseDefinition.requiredEvidenceIds)
@@ -280,7 +282,7 @@ export function analyzeEvidenceReadiness(input: {
           "knowledge",
         );
   const providedEvidence = requiredEvidence.filter((requirement) =>
-    isEvidenceProvided(requirement, input.ticket),
+    isEvidenceProvided(requirement, input.ticket, accountFacts),
   );
   const providedIds = new Set(providedEvidence.map((requirement) => requirement.id));
   const missingEvidence = requiredEvidence.filter(
@@ -395,16 +397,23 @@ function buildNextInvestigationSteps(input: {
 function isEvidenceProvided(
   requirement: EvidenceRequirement,
   ticket: Ticket,
+  accountFacts: AccountFacts,
 ): boolean {
   const text = ticketText(ticket);
   switch (requirement.id) {
     case "platform":
+      if (accountFacts.ecommercePlatform !== undefined) {
+        return true;
+      }
       return /\b(shopify|magento|woocommerce|custom store|custom setup)\b/i.test(
         text,
       );
     case "store-url":
     case "endpoint-url":
     case "product-reference":
+      if (requirement.id === "store-url" && accountFacts.storeUrls.length > 0) {
+        return true;
+      }
       return /\bhttps?:\/\/\S+|\b[a-z0-9-]+\.(com|net|org|io|co|fi|store)\b/i.test(
         text,
       );

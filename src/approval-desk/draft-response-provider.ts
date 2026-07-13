@@ -15,6 +15,7 @@ import type {
 } from "../domain.js";
 import { GptAssistAudienceSchema } from "../domain.js";
 import type { EvidenceReadiness } from "./evidence-readiness.js";
+import { extractAccountFacts } from "./account-facts.js";
 
 const DEFAULT_OPENAI_MODEL = "gpt-5.6-luna";
 export const DEFAULT_SUPPORT_COMPANY_NAME = "Northstar Marketing Support";
@@ -685,6 +686,7 @@ function buildDraftInput(input: CustomerResponseDraftInput): string {
         description: input.ticket.description,
         tags: input.ticket.tags,
       },
+      accountFacts: extractAccountFacts(input.ticket),
       requestedResponseStyle: input.responseStyle,
       expectedOutcome: {
         category: input.outcome.category,

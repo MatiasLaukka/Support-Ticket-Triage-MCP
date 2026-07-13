@@ -32,6 +32,18 @@ Each new ticket should have:
 - a customer response expectation that is understandable to non-technical
   users.
 
+Next backend slice:
+
+- add known causes for existing tickets such as Track API local-time
+  timestamps, Shopify custom field mapping, SMS STOP sync delay, and webhook
+  delivery latency;
+- improve evidence extraction for explicit negative evidence such as "not
+  changed", timestamps and time zones, platform/store/account facts from ticket
+  text plus replies, and duplicate evidence asks across overlapping knowledge
+  articles;
+- add local customer-reply fixtures keyed by ticket ID, covering first contact,
+  partial information, complete information, and resolved confirmation.
+
 ## Response Quality Improvements
 
 The current GPT drafting path is intentionally bounded. Next improvements
@@ -43,6 +55,9 @@ should target quality without weakening governance:
 - add a validator warning when the draft asks for irrelevant information;
 - add a "known cause vs needs diagnosis" label to the safety panel;
 - add examples of good and bad customer replies in `docs/demo-results.md`.
+- keep GPT assist as the drafting layer: deterministic lifecycle and evidence
+  state decide what the response must accomplish, while GPT polishes the
+  customer-facing wording from trusted context.
 
 ## Production-Like Extensions
 
@@ -62,4 +77,3 @@ These are useful later, but should stay behind the same approval boundary:
 - real customer data;
 - hidden approval shortcuts;
 - vendor documentation copied from third-party platforms.
-

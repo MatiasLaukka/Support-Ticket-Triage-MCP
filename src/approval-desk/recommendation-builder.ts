@@ -19,30 +19,12 @@ import {
   ensureDraftSignOff,
   type CustomerResponseDraftProvider,
 } from "./draft-response-provider.js";
+import {
+  analyzeEvidenceReadiness,
+  type EvidenceReadiness,
+} from "./evidence-readiness.js";
 
 const SlugSchema = z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/);
-const CUSTOMER_RESPONSE_TEMPLATES: Readonly<Record<string, string>> = {
-  "campaign-send-failures":
-    "Please share the campaign name, scheduled send time, expected audience size, and any error banner shown in the campaign status. We will check the audience snapshot, template validation, sender profile, and suppression summary before recommending the next send action.",
-  "coupon-catalog-sync":
-    "Please share the store URL, product SKU, coupon pool name, last catalog sync time, and whether unused coupon codes remain available. We will compare the catalog import history with the campaign content before recommending a coupon or product update.",
-  "email-deliverability":
-    "Please share the campaign name, send time, sending domain, affected recipient domains, bounce samples, and whether the audience was recently imported. We will compare bounce type, complaint rate, suppression growth, and sender alignment with prior sends.",
-  "event-tracking-debugging":
-    "Please share the profile email or customer ID, event name, event timestamp with time zone, request ID if available, and a sample payload with secrets removed. We will compare the event payload, API accepted time, profile timeline, and downstream qualification.",
-  "flow-trigger-troubleshooting":
-    "Please share the flow name, profile email, trigger event, event timestamp, flow filters, consent state, smart sending status, and the profile's flow history. We will compare the trigger event, profile qualification, and message eligibility before recommending the next update.",
-  "profile-sync-issues":
-    "Please share the profile email, external customer ID, import filename or API request ID, update timestamp, and the field that should have changed. We will check duplicate profiles, matching identifiers, and consent state before recommending a merge or update.",
-  "segmentation-audience-rules":
-    "Please share the segment name, expected count, observed count, rule definition, a sample profile that should qualify, and when the segment was last edited. We will compare profile attributes, event recency, consent filters, and recalculation state.",
-  "shopify-integration-sync":
-    "Please share the Shopify store URL, affected object ID, SKU or order number, expected field, and last update time in Shopify. We will compare the source object with integration scopes and import history before recommending a sync action.",
-  "sms-compliance":
-    "Please share the campaign or flow name, masked recipient phone number, recipient region, consent source, opt-in timestamp, opt-out history, scheduled send time, and the compliance banner shown in the UI. We will verify channel eligibility before recommending any SMS send action.",
-  "webhook-signature-validation":
-    "Please share the delivery ID, endpoint URL, failure timestamp, signing secret rotation time, timestamp tolerance, endpoint response code, and whether raw body handling changed recently. We will compare the signed payload, delivery headers, and retry history before recommending a code or configuration change.",
-};
 
 type ResponseStyle =
   | "known-cause"
@@ -96,11 +78,13 @@ export function buildApprovalDeskRecommendationInput(input: {
 
   const escalationReasons = outcome.requiredEscalations;
   const knowledgeArticleIds = outcome.knowledgeArticleIds;
+  const evidenceReadiness = analyzeEvidenceReadiness({ ticket, outcome });
 
   const draftCustomerResponse = buildDraftCustomerResponse({
     ticket,
     knowledgeArticleIds,
     escalationReasons,
+    evidenceReadiness,
   });
   const signedDraftCustomerResponse = ensureDraftSignOff(draftCustomerResponse, {
     actor,
@@ -124,6 +108,7 @@ export function buildApprovalDeskRecommendationInput(input: {
       responseStyle: "auto",
       actor,
       companyName: DEFAULT_SUPPORT_COMPANY_NAME,
+      evidenceReadiness,
     },
     "deterministic",
     deterministicDraftChecks,
@@ -140,9 +125,15 @@ export function buildApprovalDeskRecommendationInput(input: {
     outageRisk: escalationReasons.includes("outage") ? "likely" : "none",
     securityRisk: escalationReasons.includes("security") ? "possible" : "none",
     slaRisk: escalationReasons.includes("sla") ? "likely" : "none",
-    missingInformation: escalationReasons.includes("missing-information")
-      ? [`Confirm the missing evidence for ${ticket.id} before approval.`]
-      : [],
+    missingInformation: evidenceReadiness.missingEvidence.map(
+      (requirement) => requirement.customerQuestion,
+    ),
+    supportState: evidenceReadiness.supportState,
+    knownCause: evidenceReadiness.knownCause,
+    requiredEvidence: evidenceReadiness.requiredEvidence,
+    providedEvidence: evidenceReadiness.providedEvidence,
+    missingEvidence: evidenceReadiness.missingEvidence,
+    nextInvestigationSteps: evidenceReadiness.nextInvestigationSteps,
     knowledgeArticleIds,
     draftCustomerResponse: signedDraftCustomerResponse,
     draftCustomerResponseSource: "deterministic",
@@ -153,8 +144,7 @@ export function buildApprovalDeskRecommendationInput(input: {
       ", ",
     )}.`,
     confidence: 0.95,
-    recommendedNextAction:
-      "Review the supporting evidence, then approve or reject this recommendation.",
+    recommendedNextAction: formatRecommendedNextAction(evidenceReadiness),
     escalationRequired: escalationReasons.length > 0,
     escalationReasons,
     actor,
@@ -185,6 +175,14 @@ export async function buildApprovalDeskRecommendationInputWithDrafting(input: {
       responseStyle: input.responseStyle ?? "auto",
       actor: input.actor,
       companyName: DEFAULT_SUPPORT_COMPANY_NAME,
+      evidenceReadiness: {
+        supportState: base.supportState ?? "diagnosing",
+        knownCause: base.knownCause,
+        requiredEvidence: base.requiredEvidence ?? [],
+        providedEvidence: base.providedEvidence ?? [],
+        missingEvidence: base.missingEvidence ?? [],
+        nextInvestigationSteps: base.nextInvestigationSteps ?? [],
+      },
     },
   });
 
@@ -212,8 +210,10 @@ function buildDraftCustomerResponse(input: {
   ticket: Ticket;
   knowledgeArticleIds: readonly string[];
   escalationReasons: readonly string[];
+  evidenceReadiness: EvidenceReadiness;
 }): string {
-  const { ticket, knowledgeArticleIds, escalationReasons } = input;
+  const { ticket, knowledgeArticleIds, escalationReasons, evidenceReadiness } =
+    input;
   const style = classifyResponseStyle(
     ticket,
     knowledgeArticleIds,
@@ -221,23 +221,35 @@ function buildDraftCustomerResponse(input: {
   );
 
   if (style === "known-cause") {
-    return buildKnownCauseResponse(ticket);
+    return buildKnownCauseResponse(ticket, evidenceReadiness);
   }
 
   if (style === "incident-or-escalation") {
-    return buildEscalationResponse(ticket, escalationReasons);
+    return buildEscalationResponse(ticket, escalationReasons, evidenceReadiness);
   }
 
   if (
     classifyCustomerAudience(ticket) === "merchant-admin" &&
     isFlowEventGuidance(knowledgeArticleIds)
   ) {
-    return buildMerchantFlowResponse(ticket);
+    return buildStructuredDiagnosticResponse({
+      ticket,
+      evidenceReadiness,
+      problemSummary: buildFlowProblemSummary(ticket),
+      nextStep:
+        "Once we have those details, we will compare the storefront event with the flow setup and profile timeline before recommending the safest correction.",
+    });
   }
 
-  return `We are investigating ${ticket.id}. ${formatCustomerGuidance(
-    knowledgeArticleIds,
-  )} We will share the next update once we have confirmed the details.`;
+  return buildStructuredDiagnosticResponse({
+    ticket,
+    evidenceReadiness,
+    problemSummary: `We are checking the ${formatKnowledgeTopic(
+      knowledgeArticleIds,
+    )} reported in ${ticket.id}.`,
+    nextStep:
+      "Once we have those details, we will compare the examples with the relevant account setup and share the next recommended action.",
+  });
 }
 
 function classifyResponseStyle(
@@ -264,28 +276,67 @@ function classifyResponseStyle(
   return "needs-diagnostics";
 }
 
-function buildKnownCauseResponse(ticket: Ticket): string {
+function buildKnownCauseResponse(
+  ticket: Ticket,
+  evidenceReadiness: EvidenceReadiness,
+): string {
   const text = ticketText(ticket);
   if (text.includes("quiet-hour") && text.includes("blocked")) {
-    return `We reviewed ${ticket.id}, and the dashboard message indicates quiet-hour protection blocked delivery. This looks like expected compliance behavior for an SMS campaign scheduled during restricted sending hours. Please reschedule the campaign for an eligible sending window or review the account quiet-hour settings before attempting another send.`;
+    return buildStructuredDiagnosticResponse({
+      ticket,
+      evidenceReadiness,
+      problemSummary:
+        "We reviewed the SMS campaign issue, and the dashboard message indicates quiet-hour protection blocked delivery.",
+      nextStep:
+        "This looks like expected compliance behavior for an SMS campaign scheduled during restricted sending hours. Please reschedule the campaign for an eligible sending window or review the account quiet-hour settings before attempting another send.",
+    });
   }
 
-  return `We reviewed ${ticket.id} and found a likely explanation in the ticket details. We will confirm the safest next step and share an update before recommending any account change.`;
+  return buildStructuredDiagnosticResponse({
+    ticket,
+    evidenceReadiness,
+    problemSummary:
+      "We reviewed the ticket and found a likely explanation in the details provided.",
+    nextStep:
+      "We will confirm the safest next step before recommending any account change.",
+  });
 }
 
 function buildEscalationResponse(
   ticket: Ticket,
   escalationReasons: readonly string[],
+  evidenceReadiness: EvidenceReadiness,
 ): string {
   if (escalationReasons.includes("security")) {
-    return `We are treating ${ticket.id} as a potential security issue. Our next step is containment review, including exposure scope, affected profiles, and any required key rotation or log preservation. We will share the next update after the security review is complete.`;
+    return buildStructuredDiagnosticResponse({
+      ticket,
+      evidenceReadiness,
+      problemSummary:
+        "We are treating this as a potential security issue and reviewing the safest containment path.",
+      nextStep:
+        "Our next step is containment review, including exposure scope, affected profiles, and any required key rotation or log preservation. We will share the next update after the security review is complete.",
+    });
   }
 
   if (escalationReasons.includes("outage")) {
-    return `We are investigating ${ticket.id} as a possible platform delay affecting event processing. The event-ingestion delay is under incident review, and we are correlating affected regions, event timing, and profile activity timelines. We will share the next update after confirming impact and mitigation.`;
+    return buildStructuredDiagnosticResponse({
+      ticket,
+      evidenceReadiness,
+      problemSummary:
+        "We are investigating this as a possible platform delay affecting event processing.",
+      nextStep:
+        "The event-ingestion delay is under incident review, and we are correlating affected regions, event timing, and profile activity timelines. We will share the next update after confirming impact and mitigation.",
+    });
   }
 
-  return `We are escalating ${ticket.id} for review and will share the next update after confirming impact, risk, and the safest next action.`;
+  return buildStructuredDiagnosticResponse({
+    ticket,
+    evidenceReadiness,
+    problemSummary:
+      "We are escalating this ticket for review because it may need a safer specialist path.",
+    nextStep:
+      "We will share the next update after confirming impact, risk, and the safest next action.",
+  });
 }
 
 function classifyCustomerAudience(ticket: Ticket): CustomerAudience {
@@ -311,18 +362,81 @@ function isFlowEventGuidance(knowledgeArticleIds: readonly string[]): boolean {
   );
 }
 
-function buildMerchantFlowResponse(ticket: Ticket): string {
+function buildFlowProblemSummary(ticket: Ticket): string {
   const flowLabel = ticketText(ticket).includes("browse abandonment")
     ? "Browse Abandonment flow"
     : "Abandoned Cart flow";
   const eventLabel = ticketText(ticket).includes("viewed product")
     ? "Viewed Product"
     : "Added to Cart";
-  const productReference = eventLabel === "Viewed Product"
-    ? "product URL or product ID"
-    : "product or cart URL";
 
-  return `We are checking why ${eventLabel} events did not place customers into the ${flowLabel}. Please send the flow name or flow ID, the ecommerce platform you use such as Shopify, Magento, WooCommerce, or a custom store, one affected customer email, the ${eventLabel} event ID or event time, and the ${productReference}. We will compare the storefront event with the flow setup and let you know what needs to be corrected.`;
+  return `We are checking why ${eventLabel} events did not place customers into the ${flowLabel}.`;
+}
+
+function buildStructuredDiagnosticResponse(input: {
+  ticket: Ticket;
+  evidenceReadiness: EvidenceReadiness;
+  problemSummary: string;
+  nextStep: string;
+}): string {
+  return [
+    `Hi ${input.ticket.customer.name},`,
+    "",
+    input.problemSummary,
+    "",
+    formatEvidenceRequest(input.evidenceReadiness),
+    "",
+    input.nextStep,
+  ]
+    .filter((line) => line !== "")
+    .join("\n");
+}
+
+function formatEvidenceRequest(evidenceReadiness: EvidenceReadiness): string {
+  if (evidenceReadiness.missingEvidence.length === 0) {
+    return "We do not need any additional information from you before the next update.";
+  }
+
+  return [
+    "To move this forward, please share:",
+    ...evidenceReadiness.missingEvidence.map(
+      (requirement) => `- ${requirement.customerQuestion}`,
+    ),
+  ].join("\n");
+}
+
+function formatRecommendedNextAction(
+  evidenceReadiness: EvidenceReadiness,
+): string {
+  if (evidenceReadiness.supportState === "needs-information") {
+    return "Collect the missing evidence, then continue diagnosis.";
+  }
+  if (evidenceReadiness.supportState === "known-cause") {
+    return "Explain the known cause and recommended customer action.";
+  }
+  if (evidenceReadiness.supportState === "waiting-on-platform-fix") {
+    return "Continue platform-impact review and share the next customer update.";
+  }
+  return "Review the supporting evidence, then approve or reject this recommendation.";
+}
+
+function formatKnowledgeTopic(knowledgeArticleIds: readonly string[]): string {
+  if (knowledgeArticleIds.includes("webhook-signature-validation")) {
+    return "webhook signature issue";
+  }
+  if (knowledgeArticleIds.includes("campaign-send-failures")) {
+    return "campaign send issue";
+  }
+  if (knowledgeArticleIds.includes("coupon-catalog-sync")) {
+    return "coupon or catalog sync issue";
+  }
+  if (knowledgeArticleIds.includes("email-deliverability")) {
+    return "email deliverability issue";
+  }
+  if (knowledgeArticleIds.includes("shopify-integration-sync")) {
+    return "store integration sync issue";
+  }
+  return "support issue";
 }
 
 function ticketText(ticket: Ticket): string {
@@ -336,15 +450,6 @@ function ticketText(ticket: Ticket): string {
   ]
     .join(" ")
     .toLowerCase();
-}
-
-function formatCustomerGuidance(knowledgeArticleIds: readonly string[]): string {
-  const guidance = knowledgeArticleIds.map(
-    (id) =>
-      CUSTOMER_RESPONSE_TEMPLATES[id] ??
-      "Please share the support details relevant to this request.",
-  );
-  return unique(guidance).join(" ");
 }
 
 function unique(values: string[]): string[] {

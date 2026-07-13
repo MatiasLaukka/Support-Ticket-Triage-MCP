@@ -8,11 +8,13 @@ import {
   DraftCustomerResponseSourceSchema,
   DraftCustomerResponseStyleSchema,
   DuplicateCandidateSchema,
+  EvidenceRequirementSchema,
   GptAssistSchema,
   IsoTimestampSchema,
   PrioritySchema,
   RequiredEscalationSchema,
   RiskSchema,
+  SupportStateSchema,
   TeamSchema,
   TicketIdSchema,
   TicketStatusSchema,
@@ -22,10 +24,12 @@ import {
   type AuditEvent,
   type Category,
   type DuplicateCandidate,
+  type EvidenceRequirement,
   type GptAssist,
   type Priority,
   type RequiredEscalation,
   type Risk,
+  type SupportState,
   type Team,
   type Ticket,
   type TicketId,
@@ -53,6 +57,12 @@ const SubmitRecommendationInputSchema = z
     securityRisk: RiskSchema,
     slaRisk: RiskSchema,
     missingInformation: z.array(NonBlankStringSchema),
+    supportState: SupportStateSchema.optional(),
+    knownCause: z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/).nullable().optional(),
+    requiredEvidence: z.array(EvidenceRequirementSchema).optional(),
+    providedEvidence: z.array(EvidenceRequirementSchema).optional(),
+    missingEvidence: z.array(EvidenceRequirementSchema).optional(),
+    nextInvestigationSteps: z.array(NonBlankStringSchema).optional(),
     knowledgeArticleIds: z.array(
       z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
     ),
@@ -97,6 +107,12 @@ export interface SubmitRecommendationInput {
   securityRisk: Risk;
   slaRisk: Risk;
   missingInformation: string[];
+  supportState?: SupportState;
+  knownCause?: string | null;
+  requiredEvidence?: EvidenceRequirement[];
+  providedEvidence?: EvidenceRequirement[];
+  missingEvidence?: EvidenceRequirement[];
+  nextInvestigationSteps?: string[];
   knowledgeArticleIds: string[];
   draftCustomerResponse: string;
   draftCustomerResponseSource?: z.infer<
@@ -203,6 +219,24 @@ export class TriageService {
       securityRisk: parsed.securityRisk,
       slaRisk: parsed.slaRisk,
       missingInformation: parsed.missingInformation,
+      ...(parsed.supportState === undefined
+        ? {}
+        : { supportState: parsed.supportState }),
+      ...(parsed.knownCause === undefined
+        ? {}
+        : { knownCause: parsed.knownCause }),
+      ...(parsed.requiredEvidence === undefined
+        ? {}
+        : { requiredEvidence: parsed.requiredEvidence }),
+      ...(parsed.providedEvidence === undefined
+        ? {}
+        : { providedEvidence: parsed.providedEvidence }),
+      ...(parsed.missingEvidence === undefined
+        ? {}
+        : { missingEvidence: parsed.missingEvidence }),
+      ...(parsed.nextInvestigationSteps === undefined
+        ? {}
+        : { nextInvestigationSteps: parsed.nextInvestigationSteps }),
       knowledgeArticleIds: parsed.knowledgeArticleIds,
       draftCustomerResponse: parsed.draftCustomerResponse,
       ...(parsed.draftCustomerResponseSource === undefined

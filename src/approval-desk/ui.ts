@@ -751,9 +751,13 @@ export const approvalDeskHtml = `<!doctype html>
               card('Outage risk', recommendation.outageRisk) +
               card('Security risk', recommendation.securityRisk) +
               card('SLA risk', recommendation.slaRisk) +
+              card('Support state', recommendation.supportState ?? 'not assessed') +
+              card('Known cause', recommendation.knownCause ?? 'none') +
               card('Escalation required', recommendation.escalationRequired ? 'yes' : 'no') +
               card('Escalation reasons', formatList(recommendation.escalationReasons)) +
               card('Missing information', formatList(recommendation.missingInformation)) +
+              card('Missing evidence', formatEvidenceLabels(recommendation.missingEvidence)) +
+              card('Provided evidence', formatEvidenceLabels(recommendation.providedEvidence)) +
             '</div>' +
             '<div class="card description"><strong>Rationale</strong>' + escapeHtml(recommendation.rationale) + '</div>' +
             '<div class="card description"><strong>Duplicate candidates</strong>' + escapeHtml(formatDuplicateCandidates(recommendation.duplicateCandidates)) + '</div>' +
@@ -1134,6 +1138,12 @@ export const approvalDeskHtml = `<!doctype html>
 
       function formatAssistList(values) {
         return Array.isArray(values) && values.length > 0 ? values.join(' | ') : 'none';
+      }
+
+      function formatEvidenceLabels(values) {
+        return Array.isArray(values) && values.length > 0
+          ? values.map(function (value) { return value.label ?? value.id; }).join(', ')
+          : 'none';
       }
 
       function formatDraftChecks(checks) {

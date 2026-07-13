@@ -114,6 +114,27 @@ export const RequiredEscalationSchema = z.enum([
   "policy-conflict",
 ]);
 
+export const SupportStateSchema = z.enum([
+  "needs-information",
+  "information-received",
+  "diagnosing",
+  "known-cause",
+  "no-known-cause",
+  "waiting-on-platform-fix",
+  "waiting-on-customer-action",
+  "ready-for-approval",
+]);
+
+export const EvidenceRequirementSchema = z
+  .object({
+    id: SlugSchema,
+    label: NonBlankStringSchema,
+    customerQuestion: NonBlankStringSchema,
+    aliases: UniqueNonBlankStringsSchema,
+    source: z.enum(["knowledge", "known-cause", "policy"]),
+  })
+  .strict();
+
 export const CustomerSchema = z
   .object({
     name: NonBlankStringSchema,
@@ -229,6 +250,12 @@ export const TriageRecommendationSchema = z
     securityRisk: RiskSchema,
     slaRisk: RiskSchema,
     missingInformation: z.array(NonBlankStringSchema),
+    supportState: SupportStateSchema.optional(),
+    knownCause: SlugSchema.nullable().optional(),
+    requiredEvidence: z.array(EvidenceRequirementSchema).optional(),
+    providedEvidence: z.array(EvidenceRequirementSchema).optional(),
+    missingEvidence: z.array(EvidenceRequirementSchema).optional(),
+    nextInvestigationSteps: UniqueNonBlankStringsSchema.optional(),
     knowledgeArticleIds: z.array(SlugSchema),
     draftCustomerResponse: NonBlankStringSchema,
     draftCustomerResponseSource: DraftCustomerResponseSourceSchema.optional(),
@@ -438,4 +465,6 @@ export type Approval = z.infer<typeof ApprovalSchema>;
 export type AuditAction = z.infer<typeof AuditActionSchema>;
 export type AuditEvent = z.infer<typeof AuditEventSchema>;
 export type RequiredEscalation = z.infer<typeof RequiredEscalationSchema>;
+export type SupportState = z.infer<typeof SupportStateSchema>;
+export type EvidenceRequirement = z.infer<typeof EvidenceRequirementSchema>;
 export type ExpectedOutcome = z.infer<typeof ExpectedOutcomeSchema>;

@@ -64,6 +64,23 @@ describe("Approval Desk recommendation builder", () => {
     expect(input.draftCustomerResponse).toContain(
       "We are checking why Viewed Product events",
     );
+    expect(input.draftCustomerResponse).toContain("Hi Prompt Streetwear,");
+    expect(input.draftCustomerResponse).toContain(
+      "To move this forward, please share:",
+    );
+    expect(input.draftCustomerResponse).toContain(
+      "- ecommerce platform, such as Shopify, Magento, WooCommerce, or custom",
+    );
+    expect(countOccurrences(input.draftCustomerResponse, "ecommerce platform")).toBe(
+      1,
+    );
+    expect(input.supportState).toBe("needs-information");
+    expect(input.requiredEvidence?.map((requirement) => requirement.id)).toEqual(
+      expect.arrayContaining(["platform", "flow-id", "event-id"]),
+    );
+    expect(input.missingEvidence?.map((requirement) => requirement.id)).toEqual(
+      expect.arrayContaining(["platform", "flow-id", "event-id"]),
+    );
     expect(input.gptAssist).toMatchObject({
       source: "deterministic",
       tone: "empathetic",
@@ -97,9 +114,14 @@ describe("Approval Desk recommendation builder", () => {
     expect(input.draftCustomerResponse).toContain("endpoint URL");
     expect(input.draftCustomerResponse).toContain("delivery ID");
     expect(input.draftCustomerResponse).toContain("failure timestamp");
-    expect(input.draftCustomerResponse).toContain("signing secret rotation");
+    expect(input.draftCustomerResponse).not.toContain(
+      "signing secret rotation time",
+    );
     expect(input.draftCustomerResponse).toContain("raw body handling");
     expect(input.draftCustomerResponse).toContain("timestamp tolerance");
+    expect(input.providedEvidence?.map((requirement) => requirement.id)).toContain(
+      "signing-secret-rotation-time",
+    );
     expect(input.draftCustomerResponse).not.toContain(
       "webhook-signature-validation",
     );
@@ -186,6 +208,9 @@ describe("Approval Desk recommendation builder", () => {
     });
 
     expect(input.knowledgeArticleIds).toEqual(["sms-compliance"]);
+    expect(input.supportState).toBe("known-cause");
+    expect(input.knownCause).toBe("sms-quiet-hours");
+    expect(input.missingEvidence).toEqual([]);
     expect(input.draftCustomerResponse).toContain("quiet-hour protection");
     expect(input.draftCustomerResponse).toContain("blocked delivery");
     expect(input.draftCustomerResponse).toContain("expected compliance");
@@ -193,6 +218,9 @@ describe("Approval Desk recommendation builder", () => {
     expect(input.draftCustomerResponse).not.toContain("masked recipient phone");
     expect(input.draftCustomerResponse).not.toContain("consent source");
     expect(input.draftCustomerResponse).not.toContain("opt-in timestamp");
+    expect(input.draftCustomerResponse).toContain(
+      "We do not need any additional information from you before the next update.",
+    );
   });
 
   it("uses escalation-aware wording for likely outage recommendations", async () => {
@@ -430,4 +458,8 @@ async function writeTemporaryJson(value: unknown): Promise<string> {
   const path = join(root, "expected-outcomes.json");
   await writeFile(path, `${JSON.stringify(value, null, 2)}\n`, "utf8");
   return path;
+}
+
+function countOccurrences(value: string, search: string): number {
+  return value.split(search).length - 1;
 }

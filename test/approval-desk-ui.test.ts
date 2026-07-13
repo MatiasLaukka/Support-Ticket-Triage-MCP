@@ -31,6 +31,9 @@ describe("approvalDeskHtml", () => {
     expect(approvalDeskHtml).toContain("approvalStage");
     expect(approvalDeskHtml).toContain("field-approve-button");
     expect(approvalDeskHtml).toContain("info-button");
+    expect(approvalDeskHtml).toContain("safety-note");
+    expect(approvalDeskHtml).toContain("requester-pill");
+    expect(approvalDeskHtml).toContain("risk-security");
   });
 
   it("uses only local API routes", () => {
@@ -225,8 +228,13 @@ describe("approvalDeskHtml", () => {
 
     await app.selectFirstTicket();
 
-    expect(app.el("ticketPanel").innerHTML).toContain("requester-card");
-    expect(app.el("ticketPanel").innerHTML).toContain("Marketing Coordinator");
+    const ticketHtml = app.el("ticketPanel").innerHTML;
+    expect(ticketHtml).toContain("requester-card");
+    expect(ticketHtml).toContain("requester-pill");
+    expect(ticketHtml).toContain("Marketing Coordinator");
+    expect(ticketHtml.indexOf("requester-card")).toBeLessThan(
+      ticketHtml.indexOf("<strong>Subject</strong>"),
+    );
     expect(approvalDeskHtml).toContain("Recommendation setup");
     expect(approvalDeskHtml).toContain("Draft style");
   });
@@ -404,7 +412,11 @@ describe("approvalDeskHtml", () => {
   it("filters queue tickets by workflow state and updates filter chips", async () => {
     const app = await startApprovalDeskApp({
       tickets: [
-        fixtureTicket,
+        {
+          ...fixtureTicket,
+          subject: "Private API key may be exposed",
+          tags: ["security", "api-key"],
+        },
         {
           ...fixtureTicket,
           id: "TKT-2001",
@@ -429,6 +441,7 @@ describe("approvalDeskHtml", () => {
 
     expect(app.el("ticketList").children).toHaveLength(1);
     expect(app.el("ticketList").children[0]!.className).toContain("state-active");
+    expect(app.el("ticketList").children[0]!.className).toContain("risk-security");
     expect(app.el("queueStatus").textContent).toBe("Showing 1 of 3 tickets.");
 
     app.setQueueFilter("pending");

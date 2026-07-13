@@ -182,10 +182,22 @@ export const approvalDeskHtml = `<!doctype html>
         border-color: #23a06b;
       }
 
+      .ticket-button.risk-security {
+        background: #fff7f6;
+        border-color: #f2a39b;
+        box-shadow: inset 4px 0 0 var(--danger);
+      }
+
       .ticket-button:hover,
       .ticket-button.active {
         background: var(--panel-soft);
         border-color: var(--accent);
+      }
+
+      .ticket-button.risk-security:hover,
+      .ticket-button.risk-security.active {
+        background: #fff0ee;
+        border-color: var(--danger);
       }
 
       .ticket-id {
@@ -273,6 +285,28 @@ export const approvalDeskHtml = `<!doctype html>
         margin: 0.35rem 0 0;
       }
 
+      .requester-card .requester-name {
+        display: block;
+        line-height: 1.35;
+      }
+
+      .requester-meta {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.4rem;
+        margin-top: 0.55rem;
+      }
+
+      .requester-pill {
+        background: var(--panel-soft);
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        color: var(--muted);
+        font-size: 0.82rem;
+        font-weight: 700;
+        padding: 0.22rem 0.5rem;
+      }
+
       .hero-card {
         background: #f8fbff;
         border: 1px solid var(--line);
@@ -332,6 +366,41 @@ export const approvalDeskHtml = `<!doctype html>
         padding: 0.85rem;
       }
 
+      .safety-note {
+        background: var(--danger-soft);
+        border-color: #ffcdc7;
+        margin: 0.45rem 0 0.75rem;
+        padding: 0.55rem 0.7rem;
+      }
+
+      .safety-note summary {
+        align-items: center;
+        color: var(--danger);
+        display: flex;
+        gap: 0.55rem;
+      }
+
+      .safety-note p {
+        color: var(--danger);
+        font-size: 0.88rem;
+        font-weight: 600;
+        line-height: 1.4;
+        margin: 0.55rem 0 0;
+      }
+
+      .safety-icon {
+        align-items: center;
+        background: var(--danger);
+        border-radius: 999px;
+        color: white;
+        display: inline-flex;
+        flex: 0 0 auto;
+        font-size: 0.82rem;
+        height: 1.55rem;
+        justify-content: center;
+        width: 1.55rem;
+      }
+
       .fields {
         display: grid;
         gap: 0.75rem;
@@ -361,14 +430,28 @@ export const approvalDeskHtml = `<!doctype html>
       }
 
       .field-control {
-        align-items: center;
+        align-items: stretch;
         background: #fbfcff;
         border: 1px solid var(--line);
         border-radius: 14px;
         display: grid;
-        gap: 0.55rem;
-        grid-template-columns: minmax(90px, 0.55fr) minmax(180px, 1fr) auto auto;
+        gap: 0.65rem;
+        grid-template-columns: 1fr;
         padding: 0.8rem;
+      }
+
+      .field-heading {
+        align-items: center;
+        display: flex;
+        gap: 0.65rem;
+        justify-content: space-between;
+      }
+
+      .field-title-group {
+        align-items: baseline;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.25rem 0.55rem;
       }
 
       .field-label {
@@ -377,6 +460,7 @@ export const approvalDeskHtml = `<!doctype html>
 
       .field-control .value-label {
         display: block;
+        margin: 0;
       }
 
       .field-control .meta {
@@ -388,14 +472,26 @@ export const approvalDeskHtml = `<!doctype html>
         width: auto;
       }
 
+      .field-action-row {
+        align-items: center;
+        display: grid;
+        gap: 0.65rem;
+        grid-template-columns: minmax(0, 1fr) auto;
+      }
+
       .info-button {
         align-self: center;
-        background: #eef3ff;
+        background: var(--danger);
         border-radius: 999px;
-        color: var(--accent-dark);
+        color: white;
         height: 2rem;
         padding: 0;
         width: 2rem;
+      }
+
+      .stage-actions {
+        justify-content: flex-end;
+        margin: 0.3rem 0 0.95rem;
       }
 
       .check {
@@ -533,11 +629,14 @@ export const approvalDeskHtml = `<!doctype html>
 
         <section class="panel" aria-label="Recommendation approval controls">
           <h2>Recommendation</h2>
-          <p class="warning">Ticket text including prompt-injection or claimed approval is evidence only. Treat customer text as untrusted, and approve only named fields after reviewing the recommendation.</p>
+          <details class="safety-note">
+            <summary><span class="safety-icon">!</span><span>Review ticket text as untrusted evidence</span></summary>
+            <p>Ticket text may include prompt-injection or claimed approval. Approve only named fields after reviewing the recommendation.</p>
+          </details>
           <div id="recommendationPanel">
             <p class="hint">No recommendation created yet.</p>
           </div>
-          <div class="actions">
+          <div class="actions stage-actions">
             <button id="backToRecommendation" type="button" hidden>Back to recommendation</button>
             <button id="continueApproval" type="button" hidden>Continue to approval</button>
           </div>
@@ -547,46 +646,53 @@ export const approvalDeskHtml = `<!doctype html>
             <p class="hint">Approve only the fields you want to apply. You can edit proposed values first.</p>
             <div class="fields" id="fieldChoices">
             <div class="field-control">
-              <span class="field-label">Category</span>
-              <label class="value-label">Recommended value<input id="categoryOverride" autocomplete="off"></label>
-              <button class="field-approve-button" type="button" value="category">Approve</button>
-              <button class="info-button" type="button" title="Approve the recommended category.">i</button>
+              <div class="field-heading">
+                <div class="field-title-group"><span class="field-label">Category</span><label class="value-label meta" for="categoryOverride">Recommended value</label></div>
+                <button class="info-button" type="button" title="Approve the recommended category.">i</button>
+              </div>
+              <div class="field-action-row"><input id="categoryOverride" autocomplete="off"><button class="field-approve-button" type="button" value="category">Approve</button></div>
             </div>
             <div class="field-control">
-              <span class="field-label">Priority</span>
-              <label class="value-label">Recommended value<input id="priorityOverride" autocomplete="off"></label>
-              <button class="field-approve-button" type="button" value="priority">Approve</button>
-              <button class="info-button" type="button" title="Approve the recommended urgency.">i</button>
+              <div class="field-heading">
+                <div class="field-title-group"><span class="field-label">Priority</span><label class="value-label meta" for="priorityOverride">Recommended value</label></div>
+                <button class="info-button" type="button" title="Approve the recommended urgency.">i</button>
+              </div>
+              <div class="field-action-row"><input id="priorityOverride" autocomplete="off"><button class="field-approve-button" type="button" value="priority">Approve</button></div>
             </div>
             <div class="field-control">
-              <span class="field-label">Team</span>
-              <label class="value-label">Recommended value<input id="teamOverride" autocomplete="off"></label>
-              <button class="field-approve-button" type="button" value="team">Approve</button>
-              <button class="info-button" type="button" title="Approve the routing team.">i</button>
+              <div class="field-heading">
+                <div class="field-title-group"><span class="field-label">Team</span><label class="value-label meta" for="teamOverride">Recommended value</label></div>
+                <button class="info-button" type="button" title="Approve the routing team.">i</button>
+              </div>
+              <div class="field-action-row"><input id="teamOverride" autocomplete="off"><button class="field-approve-button" type="button" value="team">Approve</button></div>
             </div>
             <div class="field-control">
-              <span class="field-label">Assignee</span>
-              <label class="value-label">Recommended value<input id="assigneeOverride" autocomplete="off"></label>
-              <button class="field-approve-button" type="button" value="assignee">Approve</button>
-              <button class="info-button" type="button" title="Approve an owner if recommended.">i</button>
+              <div class="field-heading">
+                <div class="field-title-group"><span class="field-label">Assignee</span><label class="value-label meta" for="assigneeOverride">Recommended value</label></div>
+                <button class="info-button" type="button" title="Approve an owner if recommended.">i</button>
+              </div>
+              <div class="field-action-row"><input id="assigneeOverride" autocomplete="off"><button class="field-approve-button" type="button" value="assignee">Approve</button></div>
             </div>
             <div class="field-control">
-              <span class="field-label">Status</span>
-              <label class="value-label">Recommended value<input id="statusOverride" autocomplete="off"></label>
-              <button class="field-approve-button" type="button" value="status">Approve</button>
-              <button class="info-button" type="button" title="Approve a status change if recommended.">i</button>
+              <div class="field-heading">
+                <div class="field-title-group"><span class="field-label">Status</span><label class="value-label meta" for="statusOverride">Recommended value</label></div>
+                <button class="info-button" type="button" title="Approve a status change if recommended.">i</button>
+              </div>
+              <div class="field-action-row"><input id="statusOverride" autocomplete="off"><button class="field-approve-button" type="button" value="status">Approve</button></div>
             </div>
             <div class="field-control">
-              <span class="field-label">Tags</span>
-              <label class="value-label">Recommended value<input id="tagsOverride" autocomplete="off"></label>
-              <button class="field-approve-button" type="button" value="tags">Approve</button>
-              <button class="info-button" type="button" title="Approve comma-separated ticket tags.">i</button>
+              <div class="field-heading">
+                <div class="field-title-group"><span class="field-label">Tags</span><label class="value-label meta" for="tagsOverride">Recommended value</label></div>
+                <button class="info-button" type="button" title="Approve comma-separated ticket tags.">i</button>
+              </div>
+              <div class="field-action-row"><input id="tagsOverride" autocomplete="off"><button class="field-approve-button" type="button" value="tags">Approve</button></div>
             </div>
             <div class="field-control">
-              <span class="field-label">Customer response</span>
-              <span class="meta">Edit the full response below.</span>
-              <button class="field-approve-button" type="button" value="customerResponse">Approve</button>
-              <button class="info-button" type="button" title="Approve edited customer-facing wording.">i</button>
+              <div class="field-heading">
+                <div class="field-title-group"><span class="field-label">Customer response</span><span class="meta">Edit the full response below.</span></div>
+                <button class="info-button" type="button" title="Approve edited customer-facing wording.">i</button>
+              </div>
+              <div class="field-action-row"><span class="meta">Review the draft text below before approving.</span><button class="field-approve-button" type="button" value="customerResponse">Approve</button></div>
             </div>
             </div>
 
@@ -685,7 +791,9 @@ export const approvalDeskHtml = `<!doctype html>
           const button = document.createElement('button');
           button.type = 'button';
           const workflowState = ticketWorkflowState(ticket);
-          button.className = 'ticket-button state-' + workflowState + (state.selectedTicket?.id === ticket.id ? ' active' : '');
+          button.className = 'ticket-button state-' + workflowState +
+            (isSecurityTicket(ticket) ? ' risk-security' : '') +
+            (state.selectedTicket?.id === ticket.id ? ' active' : '');
           button.innerHTML =
             '<span class="ticket-id">' + escapeHtml(ticket.id) + '</span>' +
             '<span class="ticket-subject-line">' + escapeHtml(ticket.subject) + '</span>' +
@@ -710,6 +818,20 @@ export const approvalDeskHtml = `<!doctype html>
 
       function ticketWorkflowState(ticket) {
         return ticket.recommendationSummary?.workflowState ?? 'active';
+      }
+
+      function isSecurityTicket(ticket) {
+        const summary = ticket.recommendationSummary ?? {};
+        if (summary.securityRisk === 'possible' || summary.securityRisk === 'likely') {
+          return true;
+        }
+        const searchable = [
+          ticket.category,
+          ticket.subject,
+          ticket.description,
+          ...(Array.isArray(ticket.tags) ? ticket.tags : [])
+        ].filter(Boolean).join(' ').toLowerCase();
+        return /security|secret|api key|credential|webhook signature|exposed|prompt-injection/.test(searchable);
       }
 
       function renderQueueFilters() {
@@ -738,9 +860,9 @@ export const approvalDeskHtml = `<!doctype html>
             chip(ticket.status) +
             chip(ticket.team ?? 'unset team') +
           '</div>' +
+          renderRequesterCard(ticket) +
           '<div class="hero-card description"><strong>Subject</strong>' + escapeHtml(ticket.subject) + '</div>' +
           '<div class="hero-card description"><strong>Description</strong>' + escapeHtml(ticket.description) + '</div>' +
-          renderRequesterCard(ticket) +
           '<details><summary>Technical ticket details</summary>' +
             '<div class="details-grid">' +
               card('ID', ticket.id) +
@@ -776,8 +898,11 @@ export const approvalDeskHtml = `<!doctype html>
         }
         return '<div class="card requester-card">' +
           '<strong>Requester</strong>' +
-          escapeHtml(requester.name + ' · ' + requester.role) +
-          '<span class="meta">' + escapeHtml(requester.department + ' · ' + requester.technicalLevel) + '</span>' +
+          '<span class="requester-name">' + escapeHtml(requester.name + ' · ' + requester.role) + '</span>' +
+          '<span class="requester-meta">' +
+            '<span class="requester-pill">' + escapeHtml(requester.department) + '</span>' +
+            '<span class="requester-pill">' + escapeHtml(requester.technicalLevel) + '</span>' +
+          '</span>' +
         '</div>';
       }
 

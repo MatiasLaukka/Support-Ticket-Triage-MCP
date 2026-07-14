@@ -439,7 +439,7 @@ function validateCustomerResponseDraft(input: {
     label: "Platform lifecycle consistency",
     passed:
       input.evidenceReadiness?.supportState !== "waiting-on-platform-fix" ||
-      !/\b(?:current\s+)?(?:webhook\s+)?signing\s+secret\b|\b(?:webhook\s+)?secret\s+rotation\b/i.test(
+      !/\b(?:current|active)\s+(?:webhook\s+)?(?:signing\s+)?secret\b|\b(?:webhook\s+)?(?:signing\s+)?secret\s+(?:rotation|configured|configuration|setup|mismatch|validation)\b|\b(?:confirm|verify|ensure|check|use|uses|using|configure|update)\b.{0,48}\b(?:webhook\s+)?(?:signing\s+)?secret\b/i.test(
         `${response} ${assistText}`,
       ),
     failMessage:

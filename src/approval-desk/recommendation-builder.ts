@@ -24,7 +24,7 @@ import {
   type EvidenceReadiness,
 } from "./evidence-readiness.js";
 import { classifyTicket, type TicketClassification } from "./classifier.js";
-import { detectKnownCause, getKnownCause } from "./known-cause-catalog.js";
+import { getKnownCause } from "./known-cause-catalog.js";
 
 const SlugSchema = z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/);
 
@@ -274,12 +274,7 @@ function buildDraftCustomerResponse(input: {
     return buildPlatformFixResponse(ticket, evidenceReadiness, input.replyStage);
   }
 
-  const style = classifyResponseStyle(
-    ticket,
-    input.outcome,
-    knowledgeArticleIds,
-    escalationReasons,
-  );
+  const style = classifyResponseStyle(escalationReasons, evidenceReadiness);
 
   if (style === "known-cause") {
     return buildKnownCauseResponse(ticket, evidenceReadiness, input.replyStage);
@@ -321,16 +316,12 @@ function buildDraftCustomerResponse(input: {
 }
 
 function classifyResponseStyle(
-  ticket: Ticket,
-  outcome: ExpectedOutcome,
-  knowledgeArticleIds: readonly string[],
   escalationReasons: readonly string[],
+  evidenceReadiness: EvidenceReadiness,
 ): ResponseStyle {
   if (
-    detectKnownCause({
-      ticket,
-      outcome,
-    }) !== undefined
+    evidenceReadiness.knownCause !== null &&
+    evidenceReadiness.knownCause !== undefined
   ) {
     return "known-cause";
   }
@@ -687,9 +678,15 @@ function isCustomerConfirmation(value: string): boolean {
 function hasPlatformFixContext(value: string): boolean {
   const negatedImpact =
     /\b(?:not|isn'?t|wasn'?t|aren'?t|weren'?t|no)\b.{0,24}\b(?:affecting|impacting)\b.{0,24}\b(?:all|multiple|many)\b.{0,40}\b(?:stores|accounts|profiles|customers)\b/i;
+  const limitedImpact =
+    /\b(?:only\s+)?(?:one|single)\s+(?:store|account|profile|customer)s?\b|\bnot\s+(?:all|multiple|many)\s+(?:stores|accounts|profiles|customers)\b/i;
   const negatedPlatform =
     /\b(?:not|isn'?t|wasn'?t|aren'?t|weren'?t|no)\b.{0,24}\b(?:platform|platform-side|incident)\b/i;
-  if (negatedImpact.test(value) || negatedPlatform.test(value)) {
+  if (
+    negatedImpact.test(value) ||
+    limitedImpact.test(value) ||
+    negatedPlatform.test(value)
+  ) {
     return false;
   }
 

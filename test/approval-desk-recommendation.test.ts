@@ -407,6 +407,67 @@ describe("Approval Desk recommendation builder", () => {
     expect(input.supportState).not.toBe("waiting-on-platform-fix");
   });
 
+  it.each([
+    "Only one store is affected, not all stores, although recent Checkout Started events are delayed even though the API accepted them.",
+    "One account is affected, not multiple accounts, although recent Checkout Started events are delayed even though the API accepted them.",
+  ])(
+    "does not infer a platform fix when limited impact is stated after the quantity phrase",
+    async (body) => {
+      const outcomes = await loadExpectedOutcomes(
+        resolve("data/seed/expected-outcomes.json"),
+      );
+      const ticket = await loadSeedTicket("TKT-1001");
+
+      const input = buildApprovalDeskRecommendationInput({
+        ticket,
+        outcome: outcomes.get("TKT-1001")!,
+        actor: "approval-desk",
+        customerReplies: [
+          {
+            id: "reply-limited-platform-impact",
+            ticketId: "TKT-1001",
+            createdAt: "2026-06-10T09:05:00.000Z",
+            body,
+          },
+        ],
+      });
+
+      expect(input.supportState).not.toBe("waiting-on-platform-fix");
+    },
+  );
+
+  it("uses reply-enriched known-cause evidence when choosing the deterministic draft style", async () => {
+    const outcomes = await loadExpectedOutcomes(
+      resolve("data/seed/expected-outcomes.json"),
+    );
+    const originalTicket = await loadSeedTicket("TKT-1008");
+    const ticket = TicketSchema.parse({
+      ...originalTicket,
+      subject: "Webhook signature verification fails",
+      description: "Our endpoint rejects webhook HMAC signatures.",
+    });
+
+    const input = buildApprovalDeskRecommendationInput({
+      ticket,
+      outcome: outcomes.get("TKT-1008")!,
+      actor: "approval-desk",
+      customerReplies: [
+        {
+          id: "reply-known-cause-evidence",
+          ticketId: "TKT-1008",
+          createdAt: "2026-06-10T09:05:00.000Z",
+          body:
+            "Since the secret rotation, webhook signature verification fails. Endpoint URL is https://hooks.juniper.example/webhooks/orders. Delivery ID is deliv_7788. Raw body handling has not changed since yesterday.",
+        },
+      ],
+    });
+
+    expect(input.supportState).toBe("known-cause");
+    expect(input.missingEvidence).toEqual([]);
+    expect(input.draftCustomerResponse).toContain("post-rotation issue");
+    expect(input.draftCustomerResponse).toContain("current signing secret");
+  });
+
   it("ignores customer replies from other tickets when building lifecycle drafts", async () => {
     const outcomes = await loadExpectedOutcomes(
       resolve("data/seed/expected-outcomes.json"),
@@ -832,6 +893,63 @@ describe("Approval Desk recommendation builder", () => {
       "possible platform delay affecting event processing",
     );
     expect(input.draftCustomerResponse).not.toContain("current signing secret");
+    expect(input.draftCustomerResponseChecks).toContainEqual(
+      expect.objectContaining({
+        id: "fallback-used",
+        status: "warn",
+        message: expect.stringContaining("platform-fix lifecycle state"),
+      }),
+    );
+  });
+
+  it("rejects AI active-webhook-secret guidance when platform-fix context is authoritative", async () => {
+    const outcomes = await loadExpectedOutcomes(
+      resolve("data/seed/expected-outcomes.json"),
+    );
+    const ticket = await loadSeedTicket("TKT-1008");
+
+    const input = await buildApprovalDeskRecommendationInputWithDrafting({
+      ticket,
+      outcome: outcomes.get("TKT-1008")!,
+      actor: "approval-desk",
+      knowledgeArticles: [],
+      customerReplies: [
+        {
+          id: "reply-platform-delay",
+          ticketId: "TKT-1008",
+          createdAt: "2026-06-10T09:05:00.000Z",
+          body:
+            "This is affecting all EU stores and recent Checkout Started events are delayed even though the API accepted them.",
+        },
+      ],
+      draftProvider: {
+        draft: async () => ({
+          source: "openai",
+          response: "Please confirm the webhook uses the active secret.",
+          assist: {
+            source: "openai",
+            missingInfoSuggestions: [
+              "Confirm which webhook secret is configured.",
+            ],
+            investigationSteps: [
+              "Verify the active secret configured for the webhook endpoint.",
+            ],
+            tone: "technical",
+            recommendedTone: "technical",
+            selectedTone: "technical",
+            toneReason: "Webhook troubleshooting needs integration details.",
+            audience: "developer",
+            checks: [],
+          },
+        }),
+      },
+    });
+
+    expect(input.supportState).toBe("waiting-on-platform-fix");
+    expect(input.draftCustomerResponseSource).toBe("fallback");
+    expect(input.draftCustomerResponse).toContain(
+      "possible platform delay affecting event processing",
+    );
     expect(input.draftCustomerResponseChecks).toContainEqual(
       expect.objectContaining({
         id: "fallback-used",

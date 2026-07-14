@@ -537,6 +537,23 @@ export const approvalDeskHtml = `<!doctype html>
         margin: 0.3rem 0 0.95rem;
       }
 
+      .classifier-reference {
+        align-items: center;
+        background: var(--panel-soft);
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        display: flex;
+        gap: 0.65rem;
+        justify-content: space-between;
+        margin-top: 0.75rem;
+        padding: 0.65rem 0.75rem;
+      }
+
+      .inline-review-button {
+        padding: 0.45rem 0.7rem;
+        white-space: nowrap;
+      }
+
       .check {
         align-items: center;
         display: flex;
@@ -984,6 +1001,7 @@ export const approvalDeskHtml = `<!doctype html>
                 chip('Team: ' + recommendation.team) +
                 chip('Status: ' + (recommendation.ticketStatus ?? 'unchanged')) +
               '</div>' +
+              renderClassifierEvidenceReference(recommendation) +
             '</div>';
         } else {
           els.recommendationPanel.innerHTML =
@@ -1491,6 +1509,17 @@ export const approvalDeskHtml = `<!doctype html>
         '</div>';
       }
 
+      function renderClassifierEvidenceReference(recommendation) {
+        const count = classificationSignalCount(recommendation);
+        const label = count === 1
+          ? 'Classification evidence available - 1 signal'
+          : 'Classification evidence available - ' + count + ' signals';
+        return '<div class="classifier-reference">' +
+          '<span>' + escapeHtml(label) + '</span>' +
+          '<button type="button" class="inline-review-button" data-action="review-classifier-evidence">Review</button>' +
+        '</div>';
+      }
+
       function classificationSignalCount(recommendation) {
         return Array.isArray(recommendation.classificationSignals)
           ? recommendation.classificationSignals.length
@@ -1704,6 +1733,12 @@ export const approvalDeskHtml = `<!doctype html>
             state.stage = 'approval';
             renderRecommendation();
           }
+        }
+      });
+      els.recommendationPanel.addEventListener('click', function (event) {
+        if (event.target?.dataset?.action === 'review-classifier-evidence' && state.recommendation !== null) {
+          state.stage = 'draft';
+          renderRecommendation();
         }
       });
       els.editedCustomerResponse.addEventListener('input', updateControls);

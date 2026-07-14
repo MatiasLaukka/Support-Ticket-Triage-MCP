@@ -61,11 +61,17 @@ const CATEGORY_DEFAULT_TEAMS: Record<Category, Team> = {
 const PRIORITY_ORDER: Priority[] = ["P1", "P2", "P3", "P4"];
 
 const CREDENTIAL_EXPOSURE_PATTERN = new RegExp(
-  "(?:api[ -]?key|access token|auth(?:entication)? token|bearer token|token|credential|private key|secret key|signing secret|password)" +
+  "(?:api[ -]?key|access token|auth(?:entication)? token|bearer token|token|credential|private key|secret[ -]key|signing[ -]secret|password)" +
     ".{0,80}(?:exposed?|exposure|leak(?:ed|age)?|shared|pasted|published|disclosed|visible|logged|in (?:the )?(?:application |shared )?logs?)" +
     "|(?:exposed?|exposure|leak(?:ed|age)?|shared|pasted|published|disclosed|visible|logged)" +
-    ".{0,80}(?:api[ -]?key|access token|auth(?:entication)? token|bearer token|token|credential|private key|secret key|signing secret|password)",
+    ".{0,80}(?:api[ -]?key|access token|auth(?:entication)? token|bearer token|token|credential|private key|secret[ -]key|signing[ -]secret|password)",
 );
+
+const EVENT_PROCESSING_DELAY_PATTERN =
+  /(?:activity timeline|profiles?).*(?:missing|not showing).*(?:events?|checkout)|(?:events?|checkout).*(?:missing|delay|not showing)/;
+
+const BROAD_EVENT_IMPACT_PATTERN =
+  /\b(?:across|all|broad(?:ly)?|correlated|entire|global|multiple|numerous|regional|region-wide|several|store-wide|widespread)\b|\bmulti-(?:account|customer|profile|store)\b|\b(?:accounts|customers|profiles|stores)\b|\b(?:two|three|four|five|six|seven|eight|nine|ten|\d+)\s+(?:accounts?|customers?|profiles?|stores?)\b/;
 
 const SAFETY_KNOWLEDGE_ARTICLES = {
   security: new Set(["security-incident-response"]),
@@ -225,7 +231,9 @@ const RULES: readonly Rule[] = [
   {
     id: "event-processing-delay",
     knowledgeCategory: "incident",
-    when: ({ content }) => /(?:activity timeline|profiles?).*(?:missing|not showing).*(?:events?|checkout)|(?:events?|checkout).*(?:missing|delay|not showing)/.test(content),
+    when: ({ content }) =>
+      EVENT_PROCESSING_DELAY_PATTERN.test(content) &&
+      BROAD_EVENT_IMPACT_PATTERN.test(content),
     emit: () => [
       signal("event-processing-delay", "risk:outage", 9, "Widespread event-processing delay may be a platform incident."),
       signal("event-processing-delay-category", "category:incident", 9, "Potential platform delay routes to incident response."),
@@ -237,6 +245,14 @@ const RULES: readonly Rule[] = [
       signal("event-processing-delay-sync-article", "knowledge:shopify-integration-sync", 5, "Review sync timing while investigating missing checkout events."),
     ],
   },
+  issueRule(
+    "api",
+    EVENT_PROCESSING_DELAY_PATTERN,
+    "api-platform",
+    "P2",
+    ["event-tracking-debugging"],
+    "Isolated missing events require normal API event-tracking diagnosis.",
+  ),
   issueRule("billing", /\bcoupon (?:codes?|pool)|expired coupon\b/, "billing", "P3", ["coupon-catalog-sync"], "Coupon lifecycle issues are billing-owned."),
   issueRule("performance", /\b(?:deliverability|hard-bounce|bounce rate|spam complaint|branded sending domain)\b/, "product", "P2", ["email-deliverability"], "Deliverability symptoms require product performance investigation."),
   issueRule("account-access", /\bduplicate profiles?.*\bcsv import|csv import.*\bduplicate profiles?\b/, "identity", "P3", ["profile-sync-issues"], "CSV profile reconciliation routes to identity."),

@@ -60,7 +60,11 @@ describe("classifyTicket", () => {
 
   it.each([
     ["webhook signing secret leaked in logs", "The webhook signing secret leaked in application logs."],
+    ["webhook signing-secret leaked in logs", "The webhook signing-secret leaked in application logs."],
+    ["logs leaked webhook signing-secret", "Application logs leaked the webhook signing-secret."],
     ["secret key exposed", "A secret key was exposed in a shared diagnostic bundle."],
+    ["secret-key exposed", "A secret-key was exposed in a shared diagnostic bundle."],
+    ["logs exposed a secret-key", "Shared logs exposed a secret-key used by the connector."],
     ["password exposure", "Public logs exposed the service account password."],
   ])("forces security routing when %s", (_name, description) => {
     const result = classifyTicket(
@@ -98,6 +102,24 @@ describe("classifyTicket", () => {
         "shopify-integration-sync",
       ]),
     );
+  });
+
+  it("keeps an isolated missing checkout event in normal API diagnosis", () => {
+    const result = classifyTicket(
+      makeTicket({
+        subject: "One checkout event missing from one profile",
+        description:
+          "A single checkout event is missing from one profile even though the Track API accepted it.",
+      }),
+    );
+
+    expect(result.category).toBe("api");
+    expect(result.team).toBe("api-platform");
+    expect(result.priority).not.toBe("P1");
+    expect(result.requiredEscalations).not.toEqual(
+      expect.arrayContaining(["outage", "sla"]),
+    );
+    expect(result.knowledgeArticleIds).toContain("event-tracking-debugging");
   });
 
   it("recognizes webhook secret rotation known cause", () => {
@@ -138,6 +160,38 @@ describe("classifyTicket", () => {
         expect.objectContaining({
           target: "knownCause:webhook-secret-rotation",
         }),
+      ]),
+    );
+  });
+
+  it.each([
+    {
+      name: "webhook secret rotation is ruled out",
+      subject: "Webhook signatures fail without secret rotation",
+      description:
+        "Webhook signature validation fails, but no signing secret rotation occurred.",
+      target: "knownCause:webhook-secret-rotation",
+    },
+    {
+      name: "webhook secret rotation was explicitly ruled out",
+      subject: "Webhook signatures still fail after investigation",
+      description:
+        "Webhook signature validation fails, but signing secret rotation was ruled out.",
+      target: "knownCause:webhook-secret-rotation",
+    },
+    {
+      name: "SMS quiet-hour blocking is ruled out",
+      subject: "SMS delivery failed outside quiet hours",
+      description:
+        "The SMS campaign failed, but it was not blocked by quiet-hour protection.",
+      target: "knownCause:sms-quiet-hours",
+    },
+  ])("does not select a known cause when $name", ({ subject, description, target }) => {
+    const result = classifyTicket(makeTicket({ subject, description }));
+
+    expect(result.signals).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ target }),
       ]),
     );
   });

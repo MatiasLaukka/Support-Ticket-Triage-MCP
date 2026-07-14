@@ -601,15 +601,19 @@ function requiresMoreCustomerEvidence(
 }
 
 function isCustomerConfirmation(value: string): boolean {
-  const clauses = value.toLowerCase().split(
+  const normalized = value.toLowerCase();
+  const unresolvedOrNegated =
+    /\b(?:not|never|isn'?t|wasn'?t|hasn'?t|still)\b.{0,24}\b(?:fixed|resolved|working|works)\b|\b(?:unresolved|broken|failing|not working)\b/i;
+  if (unresolvedOrNegated.test(normalized)) {
+    return false;
+  }
+
+  const clauses = normalized.split(
     /(?:[.!?\n]+|\bbut\b|\bhowever\b)/,
   );
   return clauses.some(
     (clause) =>
       /\b(?:that|this|it) (?:has )?(?:worked|fixed it|resolved (?:it|the issue|the problem))\b|\b(?:works|working|fixed|resolved) now\b|\b(?:the |this )?(?:issue|problem) (?:is|has been) resolved\b|\b(?:fixed|resolved)[, ]+(?:thanks|thank you|on my end|for us)\b/i.test(
-        clause,
-      ) &&
-      !/\b(?:not|never|isn'?t|wasn'?t|hasn'?t|still)\b.{0,24}\b(?:fixed|resolved|working|works)\b|\b(?:unresolved|broken|failing|not working)\b/i.test(
         clause,
       ),
   );

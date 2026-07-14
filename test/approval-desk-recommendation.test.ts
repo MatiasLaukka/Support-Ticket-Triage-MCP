@@ -289,6 +289,32 @@ describe("Approval Desk recommendation builder", () => {
     );
   });
 
+  it("does not close on a contradictory customer reply", async () => {
+    const outcomes = await loadExpectedOutcomes(
+      resolve("data/seed/expected-outcomes.json"),
+    );
+    const ticket = await loadSeedTicket("TKT-1008");
+
+    const input = buildApprovalDeskRecommendationInput({
+      ticket,
+      outcome: outcomes.get("TKT-1008")!,
+      actor: "approval-desk",
+      customerReplies: [
+        {
+          id: "reply-contradictory",
+          ticketId: "TKT-1008",
+          createdAt: "2026-06-10T10:02:00.000Z",
+          body: "The workaround works now, but the issue is still unresolved.",
+        },
+      ],
+    });
+
+    expect(input.supportState).not.toBe("ready-for-close");
+    expect(input.draftCustomerResponse).not.toContain(
+      "Glad to hear that resolved it.",
+    );
+  });
+
   it("uses the newest customer reply by createdAt for confirmation", async () => {
     const outcomes = await loadExpectedOutcomes(
       resolve("data/seed/expected-outcomes.json"),

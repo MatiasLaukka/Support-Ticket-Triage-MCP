@@ -262,6 +262,14 @@ describe("approvalDeskHtml", () => {
     expect(app.el("recommendationPanel").innerHTML).not.toContain(
       "Why this classification?",
     );
+    expect(app.el("recommendationPanel").innerHTML).not.toContain(
+      "category-authentication",
+    );
+    expect(app.el("recommendationPanel").innerHTML).not.toContain(
+      "Ticket text mentions login and account access failures.",
+    );
+    expect(app.el("recommendationPanel").innerHTML).not.toContain("<details");
+    expect(app.el("recommendationPanel").innerHTML).not.toContain("<summary");
 
     app.el("recommendationPanel").dispatch("click", {
       target: { dataset: { action: "review-classifier-evidence" } },
@@ -502,6 +510,8 @@ describe("approvalDeskHtml", () => {
 
     const html = app.el("recommendationPanel").innerHTML;
     expect(html).toContain("Classifier evidence");
+    expect(html).toContain("<details");
+    expect(html).toContain("<summary");
     expect(html).toContain("Category: authentication");
     expect(html).toContain("Priority: P2");
     expect(html).toContain("Team: identity");

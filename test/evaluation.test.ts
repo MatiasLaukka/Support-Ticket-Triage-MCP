@@ -325,6 +325,8 @@ describe("evaluateClassifications", () => {
     expect(report.categoryAccuracy).toBeGreaterThanOrEqual(0.9);
     expect(report.routingAccuracy).toBeGreaterThanOrEqual(0.9);
     expect(report.priorityAgreement).toBeGreaterThanOrEqual(0.9);
+    expect(report.securityEscalationRecall).toBe(1);
+    expect(report.outageEscalationRecall).toBe(1);
     expect(report.knowledgeCitationCoverage).toBeGreaterThanOrEqual(0.85);
   });
 });

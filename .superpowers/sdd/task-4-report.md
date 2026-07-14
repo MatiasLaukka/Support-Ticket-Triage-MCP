@@ -74,3 +74,12 @@ does not use ticket metadata to supply it.
 
 Tests: `npm test -- --run test/classifier.test.ts test/evaluation.test.ts`
 passed with 31 tests.
+
+## Evaluation Gate Review Fix
+
+Added executable classifier-gate assertions requiring exact `1` security and
+outage escalation recall for the synthetic fixture. This aligns the test gate
+with the audit's stated 100% recall results.
+
+Tests: `npm test -- --run test/classifier.test.ts test/evaluation.test.ts`
+passed with 31 tests across 2 files.

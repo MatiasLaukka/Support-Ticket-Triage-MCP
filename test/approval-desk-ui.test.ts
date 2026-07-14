@@ -596,6 +596,73 @@ describe("approvalDeskHtml", () => {
     );
   });
 
+  it("keeps edited approval values across classifier review navigation", async () => {
+    const app = await startApprovalDeskApp();
+    await app.selectFirstTicket();
+    await app.createRecommendation();
+
+    app.el("continueApproval").dispatch("click");
+    app.approveField("category");
+    app.approveField("customerResponse");
+    app.el("categoryOverride").value = "incident";
+    app.el("editedCustomerResponse").value = "We are investigating an urgent issue.";
+
+    app.el("recommendationPanel").dispatch("click", {
+      target: { dataset: { action: "review-classifier-evidence" } },
+    });
+    app.el("continueApproval").dispatch("click");
+    app.el("backToRecommendation").dispatch("click");
+    app.el("continueApproval").dispatch("click");
+
+    expect(app.el("categoryOverride").value).toBe("incident");
+    expect(app.el("editedCustomerResponse").value).toBe(
+      "We are investigating an urgent issue.",
+    );
+  });
+
+  it("renders distinct compact classifier chips for multiple safety signals", async () => {
+    const app = await startApprovalDeskApp({
+      recommendation: {
+        ...fixtureRecommendation,
+        classificationSignals: [
+          {
+            ruleId: "risk-security",
+            target: "risk:security:possible",
+            weight: 0.8,
+            reason: "Security risk detected.",
+          },
+          {
+            ruleId: "risk-sla",
+            target: "risk:sla:likely",
+            weight: 0.7,
+            reason: "SLA risk detected.",
+          },
+          {
+            ruleId: "known-cause-login-session-expiry",
+            target: "knownCause:login-session-expiry",
+            weight: 0.5,
+            reason: "Known login session expiry symptoms match the ticket.",
+          },
+          {
+            ruleId: "category-authentication",
+            target: "category:authentication",
+            weight: 0.4,
+            reason: "Ticket text mentions login failures.",
+          },
+        ],
+      },
+    });
+    await app.selectFirstTicket();
+    await app.createRecommendation();
+
+    const topChips = app.el("recommendationPanel").innerHTML
+      .split('<details><summary>Why this classification?</summary>')[0]!;
+    expect(topChips).toContain("Safety signal");
+    expect(topChips).toContain("Known cause");
+    expect(topChips).toContain("Category reason");
+    expect(topChips.match(/Safety signal/g)).toHaveLength(1);
+  });
+
   it("filters queue tickets by workflow state and updates filter chips", async () => {
     const app = await startApprovalDeskApp({
       tickets: [

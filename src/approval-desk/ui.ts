@@ -966,7 +966,7 @@ export const approvalDeskHtml = `<!doctype html>
         '</div>';
       }
 
-      function renderRecommendation() {
+      function renderRecommendation(preserveApprovalInputs) {
         const recommendation = state.recommendation;
         if (recommendation === null) {
           els.recommendationPanel.innerHTML = '<p class="hint">No recommendation created yet.</p>';
@@ -1061,8 +1061,10 @@ export const approvalDeskHtml = `<!doctype html>
               '</div>' +
             '</details>';
         }
-        els.editedCustomerResponse.value = recommendation.draftCustomerResponse;
-        populateApprovalInputs(recommendation);
+        if (!preserveApprovalInputs) {
+          els.editedCustomerResponse.value = recommendation.draftCustomerResponse;
+          populateApprovalInputs(recommendation);
+        }
         renderRecommendationStageControls();
         updateControls();
       }
@@ -1490,15 +1492,8 @@ export const approvalDeskHtml = `<!doctype html>
             '<p class="hint">No classifier signal snapshot stored for this recommendation.</p>' +
           '</div>';
         }
-        const topChips = signals
-          .slice()
-          .sort(function (left, right) {
-            return classifierSignalRank(right) - classifierSignalRank(left);
-          })
-          .slice(0, 3)
-          .map(function (signal) {
-            return chip(classifierSignalLabel(signal));
-          })
+        const topChips = classifierTopChipLabels(signals)
+          .map(chip)
           .join('');
         return '<div class="hero-card classifier-card"><strong>Classifier evidence</strong>' +
           summary +
@@ -1507,6 +1502,26 @@ export const approvalDeskHtml = `<!doctype html>
             renderClassifierSignalRows(signals) +
           '</details>' +
         '</div>';
+      }
+
+      function classifierTopChipLabels(signals) {
+        const labels = new Set();
+        return signals
+          .slice()
+          .sort(function (left, right) {
+            return classifierSignalRank(right) - classifierSignalRank(left);
+          })
+          .map(function (signal) {
+            return classifierSignalLabel(signal);
+          })
+          .filter(function (label) {
+            if (labels.has(label)) {
+              return false;
+            }
+            labels.add(label);
+            return true;
+          })
+          .slice(0, 3);
       }
 
       function renderClassifierEvidenceReference(recommendation) {
@@ -1727,7 +1742,7 @@ export const approvalDeskHtml = `<!doctype html>
       els.backToRecommendation.addEventListener('click', function () {
         if (state.recommendation !== null) {
           state.stage = 'draft';
-          renderRecommendation();
+          renderRecommendation(true);
         }
       });
       els.confirmApproval.addEventListener('change', updateControls);
@@ -1737,14 +1752,14 @@ export const approvalDeskHtml = `<!doctype html>
             void cancelApprovedRecommendation().catch(function (error) { setResult({ error: error.message }); });
           } else {
             state.stage = 'approval';
-            renderRecommendation();
+            renderRecommendation(true);
           }
         }
       });
       els.recommendationPanel.addEventListener('click', function (event) {
         if (event.target?.dataset?.action === 'review-classifier-evidence' && state.recommendation !== null) {
           state.stage = 'draft';
-          renderRecommendation();
+          renderRecommendation(true);
         }
       });
       els.editedCustomerResponse.addEventListener('input', updateControls);

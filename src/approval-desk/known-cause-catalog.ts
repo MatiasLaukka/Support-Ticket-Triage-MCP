@@ -152,7 +152,7 @@ function matchesSmsQuietHours(text: string): boolean {
 function matchesWebhookSecretRotation(text: string): boolean {
   return includesAll(text, ["webhook", "signature", "secret rotation"]) &&
     /\b(?:fail(?:s|ed|ing|ure)?|invalid|mismatch)\b/.test(text) &&
-    !/\b(?:no|not|never|without)\b.{0,48}\b(?:signing[ -]secret|secret) rotation\b|\b(?:signing[ -]secret|secret) rotation\b.{0,48}(?:\b(?:did not|didn't|has not|hasn't|was not|wasn't|never)\b.{0,24}\b(?:occur|happen|change)|\b(?:ruled out|excluded)\b)/.test(
+    !/\b(?:no|not|never|without)\b.{0,48}\b(?:signing[ -]secret|secret) rotation\b|\b(?:signing[ -]secret|secret) rotation\b.{0,48}(?:\b(?:did not|didn't|has not|hasn't|was not|wasn't|never)\b.{0,24}\b(?:occur|happen|change)|\b(?:ruled out|excluded)\b)|\b(?:ruled out|excluded)\b.{0,48}\b(?:signing[ -]secret|secret) rotation\b/.test(
       text,
     );
 }

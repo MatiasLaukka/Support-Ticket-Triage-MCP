@@ -71,7 +71,7 @@ const EVENT_PROCESSING_DELAY_PATTERN =
   /(?:activity timeline|profiles?).*(?:missing|not showing).*(?:events?|checkout)|(?:events?|checkout).*(?:missing|delay|not showing)/;
 
 const BROAD_EVENT_IMPACT_PATTERN =
-  /\b(?:across|all|broad(?:ly)?|correlated|entire|global|multiple|numerous|regional|region-wide|several|store-wide|widespread)\b|\bmulti-(?:account|customer|profile|store)\b|\b(?:accounts|customers|profiles|stores)\b|\b(?:two|three|four|five|six|seven|eight|nine|ten|\d+)\s+(?:accounts?|customers?|profiles?|stores?)\b/;
+  /\bmulti-(?:account|customer|profile|store)\b|\b(?:accounts|customers|profiles|stores|regions|events)\b|\b(?:two|three|four|five|six|seven|eight|nine|ten|\d+)\s+(?:accounts?|customers?|profiles?|stores?|regions?|events?)\b|\b(?:across|all|broad(?:ly)?|correlated|entire|global|multiple|numerous|regional|region-wide|several|store-wide|widespread)\b.{0,48}\b(?:accounts|customers|profiles|stores|regions|events)\b|\b(?:accounts|customers|profiles|stores|regions|events)\b.{0,48}\b(?:across|all|broad(?:ly)?|correlated|entire|global|multiple|numerous|regional|region-wide|several|store-wide|widespread)\b/;
 
 const SAFETY_KNOWLEDGE_ARTICLES = {
   security: new Set(["security-incident-response"]),

@@ -122,6 +122,23 @@ describe("classifyTicket", () => {
     expect(result.knowledgeArticleIds).toContain("event-tracking-debugging");
   });
 
+  it("does not treat retry count as broad checkout-event impact", () => {
+    const result = classifyTicket(
+      makeTicket({
+        subject: "One checkout event missing from one profile",
+        description:
+          "After multiple retries, one checkout event is missing from one profile.",
+      }),
+    );
+
+    expect(result.category).toBe("api");
+    expect(result.team).toBe("api-platform");
+    expect(result.priority).not.toBe("P1");
+    expect(result.requiredEscalations).not.toEqual(
+      expect.arrayContaining(["outage", "sla"]),
+    );
+  });
+
   it("recognizes webhook secret rotation known cause", () => {
     const result = classifyTicket(
       makeTicket({
@@ -177,6 +194,13 @@ describe("classifyTicket", () => {
       subject: "Webhook signatures still fail after investigation",
       description:
         "Webhook signature validation fails, but signing secret rotation was ruled out.",
+      target: "knownCause:webhook-secret-rotation",
+    },
+    {
+      name: "webhook secret rotation is ruled out before the phrase",
+      subject: "Webhook signatures still fail after investigation",
+      description:
+        "We ruled out secret rotation, but webhook signature validation still fails.",
       target: "knownCause:webhook-secret-rotation",
     },
     {

@@ -603,7 +603,7 @@ function requiresMoreCustomerEvidence(
 function isCustomerConfirmation(value: string): boolean {
   const normalized = value.toLowerCase();
   const unresolvedOrNegated =
-    /\b(?:not|never|isn'?t|wasn'?t|hasn'?t|still)\b.{0,24}\b(?:fixed|resolved|working|works)\b|\b(?:unresolved|broken|failing|not working)\b/i;
+    /\b(?:not|never|isn'?t|wasn'?t|hasn'?t|still)\b.{0,24}\b(?:fixed|resolved|working|works)\b|\b(?:unresolved|broken|fail(?:s|ed|ing|ure)?|not working)\b/i;
   if (unresolvedOrNegated.test(normalized)) {
     return false;
   }

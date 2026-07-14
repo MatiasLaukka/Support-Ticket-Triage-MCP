@@ -281,6 +281,7 @@ export async function draftCustomerResponseWithFallback(input: {
       response,
       assist: candidate.assist,
       knowledgeArticleIds: input.draftInput.outcome.knowledgeArticleIds,
+      evidenceReadiness: input.draftInput.evidenceReadiness,
     });
     if (validation.blockingMessages.length === 0) {
       return {
@@ -327,6 +328,7 @@ function fallbackDraft(input: {
     ),
     assist: fallbackAssist,
     knowledgeArticleIds: input.draftInput.outcome.knowledgeArticleIds,
+    evidenceReadiness: input.draftInput.evidenceReadiness,
   });
   const checks: DraftCustomerResponseCheck[] = [
     {
@@ -355,6 +357,7 @@ function validateCustomerResponseDraft(input: {
   response: string;
   assist: GptAssist;
   knowledgeArticleIds: readonly string[];
+  evidenceReadiness?: EvidenceReadiness;
 }): { checks: DraftCustomerResponseCheck[]; blockingMessages: string[] } {
   const response = input.response.trim();
   const checks: DraftCustomerResponseCheck[] = [];
@@ -427,6 +430,20 @@ function validateCustomerResponseDraft(input: {
         `${response} ${assistText}`,
       ),
     failMessage: "The draft asked for secrets or sensitive credentials.",
+  });
+
+  pushCheck({
+    checks,
+    blockingMessages,
+    id: "platform-lifecycle-consistency",
+    label: "Platform lifecycle consistency",
+    passed:
+      input.evidenceReadiness?.supportState !== "waiting-on-platform-fix" ||
+      !/\b(?:current\s+)?(?:webhook\s+)?signing\s+secret\b|\b(?:webhook\s+)?secret\s+rotation\b/i.test(
+        `${response} ${assistText}`,
+      ),
+    failMessage:
+      "The draft gave signing-secret guidance that conflicts with the platform-fix lifecycle state.",
   });
 
   return { checks, blockingMessages };

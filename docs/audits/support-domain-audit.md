@@ -94,3 +94,14 @@ identity.
 5. Done: add SMS opt-out evidence separate from SMS campaign-send evidence.
 6. Next: build the classifier against the cleaned-up domain labels and evidence
    model.
+
+## Classifier Disagreements
+
+The deterministic remediation meets the configured threshold gate: category,
+routing, priority, security escalation recall, and outage escalation recall are
+all 100%. Knowledge citation coverage is 97.6%.
+
+- `TKT-1010`: the classifier intentionally leaves a content-free "It does not
+  work" ticket without an event-tracking article. The expected outcome includes
+  that article despite no content-based event signal, so the classifier does
+  not infer it from submitted metadata.

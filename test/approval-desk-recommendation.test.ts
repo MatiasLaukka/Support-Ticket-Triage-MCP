@@ -263,6 +263,117 @@ describe("Approval Desk recommendation builder", () => {
     );
   });
 
+  it("does not treat negated resolution language as customer confirmation", async () => {
+    const outcomes = await loadExpectedOutcomes(
+      resolve("data/seed/expected-outcomes.json"),
+    );
+    const ticket = await loadSeedTicket("TKT-1008");
+
+    const input = buildApprovalDeskRecommendationInput({
+      ticket,
+      outcome: outcomes.get("TKT-1008")!,
+      actor: "approval-desk",
+      customerReplies: [
+        {
+          id: "reply-negative",
+          ticketId: "TKT-1008",
+          createdAt: "2026-06-10T10:02:00.000Z",
+          body: "This is not fixed and the webhook is still unresolved.",
+        },
+      ],
+    });
+
+    expect(input.supportState).not.toBe("ready-for-close");
+    expect(input.draftCustomerResponse).not.toContain(
+      "Glad to hear that resolved it.",
+    );
+  });
+
+  it("does not close on a contradictory customer reply", async () => {
+    const outcomes = await loadExpectedOutcomes(
+      resolve("data/seed/expected-outcomes.json"),
+    );
+    const ticket = await loadSeedTicket("TKT-1008");
+
+    const input = buildApprovalDeskRecommendationInput({
+      ticket,
+      outcome: outcomes.get("TKT-1008")!,
+      actor: "approval-desk",
+      customerReplies: [
+        {
+          id: "reply-contradictory",
+          ticketId: "TKT-1008",
+          createdAt: "2026-06-10T10:02:00.000Z",
+          body: "The workaround works now, but the issue is still unresolved.",
+        },
+      ],
+    });
+
+    expect(input.supportState).not.toBe("ready-for-close");
+    expect(input.draftCustomerResponse).not.toContain(
+      "Glad to hear that resolved it.",
+    );
+  });
+
+  it("does not close when a workaround works but the issue still fails", async () => {
+    const outcomes = await loadExpectedOutcomes(
+      resolve("data/seed/expected-outcomes.json"),
+    );
+    const ticket = await loadSeedTicket("TKT-1008");
+
+    const input = buildApprovalDeskRecommendationInput({
+      ticket,
+      outcome: outcomes.get("TKT-1008")!,
+      actor: "approval-desk",
+      customerReplies: [
+        {
+          id: "reply-contradictory-failure",
+          ticketId: "TKT-1008",
+          createdAt: "2026-06-10T10:02:00.000Z",
+          body:
+            "The workaround works now, but the underlying issue continues to fail intermittently.",
+        },
+      ],
+    });
+
+    expect(input.supportState).not.toBe("ready-for-close");
+    expect(input.draftCustomerResponse).not.toContain(
+      "Glad to hear that resolved it.",
+    );
+  });
+
+  it("uses the newest customer reply by createdAt for confirmation", async () => {
+    const outcomes = await loadExpectedOutcomes(
+      resolve("data/seed/expected-outcomes.json"),
+    );
+    const ticket = await loadSeedTicket("TKT-1008");
+
+    const input = buildApprovalDeskRecommendationInput({
+      ticket,
+      outcome: outcomes.get("TKT-1008")!,
+      actor: "approval-desk",
+      customerReplies: [
+        {
+          id: "reply-newer",
+          ticketId: "TKT-1008",
+          createdAt: "2026-06-10T10:02:00.000Z",
+          body: "That fixed it. Thanks for the help!",
+        },
+        {
+          id: "reply-older",
+          ticketId: "TKT-1008",
+          createdAt: "2026-06-10T09:05:00.000Z",
+          body: "The endpoint URL is https://hooks.juniper.example/webhooks/orders.",
+        },
+      ],
+    });
+
+    expect(input.supportState).toBe("ready-for-close");
+    expect(input.draftCustomerResponse).toContain(
+      "Glad to hear that resolved it.",
+    );
+  });
+
   it("keeps multiple knowledge IDs internal while using merchant-friendly flow guidance", async () => {
     const outcomes = await loadExpectedOutcomes(
       resolve("data/seed/expected-outcomes.json"),
@@ -522,19 +633,34 @@ describe("Approval Desk recommendation builder", () => {
     });
   });
 
-  it("throws when no expected outcome exists for the ticket", async () => {
+  it("builds a classifier-driven recommendation when no expected outcome exists", async () => {
     const ticket = TicketSchema.parse({
-      ...(await loadSeedTicket("TKT-1005")),
+      ...(await loadSeedTicket("TKT-1008")),
       id: "TKT-9999",
     });
 
-    expect(() =>
-      buildApprovalDeskRecommendationInput({
-        ticket,
-        outcome: undefined,
-        actor: "approval-desk",
-      }),
-    ).toThrow("No expected outcome exists for TKT-9999.");
+    const input = buildApprovalDeskRecommendationInput({
+      ticket,
+      outcome: undefined,
+      actor: "approval-desk",
+    });
+
+    expect(input).toMatchObject({
+      ticketId: "TKT-9999",
+      category: "integration",
+      priority: "P2",
+      team: "integrations",
+      knowledgeArticleIds: ["webhook-signature-validation"],
+      actor: "approval-desk",
+    });
+    expect(input.classificationSignals).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          target: "knownCause:webhook-secret-rotation",
+        }),
+      ]),
+    );
+    expect(input.rationale).toContain("classifier");
   });
 
   it("throws when the expected outcome belongs to a different ticket", async () => {

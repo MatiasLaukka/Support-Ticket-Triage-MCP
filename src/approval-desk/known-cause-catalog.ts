@@ -5,7 +5,7 @@ export interface KnownCauseDefinition {
   label: string;
   knowledgeArticleIds: readonly string[];
   requiredEvidenceIds: readonly string[];
-  matchAll: readonly string[];
+  matches: (text: string) => boolean;
   problemSummary: string;
   nextStep: string;
   investigationSteps: readonly string[];
@@ -17,7 +17,7 @@ export const KNOWN_CAUSES: readonly KnownCauseDefinition[] = [
     label: "SMS quiet-hour protection",
     knowledgeArticleIds: ["sms-compliance"],
     requiredEvidenceIds: [],
-    matchAll: ["quiet-hour", "blocked"],
+    matches: matchesSmsQuietHours,
     problemSummary:
       "We reviewed the SMS campaign issue, and the dashboard message indicates quiet-hour protection blocked delivery.",
     nextStep:
@@ -36,7 +36,7 @@ export const KNOWN_CAUSES: readonly KnownCauseDefinition[] = [
       "signing-secret-rotation-time",
       "raw-body-change-status",
     ],
-    matchAll: ["webhook", "signature", "secret rotation"],
+    matches: matchesWebhookSecretRotation,
     problemSummary:
       "The webhook signature failures match a common post-rotation issue where the sender and receiving endpoint are not validating with the same active signing secret.",
     nextStep:
@@ -55,7 +55,7 @@ export const KNOWN_CAUSES: readonly KnownCauseDefinition[] = [
       "api-response-status",
       "sample-payload",
     ],
-    matchAll: ["track api", "timestamp", "local time"],
+    matches: matchesTrackApiLocalTime,
     problemSummary:
       "The Track API timestamp error matches a common timestamp-format issue where a local time is sent instead of an accepted event timestamp format.",
     nextStep:
@@ -76,7 +76,7 @@ export const KNOWN_CAUSES: readonly KnownCauseDefinition[] = [
       "source-update-time",
       "catalog-sync-time",
     ],
-    matchAll: ["shopify", "custom", "field"],
+    matches: matchesShopifyCustomField,
     problemSummary:
       "The Shopify sync completed, but the reported custom field is not appearing in the destination record.",
     nextStep:
@@ -96,7 +96,7 @@ export const KNOWN_CAUSES: readonly KnownCauseDefinition[] = [
       "profile-email",
       "consent-timeline",
     ],
-    matchAll: ["sms", "stop", "opt-out"],
+    matches: matchesSmsStopSync,
     problemSummary:
       "The SMS opt-out report matches a consent-state sync issue where a STOP reply has not yet appeared on the profile.",
     nextStep:
@@ -117,7 +117,7 @@ export const KNOWN_CAUSES: readonly KnownCauseDefinition[] = [
       "endpoint-response-code",
       "retry-history",
     ],
-    matchAll: ["webhook", "delayed"],
+    matches: matchesWebhookDeliveryLatency,
     problemSummary:
       "The webhook deliveries are succeeding but arriving noticeably after the source event time.",
     nextStep:
@@ -138,8 +138,52 @@ export function detectKnownCause(input: {
     cause.knowledgeArticleIds.every((articleId) =>
       input.outcome.knowledgeArticleIds.includes(articleId),
     ) &&
-    cause.matchAll.every((term) => text.includes(term)),
+    cause.matches(text),
   );
+}
+
+function matchesSmsQuietHours(text: string): boolean {
+  return includesAll(text, ["quiet-hour", "blocked"]) &&
+    !/\b(?:not|never)\s+(?:\w+\s+){0,3}blocked\b|\bno\b.{0,40}\bquiet-hours?\b|\bquiet-hours?\b.{0,40}\b(?:did not|didn't|does not|doesn't|was not|wasn't|not|never)\b.{0,20}\bblock/.test(
+      text,
+    );
+}
+
+function matchesWebhookSecretRotation(text: string): boolean {
+  return includesAll(text, ["webhook", "signature", "secret rotation"]) &&
+    /\b(?:fail(?:s|ed|ing|ure)?|invalid|mismatch)\b/.test(text) &&
+    !/\b(?:no|not|never|without)\b.{0,48}\b(?:signing[ -]secret|secret) rotation\b|\b(?:signing[ -]secret|secret) rotation\b.{0,48}(?:\b(?:did not|didn't|has not|hasn't|was not|wasn't|never)\b.{0,24}\b(?:occur|happen|change)|\b(?:ruled out|excluded)\b)|\b(?:ruled out|excluded)\b.{0,48}\b(?:signing[ -]secret|secret) rotation\b/.test(
+      text,
+    );
+}
+
+function matchesTrackApiLocalTime(text: string): boolean {
+  return includesAll(text, ["track api", "timestamp", "local time"]) &&
+    /\b(?:400|error|invalid|reject(?:s|ed|ing)?)\b/.test(text) &&
+    !/\b(?:not|never|without)\b.{0,32}\blocal time\b/.test(text);
+}
+
+function matchesShopifyCustomField(text: string): boolean {
+  return includesAll(text, ["shopify", "custom", "field"]) &&
+    /\b(?:does not|doesn't|did not|didn't|not|never)\b.{0,32}\b(?:copy|map|sync|appear|show)\b|\b(?:missing|skips?|omits?|not appearing)\b/.test(
+      text,
+    );
+}
+
+function matchesSmsStopSync(text: string): boolean {
+  return includesAll(text, ["sms", "stop", "opt-out"]) &&
+    /\b(?:not reflected|not updated|still (?:appears? )?eligible|delay(?:ed)?)\b/.test(
+      text,
+    );
+}
+
+function matchesWebhookDeliveryLatency(text: string): boolean {
+  return includesAll(text, ["webhook", "delayed"]) &&
+    !/\b(?:not|never|no longer)\b.{0,24}\bdelayed\b/.test(text);
+}
+
+function includesAll(text: string, terms: readonly string[]): boolean {
+  return terms.every((term) => text.includes(term));
 }
 
 export function getKnownCause(id: string | null | undefined): KnownCauseDefinition | undefined {

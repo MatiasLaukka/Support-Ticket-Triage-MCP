@@ -23,6 +23,7 @@ import {
   analyzeEvidenceReadiness,
   type EvidenceReadiness,
 } from "./evidence-readiness.js";
+import { classifyTicket, type TicketClassification } from "./classifier.js";
 import { detectKnownCause, getKnownCause } from "./known-cause-catalog.js";
 
 const SlugSchema = z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/);
@@ -80,27 +81,27 @@ export function buildApprovalDeskRecommendationInput(input: {
   customerReplies?: readonly CustomerReply[];
 }): Omit<SubmitRecommendationInput, "submittedAt"> {
   const { ticket, outcome, actor } = input;
-  if (outcome === undefined) {
-    throw new Error(`No expected outcome exists for ${ticket.id}.`);
-  }
-  if (outcome.ticketId !== ticket.id) {
+  const classification = outcome === undefined ? classifyTicket(ticket) : undefined;
+  const resolvedOutcome =
+    outcome ?? outcomeFromClassification(ticket, classification!);
+  if (outcome !== undefined && outcome.ticketId !== ticket.id) {
     throw new Error(
       `Expected outcome ${outcome.ticketId} does not match ticket ${ticket.id}.`,
     );
   }
 
-  const escalationReasons = outcome.requiredEscalations;
-  const knowledgeArticleIds = outcome.knowledgeArticleIds;
+  const escalationReasons = resolvedOutcome.requiredEscalations;
+  const knowledgeArticleIds = resolvedOutcome.knowledgeArticleIds;
   const lifecycle = analyzeCustomerReplyLifecycle({
     ticket,
-    outcome,
+    outcome: resolvedOutcome,
     customerReplies: input.customerReplies ?? [],
   });
   const evidenceReadiness = lifecycle.evidenceReadiness;
 
   const draftCustomerResponse = buildDraftCustomerResponse({
     ticket,
-    outcome,
+    outcome: resolvedOutcome,
     knowledgeArticleIds,
     escalationReasons,
     evidenceReadiness,
@@ -122,7 +123,7 @@ export function buildApprovalDeskRecommendationInput(input: {
   const deterministicAssist = buildDeterministicGptAssist(
     {
       ticket,
-      outcome,
+      outcome: resolvedOutcome,
       knowledgeArticles: [],
       deterministicDraft: signedDraftCustomerResponse,
       responseStyle: "auto",
@@ -137,10 +138,10 @@ export function buildApprovalDeskRecommendationInput(input: {
   return {
     ticketId: ticket.id,
     sourceRevision: ticket.revision,
-    category: outcome.category,
-    priority: outcome.acceptablePriorities[0],
-    team: outcome.team,
-    tags: buildTags(ticket, outcome),
+    category: resolvedOutcome.category,
+    priority: resolvedOutcome.acceptablePriorities[0],
+    team: resolvedOutcome.team,
+    tags: buildTags(ticket, resolvedOutcome),
     duplicateCandidates: [],
     outageRisk: escalationReasons.includes("outage") ? "likely" : "none",
     securityRisk: escalationReasons.includes("security") ? "possible" : "none",
@@ -160,10 +161,20 @@ export function buildApprovalDeskRecommendationInput(input: {
     draftCustomerResponseStyle: deterministicAssist.selectedTone,
     draftCustomerResponseChecks: deterministicDraftChecks,
     gptAssist: deterministicAssist,
-    rationale: `${ticket.id} matches expected ${outcome.category} routing to ${outcome.team} with knowledge ${knowledgeArticleIds.join(
-      ", ",
-    )}.`,
-    confidence: 0.95,
+    ...(classification === undefined
+      ? {
+          rationale: `${ticket.id} matches expected ${resolvedOutcome.category} routing to ${resolvedOutcome.team} with knowledge ${knowledgeArticleIds.join(
+            ", ",
+          )}.`,
+          confidence: 0.95,
+        }
+      : {
+          classificationSignals: classification.signals,
+          confidence: classification.confidence,
+          rationale: `${ticket.id} was classified by the deterministic classifier as ${resolvedOutcome.category} routing to ${resolvedOutcome.team} with knowledge ${resolvedOutcome.knowledgeArticleIds.join(
+            ", ",
+          )}.`,
+        }),
     recommendedNextAction: formatRecommendedNextAction(evidenceReadiness),
     escalationRequired: escalationReasons.length > 0,
     escalationReasons,
@@ -181,16 +192,20 @@ export async function buildApprovalDeskRecommendationInputWithDrafting(input: {
   customerReplies?: readonly CustomerReply[];
 }): Promise<Omit<SubmitRecommendationInput, "submittedAt">> {
   const base = buildApprovalDeskRecommendationInput(input);
-  const outcome = input.outcome;
-  if (outcome === undefined) {
-    return base;
-  }
+  const providerOutcome = input.outcome ?? {
+    ticketId: input.ticket.id,
+    category: base.category,
+    acceptablePriorities: [base.priority],
+    team: base.team,
+    requiredEscalations: base.escalationReasons ?? [],
+    knowledgeArticleIds: base.knowledgeArticleIds,
+  };
 
   const draft = await draftCustomerResponseWithFallback({
     provider: input.draftProvider,
     draftInput: {
       ticket: input.ticket,
-      outcome,
+      outcome: providerOutcome,
       knowledgeArticles: input.knowledgeArticles,
       deterministicDraft: base.draftCustomerResponse,
       responseStyle: input.responseStyle ?? "auto",
@@ -214,6 +229,20 @@ export async function buildApprovalDeskRecommendationInputWithDrafting(input: {
     draftCustomerResponseStyle: draft.assist.selectedTone,
     draftCustomerResponseChecks: draft.checks,
     gptAssist: draft.assist,
+  };
+}
+
+function outcomeFromClassification(
+  ticket: Ticket,
+  classification: TicketClassification,
+): ExpectedOutcome {
+  return {
+    ticketId: ticket.id,
+    category: classification.category,
+    acceptablePriorities: [classification.priority],
+    team: classification.team,
+    requiredEscalations: classification.requiredEscalations,
+    knowledgeArticleIds: classification.knowledgeArticleIds,
   };
 }
 

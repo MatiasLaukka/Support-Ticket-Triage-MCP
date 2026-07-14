@@ -522,19 +522,34 @@ describe("Approval Desk recommendation builder", () => {
     });
   });
 
-  it("throws when no expected outcome exists for the ticket", async () => {
+  it("builds a classifier-driven recommendation when no expected outcome exists", async () => {
     const ticket = TicketSchema.parse({
-      ...(await loadSeedTicket("TKT-1005")),
+      ...(await loadSeedTicket("TKT-1008")),
       id: "TKT-9999",
     });
 
-    expect(() =>
-      buildApprovalDeskRecommendationInput({
-        ticket,
-        outcome: undefined,
-        actor: "approval-desk",
-      }),
-    ).toThrow("No expected outcome exists for TKT-9999.");
+    const input = buildApprovalDeskRecommendationInput({
+      ticket,
+      outcome: undefined,
+      actor: "approval-desk",
+    });
+
+    expect(input).toMatchObject({
+      ticketId: "TKT-9999",
+      category: "integration",
+      priority: "P2",
+      team: "integrations",
+      knowledgeArticleIds: ["webhook-signature-validation"],
+      actor: "approval-desk",
+    });
+    expect(input.classificationSignals).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          target: "knownCause:webhook-secret-rotation",
+        }),
+      ]),
+    );
+    expect(input.rationale).toContain("classifier");
   });
 
   it("throws when the expected outcome belongs to a different ticket", async () => {

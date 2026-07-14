@@ -3,11 +3,16 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   ExpectedOutcomeSchema,
+  TicketSchema,
   TriageRecommendationSchema,
   type ExpectedOutcome,
   type TriageRecommendation,
 } from "../src/domain.js";
-import { evaluateRecommendations } from "../src/evaluation.js";
+import { classifyTicket } from "../src/approval-desk/classifier.js";
+import {
+  evaluateClassifications,
+  evaluateRecommendations,
+} from "../src/evaluation.js";
 
 describe("evaluateRecommendations", () => {
   it("calculates classification, escalation, duplicate, citation, and safety metrics", () => {
@@ -296,6 +301,31 @@ describe("evaluateRecommendations", () => {
       knowledgeCitationCoverage: 1,
       approvalSafetyViolations: 0,
     });
+  });
+});
+
+describe("evaluateClassifications", () => {
+  it("evaluates classifier output against expected outcomes", () => {
+    const tickets = TicketSchema.array().parse(
+      JSON.parse(readFileSync(resolve("data/seed/tickets.json"), "utf8")),
+    );
+    const outcomes = ExpectedOutcomeSchema.array().parse(
+      JSON.parse(
+        readFileSync(resolve("data/seed/expected-outcomes.json"), "utf8"),
+      ),
+    );
+    const classifications = tickets.map((ticket) => ({
+      ticketId: ticket.id,
+      ...classifyTicket(ticket),
+    }));
+
+    const report = evaluateClassifications(classifications, outcomes);
+
+    expect(report.ticketCount).toBe(30);
+    expect(report.categoryAccuracy).toBeGreaterThanOrEqual(0.9);
+    expect(report.routingAccuracy).toBeGreaterThanOrEqual(0.9);
+    expect(report.priorityAgreement).toBeGreaterThanOrEqual(0.9);
+    expect(report.knowledgeCitationCoverage).toBeGreaterThanOrEqual(0.85);
   });
 });
 

@@ -17,6 +17,86 @@ export interface EvaluationReport {
   approvalSafetyViolations: number;
 }
 
+export interface ClassificationEvaluationInput {
+  ticketId: string;
+  category: ExpectedOutcome["category"];
+  priority: ExpectedOutcome["acceptablePriorities"][number];
+  team: ExpectedOutcome["team"];
+  requiredEscalations: ExpectedOutcome["requiredEscalations"];
+  knowledgeArticleIds: ExpectedOutcome["knowledgeArticleIds"];
+}
+
+export function evaluateClassifications(
+  classifications: readonly ClassificationEvaluationInput[],
+  expectedOutcomes: readonly ExpectedOutcome[],
+): Pick<
+  EvaluationReport,
+  | "ticketCount"
+  | "categoryAccuracy"
+  | "routingAccuracy"
+  | "priorityAgreement"
+  | "securityEscalationRecall"
+  | "outageEscalationRecall"
+  | "knowledgeCitationCoverage"
+> {
+  validateClassificationEvaluationInput(classifications, expectedOutcomes);
+  const classificationsByTicket = new Map(
+    classifications.map((classification) => [
+      classification.ticketId,
+      classification,
+    ]),
+  );
+  let categoryMatches = 0;
+  let routingMatches = 0;
+  let priorityMatches = 0;
+  let knowledgeCitations = 0;
+  let expectedKnowledgeCitations = 0;
+
+  for (const outcome of expectedOutcomes) {
+    const classification = classificationsByTicket.get(outcome.ticketId);
+    if (classification?.category === outcome.category) {
+      categoryMatches += 1;
+    }
+    if (classification?.team === outcome.team) {
+      routingMatches += 1;
+    }
+    if (
+      classification !== undefined &&
+      outcome.acceptablePriorities.includes(classification.priority)
+    ) {
+      priorityMatches += 1;
+    }
+
+    expectedKnowledgeCitations += outcome.knowledgeArticleIds.length;
+    for (const articleId of outcome.knowledgeArticleIds) {
+      if (classification?.knowledgeArticleIds.includes(articleId)) {
+        knowledgeCitations += 1;
+      }
+    }
+  }
+
+  return {
+    ticketCount: expectedOutcomes.length,
+    categoryAccuracy: finiteRate(categoryMatches, expectedOutcomes.length),
+    routingAccuracy: finiteRate(routingMatches, expectedOutcomes.length),
+    priorityAgreement: finiteRate(priorityMatches, expectedOutcomes.length),
+    securityEscalationRecall: classificationEscalationRecall(
+      classificationsByTicket,
+      expectedOutcomes,
+      "security",
+    ),
+    outageEscalationRecall: classificationEscalationRecall(
+      classificationsByTicket,
+      expectedOutcomes,
+      "outage",
+    ),
+    knowledgeCitationCoverage: finiteRate(
+      knowledgeCitations,
+      expectedKnowledgeCitations,
+    ),
+  };
+}
+
 export function evaluateRecommendations(
   recommendations: readonly TriageRecommendation[],
   expectedOutcomes: readonly ExpectedOutcome[],
@@ -168,6 +248,50 @@ function validateEvaluationInput(
   }
 }
 
+function validateClassificationEvaluationInput(
+  classifications: readonly ClassificationEvaluationInput[],
+  expectedOutcomes: readonly ExpectedOutcome[],
+): void {
+  const duplicateClassificationIds = duplicateTicketIds(
+    classifications.map(({ ticketId }) => ticketId),
+  );
+  if (duplicateClassificationIds.length > 0) {
+    throw new Error(
+      `Classifications contain duplicate ticket IDs: ${duplicateClassificationIds.join(", ")}.`,
+    );
+  }
+
+  const duplicateOutcomeIds = duplicateTicketIds(
+    expectedOutcomes.map(({ ticketId }) => ticketId),
+  );
+  if (duplicateOutcomeIds.length > 0) {
+    throw new Error(
+      `Expected outcomes contain duplicate ticket IDs: ${duplicateOutcomeIds.join(", ")}.`,
+    );
+  }
+
+  const classificationIds = new Set(
+    classifications.map(({ ticketId }) => ticketId),
+  );
+  const outcomeIds = new Set(expectedOutcomes.map(({ ticketId }) => ticketId));
+  const unexpectedClassificationIds = [...classificationIds]
+    .filter((ticketId) => !outcomeIds.has(ticketId))
+    .sort();
+  const missingClassificationIds = [...outcomeIds]
+    .filter((ticketId) => !classificationIds.has(ticketId))
+    .sort();
+  if (
+    unexpectedClassificationIds.length > 0 ||
+    missingClassificationIds.length > 0
+  ) {
+    throw new Error(
+      "Classification ticket IDs must exactly match expected outcomes " +
+        `(unexpected: ${formatTicketIds(unexpectedClassificationIds)}; ` +
+        `missing: ${formatTicketIds(missingClassificationIds)}).`,
+    );
+  }
+}
+
 function duplicateTicketIds(ticketIds: readonly string[]): string[] {
   const seen = new Set<string>();
   const duplicates = new Set<string>();
@@ -194,6 +318,20 @@ function escalationRecall(
   );
   const detected = required.filter(({ ticketId }) =>
     recommendationsByTicket.get(ticketId)?.escalationReasons.includes(reason),
+  ).length;
+  return nullableRate(detected, required.length);
+}
+
+function classificationEscalationRecall(
+  classificationsByTicket: ReadonlyMap<string, ClassificationEvaluationInput>,
+  expectedOutcomes: readonly ExpectedOutcome[],
+  reason: Extract<RequiredEscalation, "security" | "outage">,
+): number | null {
+  const required = expectedOutcomes.filter(({ requiredEscalations }) =>
+    requiredEscalations.includes(reason),
+  );
+  const detected = required.filter(({ ticketId }) =>
+    classificationsByTicket.get(ticketId)?.requiredEscalations.includes(reason),
   ).length;
   return nullableRate(detected, required.length);
 }

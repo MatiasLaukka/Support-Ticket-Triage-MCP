@@ -94,3 +94,27 @@ identity.
 5. Done: add SMS opt-out evidence separate from SMS campaign-send evidence.
 6. Next: build the classifier against the cleaned-up domain labels and evidence
    model.
+
+## Classifier Disagreements
+
+The first deterministic classifier pass does not yet meet the configured
+evaluation thresholds: category accuracy is 53.3%, routing accuracy is 56.7%,
+priority agreement is 56.7%, security escalation recall is 50.0%, and knowledge
+citation coverage is 52.4%. Outage escalation recall is 100.0%.
+
+- `TKT-1001`, `TKT-1002`, and `TKT-1003`: classifier chooses `P2` instead of
+  expected `P1` because the event-processing incident rule establishes a P2
+  floor but does not promote the seed outage pattern to P1.
+- `TKT-1005`, `TKT-1010` through `TKT-1012`, and `TKT-1027`: classifier omits
+  expected supporting knowledge articles because it only emits articles tied to
+  directly matched product rules or known causes.
+- `TKT-1006`, `TKT-1020`, `TKT-1024`, and `TKT-1026`: classifier chooses API
+  campaign handling instead of the expected billing, performance, or support
+  outcomes because broad campaign terms outweigh the submitted metadata.
+- `TKT-1013` through `TKT-1016`, `TKT-1021` through `TKT-1025`, `TKT-1029`,
+  and `TKT-1030`: classifier lacks deterministic rules for the expected
+  deliverability, access, authentication, feature-request, consent, and
+  product-routing cases.
+- `TKT-1019`: classifier chooses `other` instead of expected `security` because
+  its prompt-injection and credential-exposure patterns do not match this
+  security scenario, so it also misses the security escalation and article.

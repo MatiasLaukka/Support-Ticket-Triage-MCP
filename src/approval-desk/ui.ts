@@ -1511,6 +1511,12 @@ export const approvalDeskHtml = `<!doctype html>
 
       function renderClassifierEvidenceReference(recommendation) {
         const count = classificationSignalCount(recommendation);
+        if (count === 0) {
+          return '<div class="classifier-reference">' +
+            '<span>' + escapeHtml('No classifier signal snapshot stored for this recommendation.') + '</span>' +
+            '<button type="button" class="inline-review-button" data-action="review-classifier-evidence">Review</button>' +
+          '</div>';
+        }
         const label = count === 1
           ? 'Classification evidence available - 1 signal'
           : 'Classification evidence available - ' + count + ' signals';

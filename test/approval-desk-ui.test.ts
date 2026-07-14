@@ -565,6 +565,37 @@ describe("approvalDeskHtml", () => {
     expect(html).not.toContain("Why this classification?");
   });
 
+  it("uses the classifier evidence fallback reference in approval mode for legacy recommendations", async () => {
+    const app = await startApprovalDeskApp({
+      recommendation: {
+        ...fixtureRecommendation,
+        classificationSignals: undefined,
+      },
+    });
+    await app.selectFirstTicket();
+    await app.createRecommendation();
+
+    app.el("continueApproval").dispatch("click");
+
+    const html = app.el("recommendationPanel").innerHTML;
+    expect(html).toContain(
+      "No classifier signal snapshot stored for this recommendation.",
+    );
+    expect(html).not.toContain("Classification evidence available");
+    expect(html).toContain(
+      'data-action="review-classifier-evidence"',
+    );
+
+    app.el("recommendationPanel").dispatch("click", {
+      target: { dataset: { action: "review-classifier-evidence" } },
+    });
+
+    expect(app.el("approvalStage").hidden).toBe(true);
+    expect(app.el("recommendationPanel").innerHTML).toContain(
+      "No classifier signal snapshot stored for this recommendation.",
+    );
+  });
+
   it("filters queue tickets by workflow state and updates filter chips", async () => {
     const app = await startApprovalDeskApp({
       tickets: [

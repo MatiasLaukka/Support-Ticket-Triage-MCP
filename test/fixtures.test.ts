@@ -37,8 +37,10 @@ const generatedArtifactPaths = [
   "data/knowledge/flow-trigger-troubleshooting.md",
   "data/knowledge/profile-sync-issues.md",
   "data/knowledge/segmentation-audience-rules.md",
+  "data/knowledge/security-incident-response.md",
   "data/knowledge/shopify-integration-sync.md",
   "data/knowledge/sms-compliance.md",
+  "data/knowledge/support-operations-playbook.md",
   "data/knowledge/webhook-signature-validation.md",
 ] as const;
 
@@ -375,9 +377,11 @@ describe("generated support fixtures", () => {
       "event-tracking-debugging.md",
       "flow-trigger-troubleshooting.md",
       "profile-sync-issues.md",
+      "security-incident-response.md",
       "segmentation-audience-rules.md",
       "shopify-integration-sync.md",
       "sms-compliance.md",
+      "support-operations-playbook.md",
       "webhook-signature-validation.md",
     ]);
 
@@ -395,7 +399,7 @@ describe("generated support fixtures", () => {
         return frontmatter.id;
       }),
     );
-    expect(knowledgeIds.size).toBe(10);
+    expect(knowledgeIds.size).toBe(12);
 
     for (const outcome of outcomes) {
       expect(outcome.knowledgeArticleIds.length).toBeGreaterThan(0);

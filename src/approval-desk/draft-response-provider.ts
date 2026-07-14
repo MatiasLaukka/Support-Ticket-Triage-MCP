@@ -439,14 +439,25 @@ function validateCustomerResponseDraft(input: {
     label: "Platform lifecycle consistency",
     passed:
       input.evidenceReadiness?.supportState !== "waiting-on-platform-fix" ||
-      !/\b(?:current|active)\s+(?:webhook\s+)?(?:signing\s+)?secret\b|\b(?:webhook\s+)?(?:signing\s+)?secret\s+(?:rotation|configured|configuration|setup|mismatch|validation)\b|\b(?:confirm|verify|ensure|check|use|uses|using|configure|update)\b.{0,48}\b(?:webhook\s+)?(?:signing\s+)?secret\b/i.test(
-        `${response} ${assistText}`,
-      ),
+      !containsPlatformFixSecretTroubleshooting(`${response} ${assistText}`),
     failMessage:
       "The draft gave signing-secret guidance that conflicts with the platform-fix lifecycle state.",
   });
 
   return { checks, blockingMessages };
+}
+
+function containsPlatformFixSecretTroubleshooting(text: string): boolean {
+  const secretGuidance =
+    /\b(?:current|active)\s+(?:webhook\s+)?(?:signing\s+)?secret\b|\b(?:webhook\s+)?(?:signing\s+)?secret\s+(?:that\s+is\s+)?(?:currently\s+)?active\b|\b(?:webhook|signing)\s+secret\b|\bsecret\s+rotation\b/i;
+  const action = /\b(?:confirm|verify|ensure|check|use|uses|using|configure|update|validat(?:e|es|ing))\b/i;
+  const context = /\b(?:secret|signature(?:s)?|webhook)\b/i;
+  const actionNearContext = new RegExp(
+    `${action.source}.{0,48}${context.source}|${context.source}.{0,48}${action.source}`,
+    "i",
+  );
+
+  return secretGuidance.test(text) || actionNearContext.test(text);
 }
 
 export function buildDeterministicGptAssist(

@@ -959,6 +959,57 @@ describe("Approval Desk recommendation builder", () => {
     );
   });
 
+  it("rejects AI signature guidance for a secret that is currently active during a platform fix", async () => {
+    const outcomes = await loadExpectedOutcomes(
+      resolve("data/seed/expected-outcomes.json"),
+    );
+    const ticket = await loadSeedTicket("TKT-1008");
+
+    const input = await buildApprovalDeskRecommendationInputWithDrafting({
+      ticket,
+      outcome: outcomes.get("TKT-1008")!,
+      actor: "approval-desk",
+      knowledgeArticles: [],
+      customerReplies: [
+        {
+          id: "reply-platform-delay",
+          ticketId: "TKT-1008",
+          createdAt: "2026-06-10T09:05:00.000Z",
+          body:
+            "This is affecting all EU stores and recent Checkout Started events are delayed even though the API accepted them.",
+        },
+      ],
+      draftProvider: {
+        draft: async () => ({
+          source: "openai",
+          response:
+            "Make sure the endpoint validates signatures with the secret that is currently active.",
+          assist: {
+            source: "openai",
+            missingInfoSuggestions: ["No additional details are needed."],
+            investigationSteps: ["Review the reported processing delay."],
+            tone: "technical",
+            recommendedTone: "technical",
+            selectedTone: "technical",
+            toneReason: "The requester is technical.",
+            audience: "developer",
+            checks: [],
+          },
+        }),
+      },
+    });
+
+    expect(input.supportState).toBe("waiting-on-platform-fix");
+    expect(input.draftCustomerResponseSource).toBe("fallback");
+    expect(input.draftCustomerResponseChecks).toContainEqual(
+      expect.objectContaining({
+        id: "fallback-used",
+        status: "warn",
+        message: expect.stringContaining("platform-fix lifecycle state"),
+      }),
+    );
+  });
+
   it("keeps manual draft style overrides separate from the recommended tone", async () => {
     const outcomes = await loadExpectedOutcomes(
       resolve("data/seed/expected-outcomes.json"),

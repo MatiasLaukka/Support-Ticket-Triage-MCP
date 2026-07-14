@@ -568,6 +568,16 @@ function analyzeCustomerReplyLifecycle(input: {
     };
   }
 
+  if (hasPlatformFixContext(replyText)) {
+    return {
+      evidenceReadiness: withLifecycleSupportState(
+        evidenceReadiness,
+        "waiting-on-platform-fix",
+      ),
+      replyStage: "all-evidence",
+    };
+  }
+
   if (requiresMoreCustomerEvidence(evidenceReadiness)) {
     return {
       evidenceReadiness: withLifecycleSupportState(
@@ -617,6 +627,12 @@ function isCustomerConfirmation(value: string): boolean {
         clause,
       ),
   );
+}
+
+function hasPlatformFixContext(value: string): boolean {
+  return /\b(?:all|multiple|many)\b.{0,40}\b(?:stores|accounts|profiles|customers)\b/i.test(value) &&
+    /\b(?:delayed|delay|missing|not showing|not processing)\b/i.test(value) &&
+    /\b(?:api accepted|accepted by the api|platform|incident|processing)\b/i.test(value);
 }
 
 function buildCustomerConfirmedResponse(ticket: Ticket): string {

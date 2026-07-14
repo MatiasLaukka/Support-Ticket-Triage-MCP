@@ -236,6 +236,97 @@ describe("Approval Desk recommendation builder", () => {
     expect(customerConfirmed.missingInformation).toEqual([]);
   });
 
+  it("infers lifecycle state from reply content rather than reply order", async () => {
+    const outcomes = await loadExpectedOutcomes(
+      resolve("data/seed/expected-outcomes.json"),
+    );
+    const ticket = await loadSeedTicket("TKT-1008");
+    const outcome = outcomes.get("TKT-1008")!;
+
+    const completeKnownCauseFirst = buildApprovalDeskRecommendationInput({
+      ticket,
+      outcome,
+      actor: "approval-desk",
+      customerReplies: [
+        {
+          id: "reply-complete-known-cause",
+          ticketId: "TKT-1008",
+          createdAt: "2026-06-10T09:05:00.000Z",
+          body:
+            "Endpoint URL is https://hooks.juniper.example/webhooks/orders. Delivery ID is deliv_7788. Raw body handling has not changed since yesterday.",
+        },
+      ],
+    });
+
+    expect(completeKnownCauseFirst.supportState).toBe("known-cause");
+    expect(completeKnownCauseFirst.missingEvidence).toEqual([]);
+    expect(completeKnownCauseFirst.draftCustomerResponse).toContain(
+      "current signing secret",
+    );
+
+    const resolvedAsFirstReply = buildApprovalDeskRecommendationInput({
+      ticket,
+      outcome,
+      actor: "approval-desk",
+      customerReplies: [
+        {
+          id: "reply-resolved",
+          ticketId: "TKT-1008",
+          createdAt: "2026-06-10T09:05:00.000Z",
+          body: "This works now. The issue is resolved on our end.",
+        },
+      ],
+    });
+
+    expect(resolvedAsFirstReply.supportState).toBe("ready-for-close");
+    expect(resolvedAsFirstReply.draftCustomerResponse).toContain(
+      "Glad to hear that resolved it.",
+    );
+
+    const negatedKnownCause = buildApprovalDeskRecommendationInput({
+      ticket,
+      outcome,
+      actor: "approval-desk",
+      customerReplies: [
+        {
+          id: "reply-ruled-out",
+          ticketId: "TKT-1008",
+          createdAt: "2026-06-10T09:05:00.000Z",
+          body:
+            "We ruled out signing secret rotation. Endpoint URL is https://hooks.juniper.example/webhooks/orders and delivery ID is deliv_7788.",
+        },
+      ],
+    });
+
+    expect(negatedKnownCause.knownCause).not.toBe("webhook-secret-rotation");
+  });
+
+  it("can infer waiting-on-platform-fix from first context when impact is platform-side", async () => {
+    const outcomes = await loadExpectedOutcomes(
+      resolve("data/seed/expected-outcomes.json"),
+    );
+    const ticket = await loadSeedTicket("TKT-1001");
+    const input = buildApprovalDeskRecommendationInput({
+      ticket,
+      outcome: outcomes.get("TKT-1001")!,
+      actor: "approval-desk",
+      customerReplies: [
+        {
+          id: "reply-platform-impact",
+          ticketId: "TKT-1001",
+          createdAt: "2026-06-10T09:05:00.000Z",
+          body:
+            "This is affecting all EU stores and recent Checkout Started events are delayed even though the API accepted them.",
+        },
+      ],
+    });
+
+    expect(input.supportState).toBe("waiting-on-platform-fix");
+    expect(input.draftCustomerResponse).toContain(
+      "possible platform delay affecting event processing",
+    );
+  });
+
   it("ignores customer replies from other tickets when building lifecycle drafts", async () => {
     const outcomes = await loadExpectedOutcomes(
       resolve("data/seed/expected-outcomes.json"),

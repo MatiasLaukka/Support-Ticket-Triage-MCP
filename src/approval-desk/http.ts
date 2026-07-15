@@ -509,6 +509,27 @@ function customerRepliesFromAudits(
     }));
 }
 
+function latestSupportResponseFromAudits(
+  ticketId: string,
+  audits: readonly AuditEvent[],
+): { sentAt: string; body: string } | undefined {
+  return audits
+    .filter(
+      (event) =>
+        event.ticketId === ticketId &&
+        event.action === "customer-response-sent" &&
+        typeof event.after.customerResponse === "string",
+    )
+    .map((event) => ({
+      sentAt:
+        typeof event.after.sentAt === "string"
+          ? event.after.sentAt
+          : event.timestamp,
+      body: event.after.customerResponse as string,
+    }))
+    .sort((left, right) => right.sentAt.localeCompare(left.sentAt))[0];
+}
+
 async function supersedePendingRecommendationsWithNewerReply(input: {
   deps: RuntimeDependencies;
   ticketId: string;
@@ -553,6 +574,10 @@ async function createRecommendation(
     deps.recommendations.list(),
   ]);
   const persistedCustomerReplies = customerRepliesFromAudits(ticketId, audits);
+  const previousSupportResponse = latestSupportResponseFromAudits(
+    ticketId,
+    audits,
+  );
   const customerReplies = [...persistedCustomerReplies, ...body.customerReplies.map((reply) => ({
     ...reply,
     ticketId,
@@ -567,6 +592,7 @@ async function createRecommendation(
     outcome,
     actor: body.actor,
     customerReplies,
+    previousSupportResponse,
   });
   const knowledgeArticles = await Promise.all(
     deterministicInput.knowledgeArticleIds.map((articleId) =>
@@ -580,6 +606,7 @@ async function createRecommendation(
     knowledgeArticles,
     responseStyle: body.responseStyle,
     customerReplies,
+    previousSupportResponse,
     draftProvider:
       options.draftProvider ??
       createCustomerResponseDraftProviderFromEnv(process.env, {

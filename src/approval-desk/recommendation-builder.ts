@@ -17,6 +17,7 @@ import {
   DEFAULT_SUPPORT_COMPANY_NAME,
   draftCustomerResponseWithFallback,
   ensureDraftSignOff,
+  type CustomerResponseConversationContext,
   type CustomerResponseDraftProvider,
 } from "./draft-response-provider.js";
 import {
@@ -41,9 +42,14 @@ type CustomerReply = {
 };
 type CustomerReplyStage =
   | "first-contact"
+  | "vague-follow-up"
   | "partial-follow-up"
   | "all-evidence"
   | "customer-confirmed";
+type PreviousSupportResponse = {
+  sentAt: string;
+  body: string;
+};
 
 const ExpectedOutcomeSchema = z
   .object({
@@ -79,6 +85,7 @@ export function buildApprovalDeskRecommendationInput(input: {
   outcome?: ExpectedOutcome;
   actor: string;
   customerReplies?: readonly CustomerReply[];
+  previousSupportResponse?: PreviousSupportResponse;
 }): Omit<SubmitRecommendationInput, "submittedAt"> {
   const { ticket, outcome, actor } = input;
   const classification = outcome === undefined ? classifyTicket(ticket) : undefined;
@@ -98,6 +105,13 @@ export function buildApprovalDeskRecommendationInput(input: {
     customerReplies: input.customerReplies ?? [],
   });
   const evidenceReadiness = lifecycle.evidenceReadiness;
+  const conversationContext = buildConversationContext({
+    customerReplies: input.customerReplies ?? [],
+    ticketId: ticket.id,
+    replyStage: lifecycle.replyStage,
+    recognizedEvidenceProgress: lifecycle.recognizedEvidenceProgress,
+    previousSupportResponse: input.previousSupportResponse,
+  });
 
   const draftCustomerResponse = buildDraftCustomerResponse({
     ticket,
@@ -130,6 +144,7 @@ export function buildApprovalDeskRecommendationInput(input: {
       actor,
       companyName: DEFAULT_SUPPORT_COMPANY_NAME,
       evidenceReadiness,
+      conversationContext,
     },
     "deterministic",
     deterministicDraftChecks,
@@ -190,6 +205,7 @@ export async function buildApprovalDeskRecommendationInputWithDrafting(input: {
   draftProvider?: CustomerResponseDraftProvider;
   responseStyle?: DraftCustomerResponseStyleInput;
   customerReplies?: readonly CustomerReply[];
+  previousSupportResponse?: PreviousSupportResponse;
 }): Promise<Omit<SubmitRecommendationInput, "submittedAt">> {
   const base = buildApprovalDeskRecommendationInput(input);
   const providerOutcome = input.outcome ?? {
@@ -200,6 +216,11 @@ export async function buildApprovalDeskRecommendationInputWithDrafting(input: {
     requiredEscalations: base.escalationReasons ?? [],
     knowledgeArticleIds: base.knowledgeArticleIds,
   };
+  const lifecycle = analyzeCustomerReplyLifecycle({
+    ticket: input.ticket,
+    outcome: providerOutcome,
+    customerReplies: input.customerReplies ?? [],
+  });
 
   const draft = await draftCustomerResponseWithFallback({
     provider: input.draftProvider,
@@ -219,6 +240,13 @@ export async function buildApprovalDeskRecommendationInputWithDrafting(input: {
         missingEvidence: base.missingEvidence ?? [],
         nextInvestigationSteps: base.nextInvestigationSteps ?? [],
       },
+      conversationContext: buildConversationContext({
+        customerReplies: input.customerReplies ?? [],
+        ticketId: input.ticket.id,
+        replyStage: lifecycle.replyStage,
+        recognizedEvidenceProgress: lifecycle.recognizedEvidenceProgress,
+        previousSupportResponse: input.previousSupportResponse,
+      }),
     },
   });
 
@@ -469,6 +497,9 @@ function buildStructuredDiagnosticResponse(input: {
 }
 
 function formatReplyAcknowledgement(replyStage: CustomerReplyStage): string {
+  if (replyStage === "vague-follow-up") {
+    return "Thanks for getting back to us.";
+  }
   if (replyStage === "partial-follow-up") {
     return "Thanks for sending those details.";
   }
@@ -487,7 +518,9 @@ function formatEvidenceRequest(
   }
 
   return [
-    replyStage === "partial-follow-up"
+    replyStage === "vague-follow-up"
+      ? "To keep this moving, we still need the specific details below:"
+      : replyStage === "partial-follow-up"
       ? "To move this forward, we still need:"
       : "To move this forward, please share:",
     ...evidenceReadiness.missingEvidence.map(
@@ -521,7 +554,11 @@ function analyzeCustomerReplyLifecycle(input: {
   ticket: Ticket;
   outcome: ExpectedOutcome;
   customerReplies: readonly CustomerReply[];
-}): { evidenceReadiness: EvidenceReadiness; replyStage: CustomerReplyStage } {
+}): {
+  evidenceReadiness: EvidenceReadiness;
+  replyStage: CustomerReplyStage;
+  recognizedEvidenceProgress: boolean;
+} {
   const ticketReplies = input.customerReplies.filter(
     (reply) => reply.ticketId === input.ticket.id,
   ).sort(
@@ -542,6 +579,7 @@ function analyzeCustomerReplyLifecycle(input: {
           : evidenceBeforeReplies.supportState,
       ),
       replyStage: "first-contact",
+      recognizedEvidenceProgress: false,
     };
   }
 
@@ -568,6 +606,7 @@ function analyzeCustomerReplyLifecycle(input: {
         "ready-for-close",
       ),
       replyStage: "customer-confirmed",
+      recognizedEvidenceProgress: true,
     };
   }
 
@@ -575,6 +614,7 @@ function analyzeCustomerReplyLifecycle(input: {
     return {
       evidenceReadiness: platformFixEvidenceReadiness(evidenceReadiness),
       replyStage: "all-evidence",
+      recognizedEvidenceProgress: true,
     };
   }
 
@@ -592,13 +632,48 @@ function analyzeCustomerReplyLifecycle(input: {
       ),
       replyStage: hasUsefulEvidenceProgress
         ? "partial-follow-up"
-        : "first-contact",
+        : "vague-follow-up",
+      recognizedEvidenceProgress: hasUsefulEvidenceProgress,
     };
   }
 
   return {
     evidenceReadiness,
     replyStage: "all-evidence",
+    recognizedEvidenceProgress: true,
+  };
+}
+
+function buildConversationContext(input: {
+  customerReplies: readonly CustomerReply[];
+  ticketId: string;
+  replyStage: CustomerReplyStage;
+  recognizedEvidenceProgress: boolean;
+  previousSupportResponse?: PreviousSupportResponse;
+}): CustomerResponseConversationContext {
+  const latestCustomerReply = input.customerReplies
+    .filter((reply) => reply.ticketId === input.ticketId)
+    .sort(
+      (left, right) =>
+        right.createdAt.localeCompare(left.createdAt) ||
+        right.id.localeCompare(left.id),
+    )[0];
+
+  return {
+    turnType: input.replyStage,
+    hasCustomerReply: latestCustomerReply !== undefined,
+    recognizedEvidenceProgress: input.recognizedEvidenceProgress,
+    ...(latestCustomerReply === undefined
+      ? {}
+      : {
+          latestCustomerReply: {
+            createdAt: latestCustomerReply.createdAt,
+            body: latestCustomerReply.body,
+          },
+        }),
+    ...(input.previousSupportResponse === undefined
+      ? {}
+      : { previousSupportResponse: input.previousSupportResponse }),
   };
 }
 

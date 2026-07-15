@@ -257,9 +257,71 @@ describe("Approval Desk recommendation builder", () => {
     });
 
     expect(input.supportState).toBe("needs-information");
-    expect(input.draftCustomerResponse).not.toContain(
-      "Thanks for sending those details.",
+    expect(input.draftCustomerResponse).toContain(
+      "Thanks for getting back to us.",
     );
+    expect(input.draftCustomerResponse).toContain(
+      "we still need the specific details below",
+    );
+  });
+
+  it("passes compact conversation context to GPT drafting for vague follow-ups", async () => {
+    const outcomes = await loadExpectedOutcomes(
+      resolve("data/seed/expected-outcomes.json"),
+    );
+    const ticket = await loadSeedTicket("TKT-1008");
+    let capturedDraftInput: any;
+
+    await buildApprovalDeskRecommendationInputWithDrafting({
+      ticket,
+      outcome: outcomes.get("TKT-1008")!,
+      actor: "approval-desk",
+      knowledgeArticles: [],
+      customerReplies: [
+        {
+          id: "reply-vague",
+          ticketId: "TKT-1008",
+          createdAt: "2026-06-10T09:05:00.000Z",
+          body: "It is still happening, but I am not sure where to find the technical details.",
+        },
+      ],
+      draftProvider: {
+        draft: async (draftInput) => {
+          capturedDraftInput = draftInput;
+          return {
+            source: "openai",
+            response:
+              "Thanks for getting back to us. We still need the endpoint URL, delivery ID, and raw body handling details before we can confirm the safest next step.",
+            assist: {
+              source: "openai",
+              missingInfoSuggestions: [
+                "Share the endpoint URL, delivery ID, and raw body handling details.",
+              ],
+              investigationSteps: [
+                "Compare the latest customer reply with the remaining evidence checklist.",
+              ],
+              tone: "empathetic",
+              recommendedTone: "empathetic",
+              selectedTone: "empathetic",
+              toneReason:
+                "The customer replied but needs help finding technical details.",
+              audience: "developer",
+              checks: [],
+            },
+          };
+        },
+      },
+    });
+
+    expect(capturedDraftInput.conversationContext).toMatchObject({
+      turnType: "vague-follow-up",
+      hasCustomerReply: true,
+      recognizedEvidenceProgress: false,
+      latestCustomerReply: {
+        body: "It is still happening, but I am not sure where to find the technical details.",
+        createdAt: "2026-06-10T09:05:00.000Z",
+      },
+    });
   });
 
   it("infers lifecycle state from reply content rather than reply order", async () => {

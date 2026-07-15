@@ -43,6 +43,26 @@ export interface CustomerResponseDraftInput {
   actor: string;
   companyName: string;
   evidenceReadiness?: EvidenceReadiness;
+  conversationContext?: CustomerResponseConversationContext;
+}
+
+export interface CustomerResponseConversationContext {
+  turnType:
+    | "first-contact"
+    | "vague-follow-up"
+    | "partial-follow-up"
+    | "all-evidence"
+    | "customer-confirmed";
+  hasCustomerReply: boolean;
+  recognizedEvidenceProgress: boolean;
+  latestCustomerReply?: {
+    createdAt: string;
+    body: string;
+  };
+  previousSupportResponse?: {
+    sentAt: string;
+    body: string;
+  };
 }
 
 export interface CustomerResponseDraft {
@@ -680,6 +700,8 @@ function buildDraftInstructions(
     "Do not promise a fix, completion, delivery, refund, or closure unless the trusted context explicitly proves it.",
     "Use plain merchant-friendly language. Ask only for information needed to diagnose or safely resolve the issue.",
     "When evidenceReadiness is present, ask only for its missingEvidence items and do not duplicate equivalent questions.",
+    "When conversationContext shows a customer follow-up, acknowledge that reply before asking for any remaining evidence; do not write as if this is the first customer contact.",
+    "When conversationContext.turnType is vague-follow-up, politely explain that the reply did not include the specific details still needed.",
     `End the draft exactly with this sign-off on separate lines: ${signOff}`,
     responseStyleInstruction(style),
     "Return only JSON matching the requested schema.",
@@ -716,6 +738,7 @@ function buildDraftInput(input: CustomerResponseDraftInput): string {
       },
       accountFacts: extractAccountFacts(input.ticket),
       requestedResponseStyle: input.responseStyle,
+      conversationContext: input.conversationContext,
       expectedOutcome: {
         category: input.outcome.category,
         priority: input.outcome.acceptablePriorities[0],

@@ -1015,7 +1015,7 @@ export const approvalDeskHtml = `<!doctype html>
         els.conversationContextPanel.innerHTML =
           '<p class="hint">Use demo replies to advance the conversation lifecycle through the local API.</p>' +
           '<details><summary>Add synthetic customer replies</summary>' +
-            '<p class="hint">Replies are persisted through the ticket API, then the selected ticket, queue, and evidence are refreshed. Partial evidence gives an endpoint URL and delivery ID; complete evidence also includes raw body handling.</p>' +
+            '<p class="hint">Replies are generated from the current ticket evidence and conversation timeline, then persisted through the local API.</p>' +
             '<div class="conversation-controls">' +
               scenarioButton('vague-reply', 'Add vague reply') +
               scenarioButton('partial-evidence', 'Add partial evidence') +
@@ -2006,22 +2006,268 @@ export const approvalDeskHtml = `<!doctype html>
       }
 
       function conversationScenarioBody(value) {
+        const context = demoReplyContext();
         if (value === 'partial-evidence') {
-          return 'The endpoint URL is https://hooks.example.test/webhooks/orders and the delivery ID is deliv_7788.';
+          return evidenceReply(context, { mode: 'partial' });
         }
         if (value === 'complete-evidence') {
-          return 'Endpoint URL is https://hooks.example.test/webhooks/orders. Delivery ID is deliv_7788. Raw body handling has not changed since yesterday.';
+          return evidenceReply(context, { mode: 'complete' });
         }
         if (value === 'known-cause-evidence') {
-          return 'We rotated the signing secret yesterday. Endpoint URL is https://hooks.example.test/webhooks/orders, delivery ID is deliv_7788, and raw body handling has not changed.';
+          return knownCauseReply(context);
         }
         if (value === 'platform-fix-context') {
-          return 'This is affecting all EU stores and recent Checkout Started events are delayed even though the API accepted them.';
+          return platformFixReply(context);
         }
         if (value === 'resolved-confirmation') {
           return 'This works now. The issue is resolved on our end.';
         }
-        return 'It is still happening, but I am not sure where to find the technical details.';
+        return vagueReply(context);
+      }
+
+      function demoReplyContext() {
+        const recommendation = state.recommendation ?? {};
+        const ticket = state.selectedTicket ?? {};
+        const timelineText = Array.isArray(state.conversationTimeline)
+          ? state.conversationTimeline
+              .filter(function (item) { return item.kind === 'customer-reply'; })
+              .map(function (item) { return String(item.body ?? ''); })
+              .join('\\n')
+              .toLowerCase()
+          : '';
+        const missingEvidence = Array.isArray(recommendation.missingEvidence)
+          ? recommendation.missingEvidence
+          : missingEvidenceFromRecommendation(recommendation);
+        return {
+          ticket,
+          recommendation,
+          missingEvidence,
+          timelineText,
+          searchableText: [
+            ticket.subject,
+            ticket.description,
+            recommendation.category,
+            recommendation.team,
+            ...(Array.isArray(ticket.tags) ? ticket.tags : [])
+          ].filter(Boolean).join(' ').toLowerCase()
+        };
+      }
+
+      function missingEvidenceFromRecommendation(recommendation) {
+        if (Array.isArray(recommendation.missingInformation) && recommendation.missingInformation.length > 0) {
+          return recommendation.missingInformation.map(function (question, index) {
+            return {
+              id: 'missing-information-' + index,
+              label: 'Missing information',
+              customerQuestion: question
+            };
+          });
+        }
+        return [
+          {
+            id: 'problem-summary',
+            label: 'Problem summary',
+            customerQuestion: 'what you were trying to do, what happened, and where it happened'
+          },
+          {
+            id: 'screenshot-or-error',
+            label: 'Screenshot or error',
+            customerQuestion: 'screenshot or exact message, if you can share one'
+          }
+        ];
+      }
+
+      function evidenceReply(context, options) {
+        const remaining = remainingEvidence(context);
+        const selected = options.mode === 'complete'
+          ? remaining
+          : remaining.slice(0, Math.min(2, remaining.length));
+        if (selected.length === 0) {
+          return 'I think I have already sent the details I can find. Please let me know if there is anything specific you still need me to check.';
+        }
+        const sentences = selected.map(function (requirement) {
+          return sampleEvidenceSentence(requirement, context);
+        });
+        return sentences.join(' ');
+      }
+
+      function remainingEvidence(context) {
+        return context.missingEvidence.filter(function (requirement) {
+          return !evidenceAlreadyMentioned(requirement, context.timelineText);
+        });
+      }
+
+      function evidenceAlreadyMentioned(requirement, timelineText) {
+        if (timelineText.trim() === '') {
+          return false;
+        }
+        const id = String(requirement.id ?? '').toLowerCase();
+        const markers = evidenceMarkers(id);
+        if (markers.some(function (marker) { return timelineText.includes(marker); })) {
+          return true;
+        }
+        const label = String(requirement.label ?? '').toLowerCase();
+        return label !== '' && timelineText.includes(label);
+      }
+
+      function evidenceMarkers(id) {
+        const markersById = {
+          'affected-recipient-domains': ['recipient domains', 'gmail.com', 'outlook.com'],
+          'audience-size': ['audience size', 'expected recipients', '2100'],
+          'affected-scope': ['affected scope', 'affected profiles', '12 profiles'],
+          'api-response-status': ['api response', 'response status', '400 validation'],
+          'audit-source': ['audit source', 'source ip', '198.51.100.24'],
+          'bounce-samples': ['bounce samples', 'bounce code', '550 5.1.1'],
+          'campaign-name': ['campaign name', 'summer flash sale'],
+          'catalog-sync-time': ['catalog sync time', 'last catalog sync'],
+          'compliance-banner': ['compliance banner', 'quiet-hour protection'],
+          'coupon-pool-name': ['coupon pool', 'summer-launch-2026'],
+          'delivery-id': ['delivery id', 'deliv_7788'],
+          'delivery-attempt-time': ['delivery attempt', '09:12 utc'],
+          'endpoint-response-code': ['endpoint response code', 'http 401'],
+          'endpoint-url': ['endpoint url', 'hooks.example.test'],
+          'consent-timeline': ['consent timeline', 'opt-out history'],
+          'error-banner': ['error banner', 'something went wrong'],
+          'event-created-time': ['event creation time', 'source event creation'],
+          'event-id': ['event id', 'evt_12345'],
+          'expected-field': ['expected field', 'custom material field'],
+          'exposure-location': ['log bundle', 'shared connector logs'],
+          'failure-timestamp': ['failure timestamp', 'failed at'],
+          'flow-id': ['flow id', 'browse abandonment'],
+          'key-identifier': ['key identifier', 'last four'],
+          'key-usage-status': ['key usage', 'used after exposure'],
+          'masked-recipient': ['masked recipient', '+1 *** *** 0134'],
+          'object-id': ['object id', 'sku-7788', 'order number'],
+          'opt-out-timestamp': ['stop reply', 'opt-out timestamp'],
+          'platform': ['shopify', 'magento', 'woocommerce', 'ecommerce platform'],
+          'problem-summary': ['campaign editor', 'what happened', 'blank page'],
+          'product-reference': ['product url', 'product id', 'cart url'],
+          'profile-email': ['profile email', 'customer id', 'customer@example.test'],
+          'raw-body-change-status': ['raw body handling', 'body parser'],
+          'recipient-region': ['recipient region', 'us recipients'],
+          'request-id': ['request id', 'req_12345'],
+          'reproduction-steps': ['steps', 'opened', 'clicked'],
+          'retry-history': ['retry history', 'eventually succeed'],
+          'rotation-status': ['rotated', 'revoked'],
+          'sample-payload': ['sample payload', 'payload'],
+          'scheduled-send-time': ['scheduled send time', '8:30 pm'],
+          'screenshot-or-error': ['screenshot', 'error message', 'page stayed blank'],
+          'segment-name': ['segment name', 'engaged subscribers'],
+          'sending-domain': ['sending domain', 'mail.example.test'],
+          'signing-secret-rotation-time': ['signing secret', 'rotated'],
+          'source-update-time': ['source update time', 'updated in shopify'],
+          'store-url': ['store url', 'store.example.test'],
+          'timestamp-tolerance': ['timestamp tolerance', 'five minutes'],
+          'timeline-visibility': ['profile timeline', 'activity timeline'],
+          'unused-coupon-status': ['unused coupon', 'codes remain available']
+        };
+        return markersById[id] ?? [id.replaceAll('-', ' ')];
+      }
+
+      function sampleEvidenceSentence(requirement, context) {
+        const id = String(requirement.id ?? '').toLowerCase();
+        const question = String(requirement.customerQuestion ?? requirement.label ?? 'the requested detail');
+        const samples = {
+          'affected-recipient-domains': 'The affected recipient domains I can see are gmail.com and outlook.com.',
+          'audience-size': 'The expected audience size was about 2,100 profiles.',
+          'affected-scope': 'The affected scope appears to be 12 profiles in the latest export.',
+          'api-response-status': 'The API response status is 400 validation_error.',
+          'audit-source': 'The audit source shown is IP 198.51.100.24.',
+          'bounce-samples': 'A sample bounce code is 550 5.1.1 user unknown.',
+          'campaign-name': 'The campaign name is Summer Flash Sale.',
+          'catalog-sync-time': 'The last catalog sync time I can see is 2026-06-10 09:20 UTC.',
+          'compliance-banner': 'The dashboard banner says quiet-hour protection blocked delivery.',
+          'coupon-pool-name': 'The coupon pool name is summer-launch-2026.',
+          'delivery-id': 'The delivery ID is deliv_7788.',
+          'delivery-attempt-time': 'The webhook delivery attempt time was 2026-06-10 09:12 UTC.',
+          'endpoint-response-code': 'The endpoint response code is HTTP 401.',
+          'endpoint-url': 'The endpoint URL is https://hooks.example.test/webhooks/orders.',
+          'consent-timeline': 'The consent timeline shows the STOP reply, but the profile still appears eligible.',
+          'error-banner': 'The error banner says "Something went wrong".',
+          'event-created-time': 'The source event creation time was 2026-06-10 08:54 UTC.',
+          'event-id': 'The event ID is evt_12345.',
+          'expected-field': 'The expected custom field name is material.',
+          'exposure-location': 'The key may have been shared in a connector log bundle attached to the ticket.',
+          'failure-timestamp': 'The failure timestamp was 2026-06-10 09:15 UTC.',
+          'flow-id': 'The flow name is Browse Abandonment, flow ID flow_12345.',
+          'key-identifier': 'The key identifier ends in 4f8a; I am not sending the secret value.',
+          'key-usage-status': 'I cannot see any post-exposure key usage in the audit view.',
+          'masked-recipient': 'The masked recipient is +1 *** *** 0134.',
+          'object-id': 'The affected object ID is sku-7788.',
+          'opt-out-timestamp': 'The STOP reply timestamp was 2026-06-10 18:42 UTC.',
+          'platform': platformSentence(context),
+          'problem-summary': 'I was trying to open the campaign editor, but the page stayed blank.',
+          'product-reference': 'The product URL is https://store.example.test/products/linen-shirt.',
+          'profile-email': 'One affected profile email is customer@example.test.',
+          'raw-body-change-status': 'Raw body handling has not changed since yesterday.',
+          'recipient-region': 'The recipient region is US.',
+          'request-id': 'The request ID is req_12345.',
+          'reproduction-steps': 'The steps were: I opened the campaign, clicked Edit, and then the page stayed blank.',
+          'retry-history': 'The retry history shows the delivery eventually succeeded after three retries.',
+          'rotation-status': 'The exposed key has been rotated and the old key was revoked.',
+          'sample-payload': 'I can share a sample payload with secrets removed.',
+          'scheduled-send-time': 'The scheduled send time was 8:30 PM US Eastern.',
+          'screenshot-or-error': 'The message on screen says "Something went wrong"; I can attach a screenshot.',
+          'segment-name': 'The segment name is Engaged Subscribers - 30 days.',
+          'sending-domain': 'The sending domain is mail.example.test.',
+          'signing-secret-rotation-time': 'We rotated the signing secret yesterday at 08:10 UTC.',
+          'source-update-time': 'The source-system update time was 2026-06-10 07:30 UTC.',
+          'store-url': 'The affected store URL is https://store.example.test.',
+          'timestamp-tolerance': 'The timestamp tolerance configured for verification is five minutes.',
+          'timeline-visibility': 'The event is still missing from the profile activity timeline.',
+          'unused-coupon-status': 'Unused coupon codes remain available in the pool.'
+        };
+        return samples[id] ?? ('For ' + question + ', the value I found is example detail for this ticket.');
+      }
+
+      function platformSentence(context) {
+        if (context.searchableText.includes('shopify')) {
+          return 'The ecommerce platform is Shopify.';
+        }
+        if (context.searchableText.includes('magento')) {
+          return 'The ecommerce platform is Magento.';
+        }
+        if (context.searchableText.includes('woocommerce')) {
+          return 'The ecommerce platform is WooCommerce.';
+        }
+        return 'The ecommerce platform is Shopify.';
+      }
+
+      function vagueReply(context) {
+        if (context.recommendation?.supportState === 'needs-information') {
+          return 'It is still happening, but I am not sure where to find the details you asked for.';
+        }
+        return 'It is still happening on my side, but I do not have more details yet.';
+      }
+
+      function knownCauseReply(context) {
+        if (context.searchableText.includes('webhook') || context.searchableText.includes('signature')) {
+          const rotation = sampleEvidenceSentence({ id: 'signing-secret-rotation-time' }, context);
+          const endpoint = evidenceAlreadyMentioned({ id: 'endpoint-url', label: 'Endpoint URL' }, context.timelineText)
+            ? ''
+            : ' ' + sampleEvidenceSentence({ id: 'endpoint-url' }, context);
+          const delivery = evidenceAlreadyMentioned({ id: 'delivery-id', label: 'Delivery ID' }, context.timelineText)
+            ? ''
+            : ' ' + sampleEvidenceSentence({ id: 'delivery-id' }, context);
+          const rawBody = evidenceAlreadyMentioned({ id: 'raw-body-change-status', label: 'Raw body handling changes' }, context.timelineText)
+            ? ''
+            : ' ' + sampleEvidenceSentence({ id: 'raw-body-change-status' }, context);
+          return (rotation + endpoint + delivery + rawBody).trim();
+        }
+        if (context.searchableText.includes('quiet-hour')) {
+          return 'The dashboard says quiet-hour protection blocked delivery, and the scheduled send time was 8:30 PM US Eastern.';
+        }
+        return evidenceReply(context, { mode: 'complete' });
+      }
+
+      function platformFixReply(context) {
+        if (context.searchableText.includes('sms')) {
+          return 'This is affecting US recipients, and the dashboard says quiet-hour protection blocked delivery.';
+        }
+        if (context.searchableText.includes('campaign') || context.searchableText.includes('audience')) {
+          return 'This is affecting the campaign audience calculation, and the snapshot has been stuck for more than one hour.';
+        }
+        return 'This is affecting multiple stores, and recent events are delayed even though the API accepted them.';
       }
 
       els.actor.addEventListener('input', updateControls);

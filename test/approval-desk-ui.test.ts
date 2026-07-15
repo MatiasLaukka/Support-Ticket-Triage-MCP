@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { approvalDeskHtml } from "../src/approval-desk/ui.js";
 
@@ -49,8 +50,52 @@ describe("approvalDeskHtml", () => {
     expect(approvalDeskHtml).not.toMatch(/fetch\(\s*['"`]https?:\/\//);
   });
 
+  it("has demo reply samples for every evidence requirement", () => {
+    const evidenceSource = readFileSync(
+      "src/approval-desk/evidence-readiness.ts",
+      "utf8",
+    );
+    const catalogBlock = evidenceSource.match(
+      /const EVIDENCE_CATALOG[\s\S]*?const KNOWLEDGE_EVIDENCE/,
+    )?.[0];
+    expect(catalogBlock).toBeDefined();
+    const catalogIds = [...catalogBlock!.matchAll(/\n\s+"([a-z0-9-]+)": \{/g)]
+      .map((match) => match[1]!)
+      .sort();
+    const markerBlock = approvalDeskHtml.match(
+      /const markersById = \{[\s\S]*?\n\s+\};/,
+    )?.[0];
+    const sampleBlock = approvalDeskHtml.match(
+      /const samples = \{[\s\S]*?\n\s+\};/,
+    )?.[0];
+    expect(markerBlock).toBeDefined();
+    expect(sampleBlock).toBeDefined();
+    const markerIds = [...markerBlock!.matchAll(/'([a-z0-9-]+)':/g)].map(
+      (match) => match[1]!,
+    );
+    const sampleIds = [...sampleBlock!.matchAll(/'([a-z0-9-]+)':/g)].map(
+      (match) => match[1]!,
+    );
+
+    expect(catalogIds.filter((id) => !markerIds.includes(id))).toEqual([]);
+    expect(catalogIds.filter((id) => !sampleIds.includes(id))).toEqual([]);
+  });
+
   it("persists synthetic customer replies and refreshes ticket, queue, and evidence", async () => {
-    const app = await startApprovalDeskApp();
+    const app = await startApprovalDeskApp({
+      ticketDetailRecommendation: {
+        ...fixtureRecommendation,
+        missingEvidence: [
+          evidenceRequirement("endpoint-url", "Endpoint URL", "endpoint URL"),
+          evidenceRequirement("delivery-id", "Delivery ID", "delivery ID"),
+          evidenceRequirement(
+            "raw-body-change-status",
+            "Raw body handling changes",
+            "whether raw body handling changed recently",
+          ),
+        ],
+      },
+    });
     await app.selectFirstTicket();
 
     expect(app.el("conversationContextPanel").innerHTML).toContain(
@@ -78,12 +123,95 @@ describe("approvalDeskHtml", () => {
     expect(app.evidenceRequests()).toBe(2);
   });
 
-  it("explains partial and complete synthetic evidence before a support response is sent", async () => {
+  it("generates gentle generic evidence replies for vague tickets", async () => {
+    const app = await startApprovalDeskApp({
+      tickets: [
+        {
+          ...fixtureTicket,
+          id: "TKT-1010",
+          subject: "Problem",
+          description: "It does not work.",
+        },
+      ],
+      ticketDetailRecommendation: {
+        ...fixtureRecommendation,
+        ticketId: "TKT-1010",
+        category: "other",
+        team: "support",
+        missingEvidence: [
+          evidenceRequirement(
+            "problem-summary",
+            "Problem summary",
+            "what you were trying to do, what happened, and where it happened",
+          ),
+          evidenceRequirement(
+            "reproduction-steps",
+            "Steps taken",
+            "steps you took, if you remember them",
+          ),
+          evidenceRequirement(
+            "screenshot-or-error",
+            "Screenshot or error",
+            "screenshot or exact message, if you can share one",
+          ),
+        ],
+      },
+    });
+    await app.selectFirstTicket();
+    await app.clickConversationScenario("partial-evidence");
+
+    const replyRequest = app.requests.find((request) =>
+      request.path.endsWith("/customer-replies"),
+    );
+    const body = JSON.parse(String(replyRequest?.init?.body)).body;
+    expect(body).toContain("campaign editor");
+    expect(body).not.toContain("endpoint URL");
+    expect(body).not.toContain("delivery ID");
+    expect(body).not.toContain("webhook");
+  });
+
+  it("does not repeat evidence already visible in the conversation timeline", async () => {
+    const app = await startApprovalDeskApp({
+      ticketDetailRecommendation: {
+        ...fixtureRecommendation,
+        missingEvidence: [
+          evidenceRequirement("endpoint-url", "Endpoint URL", "endpoint URL"),
+          evidenceRequirement("delivery-id", "Delivery ID", "delivery ID"),
+          evidenceRequirement(
+            "raw-body-change-status",
+            "Raw body handling changes",
+            "whether raw body handling changed recently",
+          ),
+        ],
+      },
+      ticketDetail: {
+        conversationTimeline: [
+          {
+            kind: "customer-reply",
+            timestamp: "2026-06-10T09:05:00.000Z",
+            actor: "Lina Weber",
+            body: "The endpoint URL is https://hooks.example.test/webhooks/orders and the delivery ID is deliv_7788.",
+          },
+        ],
+      },
+    });
+    await app.selectFirstTicket();
+    await app.clickConversationScenario("partial-evidence");
+
+    const replyRequest = app.requests.find((request) =>
+      request.path.endsWith("/customer-replies"),
+    );
+    const body = JSON.parse(String(replyRequest?.init?.body)).body;
+    expect(body).toContain("Raw body handling");
+    expect(body).not.toContain("deliv_7788");
+  });
+
+  it("explains synthetic evidence replies are based on current missing evidence", async () => {
     const app = await startApprovalDeskApp();
     await app.selectFirstTicket();
 
     expect(app.el("conversationContextPanel").innerHTML).toContain(
-      "Partial evidence gives an endpoint URL and delivery ID; complete evidence also includes raw body handling.",
+      "Replies are generated from the current ticket evidence and conversation timeline",
     );
     expect(app.el("conversationContextPanel").innerHTML).toContain(
       "Add synthetic customer replies",
@@ -1293,6 +1421,15 @@ const fixtureConversationTimeline = [
   },
 ];
 
+function evidenceRequirement(id: string, label: string, customerQuestion: string) {
+  return {
+    id,
+    label,
+    customerQuestion,
+    source: "policy",
+  };
+}
+
 type FixtureRecommendation = Omit<typeof fixtureRecommendation, "classificationSignals"> & {
   classificationSignals?: typeof fixtureRecommendation.classificationSignals;
   supportState?: string;
@@ -1320,6 +1457,7 @@ async function startApprovalDeskApp(options: {
   const requests: Array<{ path: string; init?: RequestInit }> = [];
   const recommendation = options.recommendation ?? fixtureRecommendation;
   const tickets = options.tickets ?? [fixtureTicket];
+  const selectedFixtureTicket = tickets[0]!;
   const metrics = { pendingRecommendations: 0, queueDepth: 1 };
   let createdRecommendation: FixtureRecommendation | undefined;
   const document = {
@@ -1349,7 +1487,7 @@ async function startApprovalDeskApp(options: {
       }
       return jsonResponse(fixtureEvidence);
     }
-    if (path === "/api/tickets/TKT-1001") {
+    if (path === `/api/tickets/${selectedFixtureTicket.id}`) {
       const recommendationHistory = createdRecommendation === undefined
         ? (options.ticketDetail?.recommendationHistory ?? [])
         : [
@@ -1365,7 +1503,7 @@ async function startApprovalDeskApp(options: {
             ]),
           ];
       return jsonResponse({
-        ticket: fixtureTicket,
+        ticket: selectedFixtureTicket,
         audits: { events: [] },
         conversationTimeline: options.ticketDetail?.conversationTimeline ?? [],
         recommendationHistory,
@@ -1374,12 +1512,12 @@ async function startApprovalDeskApp(options: {
           createdRecommendation ?? options.ticketDetailRecommendation,
       });
     }
-    if (path === "/api/tickets/TKT-1001/customer-replies") {
+    if (path === `/api/tickets/${selectedFixtureTicket.id}/customer-replies`) {
       return jsonResponse({
         auditEvent: { action: "customer-reply-received" },
       }, 201);
     }
-    if (path === "/api/tickets/TKT-1001/recommendations") {
+    if (path === `/api/tickets/${selectedFixtureTicket.id}/recommendations`) {
       if (options.recommendationDelayTicks !== undefined) {
         await settle(options.recommendationDelayTicks);
       }
@@ -1433,7 +1571,7 @@ async function startApprovalDeskApp(options: {
       requests.filter((request) => request.path === "/api/tickets?limit=50")
         .length,
     ticketDetailRequests: () =>
-      requests.filter((request) => request.path === "/api/tickets/TKT-1001")
+      requests.filter((request) => request.path === `/api/tickets/${selectedFixtureTicket.id}`)
         .length,
     field: (value: string) =>
       elements.fieldChoices.children.find((field) => field.value === value)!,

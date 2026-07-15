@@ -866,6 +866,7 @@ describe("TriageService", () => {
         customerResponse: expect.stringContaining("Hi"),
       },
     });
+    expect(harness.audit.events.at(-1)).toEqual(sentEvent);
     expect(await harness.tickets.get("TKT-1001")).toEqual(before);
   });
 
@@ -889,6 +890,7 @@ describe("TriageService", () => {
         source: "demo-scenario",
       },
     });
+    expect(harness.audit.events.at(-1)).toEqual(replyEvent);
     expect(await harness.tickets.get("TKT-1001")).toEqual(before);
   });
 
@@ -909,9 +911,33 @@ describe("TriageService", () => {
       before: { resolution: "pending" },
       after: { resolution: "superseded" },
     });
+    expect(harness.audit.events.at(-1)).toEqual(supersededEvent);
     expect(await harness.recommendations.get(recommendationId)).toMatchObject({
       resolution: "superseded",
     });
+  });
+
+  it("rolls pending recommendation back when supersession audit fails", async () => {
+    const harness = makeHarness();
+    await harness.service.submit(makeSubmitInput());
+    harness.audit.failNext = true;
+
+    await expect(
+      harness.service.supersedeRecommendation({
+        recommendationId,
+        ticketId: "TKT-1001",
+        actor: "Maya Chen",
+        supersededAt: "2026-06-10T09:20:00.000Z",
+        reason: "A more current recommendation is required.",
+      }),
+    ).rejects.toMatchObject({
+      message: "Supersession audit failed; recommendation was compensated.",
+    });
+
+    expect(await harness.recommendations.get(recommendationId)).toMatchObject({
+      resolution: "pending",
+    });
+    expect(harness.audit.events).toHaveLength(1);
   });
 
   it("rolls approved recommendation back when cancellation audit fails", async () => {

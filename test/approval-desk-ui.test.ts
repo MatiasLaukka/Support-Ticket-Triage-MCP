@@ -164,10 +164,6 @@ describe("approvalDeskHtml", () => {
     );
 
     const repliedApp = await startApprovalDeskApp({
-      ticketDetailRecommendation: {
-        ...fixtureRecommendation,
-        resolution: "approved",
-      },
       ticketDetail: {
         recommendationSummary: {
           workflowState: "customer-replied",
@@ -175,6 +171,28 @@ describe("approvalDeskHtml", () => {
           hasSentResponse: true,
           hasCustomerReply: true,
         },
+        conversationTimeline: [
+          {
+            kind: "support-response-sent",
+            timestamp: "2026-06-10T09:04:00.000Z",
+            actor: "approval-desk",
+            recommendationId: fixtureRecommendation.id,
+            body: "Earlier sent response.",
+          },
+          {
+            kind: "customer-reply",
+            timestamp: "2026-06-10T09:05:00.000Z",
+            actor: "Avery Brooks",
+            body: "I sent the remaining evidence.",
+          },
+        ],
+        recommendationHistory: [
+          {
+            ...fixtureRecommendation,
+            resolution: "approved",
+            draftCustomerResponse: "Earlier sent response.",
+          },
+        ],
       },
     });
     await repliedApp.selectFirstTicket();
@@ -189,6 +207,57 @@ describe("approvalDeskHtml", () => {
     expect(
       repliedApp.requests.some((request) => request.path.endsWith("/recommendations")),
     ).toBe(true);
+    expect(repliedApp.ticketDetailRequests()).toBe(2);
+    expect(repliedApp.el("recommendationPanel").innerHTML).toContain(
+      "Previous recommendations",
+    );
+  });
+
+  it("keeps the latest approved recommendation sendable after older sent and reply events", async () => {
+    const app = await startApprovalDeskApp({
+      ticketDetailRecommendation: {
+        ...fixtureRecommendation,
+        resolution: "approved",
+      },
+      ticketDetail: {
+        conversationTimeline: [
+          {
+            kind: "original-ticket",
+            timestamp: "2026-06-10T09:00:00.000Z",
+            actor: "Avery Brooks",
+            title: "Original ticket",
+            body: "Login fails.",
+          },
+          {
+            kind: "support-response-sent",
+            timestamp: "2026-06-10T09:04:00.000Z",
+            actor: "approval-desk",
+            recommendationId: "22222222-2222-4222-8222-222222222222",
+            body: "Earlier sent response.",
+          },
+          {
+            kind: "customer-reply",
+            timestamp: "2026-06-10T09:05:00.000Z",
+            actor: "Avery Brooks",
+            body: "I sent the remaining evidence.",
+          },
+        ],
+        recommendationSummary: {
+          workflowState: "draft-ready",
+          latestRecommendationId: fixtureRecommendation.id,
+          latestResolution: "approved",
+          hasSentResponse: true,
+          hasCustomerReply: true,
+        },
+      },
+    });
+
+    await app.selectFirstTicket();
+
+    expect(app.el("recommendationPanel").innerHTML).toContain(
+      "Mark response as sent",
+    );
+    expect(app.el("createRecommendation").disabled).toBe(true);
   });
 
   it("renders previous recommendations compactly in collapsed history", async () => {
@@ -1197,6 +1266,7 @@ async function startApprovalDeskApp(options: {
   const recommendation = options.recommendation ?? fixtureRecommendation;
   const tickets = options.tickets ?? [fixtureTicket];
   const metrics = { pendingRecommendations: 0, queueDepth: 1 };
+  let createdRecommendation: FixtureRecommendation | undefined;
   const document = {
     createElement: () => new FakeElement(),
     getElementById: (id: string) => elements[id],
@@ -1225,13 +1295,28 @@ async function startApprovalDeskApp(options: {
       return jsonResponse(fixtureEvidence);
     }
     if (path === "/api/tickets/TKT-1001") {
+      const recommendationHistory = createdRecommendation === undefined
+        ? (options.ticketDetail?.recommendationHistory ?? [])
+        : [
+            createdRecommendation,
+            ...(options.ticketDetail?.recommendationHistory ?? [
+              {
+                ...fixtureRecommendation,
+                id: "22222222-2222-4222-8222-222222222222",
+                resolution: "approved",
+                createdAt: "2026-06-10T08:20:00.000Z",
+                draftCustomerResponse: "Earlier approved response.",
+              },
+            ]),
+          ];
       return jsonResponse({
         ticket: fixtureTicket,
         audits: { events: [] },
         conversationTimeline: options.ticketDetail?.conversationTimeline ?? [],
-        recommendationHistory: options.ticketDetail?.recommendationHistory ?? [],
+        recommendationHistory,
         recommendationSummary: options.ticketDetail?.recommendationSummary,
-        latestRecommendation: options.ticketDetailRecommendation,
+        latestRecommendation:
+          createdRecommendation ?? options.ticketDetailRecommendation,
       });
     }
     if (path === "/api/tickets/TKT-1001/customer-replies") {
@@ -1249,6 +1334,7 @@ async function startApprovalDeskApp(options: {
           503,
         );
       }
+      createdRecommendation = recommendation;
       return jsonResponse({ recommendation }, 201);
     }
     if (path === "/api/recommendations/11111111-1111-4111-8111-111111111111/approve") {

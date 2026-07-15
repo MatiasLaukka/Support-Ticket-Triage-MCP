@@ -1003,9 +1003,8 @@ export const approvalDeskHtml = `<!doctype html>
       }
 
       function isApprovedAwaitingSend() {
-        const summary = state.selectedTicket?.recommendationSummary ?? {};
-        const approved = state.recommendation?.resolution === 'approved' || summary.latestResolution === 'approved';
-        return approved && summary.hasSentResponse !== true && summary.hasCustomerReply !== true;
+        const approved = state.recommendation?.resolution === 'approved';
+        return approved && !isCurrentRecommendationSent();
       }
 
       function renderConversationContext() {
@@ -1234,7 +1233,17 @@ export const approvalDeskHtml = `<!doctype html>
       function shouldShowMarkSentAction() {
         const summary = state.selectedTicket?.recommendationSummary ?? {};
         const approved = state.recommendation?.resolution === 'approved' || summary.latestResolution === 'approved';
-        return approved && summary.hasSentResponse !== true;
+        return approved && !isCurrentRecommendationSent();
+      }
+
+      function isCurrentRecommendationSent() {
+        const recommendationId = state.recommendation?.id ?? state.selectedTicket?.recommendationSummary?.latestRecommendationId;
+        if (recommendationId === undefined) {
+          return false;
+        }
+        return Array.isArray(state.conversationTimeline) && state.conversationTimeline.some(function (item) {
+          return item.kind === 'support-response-sent' && item.recommendationId === recommendationId;
+        });
       }
 
       function renderPreviousRecommendations() {
@@ -1411,6 +1420,9 @@ export const approvalDeskHtml = `<!doctype html>
           markSelectedTicketWorkflow(data.recommendation, 'draft-ready');
           renderRecommendation();
           setResult(data);
+          if (state.selectedTicket?.id !== undefined) {
+            await selectTicket(state.selectedTicket.id);
+          }
           await refreshEvidenceBestEffort();
         } finally {
           els.createRecommendation.disabled = false;

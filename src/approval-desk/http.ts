@@ -671,9 +671,7 @@ async function markRecommendationSent(
         "Customer response must be approved before it can be marked sent.",
       );
     }
-    const sentAt = new Date(
-      new Date(approval.timestamp).getTime() + 5 * 60 * 1_000,
-    ).toISOString();
+    const sentAt = deps.now().toISOString();
     return {
       auditEvent: await deps.service.markResponseSent({
         ...body,

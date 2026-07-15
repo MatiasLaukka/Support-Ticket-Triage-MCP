@@ -275,7 +275,7 @@ describe("createApprovalDeskHttpServer", () => {
     expect(seenResponseStyles).toEqual(["technical"]);
   });
 
-  it("marks an approved recommendation as sent five minutes after approval", async () => {
+  it("marks an approved recommendation as sent at the reviewer click time", async () => {
     let currentNow = now;
     const { json } = await startFixture({}, { now: () => currentNow });
     const approvedResponse =
@@ -316,9 +316,9 @@ describe("createApprovalDeskHttpServer", () => {
     expect(sent.status).toBe(200);
     expect(sent.body.auditEvent).toMatchObject({
       action: "customer-response-sent",
-      timestamp: "2026-06-10T09:05:00.000Z",
+      timestamp: "2026-06-10T10:00:00.000Z",
       after: {
-        sentAt: "2026-06-10T09:05:00.000Z",
+        sentAt: "2026-06-10T10:00:00.000Z",
         customerResponse: approvedResponse,
       },
     });
@@ -328,12 +328,12 @@ describe("createApprovalDeskHttpServer", () => {
       workflowState: "waiting",
       hasSentResponse: true,
       hasCustomerReply: false,
-      latestSentAt: "2026-06-10T09:05:00.000Z",
+      latestSentAt: "2026-06-10T10:00:00.000Z",
     });
     expect(detail.body.conversationTimeline).toContainEqual(
       expect.objectContaining({
         kind: "support-response-sent",
-        timestamp: "2026-06-10T09:05:00.000Z",
+        timestamp: "2026-06-10T10:00:00.000Z",
         recommendationId: created.body.recommendation.id,
         body: approvedResponse,
       }),
@@ -494,7 +494,7 @@ describe("createApprovalDeskHttpServer", () => {
       workflowState: "customer-replied",
       hasSentResponse: true,
       hasCustomerReply: true,
-      latestSentAt: "2026-06-10T09:05:00.000Z",
+      latestSentAt: "2026-06-10T09:00:00.000Z",
       latestCustomerReplyAt: "2026-06-10T09:06:00.000Z",
     });
     expect(detail.body.conversationTimeline).toContainEqual(

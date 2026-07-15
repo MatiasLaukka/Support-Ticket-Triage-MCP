@@ -106,6 +106,35 @@ const CancelApprovalInputSchema = z
   })
   .strict();
 
+const MarkResponseSentInputSchema = z
+  .object({
+    recommendationId: z.uuid(),
+    ticketId: TicketIdSchema,
+    actor: NonBlankStringSchema,
+    sentAt: IsoTimestampSchema,
+  })
+  .strict();
+
+const AddCustomerReplyInputSchema = z
+  .object({
+    ticketId: TicketIdSchema,
+    actor: NonBlankStringSchema,
+    body: NonBlankStringSchema.max(4_000),
+    receivedAt: IsoTimestampSchema,
+    source: NonBlankStringSchema.optional(),
+  })
+  .strict();
+
+const SupersedeRecommendationInputSchema = z
+  .object({
+    recommendationId: z.uuid(),
+    ticketId: TicketIdSchema,
+    actor: NonBlankStringSchema,
+    supersededAt: IsoTimestampSchema,
+    reason: NonBlankStringSchema,
+  })
+  .strict();
+
 export interface SubmitRecommendationInput {
   ticketId: TicketId;
   sourceRevision: number;
@@ -162,6 +191,29 @@ export interface CancelApprovalInput {
   actor: string;
   reason: string;
   canceledAt: string;
+}
+
+export interface MarkResponseSentInput {
+  recommendationId: string;
+  ticketId: TicketId;
+  actor: string;
+  sentAt: string;
+}
+
+export interface AddCustomerReplyInput {
+  ticketId: TicketId;
+  actor: string;
+  body: string;
+  receivedAt: string;
+  source?: string;
+}
+
+export interface SupersedeRecommendationInput {
+  recommendationId: string;
+  ticketId: TicketId;
+  actor: string;
+  supersededAt: string;
+  reason: string;
 }
 
 export interface TicketStore {
@@ -352,6 +404,74 @@ export class TriageService {
     const cancellation = CancelApprovalInputSchema.parse(input);
     return serializeRecommendation(cancellation.recommendationId, () =>
       this.cancelApprovalValidated(cancellation),
+    );
+  }
+
+  async markResponseSent(
+    input: MarkResponseSentInput,
+  ): Promise<AuditEvent> {
+    const sent = MarkResponseSentInputSchema.parse(input);
+    return serializeRecommendation(sent.recommendationId, async () => {
+      const recommendation = await this.dependencies.recommendations.get(
+        sent.recommendationId,
+      );
+      if (
+        recommendation.resolution !== "approved" ||
+        recommendation.ticketId !== sent.ticketId
+      ) {
+        throw stale("Approved customer response cannot be marked sent.");
+      }
+
+      const auditEvent = AuditEventSchema.parse({
+        id: this.uuid(),
+        timestamp: sent.sentAt,
+        actor: sent.actor,
+        action: "customer-response-sent",
+        ticketId: sent.ticketId,
+        recommendationId: recommendation.id,
+        before: {},
+        after: {
+          sentAt: sent.sentAt,
+          customerResponse: recommendation.draftCustomerResponse,
+        },
+        rationale: "Approved customer response was sent.",
+        knowledgeArticleIds: recommendation.knowledgeArticleIds,
+        result: "success",
+      });
+      await this.dependencies.audit.append(auditEvent);
+      return auditEvent;
+    });
+  }
+
+  async addCustomerReply(input: AddCustomerReplyInput): Promise<AuditEvent> {
+    const reply = AddCustomerReplyInputSchema.parse(input);
+    await this.dependencies.tickets.get(reply.ticketId);
+
+    const auditEvent = AuditEventSchema.parse({
+      id: this.uuid(),
+      timestamp: reply.receivedAt,
+      actor: reply.actor,
+      action: "customer-reply-received",
+      ticketId: reply.ticketId,
+      before: {},
+      after: {
+        body: reply.body,
+        ...(reply.source === undefined ? {} : { source: reply.source }),
+      },
+      rationale: "Customer reply added to ticket conversation.",
+      knowledgeArticleIds: [],
+      result: "success",
+    });
+    await this.dependencies.audit.append(auditEvent);
+    return auditEvent;
+  }
+
+  async supersedeRecommendation(
+    input: SupersedeRecommendationInput,
+  ): Promise<AuditEvent> {
+    const supersession = SupersedeRecommendationInputSchema.parse(input);
+    return serializeRecommendation(supersession.recommendationId, () =>
+      this.supersedeRecommendationValidated(supersession),
     );
   }
 
@@ -601,6 +721,61 @@ export class TriageService {
       }
       throw domainErrorWithCause(
         "Cancellation audit failed; recommendation was compensated.",
+        auditError,
+      );
+    }
+    return auditEvent;
+  }
+
+  private async supersedeRecommendationValidated(
+    supersession: SupersedeRecommendationInput,
+  ): Promise<AuditEvent> {
+    const recommendation = await this.dependencies.recommendations.get(
+      supersession.recommendationId,
+    );
+    if (
+      recommendation.resolution !== "pending" ||
+      recommendation.ticketId !== supersession.ticketId
+    ) {
+      throw stale("Pending recommendation cannot be superseded.");
+    }
+
+    const auditEvent = AuditEventSchema.parse({
+      id: this.uuid(),
+      timestamp: supersession.supersededAt,
+      actor: supersession.actor,
+      action: "recommendation-superseded",
+      ticketId: supersession.ticketId,
+      recommendationId: recommendation.id,
+      before: { resolution: "pending" },
+      after: { resolution: "superseded" },
+      rationale: supersession.reason,
+      knowledgeArticleIds: recommendation.knowledgeArticleIds,
+      result: "success",
+    });
+
+    await this.dependencies.recommendations.transitionResolution(
+      recommendation.id,
+      "pending",
+      "superseded",
+    );
+    try {
+      await this.dependencies.audit.append(auditEvent);
+    } catch (auditError) {
+      try {
+        await this.dependencies.recommendations.transitionResolution(
+          recommendation.id,
+          "superseded",
+          "pending",
+        );
+      } catch {
+        throw domainErrorWithCause(
+          "Supersession audit failed and recommendation rollback was not safe.",
+          auditError,
+        );
+      }
+      throw domainErrorWithCause(
+        "Supersession audit failed; recommendation was compensated.",
         auditError,
       );
     }

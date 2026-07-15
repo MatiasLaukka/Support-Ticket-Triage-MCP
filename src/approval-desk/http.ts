@@ -513,9 +513,9 @@ async function supersedePendingRecommendationsWithNewerReply(input: {
   ticketId: string;
   actor: string;
   recommendations: readonly TriageRecommendation[];
-  customerReplies: readonly { createdAt: string }[];
+  persistedCustomerReplies: readonly { createdAt: string }[];
 }): Promise<void> {
-  const latestReplyAt = input.customerReplies
+  const latestReplyAt = input.persistedCustomerReplies
     .map((reply) => reply.createdAt)
     .sort((left, right) => right.localeCompare(left))[0];
   if (latestReplyAt === undefined) {
@@ -561,7 +561,7 @@ async function createRecommendation(
     ticketId,
     actor: body.actor,
     recommendations,
-    customerReplies,
+    persistedCustomerReplies,
   });
   const outcomes =
     options.expectedOutcomesPath === undefined
@@ -653,6 +653,15 @@ async function markRecommendationSent(
   if (approval === undefined) {
     throw invalidRequest("Approved recommendation audit was not found.");
   }
+  const customerResponse =
+    typeof approval.after.customerResponse === "string"
+      ? approval.after.customerResponse
+      : undefined;
+  if (customerResponse === undefined) {
+    throw invalidRequest(
+      "Customer response must be approved before it can be marked sent.",
+    );
+  }
   const sentAt = new Date(
     new Date(approval.timestamp).getTime() + 5 * 60 * 1_000,
   ).toISOString();
@@ -661,6 +670,7 @@ async function markRecommendationSent(
       ...body,
       recommendationId,
       sentAt,
+      customerResponse,
     }),
   };
 }

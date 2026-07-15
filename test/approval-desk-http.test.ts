@@ -278,6 +278,8 @@ describe("createApprovalDeskHttpServer", () => {
   it("marks an approved recommendation as sent five minutes after approval", async () => {
     let currentNow = now;
     const { json } = await startFixture({}, { now: () => currentNow });
+    const approvedResponse =
+      "Hi Prompt Streetwear, we reviewed this response and it is ready to send.";
     const created = await json("/api/tickets/TKT-1005/recommendations", {
       method: "POST",
       body: JSON.stringify({ actor: "approval-desk" }),
@@ -289,7 +291,8 @@ describe("createApprovalDeskHttpServer", () => {
         body: JSON.stringify({
           ticketId: "TKT-1005",
           expectedRevision: 0,
-          approvedFields: ["category"],
+          approvedFields: ["customerResponse"],
+          editedCustomerResponse: approvedResponse,
           actor: "matias-reviewer",
           confirm: true,
         }),
@@ -316,7 +319,7 @@ describe("createApprovalDeskHttpServer", () => {
       timestamp: "2026-06-10T09:05:00.000Z",
       after: {
         sentAt: "2026-06-10T09:05:00.000Z",
-        customerResponse: created.body.recommendation.draftCustomerResponse,
+        customerResponse: approvedResponse,
       },
     });
     expect(detail.body.recommendationSummary).toMatchObject({
@@ -332,7 +335,7 @@ describe("createApprovalDeskHttpServer", () => {
         kind: "support-response-sent",
         timestamp: "2026-06-10T09:05:00.000Z",
         recommendationId: created.body.recommendation.id,
-        body: created.body.recommendation.draftCustomerResponse,
+        body: approvedResponse,
       }),
     );
     expect(detail.body.recommendationHistory).toMatchObject([
@@ -343,9 +346,8 @@ describe("createApprovalDeskHttpServer", () => {
     ]);
   });
 
-  it("records a customer reply after a sent response and marks the ticket customer-replied", async () => {
-    let currentNow = now;
-    const { json } = await startFixture({}, { now: () => currentNow });
+  it("rejects mark-sent when the customer response was not approved", async () => {
+    const { json } = await startFixture();
     const created = await json("/api/tickets/TKT-1005/recommendations", {
       method: "POST",
       body: JSON.stringify({ actor: "approval-desk" }),
@@ -356,6 +358,52 @@ describe("createApprovalDeskHttpServer", () => {
         ticketId: "TKT-1005",
         expectedRevision: 0,
         approvedFields: ["category"],
+        actor: "matias-reviewer",
+        confirm: true,
+      }),
+    });
+
+    const sent = await json(
+      `/api/recommendations/${created.body.recommendation.id}/mark-sent`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          ticketId: "TKT-1005",
+          actor: "approval-desk",
+        }),
+      },
+    );
+    const detail = await json("/api/tickets/TKT-1005");
+
+    expect(sent.status).toBe(400);
+    expect(sent.body).toEqual({
+      error: {
+        code: "INVALID_REQUEST",
+        message:
+          "Customer response must be approved before it can be marked sent.",
+      },
+    });
+    expect(detail.body.audits.events).not.toContainEqual(
+      expect.objectContaining({ action: "customer-response-sent" }),
+    );
+  });
+
+  it("records a customer reply after a sent response and marks the ticket customer-replied", async () => {
+    let currentNow = now;
+    const { json } = await startFixture({}, { now: () => currentNow });
+    const approvedResponse =
+      "Hi Prompt Streetwear, we reviewed this response and it is ready to send.";
+    const created = await json("/api/tickets/TKT-1005/recommendations", {
+      method: "POST",
+      body: JSON.stringify({ actor: "approval-desk" }),
+    });
+    await json(`/api/recommendations/${created.body.recommendation.id}/approve`, {
+      method: "POST",
+      body: JSON.stringify({
+        ticketId: "TKT-1005",
+        expectedRevision: 0,
+        approvedFields: ["customerResponse"],
+        editedCustomerResponse: approvedResponse,
         actor: "matias-reviewer",
         confirm: true,
       }),
@@ -486,6 +534,53 @@ describe("createApprovalDeskHttpServer", () => {
       workflowState: "draft-ready",
       hasPendingRecommendation: true,
     });
+    expect(detail.body.recommendationHistory).toMatchObject([
+      {
+        id: second.body.recommendation.id,
+        resolution: "pending",
+      },
+      {
+        id: first.body.recommendation.id,
+        resolution: "pending",
+      },
+    ]);
+  });
+
+  it("does not supersede a pending recommendation from body-only customer reply context", async () => {
+    let currentNow = now;
+    const { deps, json } = await startFixture({}, { now: () => currentNow });
+    const first = await json("/api/tickets/TKT-1008/recommendations", {
+      method: "POST",
+      body: JSON.stringify({ actor: "approval-desk" }),
+    });
+    currentNow = new Date("2026-06-10T09:02:00.000Z");
+
+    const second = await json("/api/tickets/TKT-1008/recommendations", {
+      method: "POST",
+      body: JSON.stringify({
+        actor: "approval-desk",
+        customerReplies: [
+          {
+            id: "body-only-reply",
+            createdAt: "2026-06-10T09:01:00.000Z",
+            body:
+              "Endpoint URL is https://hooks.juniper.example/webhooks/orders and delivery ID is deliv_7788.",
+          },
+        ],
+      }),
+    });
+    const detail = await json("/api/tickets/TKT-1008");
+
+    expect(second.status).toBe(201);
+    expect(await deps.recommendations.get(first.body.recommendation.id)).toMatchObject({
+      resolution: "pending",
+    });
+    expect(second.body.recommendation.providedEvidence).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "endpoint-url" }),
+        expect.objectContaining({ id: "delivery-id" }),
+      ]),
+    );
     expect(detail.body.recommendationHistory).toMatchObject([
       {
         id: second.body.recommendation.id,

@@ -112,6 +112,7 @@ const MarkResponseSentInputSchema = z
     ticketId: TicketIdSchema,
     actor: NonBlankStringSchema,
     sentAt: IsoTimestampSchema,
+    customerResponse: NonBlankStringSchema,
   })
   .strict();
 
@@ -198,6 +199,7 @@ export interface MarkResponseSentInput {
   ticketId: TicketId;
   actor: string;
   sentAt: string;
+  customerResponse: string;
 }
 
 export interface AddCustomerReplyInput {
@@ -432,7 +434,7 @@ export class TriageService {
         before: {},
         after: {
           sentAt: sent.sentAt,
-          customerResponse: recommendation.draftCustomerResponse,
+          customerResponse: sent.customerResponse,
         },
         rationale: "Approved customer response was sent.",
         knowledgeArticleIds: recommendation.knowledgeArticleIds,

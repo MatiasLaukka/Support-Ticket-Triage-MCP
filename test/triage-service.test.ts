@@ -847,7 +847,12 @@ describe("TriageService", () => {
   it("marks an approved customer response as sent without updating the ticket", async () => {
     const harness = makeHarness();
     await harness.service.submit(makeSubmitInput({ draftCustomerResponse: "Hi, we are investigating the API errors." }));
-    await harness.service.approve(makeApproval({ approvedFields: ["priority"] }));
+    await harness.service.approve(
+      makeApproval({
+        approvedFields: ["customerResponse"],
+        editedCustomerResponse: "Hi, the reviewed API response is approved.",
+      }),
+    );
     const before = await harness.tickets.get("TKT-1001");
 
     const sentEvent = await harness.service.markResponseSent({
@@ -855,6 +860,7 @@ describe("TriageService", () => {
       ticketId: "TKT-1001",
       actor: "Maya Chen",
       sentAt: "2026-06-10T09:10:00.000Z",
+      customerResponse: "Hi, the reviewed API response is approved.",
     });
 
     expect(sentEvent).toMatchObject({
@@ -863,7 +869,7 @@ describe("TriageService", () => {
       ticketId: "TKT-1001",
       after: {
         sentAt: "2026-06-10T09:10:00.000Z",
-        customerResponse: expect.stringContaining("Hi"),
+        customerResponse: "Hi, the reviewed API response is approved.",
       },
     });
     expect(harness.audit.events.at(-1)).toEqual(sentEvent);

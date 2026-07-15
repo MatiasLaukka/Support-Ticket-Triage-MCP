@@ -1124,6 +1124,40 @@ describe("Approval Desk recommendation builder", () => {
     expect(input.rationale).toContain("classifier");
   });
 
+  it("asks for basic problem evidence for vague classifier-driven tickets", async () => {
+    const ticket = await loadSeedTicket("TKT-1010");
+
+    const input = buildApprovalDeskRecommendationInput({
+      ticket,
+      outcome: undefined,
+      actor: "approval-desk",
+    });
+
+    expect(input.category).toBe("other");
+    expect(input.supportState).toBe("needs-information");
+    expect(input.missingInformation).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("what you were trying to do"),
+        expect.stringContaining("steps you took"),
+        expect.stringContaining("screenshot or exact message"),
+      ]),
+    );
+    expect(input.draftCustomerResponse).toContain(
+      "I am sorry this is getting in your way.",
+    );
+    expect(input.draftCustomerResponse).toContain(
+      "To move this forward, please share:",
+    );
+    expect(input.draftCustomerResponse).toContain(
+      "what you were trying to do",
+    );
+    expect(input.draftCustomerResponse).not.toContain(
+      "We do not need any additional information",
+    );
+    expect(input.draftCustomerResponse).not.toContain("Once we have those details");
+    expect(input.draftCustomerResponse).not.toContain("activity timeline");
+  });
+
   it("throws when the expected outcome belongs to a different ticket", async () => {
     const outcomes = await loadExpectedOutcomes(
       resolve("data/seed/expected-outcomes.json"),

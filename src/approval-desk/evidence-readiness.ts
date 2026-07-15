@@ -170,6 +170,25 @@ const EVIDENCE_CATALOG: Readonly<Record<string, Omit<EvidenceRequirement, "sourc
     customerQuestion: "Affected object ID, SKU, order number, or profile ID",
     aliases: ["object id", "sku", "order number", "profile id"],
   },
+  "problem-summary": {
+    id: "problem-summary",
+    label: "Problem summary",
+    customerQuestion:
+      "what you were trying to do, what happened, and where it happened",
+    aliases: ["not working", "does not work", "problem", "expected to happen"],
+  },
+  "reproduction-steps": {
+    id: "reproduction-steps",
+    label: "Steps taken",
+    customerQuestion: "steps you took, if you remember them",
+    aliases: ["steps", "clicked", "opened", "selected", "tried"],
+  },
+  "screenshot-or-error": {
+    id: "screenshot-or-error",
+    label: "Screenshot or error",
+    customerQuestion: "screenshot or exact message, if you can share one",
+    aliases: ["screenshot", "screen recording", "error message", "error"],
+  },
   "opt-out-timestamp": {
     id: "opt-out-timestamp",
     label: "Opt-out timestamp",
@@ -422,6 +441,15 @@ function evidenceForIssuePattern(input: {
     return evidenceForKnowledge(["security-incident-response"], "policy");
   }
   if (
+    input.outcome.category === "other" &&
+    input.outcome.knowledgeArticleIds.length === 0
+  ) {
+    return evidenceForIds(
+      ["problem-summary", "reproduction-steps", "screenshot-or-error"],
+      "policy",
+    );
+  }
+  if (
     input.outcome.requiredEscalations.includes("outage") &&
     input.outcome.knowledgeArticleIds.includes("event-tracking-debugging")
   ) {
@@ -570,6 +598,18 @@ function isEvidenceProvided(
       return /\b(request id|req[-_][a-z0-9]+)\b/i.test(text);
     case "delivery-id":
       return /\b(delivery id|deliv[-_][a-z0-9]+)\b/i.test(text);
+    case "problem-summary":
+      return hasSpecificProblemSummary(
+        [ticket.subject, ticket.description].join(" "),
+      );
+    case "reproduction-steps":
+      return /\b(?:steps?|clicked|opened|selected|submitted|tried|attempted|when i|when we|after i|after we)\b/i.test(
+        text,
+      );
+    case "screenshot-or-error":
+      return /\b(?:screenshot|screen recording|recording|error message|error code|banner says|message says)\b/i.test(
+        text,
+      );
     case "key-identifier":
       return hasConcreteKeyIdentifier(text);
     case "exposure-location":
@@ -652,6 +692,18 @@ function hasKnownAffectedScope(text: string): boolean {
   const subject = "(?:affected scope|affected profiles|profiles? (?:were )?accessed|accounts? (?:were )?accessed)";
   if (hasUnknownQualification(text, subject)) return false;
   return /\b\d+\s+(?:profiles?|accounts?|logs?|actions?)\b|\b(?:affected|accessed|exposed|impacted)\s+(?:profiles?|accounts?|logs?|actions?)\b|\b(?:profiles?|accounts?) were (?:accessed|exposed|affected)\b/i.test(
+    text,
+  );
+}
+
+function hasSpecificProblemSummary(text: string): boolean {
+  const trimmed = text.trim().replace(/\s+/g, " ");
+  const vagueOnly =
+    /^(?:(?:problem|issue|bug)[.!?\s]*)?(?:it (?:does not|doesn'?t|isn'?t|won'?t) work|not working|broken|problem|issue|bug)[.!?\s]*$/i;
+  if (vagueOnly.test(trimmed)) {
+    return false;
+  }
+  return /\b(?:cannot|can'?t|failed|fails|missing|delayed|blocked|stuck|invalid|not showing|not sending|not syncing|not loading|error|broken)\b/i.test(
     text,
   );
 }

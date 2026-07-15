@@ -331,6 +331,18 @@ function buildDraftCustomerResponse(input: {
     });
   }
 
+  if (isGenericSupportIssue(input.outcome, knowledgeArticleIds)) {
+    return buildStructuredDiagnosticResponse({
+      ticket,
+      evidenceReadiness,
+      replyStage: input.replyStage,
+      problemSummary:
+        "I am sorry this is getting in your way. We need a little more detail so we can understand what is happening and route it to the right team.",
+      nextStep:
+        "Once we know what you were trying to do, where it happened, and what you saw, we can investigate the right area and share the next step.",
+    });
+  }
+
   return buildStructuredDiagnosticResponse({
     ticket,
     evidenceReadiness,
@@ -687,6 +699,13 @@ function hasNewRecognizedEvidence(
   return evidenceAfterReplies.providedEvidence.some(
     (requirement) => !providedBeforeReplies.has(requirement.id),
   );
+}
+
+function isGenericSupportIssue(
+  outcome: ExpectedOutcome,
+  knowledgeArticleIds: readonly string[],
+): boolean {
+  return outcome.category === "other" && knowledgeArticleIds.length === 0;
 }
 
 function platformFixEvidenceReadiness(

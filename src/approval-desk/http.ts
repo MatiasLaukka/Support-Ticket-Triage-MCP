@@ -32,6 +32,7 @@ import {
 
 const JSON_BODY_LIMIT_BYTES = 65_536;
 const UNEXPECTED_ERROR_TEXT = "Unexpected local approval desk error.";
+const markSentOperations = new Map<string, Promise<void>>();
 
 const TicketListQuerySchema = z
   .object({
@@ -641,45 +642,47 @@ async function markRecommendationSent(
 ): Promise<unknown> {
   const recommendationId = RecommendationIdSchema.parse(id);
   const body = MarkSentBodySchema.parse(await readJsonBody(request));
-  const audits = await deps.audits.list(body.ticketId);
-  const alreadySent = audits.some(
-    (event) =>
-      event.action === "customer-response-sent" &&
-      event.recommendationId === recommendationId,
-  );
-  if (alreadySent) {
-    throw invalidRequest("Customer response has already been marked sent.");
-  }
-  const approval = audits
-    .filter(
+  return serializeMarkSent(recommendationId, async () => {
+    const audits = await deps.audits.list(body.ticketId);
+    const alreadySent = audits.some(
       (event) =>
-        event.action === "recommendation-approved" &&
+        event.action === "customer-response-sent" &&
         event.recommendationId === recommendationId,
-    )
-    .sort((left, right) => right.timestamp.localeCompare(left.timestamp))[0];
-  if (approval === undefined) {
-    throw invalidRequest("Approved recommendation audit was not found.");
-  }
-  const customerResponse =
-    typeof approval.after.customerResponse === "string"
-      ? approval.after.customerResponse
-      : undefined;
-  if (customerResponse === undefined) {
-    throw invalidRequest(
-      "Customer response must be approved before it can be marked sent.",
     );
-  }
-  const sentAt = new Date(
-    new Date(approval.timestamp).getTime() + 5 * 60 * 1_000,
-  ).toISOString();
-  return {
-    auditEvent: await deps.service.markResponseSent({
-      ...body,
-      recommendationId,
-      sentAt,
-      customerResponse,
-    }),
-  };
+    if (alreadySent) {
+      throw invalidRequest("Customer response has already been marked sent.");
+    }
+    const approval = audits
+      .filter(
+        (event) =>
+          event.action === "recommendation-approved" &&
+          event.recommendationId === recommendationId,
+      )
+      .sort((left, right) => right.timestamp.localeCompare(left.timestamp))[0];
+    if (approval === undefined) {
+      throw invalidRequest("Approved recommendation audit was not found.");
+    }
+    const customerResponse =
+      typeof approval.after.customerResponse === "string"
+        ? approval.after.customerResponse
+        : undefined;
+    if (customerResponse === undefined) {
+      throw invalidRequest(
+        "Customer response must be approved before it can be marked sent.",
+      );
+    }
+    const sentAt = new Date(
+      new Date(approval.timestamp).getTime() + 5 * 60 * 1_000,
+    ).toISOString();
+    return {
+      auditEvent: await deps.service.markResponseSent({
+        ...body,
+        recommendationId,
+        sentAt,
+        customerResponse,
+      }),
+    };
+  });
 }
 
 async function rejectRecommendation(
@@ -785,6 +788,28 @@ function invalidRequest(message: string, input?: unknown): z.ZodError {
       input,
     },
   ]);
+}
+
+async function serializeMarkSent<T>(
+  recommendationId: string,
+  operation: () => Promise<T>,
+): Promise<T> {
+  const previous =
+    markSentOperations.get(recommendationId) ?? Promise.resolve();
+  let release = (): void => undefined;
+  const current = new Promise<void>((resolveOperation) => {
+    release = resolveOperation;
+  });
+  markSentOperations.set(recommendationId, current);
+  await previous;
+  try {
+    return await operation();
+  } finally {
+    release();
+    if (markSentOperations.get(recommendationId) === current) {
+      markSentOperations.delete(recommendationId);
+    }
+  }
 }
 
 function text(

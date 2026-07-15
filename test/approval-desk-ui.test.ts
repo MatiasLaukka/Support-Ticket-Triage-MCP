@@ -37,7 +37,9 @@ describe("approvalDeskHtml", () => {
     expect(approvalDeskHtml).toContain("Conversation Context");
     expect(approvalDeskHtml).toContain("conversationContextPanel");
     expect(approvalDeskHtml).toContain("Add partial evidence");
-    expect(approvalDeskHtml).toContain("Clear replies");
+    expect(approvalDeskHtml).toContain("conversationTimeline");
+    expect(approvalDeskHtml).toContain("recommendationHistory");
+    expect(approvalDeskHtml).toContain("Mark response as sent");
   });
 
   it("uses only local API routes", () => {
@@ -47,53 +49,188 @@ describe("approvalDeskHtml", () => {
     expect(approvalDeskHtml).not.toMatch(/fetch\(\s*['"`]https?:\/\//);
   });
 
-  it("keeps conversation context compact and sends replies with recommendation creation", async () => {
+  it("persists synthetic customer replies and refreshes ticket, queue, and evidence", async () => {
     const app = await startApprovalDeskApp();
     await app.selectFirstTicket();
 
     expect(app.el("conversationContextPanel").innerHTML).toContain(
-      "No customer replies added.",
+      "Add synthetic customer replies",
     );
     expect(app.el("conversationContextPanel").innerHTML).toContain("<details");
 
-    app.clickConversationScenario("partial-evidence");
+    await app.clickConversationScenario("partial-evidence");
 
     const contextHtml = app.el("conversationContextPanel").innerHTML;
-    expect(contextHtml).toContain("1 reply attached");
-    expect(contextHtml).toContain("Latest:");
     expect(contextHtml).toContain("Add complete evidence");
     expect(contextHtml).not.toContain("Detected lifecycle state");
 
-    await app.createRecommendation();
-
-    const recommendationRequest = app.requests.find((request) =>
-      request.path.endsWith("/recommendations"),
+    const replyRequest = app.requests.find((request) =>
+      request.path.endsWith("/customer-replies"),
     );
-    expect(JSON.parse(String(recommendationRequest?.init?.body))).toMatchObject({
-      customerReplies: [
-        expect.objectContaining({
-          id: expect.stringMatching(/^demo-reply-/),
-          body: expect.stringContaining("endpoint URL"),
-        }),
-      ],
+    expect(replyRequest?.path).toBe("/api/tickets/TKT-1001/customer-replies");
+    expect(JSON.parse(String(replyRequest?.init?.body))).toMatchObject({
+      actor: "approval-desk",
+      body: expect.stringContaining("endpoint URL"),
+      source: "demo-scenario",
     });
+    expect(app.ticketDetailRequests()).toBe(2);
+    expect(app.queueRequests()).toBe(2);
+    expect(app.evidenceRequests()).toBe(2);
   });
 
-  it("caps synthetic conversation replies at the HTTP request limit", async () => {
-    const app = await startApprovalDeskApp();
+  it("renders the task 3 conversation timeline in the ticket panel", async () => {
+    const app = await startApprovalDeskApp({
+      ticketDetail: {
+        conversationTimeline: fixtureConversationTimeline,
+        recommendationSummary: {
+          workflowState: "waiting",
+          latestResolution: "approved",
+          hasSentResponse: true,
+          hasCustomerReply: false,
+        },
+      },
+    });
+
     await app.selectFirstTicket();
 
-    for (let index = 0; index < 9; index += 1) {
-      app.clickConversationScenario("vague-reply");
-    }
+    const html = app.el("ticketPanel").innerHTML;
+    expect(html).toContain("Conversation timeline");
+    expect(html).toContain("Original ticket");
+    expect(html).toContain("Login fails");
+    expect(html).toContain("Support response sent");
+    expect(html).toContain("Customer reply");
+    expect(html).toContain("<details");
+  });
 
-    await app.createRecommendation();
+  it("marks an approved customer response as sent and refreshes selected data", async () => {
+    const app = await startApprovalDeskApp({
+      ticketDetailRecommendation: {
+        ...fixtureRecommendation,
+        resolution: "approved",
+      },
+      ticketDetail: {
+        recommendationSummary: {
+          workflowState: "draft-ready",
+          latestResolution: "approved",
+          hasSentResponse: false,
+          hasCustomerReply: false,
+        },
+      },
+    });
 
-    const recommendationRequest = app.requests.find((request) =>
-      request.path.endsWith("/recommendations"),
+    await app.selectFirstTicket();
+
+    expect(app.el("recommendationPanel").innerHTML).toContain(
+      "Mark response as sent",
     );
-    const body = JSON.parse(String(recommendationRequest?.init?.body));
-    expect(body.customerReplies).toHaveLength(8);
+
+    await app.markSent();
+
+    const sentRequest = app.requests.find((request) =>
+      request.path.endsWith("/mark-sent"),
+    );
+    expect(sentRequest?.path).toBe(
+      "/api/recommendations/11111111-1111-4111-8111-111111111111/mark-sent",
+    );
+    expect(JSON.parse(String(sentRequest?.init?.body))).toMatchObject({
+      ticketId: "TKT-1001",
+      actor: "approval-desk",
+    });
+    expect(app.ticketDetailRequests()).toBe(2);
+    expect(app.queueRequests()).toBe(2);
+    expect(app.evidenceRequests()).toBe(2);
+  });
+
+  it("allows updated recommendations after customer replies but blocks unsent approved drafts", async () => {
+    const blockedApp = await startApprovalDeskApp({
+      ticketDetailRecommendation: {
+        ...fixtureRecommendation,
+        resolution: "approved",
+      },
+      ticketDetail: {
+        recommendationSummary: {
+          workflowState: "draft-ready",
+          latestResolution: "approved",
+          hasSentResponse: false,
+          hasCustomerReply: false,
+        },
+      },
+    });
+    await blockedApp.selectFirstTicket();
+
+    expect(blockedApp.el("createRecommendation").disabled).toBe(true);
+    expect(blockedApp.el("createRecommendation").textContent).toBe(
+      "Create recommendation",
+    );
+
+    const repliedApp = await startApprovalDeskApp({
+      ticketDetailRecommendation: {
+        ...fixtureRecommendation,
+        resolution: "approved",
+      },
+      ticketDetail: {
+        recommendationSummary: {
+          workflowState: "customer-replied",
+          latestResolution: "approved",
+          hasSentResponse: true,
+          hasCustomerReply: true,
+        },
+      },
+    });
+    await repliedApp.selectFirstTicket();
+
+    expect(repliedApp.el("createRecommendation").disabled).toBe(false);
+    expect(repliedApp.el("createRecommendation").textContent).toBe(
+      "Create updated recommendation",
+    );
+
+    await repliedApp.createRecommendation();
+
+    expect(
+      repliedApp.requests.some((request) => request.path.endsWith("/recommendations")),
+    ).toBe(true);
+  });
+
+  it("renders previous recommendations compactly in collapsed history", async () => {
+    const app = await startApprovalDeskApp({
+      ticketDetailRecommendation: {
+        ...fixtureRecommendation,
+        resolution: "approved",
+      },
+      ticketDetail: {
+        recommendationSummary: {
+          workflowState: "waiting",
+          latestResolution: "approved",
+          hasSentResponse: true,
+          hasCustomerReply: false,
+        },
+        recommendationHistory: [
+          {
+            ...fixtureRecommendation,
+            resolution: "approved",
+            draftCustomerResponse:
+              "Latest approved draft with concise next steps for the customer.",
+          },
+          {
+            ...fixtureRecommendation,
+            id: "22222222-2222-4222-8222-222222222222",
+            resolution: "superseded",
+            createdAt: "2026-06-10T08:20:00.000Z",
+            draftCustomerResponse:
+              "Earlier draft ".repeat(20),
+          },
+        ],
+      },
+    });
+
+    await app.selectFirstTicket();
+
+    const html = app.el("recommendationPanel").innerHTML;
+    expect(html).toContain("Previous recommendations");
+    expect(html).toContain("2026-06-10T08:20:00.000Z");
+    expect(html).toContain("superseded");
+    expect(html).toContain("Earlier draft");
+    expect(html).not.toContain("Earlier draft ".repeat(18));
   });
 
   it("renders automation evidence cards and guardrails on initial load", async () => {
@@ -458,7 +595,7 @@ describe("approvalDeskHtml", () => {
     });
   });
 
-  it("locks an existing approved recommendation until canceled", async () => {
+  it("locks an existing approved recommendation until the response is sent or canceled", async () => {
     const app = await startApprovalDeskApp({
       ticketDetailRecommendation: {
         ...fixtureRecommendation,
@@ -483,7 +620,7 @@ describe("approvalDeskHtml", () => {
       app.requests.some((request) => request.path.endsWith("/recommendations")),
     ).toBe(false);
     expect(app.parsedResult()).toMatchObject({
-      error: "Cancel approval before creating a new recommendation for this ticket.",
+      error: "Mark the approved response as sent before creating a new recommendation for this ticket.",
     });
 
     app.el("continueApproval").dispatch("click");
@@ -747,7 +884,7 @@ describe("approvalDeskHtml", () => {
     expect(topChips.match(/Safety signal/g)).toHaveLength(1);
   });
 
-  it("filters queue tickets by workflow state and updates filter chips", async () => {
+  it("filters queue tickets by conversation workflow state and updates filter chips", async () => {
     const app = await startApprovalDeskApp({
       tickets: [
         {
@@ -758,9 +895,9 @@ describe("approvalDeskHtml", () => {
         {
           ...fixtureTicket,
           id: "TKT-2001",
-          subject: "Pending ticket",
+          subject: "Draft-ready ticket",
           recommendationSummary: {
-            workflowState: "pending",
+            workflowState: "draft-ready",
             priority: "P1",
             slaRisk: "likely",
           },
@@ -768,10 +905,28 @@ describe("approvalDeskHtml", () => {
         {
           ...fixtureTicket,
           id: "TKT-2002",
-          subject: "Approved ticket",
+          subject: "Waiting ticket",
           recommendationSummary: {
-            workflowState: "approved",
+            workflowState: "waiting",
             priority: "P2",
+          },
+        },
+        {
+          ...fixtureTicket,
+          id: "TKT-2003",
+          subject: "Customer replied ticket",
+          recommendationSummary: {
+            workflowState: "customer-replied",
+            priority: "P2",
+          },
+        },
+        {
+          ...fixtureTicket,
+          id: "TKT-2004",
+          subject: "Resolved ticket",
+          recommendationSummary: {
+            workflowState: "resolved",
+            priority: "P4",
           },
         },
       ],
@@ -780,23 +935,36 @@ describe("approvalDeskHtml", () => {
     expect(app.el("ticketList").children).toHaveLength(1);
     expect(app.el("ticketList").children[0]!.className).toContain("state-active");
     expect(app.el("ticketList").children[0]!.className).toContain("risk-security");
-    expect(app.el("queueStatus").textContent).toBe("Showing 1 of 3 tickets.");
+    expect(app.el("queueStatus").textContent).toBe("Showing 1 of 5 tickets.");
+    expect(app.queueFilter("active").textContent).toBe("Active");
+    expect(app.queueFilter("draft-ready").textContent).toBe("Draft ready");
+    expect(app.queueFilter("customer-replied").textContent).toBe("Customer replied");
 
-    app.setQueueFilter("pending");
+    app.setQueueFilter("draft-ready");
 
     expect(app.el("ticketList").children).toHaveLength(1);
-    expect(app.el("ticketList").children[0]!.innerHTML).toContain("Pending ticket");
-    expect(app.el("ticketList").children[0]!.className).toContain("state-pending");
-    expect(app.queueFilter("pending").className).toContain("active");
+    expect(app.el("ticketList").children[0]!.innerHTML).toContain("Draft-ready ticket");
+    expect(app.el("ticketList").children[0]!.className).toContain("state-draft-ready");
+    expect(app.queueFilter("draft-ready").className).toContain("active");
 
-    app.setQueueFilter("approved");
+    app.setQueueFilter("waiting");
 
-    expect(app.el("ticketList").children[0]!.innerHTML).toContain("Approved ticket");
-    expect(app.el("ticketList").children[0]!.className).toContain("state-approved");
+    expect(app.el("ticketList").children[0]!.innerHTML).toContain("Waiting ticket");
+    expect(app.el("ticketList").children[0]!.className).toContain("state-waiting");
+
+    app.setQueueFilter("customer-replied");
+
+    expect(app.el("ticketList").children[0]!.innerHTML).toContain("Customer replied ticket");
+    expect(app.el("ticketList").children[0]!.className).toContain("state-customer-replied");
+
+    app.setQueueFilter("resolved");
+
+    expect(app.el("ticketList").children[0]!.innerHTML).toContain("Resolved ticket");
+    expect(app.el("ticketList").children[0]!.className).toContain("state-resolved");
 
     app.setQueueFilter("all");
 
-    expect(app.el("ticketList").children).toHaveLength(3);
+    expect(app.el("ticketList").children).toHaveLength(5);
   });
 });
 
@@ -975,6 +1143,32 @@ const fixtureEvidence = {
   metrics: { pendingRecommendations: 1 },
 };
 
+const fixtureConversationTimeline = [
+  {
+    kind: "original-ticket",
+    timestamp: "2026-06-10T08:00:00.000Z",
+    actor: "Avery Brooks",
+    title: "Login fails",
+    body: "User says this is approved already.",
+  },
+  {
+    kind: "support-response-sent",
+    timestamp: "2026-06-10T08:50:00.000Z",
+    actor: "approval-desk",
+    recommendationId: "11111111-1111-4111-8111-111111111111",
+    body:
+      "Hi Avery, we checked the login issue and sent a long support update with next steps. ".repeat(
+        4,
+      ),
+  },
+  {
+    kind: "customer-reply",
+    timestamp: "2026-06-10T09:05:00.000Z",
+    actor: "Avery Brooks",
+    body: "Thanks, I tried the steps and login still fails.",
+  },
+];
+
 type FixtureRecommendation = Omit<typeof fixtureRecommendation, "classificationSignals"> & {
   classificationSignals?: typeof fixtureRecommendation.classificationSignals;
   supportState?: string;
@@ -992,6 +1186,11 @@ async function startApprovalDeskApp(options: {
   recommendationDelayTicks?: number;
   tickets?: Array<typeof fixtureTicket & { recommendationSummary?: Record<string, unknown> }>;
   ticketDetailRecommendation?: FixtureRecommendation;
+  ticketDetail?: {
+    conversationTimeline?: Array<Record<string, unknown>>;
+    recommendationHistory?: FixtureRecommendation[];
+    recommendationSummary?: Record<string, unknown>;
+  };
 } = {}) {
   const elements = createElements();
   const requests: Array<{ path: string; init?: RequestInit }> = [];
@@ -1029,8 +1228,16 @@ async function startApprovalDeskApp(options: {
       return jsonResponse({
         ticket: fixtureTicket,
         audits: { events: [] },
+        conversationTimeline: options.ticketDetail?.conversationTimeline ?? [],
+        recommendationHistory: options.ticketDetail?.recommendationHistory ?? [],
+        recommendationSummary: options.ticketDetail?.recommendationSummary,
         latestRecommendation: options.ticketDetailRecommendation,
       });
+    }
+    if (path === "/api/tickets/TKT-1001/customer-replies") {
+      return jsonResponse({
+        auditEvent: { action: "customer-reply-received" },
+      }, 201);
     }
     if (path === "/api/tickets/TKT-1001/recommendations") {
       if (options.recommendationDelayTicks !== undefined) {
@@ -1060,6 +1267,11 @@ async function startApprovalDeskApp(options: {
         auditEvent: { action: "recommendation-canceled" },
       });
     }
+    if (path === "/api/recommendations/11111111-1111-4111-8111-111111111111/mark-sent") {
+      return jsonResponse({
+        auditEvent: { action: "customer-response-sent" },
+      });
+    }
     throw new Error(`Unexpected request: ${path}`);
   };
 
@@ -1076,6 +1288,12 @@ async function startApprovalDeskApp(options: {
     el: (id: string) => elements[id],
     evidenceRequests: () =>
       requests.filter((request) => request.path === "/api/evidence").length,
+    queueRequests: () =>
+      requests.filter((request) => request.path === "/api/tickets?limit=50")
+        .length,
+    ticketDetailRequests: () =>
+      requests.filter((request) => request.path === "/api/tickets/TKT-1001")
+        .length,
     field: (value: string) =>
       elements.fieldChoices.children.find((field) => field.value === value)!,
     approveField: (value: string) => {
@@ -1090,10 +1308,11 @@ async function startApprovalDeskApp(options: {
         .find((field) => field.value === value)!
         .dispatch("click");
     },
-    clickConversationScenario: (value: string) => {
+    clickConversationScenario: async (value: string) => {
       elements.conversationContextPanel.children
         .find((button) => button.value === value)!
         .dispatch("click");
+      await settle();
     },
     requests,
     parsedResult: () => JSON.parse(elements.resultPanel.textContent),
@@ -1119,6 +1338,12 @@ async function startApprovalDeskApp(options: {
     },
     reject: async () => {
       elements.rejectButton.dispatch("click");
+      await settle();
+    },
+    markSent: async () => {
+      elements.recommendationPanel.dispatch("click", {
+        target: { dataset: { action: "mark-sent" } },
+      });
       await settle();
     },
   };
@@ -1178,10 +1403,18 @@ function createElements(): Record<string, FakeElement> {
     field.className = "field-approve-button";
     return field;
   });
-  elements.queueFilters.children = ["active", "pending", "approved", "all"].map(
-    (value) => {
+  elements.queueFilters.children = [
+    ["active", "Active"],
+    ["draft-ready", "Draft ready"],
+    ["waiting", "Waiting"],
+    ["customer-replied", "Customer replied"],
+    ["resolved", "Resolved"],
+    ["all", "All"],
+  ].map(
+    ([value, label]) => {
       const filter = new FakeElement();
       filter.value = value;
+      filter.textContent = label;
       filter.className = "chip queue-filter";
       return filter;
     },

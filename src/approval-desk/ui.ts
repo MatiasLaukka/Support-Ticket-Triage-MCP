@@ -172,14 +172,24 @@ export const approvalDeskHtml = `<!doctype html>
         border-color: #b8c7e6;
       }
 
-      .ticket-button.state-pending {
+      .ticket-button.state-draft-ready {
         background: #fff9e8;
         border-color: #f4c542;
       }
 
-      .ticket-button.state-approved {
+      .ticket-button.state-waiting {
         background: #ecfdf3;
         border-color: #23a06b;
+      }
+
+      .ticket-button.state-customer-replied {
+        background: #f0f5ff;
+        border-color: #6c8ee8;
+      }
+
+      .ticket-button.state-resolved {
+        background: #f3f4f6;
+        border-color: #cfd6e4;
       }
 
       .ticket-button.risk-security {
@@ -664,8 +674,10 @@ export const approvalDeskHtml = `<!doctype html>
           <div id="queueStatus" class="status" role="status"></div>
           <div id="queueFilters" class="queue-filters" aria-label="Queue filters">
             <button type="button" class="chip queue-filter active" value="active">Active</button>
-            <button type="button" class="chip queue-filter" value="pending">Pending</button>
-            <button type="button" class="chip queue-filter" value="approved">Approved</button>
+            <button type="button" class="chip queue-filter" value="draft-ready">Draft ready</button>
+            <button type="button" class="chip queue-filter" value="waiting">Waiting</button>
+            <button type="button" class="chip queue-filter" value="customer-replied">Customer replied</button>
+            <button type="button" class="chip queue-filter" value="resolved">Resolved</button>
             <button type="button" class="chip queue-filter" value="all">All</button>
           </div>
           <div id="ticketList" class="queue-list"></div>
@@ -818,7 +830,8 @@ export const approvalDeskHtml = `<!doctype html>
         stage: 'empty',
         queueFilter: 'active',
         approvedFields: [],
-        customerRepliesByTicketId: {}
+        conversationTimeline: [],
+        recommendationHistory: []
       };
 
       const els = {
@@ -887,7 +900,7 @@ export const approvalDeskHtml = `<!doctype html>
             '<span class="ticket-id">' + escapeHtml(ticket.id) + '</span>' +
             '<span class="ticket-subject-line">' + escapeHtml(ticket.subject) + '</span>' +
             '<span class="ticket-meta-line">' + escapeHtml(ticket.customer.name) + '</span>' +
-            '<span class="ticket-meta-line">rev ' + escapeHtml(ticket.revision) + ' · ' + escapeHtml(workflowState) + '</span>' +
+            '<span class="ticket-meta-line">rev ' + escapeHtml(ticket.revision) + ' · ' + escapeHtml(workflowStateLabel(workflowState)) + '</span>' +
             renderQueueBadges(ticket);
           button.addEventListener('click', function () {
             void selectTicket(ticket.id);
@@ -907,6 +920,16 @@ export const approvalDeskHtml = `<!doctype html>
 
       function ticketWorkflowState(ticket) {
         return ticket.recommendationSummary?.workflowState ?? 'active';
+      }
+
+      function workflowStateLabel(value) {
+        if (value === 'draft-ready') {
+          return 'Draft ready';
+        }
+        if (value === 'customer-replied') {
+          return 'Customer replied';
+        }
+        return String(value ?? 'active').replace(/^./, function (letter) { return letter.toUpperCase(); });
       }
 
       function isSecurityTicket(ticket) {
@@ -941,17 +964,20 @@ export const approvalDeskHtml = `<!doctype html>
           els.createRecommendation.disabled = true;
           return;
         }
-        els.createRecommendation.disabled = isApprovedWorkflow();
+        els.createRecommendation.disabled = !canCreateRecommendation();
+        els.createRecommendation.textContent = createRecommendationLabel();
         els.ticketPanel.innerHTML =
           '<div class="chips">' +
             chip(ticket.id) +
             chip(ticket.priority ?? 'unset priority') +
             chip(ticket.status) +
+            chip(workflowStateLabel(ticketWorkflowState(ticket))) +
             chip(ticket.team ?? 'unset team') +
           '</div>' +
           renderRequesterCard(ticket) +
           '<div class="hero-card description"><strong>Subject</strong>' + escapeHtml(ticket.subject) + '</div>' +
           '<div class="hero-card description"><strong>Description</strong>' + escapeHtml(ticket.description) + '</div>' +
+          renderConversationTimeline(ticket) +
           '<details><summary>Technical ticket details</summary>' +
             '<div class="details-grid">' +
               card('ID', ticket.id) +
@@ -966,11 +992,20 @@ export const approvalDeskHtml = `<!doctype html>
           '</details>';
       }
 
-      function currentCustomerReplies() {
-        if (state.selectedTicket === null) {
-          return [];
-        }
-        return state.customerRepliesByTicketId[state.selectedTicket.id] ?? [];
+      function createRecommendationLabel() {
+        return ticketWorkflowState(state.selectedTicket ?? {}) === 'customer-replied'
+          ? 'Create updated recommendation'
+          : 'Create recommendation';
+      }
+
+      function canCreateRecommendation() {
+        return state.selectedTicket !== null && !isApprovedAwaitingSend();
+      }
+
+      function isApprovedAwaitingSend() {
+        const summary = state.selectedTicket?.recommendationSummary ?? {};
+        const approved = state.recommendation?.resolution === 'approved' || summary.latestResolution === 'approved';
+        return approved && summary.hasSentResponse !== true && summary.hasCustomerReply !== true;
       }
 
       function renderConversationContext() {
@@ -978,15 +1013,10 @@ export const approvalDeskHtml = `<!doctype html>
           els.conversationContextPanel.innerHTML = '<p class="hint">Select a ticket to add customer reply context.</p>';
           return;
         }
-        const replies = currentCustomerReplies();
-        const latest = replies[replies.length - 1];
-        const summary = replies.length === 0
-          ? 'No customer replies added.'
-          : replies.length + ' ' + (replies.length === 1 ? 'reply' : 'replies') + ' attached. Latest: ' + previewText(latest.body);
         els.conversationContextPanel.innerHTML =
-          '<p class="hint">' + escapeHtml(summary) + '</p>' +
-          '<details><summary>Add or review synthetic replies</summary>' +
-            '<p class="hint">These buttons add customer-message context only. The backend still infers lifecycle state from the text.</p>' +
+          '<p class="hint">Use demo replies to advance the conversation lifecycle through the local API.</p>' +
+          '<details><summary>Add synthetic customer replies</summary>' +
+            '<p class="hint">Replies are persisted through the ticket API, then the selected ticket, queue, and evidence are refreshed.</p>' +
             '<div class="conversation-controls">' +
               scenarioButton('vague-reply', 'Add vague reply') +
               scenarioButton('partial-evidence', 'Add partial evidence') +
@@ -994,9 +1024,7 @@ export const approvalDeskHtml = `<!doctype html>
               scenarioButton('known-cause-evidence', 'Add known-cause evidence') +
               scenarioButton('platform-fix-context', 'Add platform-fix context') +
               scenarioButton('resolved-confirmation', 'Add resolved confirmation') +
-              scenarioButton('clear-replies', 'Clear replies') +
             '</div>' +
-            renderConversationReplies(replies) +
           '</details>';
       }
 
@@ -1004,17 +1032,52 @@ export const approvalDeskHtml = `<!doctype html>
         return '<button type="button" class="secondary conversation-scenario" value="' + escapeHtml(value) + '">' + escapeHtml(label) + '</button>';
       }
 
-      function renderConversationReplies(replies) {
-        if (replies.length === 0) {
-          return '<p class="reply-preview">No synthetic replies are attached to this ticket.</p>';
-        }
-        return replies.map(function (reply) {
-          return '<div class="card description"><strong>' + escapeHtml(reply.id) + '</strong>' + escapeHtml(reply.body) + '</div>';
-        }).join('');
+      function renderConversationTimeline(ticket) {
+        const timeline = Array.isArray(state.conversationTimeline) && state.conversationTimeline.length > 0
+          ? state.conversationTimeline
+          : [{
+              kind: 'original-ticket',
+              timestamp: ticket.createdAt,
+              actor: ticket.requester?.name ?? ticket.customer.name,
+              title: ticket.subject,
+              body: ticket.description
+            }];
+        return '<section class="hero-card conversation-timeline" aria-label="conversationTimeline">' +
+          '<strong>Conversation timeline</strong>' +
+          timeline.map(renderConversationTimelineItem).join('') +
+        '</section>';
       }
 
-      function previewText(value) {
-        return value.length > 110 ? value.slice(0, 107) + '...' : value;
+      function renderConversationTimelineItem(item) {
+        const label = conversationTimelineLabel(item);
+        const title = item.title === undefined ? '' : '<span class="meta">' + escapeHtml(item.title) + '</span>';
+        return '<div class="card description">' +
+          '<strong>' + escapeHtml(label) + '</strong>' +
+          '<span class="meta">' + escapeHtml(item.timestamp ?? 'unknown time') + ' · ' + escapeHtml(item.actor ?? 'unknown actor') + '</span>' +
+          title +
+          renderTimelineBody(item.body ?? item.summary ?? '') +
+        '</div>';
+      }
+
+      function conversationTimelineLabel(item) {
+        if (item.kind === 'original-ticket') {
+          return 'Original ticket';
+        }
+        if (item.kind === 'support-response-sent') {
+          return 'Support response sent';
+        }
+        if (item.kind === 'customer-reply') {
+          return 'Customer reply';
+        }
+        return 'Recommendation event';
+      }
+
+      function renderTimelineBody(body) {
+        const text = String(body ?? '');
+        if (text.length > 180) {
+          return '<details><summary>Read message</summary><p>' + escapeHtml(text) + '</p></details>';
+        }
+        return '<p>' + escapeHtml(text) + '</p>';
       }
 
       function renderQueueBadges(ticket) {
@@ -1060,7 +1123,9 @@ export const approvalDeskHtml = `<!doctype html>
         if (isApprovedWorkflow()) {
           els.recommendationPanel.innerHTML =
             '<div class="hero-card description"><strong>Approved Draft Customer Response</strong>' + escapeHtml(recommendation.draftCustomerResponse) + '</div>' +
-            '<p class="hint">This recommendation is approved. Cancel approval before creating a replacement recommendation.</p>' +
+            '<p class="hint">This recommendation is approved. Mark it sent after the support response has been sent to the customer.</p>' +
+            renderMarkSentAction() +
+            renderPreviousRecommendations() +
             '<details><summary>All proposed ticket values</summary>' +
               '<div class="details-grid">' +
               card('Category', recommendation.category) +
@@ -1140,7 +1205,8 @@ export const approvalDeskHtml = `<!doctype html>
               card('Status', recommendation.ticketStatus ?? 'unchanged') +
               card('Tags', Array.isArray(recommendation.tags) ? recommendation.tags.join(', ') : 'unchanged') +
               '</div>' +
-            '</details>';
+            '</details>' +
+            renderPreviousRecommendations();
         }
         if (!preserveApprovalInputs) {
           els.editedCustomerResponse.value = recommendation.draftCustomerResponse;
@@ -1158,6 +1224,38 @@ export const approvalDeskHtml = `<!doctype html>
         els.approvalStage.hidden = !(hasRecommendation && state.stage === 'approval');
       }
 
+      function renderMarkSentAction() {
+        if (!shouldShowMarkSentAction()) {
+          return '';
+        }
+        return '<div class="actions"><button type="button" data-action="mark-sent">Mark response as sent</button></div>';
+      }
+
+      function shouldShowMarkSentAction() {
+        const summary = state.selectedTicket?.recommendationSummary ?? {};
+        const approved = state.recommendation?.resolution === 'approved' || summary.latestResolution === 'approved';
+        return approved && summary.hasSentResponse !== true;
+      }
+
+      function renderPreviousRecommendations() {
+        if (!Array.isArray(state.recommendationHistory) || state.recommendationHistory.length <= 1) {
+          return '';
+        }
+        return '<details aria-label="recommendationHistory"><summary>Previous recommendations</summary>' +
+          state.recommendationHistory.slice(1).map(function (recommendation) {
+            return '<div class="card description">' +
+              '<strong>' + escapeHtml(recommendation.createdAt ?? 'unknown time') + ' · ' + escapeHtml(recommendation.resolution ?? 'unknown') + '</strong>' +
+              '<p>' + escapeHtml(previewRecommendationDraft(recommendation.draftCustomerResponse)) + '</p>' +
+            '</div>';
+          }).join('') +
+        '</details>';
+      }
+
+      function previewRecommendationDraft(value) {
+        const text = String(value ?? '');
+        return text.length > 160 ? text.slice(0, 157) + '...' : text;
+      }
+
       function updateControls() {
         const hasRecommendation = state.recommendation !== null;
         const approvedWorkflow = isApprovedWorkflow();
@@ -1172,6 +1270,8 @@ export const approvalDeskHtml = `<!doctype html>
 
         els.approveButton.disabled = !(hasRecommendation && !approvedWorkflow && actorPresent && confirmed && hasFields && customerResponseReady);
         els.rejectButton.disabled = !(hasRecommendation && !approvedWorkflow && actorPresent && feedbackPresent);
+        els.createRecommendation.disabled = !canCreateRecommendation();
+        els.createRecommendation.textContent = createRecommendationLabel();
       }
 
       async function loadQueue() {
@@ -1264,6 +1364,8 @@ export const approvalDeskHtml = `<!doctype html>
         state.selectedTicket = data.recommendationSummary === undefined
           ? data.ticket
           : { ...data.ticket, recommendationSummary: data.recommendationSummary };
+        state.conversationTimeline = Array.isArray(data.conversationTimeline) ? data.conversationTimeline : [];
+        state.recommendationHistory = Array.isArray(data.recommendationHistory) ? data.recommendationHistory : [];
         state.recommendation = data.latestRecommendation ?? null;
         state.stage = state.recommendation === null
           ? 'empty'
@@ -1281,8 +1383,8 @@ export const approvalDeskHtml = `<!doctype html>
         if (state.selectedTicket === null) {
           return;
         }
-        if (isApprovedWorkflow()) {
-          setResult({ error: 'Cancel approval before creating a new recommendation for this ticket.' });
+        if (isApprovedAwaitingSend()) {
+          setResult({ error: 'Mark the approved response as sent before creating a new recommendation for this ticket.' });
           return;
         }
         if (state.recommendation?.resolution === 'pending') {
@@ -1301,13 +1403,12 @@ export const approvalDeskHtml = `<!doctype html>
             method: 'POST',
             body: JSON.stringify({
               actor: els.actor.value.trim() || 'approval-desk',
-              responseStyle: els.draftStyle.value,
-              customerReplies: currentCustomerReplies()
+              responseStyle: els.draftStyle.value
             })
           });
           state.recommendation = data.recommendation;
           state.stage = 'draft';
-          markSelectedTicketWorkflow(data.recommendation, 'pending');
+          markSelectedTicketWorkflow(data.recommendation, 'draft-ready');
           renderRecommendation();
           setResult(data);
           await refreshEvidenceBestEffort();
@@ -1342,7 +1443,7 @@ export const approvalDeskHtml = `<!doctype html>
         });
         state.recommendation = { ...approvedRecommendation, resolution: 'approved' };
         state.stage = 'approved';
-        state.selectedTicket = withRecommendationSummary(data.ticket, state.recommendation, 'approved');
+        state.selectedTicket = withRecommendationSummary(data.ticket, state.recommendation, 'draft-ready');
         replaceTicket(state.selectedTicket);
         resetApprovalControls();
         renderTicket();
@@ -1400,6 +1501,45 @@ export const approvalDeskHtml = `<!doctype html>
         renderTicketList();
         renderRecommendation();
         await loadMetrics(data);
+        await refreshEvidenceBestEffort();
+      }
+
+      async function markResponseSent() {
+        if (state.recommendation === null || state.selectedTicket === null) {
+          return;
+        }
+        const data = await requestJson('/api/recommendations/' + encodeURIComponent(state.recommendation.id) + '/mark-sent', {
+          method: 'POST',
+          body: JSON.stringify({
+            ticketId: state.selectedTicket.id,
+            actor: els.actor.value.trim() || 'approval-desk'
+          })
+        });
+        setResult(data);
+        await refreshSelectedTicketQueueAndEvidence();
+      }
+
+      async function persistDemoCustomerReply(value) {
+        if (state.selectedTicket === null) {
+          return;
+        }
+        await requestJson('/api/tickets/' + encodeURIComponent(state.selectedTicket.id) + '/customer-replies', {
+          method: 'POST',
+          body: JSON.stringify({
+            actor: els.actor.value.trim() || 'approval-desk',
+            body: conversationScenarioBody(value),
+            source: 'demo-scenario'
+          })
+        });
+        await refreshSelectedTicketQueueAndEvidence();
+      }
+
+      async function refreshSelectedTicketQueueAndEvidence() {
+        const selectedId = state.selectedTicket?.id;
+        if (selectedId !== undefined) {
+          await selectTicket(selectedId);
+        }
+        await loadQueue();
         await refreshEvidenceBestEffort();
       }
 
@@ -1509,7 +1649,7 @@ export const approvalDeskHtml = `<!doctype html>
       function isApprovedWorkflow() {
         return state.stage === 'approved' ||
           state.recommendation?.resolution === 'approved' ||
-          state.selectedTicket?.recommendationSummary?.workflowState === 'approved';
+          state.selectedTicket?.recommendationSummary?.latestResolution === 'approved';
       }
 
       function withRecommendationSummary(ticket, recommendation, workflowState) {
@@ -1517,7 +1657,12 @@ export const approvalDeskHtml = `<!doctype html>
           ...ticket,
           recommendationSummary: {
             workflowState,
-            recommendationId: recommendation.id,
+            latestRecommendationId: recommendation.id,
+            latestResolution: recommendation.resolution,
+            hasPendingRecommendation: recommendation.resolution === 'pending',
+            hasApprovedRecommendation: recommendation.resolution === 'approved',
+            hasSentResponse: false,
+            hasCustomerReply: false,
             category: recommendation.category,
             priority: recommendation.priority,
             team: recommendation.team,
@@ -1839,28 +1984,6 @@ export const approvalDeskHtml = `<!doctype html>
           .replaceAll("'", '&#039;');
       }
 
-      function appendConversationScenario(value) {
-        if (state.selectedTicket === null) {
-          return;
-        }
-        if (value === 'clear-replies') {
-          state.customerRepliesByTicketId[state.selectedTicket.id] = [];
-          renderConversationContext();
-          return;
-        }
-        const body = conversationScenarioBody(value);
-        const replies = currentCustomerReplies();
-        if (replies.length >= 8) {
-          return;
-        }
-        state.customerRepliesByTicketId[state.selectedTicket.id] = replies.concat({
-          id: 'demo-reply-' + String(replies.length + 1),
-          createdAt: new Date(Date.UTC(2026, 5, 10, 9, replies.length * 7)).toISOString(),
-          body
-        });
-        renderConversationContext();
-      }
-
       function conversationScenarioBody(value) {
         if (value === 'partial-evidence') {
           return 'The endpoint URL is https://hooks.example.test/webhooks/orders and the delivery ID is deliv_7788.';
@@ -1903,10 +2026,13 @@ export const approvalDeskHtml = `<!doctype html>
           state.stage = 'draft';
           renderRecommendation(true);
         }
+        if (event.target?.dataset?.action === 'mark-sent' && state.recommendation !== null) {
+          void markResponseSent().catch(function (error) { setResult({ error: error.message }); });
+        }
       });
       els.conversationContextPanel.addEventListener('click', function (event) {
         if (event.target?.className?.includes('conversation-scenario')) {
-          appendConversationScenario(event.target.value);
+          void persistDemoCustomerReply(event.target.value).catch(function (error) { setResult({ error: error.message }); });
         }
       });
       els.editedCustomerResponse.addEventListener('input', updateControls);

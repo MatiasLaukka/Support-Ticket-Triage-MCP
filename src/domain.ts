@@ -284,7 +284,13 @@ export const TriageRecommendationSchema = z
       .refine((reasons) => new Set(reasons).size === reasons.length, {
         message: "Escalation reasons must be unique.",
       }),
-    resolution: z.enum(["pending", "approved", "rejected", "canceled"]),
+    resolution: z.enum([
+      "pending",
+      "approved",
+      "rejected",
+      "canceled",
+      "superseded",
+    ]),
     createdAt: IsoTimestampSchema,
   })
   .strict()
@@ -379,6 +385,9 @@ export const AuditActionSchema = z.enum([
   "recommendation-approved",
   "recommendation-rejected",
   "recommendation-canceled",
+  "recommendation-superseded",
+  "customer-response-sent",
+  "customer-reply-received",
   "ticket-updated",
   "approval-rejected",
 ]);

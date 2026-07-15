@@ -1012,10 +1012,16 @@ export const approvalDeskHtml = `<!doctype html>
           els.conversationContextPanel.innerHTML = '<p class="hint">Select a ticket to add customer reply context.</p>';
           return;
         }
+        if (!hasAnySentSupportResponse()) {
+          els.conversationContextPanel.innerHTML =
+            '<p class="hint">Mark a customer response as sent before adding demo replies.</p>' +
+            '<p class="hint">This keeps the showcase lifecycle honest: draft, approve, mark sent, then receive customer replies.</p>';
+          return;
+        }
         els.conversationContextPanel.innerHTML =
           '<p class="hint">Use demo replies to advance the conversation lifecycle through the local API.</p>' +
           '<details><summary>Add synthetic customer replies</summary>' +
-            '<p class="hint">Replies are persisted through the ticket API, then the selected ticket, queue, and evidence are refreshed.</p>' +
+            '<p class="hint">Replies are persisted through the ticket API, then the selected ticket, queue, and evidence are refreshed. Partial evidence gives an endpoint URL and delivery ID; complete evidence also includes raw body handling.</p>' +
             '<div class="conversation-controls">' +
               scenarioButton('vague-reply', 'Add vague reply') +
               scenarioButton('partial-evidence', 'Add partial evidence') +
@@ -1244,6 +1250,14 @@ export const approvalDeskHtml = `<!doctype html>
         return Array.isArray(state.conversationTimeline) && state.conversationTimeline.some(function (item) {
           return item.kind === 'support-response-sent' && item.recommendationId === recommendationId;
         });
+      }
+
+      function hasAnySentSupportResponse() {
+        const summary = state.selectedTicket?.recommendationSummary ?? {};
+        return summary.hasSentResponse === true ||
+          (Array.isArray(state.conversationTimeline) && state.conversationTimeline.some(function (item) {
+            return item.kind === 'support-response-sent';
+          }));
       }
 
       function renderPreviousRecommendations() {
@@ -1533,6 +1547,10 @@ export const approvalDeskHtml = `<!doctype html>
 
       async function persistDemoCustomerReply(value) {
         if (state.selectedTicket === null) {
+          return;
+        }
+        if (!hasAnySentSupportResponse()) {
+          setResult({ error: 'Mark a customer response as sent before adding demo replies.' });
           return;
         }
         await requestJson('/api/tickets/' + encodeURIComponent(state.selectedTicket.id) + '/customer-replies', {

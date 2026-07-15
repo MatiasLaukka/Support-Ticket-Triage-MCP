@@ -50,7 +50,25 @@ describe("approvalDeskHtml", () => {
   });
 
   it("persists synthetic customer replies and refreshes ticket, queue, and evidence", async () => {
-    const app = await startApprovalDeskApp();
+    const app = await startApprovalDeskApp({
+      ticketDetail: {
+        conversationTimeline: [
+          {
+            kind: "support-response-sent",
+            timestamp: "2026-06-10T09:04:00.000Z",
+            actor: "approval-desk",
+            recommendationId: fixtureRecommendation.id,
+            body: "Earlier sent response.",
+          },
+        ],
+        recommendationSummary: {
+          workflowState: "waiting",
+          latestResolution: "approved",
+          hasSentResponse: true,
+          hasCustomerReply: false,
+        },
+      },
+    });
     await app.selectFirstTicket();
 
     expect(app.el("conversationContextPanel").innerHTML).toContain(
@@ -76,6 +94,19 @@ describe("approvalDeskHtml", () => {
     expect(app.ticketDetailRequests()).toBe(2);
     expect(app.queueRequests()).toBe(2);
     expect(app.evidenceRequests()).toBe(2);
+  });
+
+  it("does not offer synthetic customer replies before a support response is sent", async () => {
+    const app = await startApprovalDeskApp();
+    await app.selectFirstTicket();
+
+    expect(app.el("conversationContextPanel").innerHTML).toContain(
+      "Mark a customer response as sent before adding demo replies.",
+    );
+    expect(app.el("conversationContextPanel").children).toHaveLength(0);
+    expect(
+      app.requests.some((request) => request.path.endsWith("/customer-replies")),
+    ).toBe(false);
   });
 
   it("renders the task 3 conversation timeline in the ticket panel", async () => {

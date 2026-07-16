@@ -125,6 +125,60 @@ const AddCustomerReplyInputSchema = z
     source: NonBlankStringSchema.optional(),
   })
   .strict();
+const DiagnosisContextSchema = z
+  .object({
+    status: z.literal("completed"),
+    causeType: z.enum([
+      "configuration",
+      "platform-delay",
+      "customer-data",
+      "integration",
+      "security",
+      "performance",
+    ]),
+    customerSafeSummary: NonBlankStringSchema,
+    evidenceUsed: z.array(NonBlankStringSchema).min(1),
+    confidence: z.enum(["likely", "confirmed"]),
+    owner: z.enum([
+      "support",
+      "engineering",
+      "customer",
+      "integration-partner",
+    ]),
+    recommendedNextAction: NonBlankStringSchema,
+    doNotSay: z.array(NonBlankStringSchema),
+  })
+  .strict();
+const FixContextSchema = z
+  .object({
+    status: z.literal("available"),
+    customerSafeSummary: NonBlankStringSchema,
+    customerAction: NonBlankStringSchema,
+    verificationRequest: NonBlankStringSchema,
+  })
+  .strict();
+const RecordDiagnosisInputSchema = z
+  .object({
+    ticketId: TicketIdSchema,
+    actor: NonBlankStringSchema,
+    diagnosedAt: IsoTimestampSchema,
+    diagnosis: DiagnosisContextSchema,
+    knowledgeArticleIds: z.array(
+      z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
+    ),
+  })
+  .strict();
+const RecordFixInputSchema = z
+  .object({
+    ticketId: TicketIdSchema,
+    actor: NonBlankStringSchema,
+    fixedAt: IsoTimestampSchema,
+    fix: FixContextSchema,
+    knowledgeArticleIds: z.array(
+      z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
+    ),
+  })
+  .strict();
 
 const SupersedeRecommendationInputSchema = z
   .object({
@@ -208,6 +262,46 @@ export interface AddCustomerReplyInput {
   body: string;
   receivedAt: string;
   source?: string;
+}
+
+export interface DiagnosisContext {
+  status: "completed";
+  causeType:
+    | "configuration"
+    | "platform-delay"
+    | "customer-data"
+    | "integration"
+    | "security"
+    | "performance";
+  customerSafeSummary: string;
+  evidenceUsed: string[];
+  confidence: "likely" | "confirmed";
+  owner: "support" | "engineering" | "customer" | "integration-partner";
+  recommendedNextAction: string;
+  doNotSay: string[];
+}
+
+export interface FixContext {
+  status: "available";
+  customerSafeSummary: string;
+  customerAction: string;
+  verificationRequest: string;
+}
+
+export interface RecordDiagnosisInput {
+  ticketId: TicketId;
+  actor: string;
+  diagnosedAt: string;
+  diagnosis: DiagnosisContext;
+  knowledgeArticleIds: string[];
+}
+
+export interface RecordFixInput {
+  ticketId: TicketId;
+  actor: string;
+  fixedAt: string;
+  fix: FixContext;
+  knowledgeArticleIds: string[];
 }
 
 export interface SupersedeRecommendationInput {
@@ -462,6 +556,50 @@ export class TriageService {
       },
       rationale: "Customer reply added to ticket conversation.",
       knowledgeArticleIds: [],
+      result: "success",
+    });
+    await this.dependencies.audit.append(auditEvent);
+    return auditEvent;
+  }
+
+  async recordDiagnosis(input: RecordDiagnosisInput): Promise<AuditEvent> {
+    const diagnosis = RecordDiagnosisInputSchema.parse(input);
+    await this.dependencies.tickets.get(diagnosis.ticketId);
+
+    const auditEvent = AuditEventSchema.parse({
+      id: this.uuid(),
+      timestamp: diagnosis.diagnosedAt,
+      actor: diagnosis.actor,
+      action: "diagnosis-completed",
+      ticketId: diagnosis.ticketId,
+      before: {},
+      after: {
+        diagnosis: diagnosis.diagnosis,
+      },
+      rationale: "Diagnosis completed from trusted support context.",
+      knowledgeArticleIds: diagnosis.knowledgeArticleIds,
+      result: "success",
+    });
+    await this.dependencies.audit.append(auditEvent);
+    return auditEvent;
+  }
+
+  async recordFix(input: RecordFixInput): Promise<AuditEvent> {
+    const fix = RecordFixInputSchema.parse(input);
+    await this.dependencies.tickets.get(fix.ticketId);
+
+    const auditEvent = AuditEventSchema.parse({
+      id: this.uuid(),
+      timestamp: fix.fixedAt,
+      actor: fix.actor,
+      action: "fix-available",
+      ticketId: fix.ticketId,
+      before: {},
+      after: {
+        fix: fix.fix,
+      },
+      rationale: "Fix or mitigation is available for customer verification.",
+      knowledgeArticleIds: fix.knowledgeArticleIds,
       result: "success",
     });
     await this.dependencies.audit.append(auditEvent);

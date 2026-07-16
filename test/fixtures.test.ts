@@ -380,6 +380,7 @@ describe("generated support fixtures", () => {
       "email-deliverability.md",
       "event-tracking-debugging.md",
       "flow-trigger-troubleshooting.md",
+      "performance-troubleshooting.md",
       "profile-sync-issues.md",
       "security-incident-response.md",
       "segmentation-audience-rules.md",
@@ -403,7 +404,7 @@ describe("generated support fixtures", () => {
         return frontmatter.id;
       }),
     );
-    expect(knowledgeIds.size).toBe(12);
+    expect(knowledgeIds.size).toBe(13);
 
     for (const outcome of outcomes) {
       expect(outcome.knowledgeArticleIds.length).toBeGreaterThan(0);

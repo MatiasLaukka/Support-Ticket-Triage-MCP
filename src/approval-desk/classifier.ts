@@ -316,9 +316,46 @@ const RULES: readonly Rule[] = [
       ),
       signal(
         "conversation-campaign-editor-blank-page-article",
-        "knowledge:campaign-send-failures",
+        "knowledge:performance-troubleshooting",
         9,
         "Campaign editor blank-page symptoms route to product performance diagnosis.",
+      ),
+    ],
+  },
+  {
+    id: "conversation-app-blank-page",
+    knowledgeCategory: "performance",
+    when: ({ content }) =>
+      /\b(?:blank page|page (?:stayed|is|was)(?: still)? blank|screen (?:stayed|is|was)(?: still)? blank|nothing (?:loaded|loads|happened))\b/.test(
+        content,
+      ) &&
+      /\b(?:chrome|firefox|safari|edge|browser|signing out|signed out|session|failure timestamp|campaign name)\b/.test(
+        content,
+      ),
+    emit: () => [
+      signal(
+        "conversation-app-blank-page-category",
+        "category:performance",
+        10,
+        "Blank-page application symptoms route to product performance diagnosis.",
+      ),
+      signal(
+        "conversation-app-blank-page-team",
+        "team:product",
+        10,
+        "Blank-page application symptoms route to product performance diagnosis.",
+      ),
+      signal(
+        "conversation-app-blank-page-priority",
+        "priority:P3",
+        10,
+        "Blank-page application symptoms route to product performance diagnosis.",
+      ),
+      signal(
+        "conversation-app-blank-page-article",
+        "knowledge:performance-troubleshooting",
+        9,
+        "Use performance troubleshooting guidance for blank-page symptoms.",
       ),
     ],
   },

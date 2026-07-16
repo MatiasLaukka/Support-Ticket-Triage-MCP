@@ -33,7 +33,7 @@ describe("classifyTicket", () => {
     expect(classification.category).toBe("performance");
     expect(classification.team).toBe("product");
     expect(classification.knowledgeArticleIds).toEqual(
-      expect.arrayContaining(["campaign-send-failures"]),
+      expect.arrayContaining(["performance-troubleshooting"]),
     );
     expect(classification.signals).toEqual(
       expect.arrayContaining([
@@ -42,6 +42,40 @@ describe("classifyTicket", () => {
           target: "category:performance",
         }),
       ]),
+    );
+  });
+
+  it("routes blank page replies with browser evidence to product performance", () => {
+    const ticket = makeTicket({
+      subject: "Problem",
+      description: "It does not work.",
+      category: "performance",
+      team: "product",
+      tags: ["performance"],
+    });
+    const context = buildConversationContextForTicket({
+      ticket,
+      customerReplies: [
+        {
+          id: "reply-complete",
+          ticketId: ticket.id,
+          createdAt: "2026-06-10T09:35:00.000Z",
+          body:
+            "The campaign name is Summer Flash Sale. The failure timestamp was 2026-06-10 09:15 UTC. I use Chrome, and the page is still blank after signing out and back in. The affected scope appears to be 12 profiles in the latest export.",
+        },
+      ],
+    });
+
+    const classification = classifyTicketFromContext(context);
+
+    expect(classification.category).toBe("performance");
+    expect(classification.team).toBe("product");
+    expect(classification.priority).toBe("P3");
+    expect(classification.knowledgeArticleIds).toEqual(
+      expect.arrayContaining(["performance-troubleshooting"]),
+    );
+    expect(classification.knowledgeArticleIds).not.toContain(
+      "campaign-send-failures",
     );
   });
 

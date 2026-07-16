@@ -363,6 +363,12 @@ const KNOWLEDGE_EVIDENCE: Readonly<Record<string, readonly string[]>> = {
     "request-id",
     "catalog-sync-time",
   ],
+  "performance-troubleshooting": [
+    "problem-summary",
+    "failure-timestamp",
+    "browser-session-details",
+    "affected-scope",
+  ],
   "security-incident-response": [
     "key-identifier",
     "exposure-location",
@@ -754,7 +760,7 @@ function hasSpecificProblemSummary(text: string): boolean {
     /\b(?:cannot|can'?t|failed|fails|missing|delayed|blocked|stuck|invalid|not showing|not sending|not syncing|not loading|error|broken)\b/i.test(
       text,
     ) ||
-    /\b(?:blank page|page (?:stayed|is|was) blank|screen (?:stayed|is|was) blank|nothing (?:loaded|loads|happened)|stayed blank)\b/i.test(
+    /\b(?:blank page|page (?:stayed|is|was)(?: still)? blank|screen (?:stayed|is|was)(?: still)? blank|nothing (?:loaded|loads|happened)|stayed blank)\b/i.test(
       text,
     )
   );

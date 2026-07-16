@@ -14,6 +14,7 @@ import type { AuditEvent, Ticket, TriageRecommendation } from "../domain.js";
 import { DomainError } from "../errors.js";
 import { calculateQueueMetrics } from "../metrics.js";
 import type { RuntimeDependencies } from "../runtime.js";
+import type { DiagnosisContext, FixContext } from "../triage-service.js";
 import {
   advisorySignalsFromGptReasoning,
   buildApprovalDeskRecommendationInput,
@@ -33,6 +34,7 @@ import {
   buildConversationHistory,
   buildConversationTimeline,
 } from "./conversation-history.js";
+import { getKnownCause } from "./known-cause-catalog.js";
 
 const JSON_BODY_LIMIT_BYTES = 65_536;
 const UNEXPECTED_ERROR_TEXT = "Unexpected local approval desk error.";
@@ -150,6 +152,11 @@ const MarkSentBodySchema = z
     actor: z.string().trim().min(1),
   })
   .strict();
+const WorkflowActionBodySchema = z
+  .object({
+    actor: z.string().trim().min(1),
+  })
+  .strict();
 
 export interface ApprovalDeskHttpOptions {
   expectedOutcomesPath?: string;
@@ -225,6 +232,22 @@ function matchRoute(
     return {
       status: 201,
       handle: (context) => addCustomerReply(context, customerReply[1]!),
+    };
+  }
+
+  const diagnosis = /^\/api\/tickets\/([^/]+)\/diagnosis$/.exec(pathname);
+  if (method === "POST" && diagnosis !== null) {
+    return {
+      status: 201,
+      handle: (context) => recordDiagnosis(context, diagnosis[1]!),
+    };
+  }
+
+  const fix = /^\/api\/tickets\/([^/]+)\/fix$/.exec(pathname);
+  if (method === "POST" && fix !== null) {
+    return {
+      status: 201,
+      handle: (context) => recordFix(context, fix[1]!),
     };
   }
 
@@ -456,6 +479,268 @@ function latestAuditTimestamp(
     .sort((left, right) => right.localeCompare(left))[0];
 }
 
+function latestSentAtForRecommendation(
+  audits: readonly AuditEvent[],
+  recommendationId: string,
+): string | undefined {
+  return audits
+    .filter(
+      (event) =>
+        event.action === "customer-response-sent" &&
+        event.recommendationId === recommendationId,
+    )
+    .map((event) =>
+      typeof event.after.sentAt === "string" ? event.after.sentAt : event.timestamp,
+    )
+    .sort((left, right) => right.localeCompare(left))[0];
+}
+
+function latestCurrentRecommendation(
+  ticketId: string,
+  recommendations: readonly TriageRecommendation[],
+): TriageRecommendation | undefined {
+  return recommendations
+    .filter(
+      (recommendation) =>
+        recommendation.ticketId === ticketId &&
+        ["pending", "approved"].includes(recommendation.resolution),
+    )
+    .sort(
+      (left, right) =>
+        right.createdAt.localeCompare(left.createdAt) ||
+        right.id.localeCompare(left.id),
+    )[0];
+}
+
+function latestDiagnosisAudit(audits: readonly AuditEvent[]): AuditEvent | undefined {
+  return audits
+    .filter(
+      (event) =>
+        event.action === "diagnosis-completed" &&
+        typeof event.after.diagnosis === "object" &&
+        event.after.diagnosis !== null,
+    )
+    .sort((left, right) => right.timestamp.localeCompare(left.timestamp))[0];
+}
+
+function latestDiagnosisContext(
+  audits: readonly AuditEvent[],
+): DiagnosisContext | undefined {
+  return parseDiagnosisContext(latestDiagnosisAudit(audits)?.after.diagnosis);
+}
+
+function latestFixContext(audits: readonly AuditEvent[]): FixContext | undefined {
+  const event = audits
+    .filter(
+      (audit) =>
+        audit.action === "fix-available" &&
+        typeof audit.after.fix === "object" &&
+        audit.after.fix !== null,
+    )
+    .sort((left, right) => right.timestamp.localeCompare(left.timestamp))[0];
+  return parseFixContext(event?.after.fix);
+}
+
+function parseDiagnosisContext(value: unknown): DiagnosisContext | undefined {
+  if (typeof value !== "object" || value === null) {
+    return undefined;
+  }
+  const context = value as Partial<DiagnosisContext>;
+  if (
+    context.status !== "completed" ||
+    typeof context.causeType !== "string" ||
+    typeof context.customerSafeSummary !== "string" ||
+    !Array.isArray(context.evidenceUsed) ||
+    typeof context.confidence !== "string" ||
+    typeof context.owner !== "string" ||
+    typeof context.recommendedNextAction !== "string" ||
+    !Array.isArray(context.doNotSay)
+  ) {
+    return undefined;
+  }
+  return {
+    status: "completed",
+    causeType: context.causeType as DiagnosisContext["causeType"],
+    customerSafeSummary: context.customerSafeSummary,
+    evidenceUsed: context.evidenceUsed.filter(
+      (item): item is string => typeof item === "string",
+    ),
+    confidence: context.confidence as DiagnosisContext["confidence"],
+    owner: context.owner as DiagnosisContext["owner"],
+    recommendedNextAction: context.recommendedNextAction,
+    doNotSay: context.doNotSay.filter(
+      (item): item is string => typeof item === "string",
+    ),
+  };
+}
+
+function parseFixContext(value: unknown): FixContext | undefined {
+  if (typeof value !== "object" || value === null) {
+    return undefined;
+  }
+  const context = value as Partial<FixContext>;
+  if (
+    context.status !== "available" ||
+    typeof context.customerSafeSummary !== "string" ||
+    typeof context.customerAction !== "string" ||
+    typeof context.verificationRequest !== "string"
+  ) {
+    return undefined;
+  }
+  return {
+    status: "available",
+    customerSafeSummary: context.customerSafeSummary,
+    customerAction: context.customerAction,
+    verificationRequest: context.verificationRequest,
+  };
+}
+
+function diagnosisContextForTicket(
+  ticket: Ticket,
+  recommendation: TriageRecommendation,
+): DiagnosisContext {
+  if (
+    ticket.id === "TKT-1010" ||
+    recommendation.knowledgeArticleIds.includes("performance-troubleshooting")
+  ) {
+    return {
+      status: "completed",
+      causeType: "performance",
+      customerSafeSummary:
+        "The details narrow the issue to campaign editor loading, but browser/session checks are needed before treating this as a frontend loading issue.",
+      evidenceUsed: [
+        "campaign name",
+        "failure timestamp",
+        "browser/session details",
+        "affected scope",
+      ],
+      confidence: "likely",
+      owner: "engineering",
+      recommendedNextAction:
+        "We will use the result of those checks to decide whether this can be resolved as a browser/session issue or needs frontend engineering investigation.",
+      doNotSay: [
+        "Do not claim the issue is fixed until a fix event is recorded.",
+        "Do not ask for another screenshot of the blank page.",
+        "Do not claim this is a confirmed frontend issue until browser/session checks fail.",
+      ],
+    };
+  }
+
+  if (
+    recommendation.supportState === "known-cause" &&
+    recommendation.knownCause !== undefined &&
+    recommendation.knownCause !== null
+  ) {
+    const knownCause = getKnownCause(recommendation.knownCause);
+    if (knownCause !== undefined) {
+      return {
+        status: "completed",
+        causeType: recommendation.category === "integration" ? "integration" : "configuration",
+        customerSafeSummary: knownCause.problemSummary,
+        evidenceUsed: providedEvidenceLabels(recommendation, knownCause.label),
+        confidence: "confirmed",
+        owner: recommendation.team === "integrations" ? "integration-partner" : "support",
+        recommendedNextAction: knownCause.nextStep,
+        doNotSay: [
+          "Do not ask for unrelated diagnostics after a known cause is confirmed.",
+        ],
+      };
+    }
+  }
+
+  if (recommendation.supportState === "waiting-on-platform-fix") {
+    return {
+      status: "completed",
+      causeType: "platform-delay",
+      customerSafeSummary:
+        "The evidence points to a platform-side processing delay affecting checkout event processing and profile timeline updates.",
+      evidenceUsed: providedEvidenceLabels(recommendation, "provided customer evidence"),
+      confidence: "likely",
+      owner: "engineering",
+      recommendedNextAction:
+        "Complete platform mitigation before asking the customer to verify the affected examples.",
+      doNotSay: ["Do not claim a final root cause until mitigation is available."],
+    };
+  }
+
+  return {
+    status: "completed",
+    causeType: recommendation.category === "security" ? "security" : "configuration",
+    customerSafeSummary:
+      "The support team has completed the investigation and identified the most likely cause from the provided evidence.",
+    evidenceUsed: providedEvidenceLabels(
+      recommendation,
+      recommendation.knownCause === undefined || recommendation.knownCause === null
+        ? "provided customer evidence"
+        : "known cause match",
+    ),
+    confidence: "likely",
+    owner: recommendation.category === "integration" ? "integration-partner" : "support",
+    recommendedNextAction:
+      "Share the diagnosis with the customer and explain the next safe action.",
+    doNotSay: ["Do not claim a fix until a fix event is recorded."],
+  };
+}
+
+function providedEvidenceLabels(
+  recommendation: TriageRecommendation,
+  fallback: string,
+): string[] {
+  const labels = recommendation.providedEvidence?.map((item) => item.label) ?? [];
+  return labels.length > 0 ? labels : [fallback];
+}
+
+function fixContextForTicket(
+  ticket: Ticket,
+  diagnosisEvent: AuditEvent,
+): FixContext {
+  if (ticket.id === "TKT-1010") {
+    return {
+      status: "available",
+      customerSafeSummary:
+        "The campaign editor loading mitigation has been applied for the affected campaign.",
+      customerAction:
+        "Please reopen the Summer Flash Sale campaign editor in Chrome and try editing the campaign again.",
+      verificationRequest:
+        "Let us know whether the editor now loads normally or if the blank page still appears.",
+    };
+  }
+
+  if (
+    typeof diagnosisEvent.after.diagnosis === "object" &&
+    diagnosisEvent.after.diagnosis !== null &&
+    "causeType" in diagnosisEvent.after.diagnosis &&
+    diagnosisEvent.after.diagnosis.causeType === "platform-delay"
+  ) {
+    return {
+      status: "available",
+      customerSafeSummary:
+        "The event-processing delay mitigation has been applied for the affected store events.",
+      customerAction:
+        "Please check the affected profile timelines again using the same store URL, profile, and event example you shared with us.",
+      verificationRequest:
+        "Let us know whether the delayed checkout events now appear correctly or if any examples are still missing.",
+    };
+  }
+
+  const diagnosis =
+    typeof diagnosisEvent.after.diagnosis === "object" &&
+    diagnosisEvent.after.diagnosis !== null &&
+    "customerSafeSummary" in diagnosisEvent.after.diagnosis &&
+    typeof diagnosisEvent.after.diagnosis.customerSafeSummary === "string"
+      ? diagnosisEvent.after.diagnosis.customerSafeSummary
+      : "the diagnosed issue";
+
+  return {
+    status: "available",
+    customerSafeSummary: `A fix or mitigation is now available for ${diagnosis}`,
+    customerAction:
+      "Please retry the affected workflow using the same example you shared with us.",
+    verificationRequest:
+      "Let us know whether the issue is resolved or if you still see the same behavior.",
+  };
+}
+
 function conversationWorkflowState(input: {
   ticket: Ticket;
   latest?: TriageRecommendation;
@@ -583,6 +868,8 @@ async function createRecommendation(
     ticketId,
     audits,
   );
+  const diagnosisContext = latestDiagnosisContext(audits);
+  const fixContext = latestFixContext(audits);
   const customerReplies = [...persistedCustomerReplies, ...body.customerReplies.map((reply) => ({
     ...reply,
     ticketId,
@@ -620,6 +907,8 @@ async function createRecommendation(
     customerReplies,
     previousSupportResponse,
     advisoryClassificationSignals,
+    diagnosisContext,
+    fixContext,
   });
   const knowledgeArticles = await Promise.all(
     deterministicInput.knowledgeArticleIds.map((articleId) =>
@@ -635,6 +924,8 @@ async function createRecommendation(
     customerReplies,
     previousSupportResponse,
     advisoryClassificationSignals,
+    diagnosisContext,
+    fixContext,
     draftProvider:
       options.draftProvider ??
       createCustomerResponseDraftProviderFromEnv(process.env, {
@@ -666,6 +957,100 @@ async function addCustomerReply(
       ...body,
       ticketId,
       receivedAt: deps.now().toISOString(),
+    }),
+  };
+}
+
+async function recordDiagnosis(
+  { deps, request }: RouteContext,
+  id: string,
+): Promise<unknown> {
+  const ticketId = TicketIdSchema.parse(id);
+  const body = WorkflowActionBodySchema.parse(await readJsonBody(request));
+  const [ticket, audits, recommendations] = await Promise.all([
+    deps.tickets.get(ticketId),
+    deps.audits.list(ticketId),
+    deps.recommendations.list(),
+  ]);
+  const latest = latestCurrentRecommendation(ticketId, recommendations);
+  if (latest === undefined) {
+    throw invalidRequest("A completed evaluation is required before diagnosis.");
+  }
+  const knownCauseReady = latest.supportState === "known-cause";
+  if (!knownCauseReady && (latest.missingEvidence?.length ?? 0) > 0) {
+    throw invalidRequest("Diagnosis requires all required evidence to be gathered.");
+  }
+  if (
+    !knownCauseReady &&
+    !["diagnosing", "waiting-on-platform-fix"].includes(latest.supportState ?? "")
+  ) {
+    throw invalidRequest("Diagnosis requires a diagnosis-ready ticket state.");
+  }
+  const sentAt = latestSentAtForRecommendation(audits, latest.id);
+  if (sentAt === undefined) {
+    throw invalidRequest("The evaluated response must be marked done before diagnosis.");
+  }
+  const latestReplyAt = latestAuditTimestamp(audits, "customer-reply-received");
+  if (latestReplyAt !== undefined && latestReplyAt > sentAt) {
+    throw invalidRequest("Evaluate the latest customer reply before diagnosis.");
+  }
+  const latestDiagnosisAt = latestAuditTimestamp(audits, "diagnosis-completed");
+  if (
+    latestDiagnosisAt !== undefined &&
+    (latestReplyAt === undefined || latestDiagnosisAt > latestReplyAt)
+  ) {
+    throw invalidRequest("Diagnosis has already been recorded for the latest context.");
+  }
+
+  return {
+    auditEvent: await deps.service.recordDiagnosis({
+      ticketId,
+      actor: body.actor,
+      diagnosedAt: deps.now().toISOString(),
+      diagnosis: diagnosisContextForTicket(ticket, latest),
+      knowledgeArticleIds: latest.knowledgeArticleIds.length > 0
+        ? latest.knowledgeArticleIds
+        : [latest.knownCause ?? "known-cause"],
+    }),
+  };
+}
+
+async function recordFix(
+  { deps, request }: RouteContext,
+  id: string,
+): Promise<unknown> {
+  const ticketId = TicketIdSchema.parse(id);
+  const body = WorkflowActionBodySchema.parse(await readJsonBody(request));
+  const [ticket, audits, recommendations] = await Promise.all([
+    deps.tickets.get(ticketId),
+    deps.audits.list(ticketId),
+    deps.recommendations.list(),
+  ]);
+  const latestDiagnosis = latestDiagnosisAudit(audits);
+  if (latestDiagnosis === undefined) {
+    throw invalidRequest("A completed diagnosis is required before marking a fix available.");
+  }
+  const latestFixAt = latestAuditTimestamp(audits, "fix-available");
+  if (latestFixAt !== undefined && latestFixAt > latestDiagnosis.timestamp) {
+    throw invalidRequest("A fix has already been recorded for the latest diagnosis.");
+  }
+  const sentAt = latestAuditTimestamp(audits, "customer-response-sent");
+  if (sentAt === undefined || sentAt < latestDiagnosis.timestamp) {
+    throw invalidRequest("Send the diagnosis response before marking a fix available.");
+  }
+  const latestReplyAt = latestAuditTimestamp(audits, "customer-reply-received");
+  if (latestReplyAt !== undefined && latestReplyAt > sentAt) {
+    throw invalidRequest("Evaluate the latest customer reply before marking a fix available.");
+  }
+  const latest = latestCurrentRecommendation(ticketId, recommendations);
+
+  return {
+    auditEvent: await deps.service.recordFix({
+      ticketId,
+      actor: body.actor,
+      fixedAt: deps.now().toISOString(),
+      fix: fixContextForTicket(ticket, latestDiagnosis),
+      knowledgeArticleIds: latest?.knowledgeArticleIds ?? [],
     }),
   };
 }
@@ -727,15 +1112,70 @@ async function markRecommendationSent(
       );
     }
     const sentAt = deps.now().toISOString();
+    const auditEvent = await deps.service.markResponseSent({
+      ...body,
+      recommendationId,
+      sentAt,
+      customerResponse,
+    });
+    const recommendation = await deps.recommendations.get(recommendationId);
+    const automaticReply = await maybeAddAutomaticCustomerReplyAfterSent({
+      deps,
+      ticketId: body.ticketId,
+      recommendation,
+      auditsBeforeSent: audits,
+      sentAt,
+    });
     return {
-      auditEvent: await deps.service.markResponseSent({
-        ...body,
-        recommendationId,
-        sentAt,
-        customerResponse,
-      }),
+      auditEvent,
+      ...(automaticReply === undefined ? {} : { automaticReply }),
     };
   });
+}
+
+async function maybeAddAutomaticCustomerReplyAfterSent(input: {
+  deps: RuntimeDependencies;
+  ticketId: string;
+  recommendation: TriageRecommendation;
+  auditsBeforeSent: readonly AuditEvent[];
+  sentAt: string;
+}): Promise<AuditEvent | undefined> {
+  const fixEvent = input.auditsBeforeSent
+    .filter((event) => event.action === "fix-available")
+    .sort((left, right) => right.timestamp.localeCompare(left.timestamp))[0];
+  if (fixEvent === undefined || input.recommendation.createdAt < fixEvent.timestamp) {
+    return undefined;
+  }
+  const latestReplyAt = latestAuditTimestamp(
+    input.auditsBeforeSent,
+    "customer-reply-received",
+  );
+  if (latestReplyAt !== undefined && latestReplyAt > fixEvent.timestamp) {
+    return undefined;
+  }
+  const ticket = await input.deps.tickets.get(input.ticketId);
+  const body = automaticReplyForTicket(ticket);
+  if (body === undefined) {
+    return undefined;
+  }
+  return input.deps.service.addCustomerReply({
+    ticketId: input.ticketId,
+    actor: ticket.requester?.name ?? ticket.customer.name,
+    body,
+    receivedAt: plusMilliseconds(input.sentAt, 1),
+    source: "demo-auto-reply",
+  });
+}
+
+function automaticReplyForTicket(ticket: Ticket): string | undefined {
+  if (ticket.id === "TKT-1010") {
+    return "It works now. The campaign editor loads normally again. Thanks for the help!";
+  }
+  return "It works now. Thanks for the help!";
+}
+
+function plusMilliseconds(timestamp: string, milliseconds: number): string {
+  return new Date(new Date(timestamp).getTime() + milliseconds).toISOString();
 }
 
 async function rejectRecommendation(

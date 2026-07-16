@@ -571,6 +571,204 @@ describe("Approval Desk recommendation builder", () => {
     );
   });
 
+  it("answers platform-fix ETA follow-ups without repeating the first diagnostic ask", async () => {
+    const outcomes = await loadExpectedOutcomes(
+      resolve("data/seed/expected-outcomes.json"),
+    );
+    const ticket = await loadSeedTicket("TKT-1001");
+
+    const input = buildApprovalDeskRecommendationInput({
+      ticket,
+      outcome: outcomes.get("TKT-1001")!,
+      actor: "approval-desk",
+      previousSupportResponse: {
+        sentAt: "2026-06-10T09:00:00.000Z",
+        body:
+          "We are investigating this as a possible platform delay affecting event processing and will share the next update after confirming impact and mitigation.",
+      },
+      customerReplies: [
+        {
+          id: "reply-eta",
+          ticketId: "TKT-1001",
+          createdAt: "2026-06-10T09:20:00.000Z",
+          body: "How long do we have to wait for a fix?",
+        },
+      ],
+    });
+
+    expect(input.supportState).toBe("waiting-on-platform-fix");
+    expect(input.draftCustomerResponse).toContain(
+      "Thanks for checking in",
+    );
+    expect(input.draftCustomerResponse).toContain("confirmed ETA");
+    expect(input.draftCustomerResponse).toContain("next update");
+    expect(input.draftCustomerResponse).not.toContain(
+      "please share:",
+    );
+    expect(input.draftCustomerResponse).not.toContain("Affected store URL");
+  });
+
+  it("answers platform-fix explanation requests without repeating the first diagnostic ask", async () => {
+    const outcomes = await loadExpectedOutcomes(
+      resolve("data/seed/expected-outcomes.json"),
+    );
+    const ticket = await loadSeedTicket("TKT-1001");
+
+    const input = buildApprovalDeskRecommendationInput({
+      ticket,
+      outcome: outcomes.get("TKT-1001")!,
+      actor: "approval-desk",
+      previousSupportResponse: {
+        sentAt: "2026-06-10T09:00:00.000Z",
+        body:
+          "We are investigating this as a possible platform delay affecting event processing and will share the next update after confirming impact and mitigation.",
+      },
+      customerReplies: [
+        {
+          id: "reply-explanation",
+          ticketId: "TKT-1001",
+          createdAt: "2026-06-10T09:20:00.000Z",
+          body: "Okay. What's the problem?",
+        },
+      ],
+    });
+
+    expect(input.supportState).toBe("waiting-on-platform-fix");
+    expect(input.draftCustomerResponse).toContain("Thanks for checking in");
+    expect(input.draftCustomerResponse).toContain(
+      "we are looking at a possible delay",
+    );
+    expect(input.draftCustomerResponse).toContain(
+      "not yet a confirmed root cause",
+    );
+    expect(input.draftCustomerResponse).not.toContain("please share:");
+    expect(input.draftCustomerResponse).not.toContain("Affected store URL");
+  });
+
+  it("falls back when an OpenAI status-follow-up draft repeats the diagnostic ask", async () => {
+    const outcomes = await loadExpectedOutcomes(
+      resolve("data/seed/expected-outcomes.json"),
+    );
+    const ticket = await loadSeedTicket("TKT-1001");
+
+    const input = await buildApprovalDeskRecommendationInputWithDrafting({
+      ticket,
+      outcome: outcomes.get("TKT-1001")!,
+      actor: "approval-desk",
+      knowledgeArticles: [],
+      previousSupportResponse: {
+        sentAt: "2026-06-10T09:00:00.000Z",
+        body:
+          "We are investigating this as a possible platform delay affecting event processing and will share the next update after confirming impact and mitigation.",
+      },
+      customerReplies: [
+        {
+          id: "reply-eta",
+          ticketId: "TKT-1001",
+          createdAt: "2026-06-10T09:20:00.000Z",
+          body: "How long do we have to wait for a fix?",
+        },
+      ],
+      draftProvider: {
+        draft: async () => ({
+          source: "openai",
+          response:
+            "Thanks for getting back to us. To move this forward, please share the affected store URL and request ID.",
+          assist: {
+            source: "openai",
+            missingInfoSuggestions: [
+              "Share the affected store URL and request ID.",
+            ],
+            investigationSteps: [
+              "Collect the missing evidence before recommending the next update.",
+            ],
+            tone: "balanced",
+            recommendedTone: "balanced",
+            selectedTone: "balanced",
+            toneReason: "Balanced tone fits the support update.",
+            audience: "merchant-admin",
+            checks: [],
+          },
+        }),
+      },
+    });
+
+    expect(input.draftCustomerResponseSource).toBe("fallback");
+    expect(input.draftCustomerResponse).toContain("Thanks for checking in");
+    expect(input.draftCustomerResponse).toContain("confirmed ETA");
+    expect(input.draftCustomerResponse).not.toContain("please share");
+    expect(input.draftCustomerResponseChecks).toContainEqual(
+      expect.objectContaining({
+        id: "status-follow-up-does-not-repeat-diagnostics",
+        status: "warn",
+      }),
+    );
+  });
+
+  it("falls back when an OpenAI explanation-request draft repeats the diagnostic ask", async () => {
+    const outcomes = await loadExpectedOutcomes(
+      resolve("data/seed/expected-outcomes.json"),
+    );
+    const ticket = await loadSeedTicket("TKT-1001");
+
+    const input = await buildApprovalDeskRecommendationInputWithDrafting({
+      ticket,
+      outcome: outcomes.get("TKT-1001")!,
+      actor: "approval-desk",
+      knowledgeArticles: [],
+      previousSupportResponse: {
+        sentAt: "2026-06-10T09:00:00.000Z",
+        body:
+          "We are investigating this as a possible platform delay affecting event processing and will share the next update after confirming impact and mitigation.",
+      },
+      customerReplies: [
+        {
+          id: "reply-explanation",
+          ticketId: "TKT-1001",
+          createdAt: "2026-06-10T09:20:00.000Z",
+          body: "Okay. What's the problem?",
+        },
+      ],
+      draftProvider: {
+        draft: async () => ({
+          source: "openai",
+          response:
+            "Thanks for getting back to us. To move this forward, please share the affected store URL and request ID.",
+          assist: {
+            source: "openai",
+            missingInfoSuggestions: [
+              "Share the affected store URL and request ID.",
+            ],
+            investigationSteps: [
+              "Collect the missing evidence before recommending the next update.",
+            ],
+            tone: "balanced",
+            recommendedTone: "balanced",
+            selectedTone: "balanced",
+            toneReason: "Balanced tone fits the support update.",
+            audience: "merchant-admin",
+            checks: [],
+          },
+        }),
+      },
+    });
+
+    expect(input.draftCustomerResponseSource).toBe("fallback");
+    expect(input.draftCustomerResponse).toContain(
+      "we are looking at a possible delay",
+    );
+    expect(input.draftCustomerResponse).toContain(
+      "not yet a confirmed root cause",
+    );
+    expect(input.draftCustomerResponse).not.toContain("please share");
+    expect(input.draftCustomerResponseChecks).toContainEqual(
+      expect.objectContaining({
+        id: "explanation-request-does-not-repeat-diagnostics",
+        status: "warn",
+      }),
+    );
+  });
+
   it("makes platform-delay context authoritative over a preexisting known cause", async () => {
     const outcomes = await loadExpectedOutcomes(
       resolve("data/seed/expected-outcomes.json"),

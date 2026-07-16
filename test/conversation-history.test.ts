@@ -191,6 +191,80 @@ describe("conversation timeline", () => {
     });
   });
 
+  it("keeps diagnosis and fix events visible as first-class timeline items", () => {
+    const diagnosisEvent = AuditEventSchema.parse({
+      id: "77777777-7777-4777-8777-777777777777",
+      timestamp: "2026-06-10T09:30:00.000Z",
+      actor: "incident-response",
+      action: "diagnosis-completed",
+      ticketId: "TKT-1001",
+      before: {},
+      after: {
+        diagnosis: {
+          status: "completed",
+          causeType: "platform-delay",
+          customerSafeSummary:
+            "Accepted checkout events were delayed before appearing on EU profile timelines.",
+          evidenceUsed: [
+            "EU store URLs",
+            "accepted API responses",
+            "profile timeline delay",
+          ],
+          confidence: "likely",
+          owner: "engineering",
+          recommendedNextAction:
+            "Engineering should complete mitigation before the customer retries.",
+          doNotSay: ["Do not claim permanent resolution before mitigation."],
+        },
+      },
+      rationale: "Diagnosis completed from customer evidence and platform checks.",
+      knowledgeArticleIds: ["event-tracking-debugging"],
+      result: "success",
+    });
+    const fixEvent = AuditEventSchema.parse({
+      id: "88888888-8888-4888-8888-888888888888",
+      timestamp: "2026-06-10T09:40:00.000Z",
+      actor: "incident-response",
+      action: "fix-available",
+      ticketId: "TKT-1001",
+      before: {},
+      after: {
+        fix: {
+          status: "available",
+          customerSafeSummary:
+            "The delayed EU event-processing queue has been drained.",
+          customerAction:
+            "Please refresh the affected profiles and check the checkout events again.",
+          verificationRequest:
+            "Let us know whether the missing checkout events are visible now.",
+        },
+      },
+      rationale: "Mitigation is available for customer verification.",
+      knowledgeArticleIds: ["event-tracking-debugging"],
+      result: "success",
+    });
+
+    const timeline = buildConversationTimeline({
+      ticket,
+      audits: [diagnosisEvent, fixEvent],
+      recommendations: [],
+    });
+
+    expect(timeline.slice(1)).toMatchObject([
+      {
+        kind: "diagnosis",
+        actor: "incident-response",
+        summary:
+          "Accepted checkout events were delayed before appearing on EU profile timelines.",
+      },
+      {
+        kind: "fix",
+        actor: "incident-response",
+        summary: "The delayed EU event-processing queue has been drained.",
+      },
+    ]);
+  });
+
   it("keeps malformed sent and reply audit payloads as recommendation events", () => {
     const timeline = buildConversationTimeline({
       ticket,

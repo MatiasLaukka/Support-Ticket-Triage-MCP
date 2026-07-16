@@ -388,6 +388,8 @@ export const AuditActionSchema = z.enum([
   "recommendation-superseded",
   "customer-response-sent",
   "customer-reply-received",
+  "diagnosis-completed",
+  "fix-available",
   "ticket-updated",
   "approval-rejected",
 ]);

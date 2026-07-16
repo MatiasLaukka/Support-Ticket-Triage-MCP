@@ -34,6 +34,18 @@ export type ConversationTimelineItem =
       body: string;
     }
   | {
+      kind: "diagnosis";
+      timestamp: string;
+      actor: string;
+      summary: string;
+    }
+  | {
+      kind: "fix";
+      timestamp: string;
+      actor: string;
+      summary: string;
+    }
+  | {
       kind: "recommendation-event";
       timestamp: string;
       actor: string;
@@ -145,6 +157,36 @@ function buildTimelineAuditItem(event: AuditEvent): ConversationTimelineItem {
     };
   }
 
+  if (
+    event.action === "diagnosis-completed" &&
+    typeof event.after.diagnosis === "object" &&
+    event.after.diagnosis !== null &&
+    "customerSafeSummary" in event.after.diagnosis &&
+    typeof event.after.diagnosis.customerSafeSummary === "string"
+  ) {
+    return {
+      kind: "diagnosis",
+      timestamp: event.timestamp,
+      actor: event.actor,
+      summary: event.after.diagnosis.customerSafeSummary,
+    };
+  }
+
+  if (
+    event.action === "fix-available" &&
+    typeof event.after.fix === "object" &&
+    event.after.fix !== null &&
+    "customerSafeSummary" in event.after.fix &&
+    typeof event.after.fix.customerSafeSummary === "string"
+  ) {
+    return {
+      kind: "fix",
+      timestamp: event.timestamp,
+      actor: event.actor,
+      summary: event.after.fix.customerSafeSummary,
+    };
+  }
+
   return {
     kind: "recommendation-event",
     timestamp: event.timestamp,
@@ -173,6 +215,10 @@ function summarizeAuditEvent(event: AuditEvent): string {
       return "Approved customer response was sent.";
     case "customer-reply-received":
       return "Customer reply was added to the ticket conversation.";
+    case "diagnosis-completed":
+      return "Diagnosis was completed for the ticket.";
+    case "fix-available":
+      return "Fix or mitigation is available for customer verification.";
     case "ticket-updated":
       return "Ticket fields were updated.";
     case "approval-rejected":

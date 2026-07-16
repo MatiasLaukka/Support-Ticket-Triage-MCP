@@ -76,7 +76,7 @@ export const approvalDeskHtml = `<!doctype html>
       .shell {
         margin: 0 auto;
         max-width: 1500px;
-        padding: 1.5rem;
+        padding: 1.5rem 1.5rem 8rem;
       }
 
       header {
@@ -244,16 +244,166 @@ export const approvalDeskHtml = `<!doctype html>
         margin-top: 0.65rem;
       }
 
+      .recommendation-setup-bar {
+        background: rgba(255, 255, 255, 0.96);
+        border: 1px solid var(--line);
+        border-radius: 18px;
+        bottom: 1rem;
+        box-shadow: 0 18px 44px rgba(23, 32, 51, 0.18);
+        right: 1rem;
+        max-width: calc(100vw - 2rem);
+        padding: 0.7rem;
+        position: fixed;
+        width: min(520px, calc(100vw - 2rem));
+        z-index: 20;
+      }
+
+      .recommendation-setup-bar h3 {
+        font-size: 0.95rem;
+        margin: 0;
+      }
+
+      .bar-mode[hidden],
+      .approval-stage-placeholder[hidden] {
+        display: none;
+      }
+
+      .bar-topline {
+        align-items: baseline;
+        display: flex;
+        gap: 0.65rem;
+        justify-content: space-between;
+      }
+
+      .bar-topline .meta {
+        text-align: right;
+      }
+
+      .bar-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.45rem;
+        justify-content: flex-end;
+        margin-top: 0.5rem;
+      }
+
+      .bar-actions button {
+        min-height: 2.35rem;
+        padding: 0.55rem 0.7rem;
+      }
+
+      .recommendation-setup-bar .secondary {
+        background: var(--accent);
+        color: white;
+      }
+
+      .recommendation-setup-bar .secondary:hover:not(:disabled) {
+        background: var(--accent-dark);
+      }
+
+      .recommendation-setup-bar .accent-action {
+        background: #7c3aed;
+        box-shadow: 0 8px 18px rgba(124, 58, 237, 0.24);
+      }
+
+      .recommendation-setup-bar .accent-action:hover:not(:disabled) {
+        background: #6d28d9;
+      }
+
+      .bar-chip-summary {
+        margin-top: 0.4rem;
+      }
+
+      .bar-chip-summary .chip {
+        font-size: 0.78rem;
+        padding: 0.2rem 0.45rem;
+      }
+
       .setup-grid {
         align-items: end;
+        display: grid;
+        gap: 0.65rem;
+        grid-template-columns: minmax(150px, 1fr) minmax(170px, 1fr) auto;
+        margin-top: 0.55rem;
       }
 
       .setup-grid label {
-        flex: 1 1 180px;
+        min-width: 0;
+      }
+
+      .setup-grid input,
+      .setup-grid select {
+        min-height: 2.65rem;
       }
 
       .setup-grid button {
-        flex: 1 1 180px;
+        min-height: 2.65rem;
+        white-space: nowrap;
+      }
+
+      .decision-summary {
+        margin: 0.3rem 0 0;
+      }
+
+      .compact-edit-grid {
+        display: grid;
+        gap: 0.5rem;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        margin-top: 0.55rem;
+      }
+
+      .compact-edit-grid label.wide,
+      .bar-mode details {
+        grid-column: 1 / -1;
+      }
+
+      .bar-mode details {
+        margin-top: 0.5rem;
+      }
+
+      .bar-mode textarea {
+        min-height: 5.5rem;
+      }
+
+      .quick-reasons {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.45rem;
+        margin-top: 0.5rem;
+      }
+
+      .quick-reason {
+        padding: 0.45rem 0.65rem;
+      }
+
+      .reply-mode {
+        margin-top: 0.55rem;
+      }
+
+      .reply-composer {
+        margin-top: 0.45rem;
+        padding: 0.55rem;
+      }
+
+      .reply-composer textarea {
+        min-height: 4.75rem;
+      }
+
+      .bar-reply-preview {
+        background: var(--panel-soft);
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        color: var(--muted);
+        font-size: 0.86rem;
+        line-height: 1.4;
+        margin-top: 0.45rem;
+        padding: 0.55rem 0.65rem;
+      }
+
+      .bar-reply-preview strong {
+        color: var(--ink);
+        display: block;
+        margin-bottom: 0.2rem;
       }
 
       .details-grid {
@@ -299,6 +449,83 @@ export const approvalDeskHtml = `<!doctype html>
         margin-top: 0.55rem;
       }
 
+      .advanced-drawer {
+        background: transparent;
+        margin-top: 0.75rem;
+        padding: 0.65rem;
+      }
+
+      .advanced-drawer summary {
+        align-items: center;
+        display: flex;
+        gap: 0.55rem;
+      }
+
+      .advanced-icon {
+        align-items: center;
+        background: var(--panel-soft);
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        color: var(--accent-dark);
+        display: inline-flex;
+        font-size: 0.82rem;
+        height: 1.65rem;
+        justify-content: center;
+        width: 1.65rem;
+      }
+
+      .advanced-section {
+        margin-top: 0.75rem;
+      }
+
+      .advanced-section h4 {
+        margin: 0 0 0.55rem;
+      }
+
+      .conversation-timeline .conversation-header {
+        align-items: flex-start;
+        display: flex;
+        gap: 0.75rem;
+        justify-content: space-between;
+      }
+
+      .conversation-state-strip {
+        background: white;
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        margin: 0.75rem 0;
+        padding: 0.75rem;
+      }
+
+      .timeline-item {
+        border-left: 4px solid var(--line);
+        margin-top: 0.65rem;
+      }
+
+      .timeline-item.customer-reply {
+        border-left-color: var(--accent);
+      }
+
+      .timeline-item.support-response-sent {
+        border-left-color: #23a06b;
+      }
+
+      .timeline-item.original-ticket {
+        border-left-color: #f4c542;
+      }
+
+      .timeline-item.recommendation-event {
+        border-left-color: var(--muted);
+      }
+
+      .timeline-item.diagnosis {
+        border-left-color: #7c3aed;
+      }
+
+      .timeline-item.fix {
+        border-left-color: #16a34a;
+      }
+
       .conversation-controls {
         display: flex;
         flex-wrap: wrap;
@@ -308,6 +535,15 @@ export const approvalDeskHtml = `<!doctype html>
 
       .conversation-controls button {
         padding: 0.45rem 0.65rem;
+      }
+
+      .conversation-controls .secondary {
+        background: var(--accent);
+        color: white;
+      }
+
+      .conversation-controls .secondary:hover:not(:disabled) {
+        background: var(--accent-dark);
       }
 
       .reply-preview {
@@ -691,47 +927,138 @@ export const approvalDeskHtml = `<!doctype html>
           <div id="ticketPanel">
             <p class="hint">No ticket selected.</p>
           </div>
-          <details>
-            <summary>Developer/audit output</summary>
-            <p class="hint">Raw local API result for debugging and audit verification.</p>
-            <pre id="resultPanel" class="result">{}</pre>
-          </details>
           <section class="card conversation-context" aria-label="Conversation Context">
-            <h3>Conversation Context</h3>
-            <label for="customerReplyBody">Add customer reply</label>
-            <textarea id="customerReplyBody" rows="4" placeholder="Paste the customer's latest reply here"></textarea>
-            <p class="hint">Paste or type the customer's latest message. The next recommendation will use the full timeline.</p>
-            <button id="addCustomerReply" type="button" class="secondary">Add customer reply</button>
+            <h3>Conversation context</h3>
             <div id="conversationContextPanel">
-              <p class="hint">Select a ticket to add customer reply context.</p>
+              <p class="hint">Select a ticket to review conversation context.</p>
             </div>
           </section>
-          <section class="card" aria-label="Recommendation setup">
-            <h3>Recommendation setup</h3>
-            <p class="hint">Choose who signs the customer draft and let GPT recommend tone, or override it manually.</p>
-            <div class="setup-grid">
+          <details class="advanced-drawer">
+            <summary><span class="advanced-icon">i</span><span>Advanced details</span></summary>
+            <div id="ticketDetailsPanel">
+              <section class="advanced-section">
+                <h4>Technical ticket details</h4>
+                <p class="hint">Select a ticket to inspect technical fields.</p>
+              </section>
+            </div>
+            <section class="advanced-section">
+              <h4>Developer/audit output</h4>
+              <p class="hint">Raw local API result for debugging and audit verification.</p>
+              <pre id="resultPanel" class="result">{}</pre>
+            </section>
+          </details>
+          <section class="recommendation-setup-bar" aria-label="Workflow actions">
+            <input id="confirmApproval" type="checkbox" hidden checked>
+            <div class="bar-topline">
+              <h3 id="actionBarTitle">Evaluate ticket</h3>
+              <span id="actionBarHint" class="meta">Uses the full conversation timeline.</span>
+            </div>
+            <div id="setupControls" class="bar-mode">
+              <div class="setup-grid">
+                <label>
+                  Actor
+                  <input id="actor" value="approval-desk" autocomplete="off">
+                </label>
+                <label>
+                  Draft style
+                  <select id="draftStyle">
+                    <option value="auto" selected>Auto (Recommended)</option>
+                    <option value="balanced">Balanced</option>
+                    <option value="concise">Concise</option>
+                    <option value="empathetic">Empathetic</option>
+                    <option value="technical">Technical</option>
+                    <option value="executive-update">Executive update</option>
+                  </select>
+                </label>
+                <button id="createRecommendation" type="button" title="Evaluate ticket and draft response">Evaluate</button>
+              </div>
+            </div>
+            <div id="decisionControls" class="bar-mode" hidden>
+              <div id="decisionChips" class="chips bar-chip-summary"></div>
+              <p id="decisionSummary" class="meta decision-summary">Review the response, then mark the task done.</p>
+              <div class="bar-actions">
+                <button id="reviewDraftButton" type="button" class="secondary" title="Review response">Response</button>
+                <button id="markSentButton" type="button" title="Mark response as sent" hidden>Done</button>
+                <button id="createUpdatedRecommendation" type="button" title="Evaluate ticket again" hidden>Evaluate</button>
+                <button id="diagnoseButton" type="button" class="secondary" title="Record diagnosis" hidden>Diagnose</button>
+                <button id="fixButton" type="button" class="secondary accent-action" title="Record fix available" hidden>Fix</button>
+                <button id="continueApproval" type="button" class="secondary" title="Edit fields" hidden>Edit</button>
+                <button id="startRejectButton" type="button" class="secondary">Reject</button>
+                <button id="approveButton" type="button" title="Mark task done" disabled>Done</button>
+              </div>
+            </div>
+            <div id="editApprovalControls" class="bar-mode" hidden>
+              <div id="fieldChoices" hidden>
+                <button class="field-approve-button" type="button" value="category">Approve</button>
+                <button class="field-approve-button" type="button" value="priority">Approve</button>
+                <button class="field-approve-button" type="button" value="team">Approve</button>
+                <button class="field-approve-button" type="button" value="assignee">Approve</button>
+                <button class="field-approve-button" type="button" value="status">Approve</button>
+                <button class="field-approve-button" type="button" value="tags">Approve</button>
+                <button class="field-approve-button" type="button" value="customerResponse">Approve</button>
+              </div>
+              <div class="compact-edit-grid">
+                <label>Category<input id="categoryOverride" autocomplete="off"></label>
+                <label>Priority<input id="priorityOverride" autocomplete="off"></label>
+                <label>Team<input id="teamOverride" autocomplete="off"></label>
+                <label>Assignee<input id="assigneeOverride" autocomplete="off"></label>
+                <label>Status<input id="statusOverride" autocomplete="off"></label>
+                <label>Tags<input id="tagsOverride" autocomplete="off"></label>
+                <details>
+                  <summary>Edit customer response</summary>
+                  <textarea id="editedCustomerResponse" placeholder="Optional: edit the customer-facing draft before approval."></textarea>
+                </details>
+              </div>
+              <div class="bar-actions">
+                <button id="backToRecommendation" type="button" class="secondary" hidden>Cancel</button>
+                <button id="approveEditedButton" type="button" title="Mark edited task done">Done</button>
+              </div>
+            </div>
+            <div id="rejectControls" class="bar-mode" hidden>
               <label>
-                Actor
-                <input id="actor" value="approval-desk" autocomplete="off">
+                Rejection feedback
+                <textarea id="feedback" placeholder="Explain what must change before this recommendation can be approved."></textarea>
               </label>
-              <label>
-                Draft style
-                <select id="draftStyle">
-                  <option value="auto" selected>Auto recommended</option>
-                  <option value="balanced">Balanced</option>
-                  <option value="concise">Concise</option>
-                  <option value="empathetic">Empathetic</option>
-                  <option value="technical">Technical</option>
-                  <option value="executive-update">Executive update</option>
-                </select>
-              </label>
-              <button id="createRecommendation" type="button">Create recommendation</button>
+              <div class="quick-reasons">
+                <button class="quick-reason secondary" type="button" value="Wrong classification.">Wrong</button>
+                <button class="quick-reason secondary" type="button" value="Needs better evidence.">Evidence</button>
+                <button class="quick-reason secondary" type="button" value="Rewrite the customer response.">Rewrite</button>
+              </div>
+              <div class="bar-actions">
+                <button id="cancelRejectButton" type="button" class="secondary">Cancel</button>
+                <button id="rejectButton" type="button" class="danger" title="Reject and log feedback" disabled>Reject</button>
+              </div>
+            </div>
+            <div id="replyControls" class="bar-mode reply-mode" hidden>
+              <div id="pendingReplyPreview" class="bar-reply-preview"></div>
+              <details id="replyComposer" class="reply-composer">
+                <summary>Add customer reply</summary>
+                <label>
+                  Predicted reply text
+                  <select id="predictedReply">
+                    <option value="">Choose a predicted reply...</option>
+                    <option value="vague-reply">Vague follow-up</option>
+                    <option value="partial-evidence">Partial evidence</option>
+                    <option value="complete-evidence">Complete evidence</option>
+                    <option value="known-cause-evidence">Known-cause evidence</option>
+                    <option value="platform-fix-context">Platform-fix context</option>
+                    <option value="resolved-confirmation">Resolved confirmation</option>
+                  </select>
+                </label>
+                <label>
+                  Customer reply
+                  <textarea id="customerReplyBody" rows="3" placeholder="Paste the customer's latest reply here, or choose predicted reply text above."></textarea>
+                </label>
+                <div class="bar-actions">
+                  <button id="addCustomerReply" type="button" class="secondary">Add reply</button>
+                </div>
+              </details>
             </div>
           </section>
         </section>
 
-        <section class="panel" aria-label="Recommendation approval controls">
-          <h2>Recommendation</h2>
+        <section class="panel" aria-label="Ticket workflow">
+          <h2>Ticket Workflow</h2>
           <details class="safety-note">
             <summary><span class="safety-icon">!</span><span>Review ticket text as untrusted evidence</span></summary>
             <p>Ticket text may include prompt-injection or claimed approval. Approve only named fields after reviewing the recommendation.</p>
@@ -739,89 +1066,7 @@ export const approvalDeskHtml = `<!doctype html>
           <div id="recommendationPanel">
             <p class="hint">No recommendation created yet.</p>
           </div>
-          <div class="actions stage-actions">
-            <button id="backToRecommendation" type="button" hidden>Back to recommendation</button>
-            <button id="continueApproval" type="button" hidden>Continue to approval</button>
-          </div>
-
-          <section id="approvalStage" hidden>
-            <h3>Approve proposed changes</h3>
-            <p class="hint">Approve only the fields you want to apply. You can edit proposed values first.</p>
-            <div class="fields" id="fieldChoices">
-            <div class="field-control">
-              <div class="field-heading">
-                <div class="field-title-group"><span class="field-label">Category</span><label class="value-label meta" for="categoryOverride">Recommended value</label></div>
-                <button class="info-button" type="button" title="Approve the recommended category.">i</button>
-              </div>
-              <div class="field-action-row"><input id="categoryOverride" autocomplete="off"><button class="field-approve-button" type="button" value="category">Approve</button></div>
-            </div>
-            <div class="field-control">
-              <div class="field-heading">
-                <div class="field-title-group"><span class="field-label">Priority</span><label class="value-label meta" for="priorityOverride">Recommended value</label></div>
-                <button class="info-button" type="button" title="Approve the recommended urgency.">i</button>
-              </div>
-              <div class="field-action-row"><input id="priorityOverride" autocomplete="off"><button class="field-approve-button" type="button" value="priority">Approve</button></div>
-            </div>
-            <div class="field-control">
-              <div class="field-heading">
-                <div class="field-title-group"><span class="field-label">Team</span><label class="value-label meta" for="teamOverride">Recommended value</label></div>
-                <button class="info-button" type="button" title="Approve the routing team.">i</button>
-              </div>
-              <div class="field-action-row"><input id="teamOverride" autocomplete="off"><button class="field-approve-button" type="button" value="team">Approve</button></div>
-            </div>
-            <div class="field-control">
-              <div class="field-heading">
-                <div class="field-title-group"><span class="field-label">Assignee</span><label class="value-label meta" for="assigneeOverride">Recommended value</label></div>
-                <button class="info-button" type="button" title="Approve an owner if recommended.">i</button>
-              </div>
-              <div class="field-action-row"><input id="assigneeOverride" autocomplete="off"><button class="field-approve-button" type="button" value="assignee">Approve</button></div>
-            </div>
-            <div class="field-control">
-              <div class="field-heading">
-                <div class="field-title-group"><span class="field-label">Status</span><label class="value-label meta" for="statusOverride">Recommended value</label></div>
-                <button class="info-button" type="button" title="Approve a status change if recommended.">i</button>
-              </div>
-              <div class="field-action-row"><input id="statusOverride" autocomplete="off"><button class="field-approve-button" type="button" value="status">Approve</button></div>
-            </div>
-            <div class="field-control">
-              <div class="field-heading">
-                <div class="field-title-group"><span class="field-label">Tags</span><label class="value-label meta" for="tagsOverride">Recommended value</label></div>
-                <button class="info-button" type="button" title="Approve comma-separated ticket tags.">i</button>
-              </div>
-              <div class="field-action-row"><input id="tagsOverride" autocomplete="off"><button class="field-approve-button" type="button" value="tags">Approve</button></div>
-            </div>
-            <div class="field-control">
-              <div class="field-heading">
-                <div class="field-title-group"><span class="field-label">Customer response</span><span class="meta">Edit the full response below.</span></div>
-                <button class="info-button" type="button" title="Approve edited customer-facing wording.">i</button>
-              </div>
-              <div class="field-action-row"><span class="meta">Review the draft text below before approving.</span><button class="field-approve-button" type="button" value="customerResponse">Approve</button></div>
-            </div>
-            </div>
-
-            <label>
-              Edited customer response
-              <textarea id="editedCustomerResponse" placeholder="Required when approving customerResponse."></textarea>
-            </label>
-
-            <label class="check">
-              <input id="confirmApproval" type="checkbox">
-              I confirm these named fields should be applied to the ticket.
-            </label>
-
-            <div class="actions">
-              <button id="approveButton" type="button" disabled>Approve selected fields</button>
-            </div>
-
-            <h3>Rejection controls</h3>
-            <label>
-              Feedback
-              <textarea id="feedback" placeholder="Explain what must change before this recommendation can be approved."></textarea>
-            </label>
-            <div class="actions">
-              <button id="rejectButton" type="button" class="danger" disabled>Reject recommendation</button>
-            </div>
-          </section>
+          <section id="approvalStage" class="approval-stage-placeholder" hidden></section>
         </section>
       </main>
     </div>
@@ -835,46 +1080,83 @@ export const approvalDeskHtml = `<!doctype html>
         queueFilter: 'active',
         approvedFields: [],
         conversationTimeline: [],
-        recommendationHistory: []
+        recommendationHistory: [],
+        consumedCustomerReplyTimestamp: null
       };
 
-        const els = {
+      const els = {
         addCustomerReply: document.getElementById('addCustomerReply'),
         actor: document.getElementById('actor'),
+        actionBarHint: document.getElementById('actionBarHint'),
+        actionBarTitle: document.getElementById('actionBarTitle'),
         approvalStage: document.getElementById('approvalStage'),
         assigneeOverride: document.getElementById('assigneeOverride'),
         approveButton: document.getElementById('approveButton'),
+        approveEditedButton: document.getElementById('approveEditedButton'),
         backToRecommendation: document.getElementById('backToRecommendation'),
+        cancelRejectButton: document.getElementById('cancelRejectButton'),
         categoryOverride: document.getElementById('categoryOverride'),
         confirmApproval: document.getElementById('confirmApproval'),
         conversationContextPanel: document.getElementById('conversationContextPanel'),
         continueApproval: document.getElementById('continueApproval'),
         createRecommendation: document.getElementById('createRecommendation'),
+        createUpdatedRecommendation: document.getElementById('createUpdatedRecommendation'),
         customerReplyBody: document.getElementById('customerReplyBody'),
+        decisionChips: document.getElementById('decisionChips'),
+        decisionControls: document.getElementById('decisionControls'),
+        decisionSummary: document.getElementById('decisionSummary'),
+        diagnoseButton: document.getElementById('diagnoseButton'),
         draftStyle: document.getElementById('draftStyle'),
+        editApprovalControls: document.getElementById('editApprovalControls'),
         editedCustomerResponse: document.getElementById('editedCustomerResponse'),
         evidencePanel: document.getElementById('evidencePanel'),
         feedback: document.getElementById('feedback'),
         fieldChoices: document.getElementById('fieldChoices'),
+        fixButton: document.getElementById('fixButton'),
         guardrailsPanel: document.getElementById('guardrailsPanel'),
         activityPanel: document.getElementById('activityPanel'),
+        markSentButton: document.getElementById('markSentButton'),
         queueFilters: document.getElementById('queueFilters'),
         queueStatus: document.getElementById('queueStatus'),
+        pendingReplyPreview: document.getElementById('pendingReplyPreview'),
+        predictedReply: document.getElementById('predictedReply'),
         recommendationPanel: document.getElementById('recommendationPanel'),
         priorityOverride: document.getElementById('priorityOverride'),
         refreshEvidence: document.getElementById('refreshEvidence'),
         refreshQueue: document.getElementById('refreshQueue'),
         rejectButton: document.getElementById('rejectButton'),
+        rejectControls: document.getElementById('rejectControls'),
+        replyComposer: document.getElementById('replyComposer'),
+        replyControls: document.getElementById('replyControls'),
         resultPanel: document.getElementById('resultPanel'),
+        reviewDraftButton: document.getElementById('reviewDraftButton'),
+        setupControls: document.getElementById('setupControls'),
+        startRejectButton: document.getElementById('startRejectButton'),
         statusOverride: document.getElementById('statusOverride'),
         tagsOverride: document.getElementById('tagsOverride'),
         teamOverride: document.getElementById('teamOverride'),
         ticketList: document.getElementById('ticketList'),
+        ticketDetailsPanel: document.getElementById('ticketDetailsPanel'),
         ticketPanel: document.getElementById('ticketPanel')
       };
 
       function selectedFields() {
-        return state.approvedFields.slice();
+        if (state.approvedFields.length > 0) {
+          return state.approvedFields.slice();
+        }
+        if (state.recommendation === null) {
+          return [];
+        }
+        return defaultApprovedFields(state.recommendation);
+      }
+
+      function defaultApprovedFields(recommendation) {
+        const fields = ['category', 'priority', 'team'];
+        if (Array.isArray(recommendation.tags) && recommendation.tags.length > 0) {
+          fields.push('tags');
+        }
+        fields.push('customerResponse');
+        return fields;
       }
 
       function setResult(value) {
@@ -967,6 +1249,11 @@ export const approvalDeskHtml = `<!doctype html>
         const ticket = state.selectedTicket;
         if (ticket === null) {
           els.ticketPanel.innerHTML = '<p class="hint">No ticket selected.</p>';
+          els.ticketDetailsPanel.innerHTML =
+            '<section class="advanced-section">' +
+              '<h4>Technical ticket details</h4>' +
+              '<p class="hint">Select a ticket to inspect technical fields.</p>' +
+            '</section>';
           els.createRecommendation.disabled = true;
           return;
         }
@@ -983,8 +1270,10 @@ export const approvalDeskHtml = `<!doctype html>
           renderRequesterCard(ticket) +
           '<div class="hero-card description"><strong>Subject</strong>' + escapeHtml(ticket.subject) + '</div>' +
           '<div class="hero-card description"><strong>Description</strong>' + escapeHtml(ticket.description) + '</div>' +
-          renderConversationTimeline(ticket) +
-          '<details><summary>Technical ticket details</summary>' +
+          renderConversationTimeline(ticket);
+        els.ticketDetailsPanel.innerHTML =
+          '<section class="advanced-section">' +
+            '<h4>Technical ticket details</h4>' +
             '<div class="details-grid">' +
               card('ID', ticket.id) +
               card('Revision', String(ticket.revision)) +
@@ -995,17 +1284,21 @@ export const approvalDeskHtml = `<!doctype html>
               card('Team', ticket.team ?? 'unset') +
               card('Tags', ticket.tags.join(', ')) +
             '</div>' +
-          '</details>';
+          '</section>';
       }
 
       function createRecommendationLabel() {
         return ticketWorkflowState(state.selectedTicket ?? {}) === 'customer-replied'
-          ? 'Create updated recommendation'
-          : 'Create recommendation';
+          ? 'Evaluate again'
+          : 'Evaluate ticket';
       }
 
       function canCreateRecommendation() {
         return state.selectedTicket !== null && !isApprovedAwaitingSend();
+      }
+
+      function createUpdatedRecommendationLabel() {
+        return latestUnevaluatedWorkflowEvent() !== null ? 'Update' : 'Evaluate';
       }
 
       function isApprovedAwaitingSend() {
@@ -1015,27 +1308,15 @@ export const approvalDeskHtml = `<!doctype html>
 
       function renderConversationContext() {
         if (state.selectedTicket === null) {
-          els.conversationContextPanel.innerHTML = '<p class="hint">Select a ticket to add customer reply context.</p>';
+          els.conversationContextPanel.innerHTML = '<p class="hint">Select a ticket to review conversation context.</p>';
           return;
         }
+        const latestReply = latestCustomerReply();
         els.conversationContextPanel.innerHTML =
-          '<p class="hint">Use sample replies only when you want a quick demo path.</p>' +
-          '<details><summary>Insert sample reply</summary>' +
-            '<p class="hint">Add synthetic customer replies for demo pacing.</p>' +
-            '<p class="hint">Replies are generated from the current ticket evidence and conversation timeline, then persisted through the local API.</p>' +
-            '<div class="conversation-controls">' +
-              scenarioButton('vague-reply', 'Insert vague sample') +
-              scenarioButton('partial-evidence', 'Insert partial evidence sample') +
-              scenarioButton('complete-evidence', 'Insert complete evidence sample') +
-              scenarioButton('known-cause-evidence', 'Insert known-cause sample') +
-              scenarioButton('platform-fix-context', 'Insert platform-fix sample') +
-              scenarioButton('resolved-confirmation', 'Insert resolved sample') +
-            '</div>' +
-          '</details>';
-      }
-
-      function scenarioButton(value, label) {
-        return '<button type="button" class="secondary conversation-scenario" value="' + escapeHtml(value) + '">' + escapeHtml(label) + '</button>';
+          '<p class="hint">Customer replies are added from the action bar so the next evaluation can use the latest message.</p>' +
+          (latestReply === null
+            ? '<p class="meta">No customer reply has been added yet.</p>'
+            : '<p class="meta"><strong>Latest customer reply</strong> ' + escapeHtml(previewRecommendationDraft(latestReply.body ?? latestReply.summary ?? '')) + '</p>');
       }
 
       function renderConversationTimeline(ticket) {
@@ -1049,15 +1330,35 @@ export const approvalDeskHtml = `<!doctype html>
               body: ticket.description
             }];
         return '<section class="hero-card conversation-timeline" aria-label="conversationTimeline">' +
-          '<strong>Conversation timeline</strong>' +
+          '<div class="conversation-header">' +
+            '<div>' +
+              '<strong>Conversation timeline</strong>' +
+              '<p class="hint">Original ticket, customer replies, sent responses, and recommendation events in order.</p>' +
+            '</div>' +
+            '<span class="meta">' + escapeHtml(String(timeline.length)) + ' item' + (timeline.length === 1 ? '' : 's') + '</span>' +
+          '</div>' +
+          renderConversationStateStrip(ticket) +
           timeline.map(renderConversationTimelineItem).join('') +
         '</section>';
+      }
+
+      function renderConversationStateStrip(ticket) {
+        const summary = ticket.recommendationSummary ?? {};
+        return '<div class="conversation-state-strip">' +
+          '<div class="chips">' +
+            chip('Workflow: ' + workflowStateLabel(summary.workflowState ?? ticketWorkflowState(ticket))) +
+            chip('Sent response: ' + (summary.hasSentResponse ? 'yes' : 'no')) +
+            chip('Customer replied: ' + (summary.hasCustomerReply ? 'yes' : 'no')) +
+            chip('Latest draft: ' + (summary.latestResolution ?? 'none')) +
+          '</div>' +
+          '<p class="hint">Use this timeline to show why each new recommendation changed.</p>' +
+        '</div>';
       }
 
       function renderConversationTimelineItem(item) {
         const label = conversationTimelineLabel(item);
         const title = item.title === undefined ? '' : '<span class="meta">' + escapeHtml(item.title) + '</span>';
-        return '<div class="card description">' +
+        return '<div class="card description timeline-item ' + escapeHtml(String(item.kind ?? 'recommendation-event')) + '">' +
           '<strong>' + escapeHtml(label) + '</strong>' +
           '<span class="meta">' + escapeHtml(item.timestamp ?? 'unknown time') + ' · ' + escapeHtml(item.actor ?? 'unknown actor') + '</span>' +
           title +
@@ -1074,6 +1375,12 @@ export const approvalDeskHtml = `<!doctype html>
         }
         if (item.kind === 'customer-reply') {
           return 'Customer reply';
+        }
+        if (item.kind === 'diagnosis') {
+          return 'Diagnosis completed';
+        }
+        if (item.kind === 'fix') {
+          return 'Fix available';
         }
         return 'Recommendation event';
       }
@@ -1118,7 +1425,10 @@ export const approvalDeskHtml = `<!doctype html>
       function renderRecommendation(preserveApprovalInputs) {
         const recommendation = state.recommendation;
         if (recommendation === null) {
-          els.recommendationPanel.innerHTML = '<p class="hint">No recommendation created yet.</p>';
+          els.recommendationPanel.innerHTML =
+            '<section class="hero-card description"><strong>Step 1: Evaluate ticket</strong>' +
+            '<p>Select a ticket, then use the action bar to evaluate classification, lifecycle state, evidence needs, and the next customer response.</p>' +
+            '</section>';
           state.stage = 'empty';
           els.editedCustomerResponse.value = '';
           clearApprovalInputs();
@@ -1128,9 +1438,9 @@ export const approvalDeskHtml = `<!doctype html>
         }
         if (isApprovedWorkflow()) {
           els.recommendationPanel.innerHTML =
-            '<div class="hero-card description"><strong>Approved Draft Customer Response</strong>' + escapeHtml(recommendation.draftCustomerResponse) + '</div>' +
-            '<p class="hint">This recommendation is approved. Mark it sent after the support response has been sent to the customer.</p>' +
-            renderMarkSentAction() +
+            renderWorkflowSteps(recommendation) +
+            '<div id="customerResponseDraft" class="hero-card description"><strong>Customer Response Draft</strong>' + escapeHtml(recommendation.draftCustomerResponse) + '</div>' +
+            renderRecommendationSummary(recommendation) +
             renderPreviousRecommendations() +
             '<details><summary>All proposed ticket values</summary>' +
               '<div class="details-grid">' +
@@ -1142,77 +1452,14 @@ export const approvalDeskHtml = `<!doctype html>
               card('Tags', Array.isArray(recommendation.tags) ? recommendation.tags.join(', ') : 'unchanged') +
               '</div>' +
             '</details>';
-        } else if (state.stage === 'approval') {
-          els.recommendationPanel.innerHTML =
-            '<div class="hero-card"><strong>Approval mode</strong>' +
-              '<p class="hint">Recommendation details are tucked away while you apply fields. Go back if you need to review the full draft, evidence, or GPT assist notes.</p>' +
-              '<div class="chips">' +
-                chip('Category: ' + recommendation.category) +
-                chip('Priority: ' + recommendation.priority) +
-                chip('Team: ' + recommendation.team) +
-                chip('Status: ' + (recommendation.ticketStatus ?? 'unchanged')) +
-              '</div>' +
-              renderClassifierEvidenceReference(recommendation) +
-            '</div>';
         } else {
           els.recommendationPanel.innerHTML =
-            '<div class="hero-card"><strong>Recommended Triage</strong>' +
-              '<div class="chips">' +
-                chip('Category: ' + recommendation.category) +
-                chip('Priority: ' + recommendation.priority) +
-                chip('Team: ' + recommendation.team) +
-                chip('Risk: ' + (recommendation.escalationRequired ? 'escalation' : 'none')) +
-              '</div>' +
-            '</div>' +
-            renderClassifierEvidenceCard(recommendation) +
-            renderLifecycleSummaryCard(recommendation) +
+            renderWorkflowSteps(recommendation) +
+            '<div id="customerResponseDraft" class="hero-card description"><strong>Customer Response Draft</strong>' + escapeHtml(recommendation.draftCustomerResponse) + '</div>' +
+            renderRecommendationSummary(recommendation) +
             renderRecommendationChangeSummary(recommendation) +
-            '<div class="hero-card description"><strong>Draft Customer Response</strong>' + escapeHtml(recommendation.draftCustomerResponse) + '</div>' +
-            '<p class="hint">Continue to approval when the draft looks ready.</p>' +
-            '<details><summary>Why this draft is safe</summary>' +
-              '<div class="chips">' +
-                chip('Source: ' + (recommendation.draftCustomerResponseSource ?? 'legacy')) +
-                chip('Style: ' + (recommendation.draftCustomerResponseStyle ?? 'balanced')) +
-                chip('Checks: ' + formatDraftCheckSummary(recommendation.draftCustomerResponseChecks)) +
-                chip('Human approval: pending') +
-              '</div>' +
-              '<p>' + escapeHtml(formatDraftSafetyNarrative(recommendation)) + '</p>' +
-              '<p class="meta"><strong>Retrieved context</strong> ' + escapeHtml(formatList(recommendation.knowledgeArticleIds)) + '</p>' +
-              '<p class="meta"><strong>Human approval</strong> Reviewer must approve or edit before use.</p>' +
-            '</details>' +
-            renderGptAssistCard(recommendation.gptAssist) +
-            '<details><summary>Evidence and internal details</summary>' +
-              '<div class="details-grid">' +
-                card('Recommendation ID', recommendation.id) +
-                card('Source revision', String(recommendation.sourceRevision)) +
-                card('Confidence', String(recommendation.confidence)) +
-                card('knowledgeArticleIds', formatList(recommendation.knowledgeArticleIds)) +
-                card('Outage risk', recommendation.outageRisk) +
-                card('Security risk', recommendation.securityRisk) +
-                card('SLA risk', recommendation.slaRisk) +
-                card('Support state', recommendation.supportState ?? 'not assessed') +
-                card('Known cause', recommendation.knownCause ?? 'none') +
-                card('Escalation required', recommendation.escalationRequired ? 'yes' : 'no') +
-                card('Escalation reasons', formatList(recommendation.escalationReasons)) +
-                card('Missing information', formatList(recommendation.missingInformation)) +
-                card('Missing evidence', formatEvidenceLabels(recommendation.missingEvidence)) +
-                card('Provided evidence', formatEvidenceLabels(recommendation.providedEvidence)) +
-              '</div>' +
-              '<div class="card description"><strong>Rationale</strong>' + escapeHtml(recommendation.rationale) + '</div>' +
-              '<div class="card description"><strong>Duplicate candidates</strong>' + escapeHtml(formatDuplicateCandidates(recommendation.duplicateCandidates)) + '</div>' +
-              '<div class="card description"><strong>Next action</strong>' + escapeHtml(recommendation.recommendedNextAction) + '</div>' +
-              '<div class="card description"><strong>Draft validation checks</strong>' + escapeHtml(formatDraftChecks(recommendation.draftCustomerResponseChecks)) + '</div>' +
-            '</details>' +
-            '<details><summary>All proposed ticket values</summary>' +
-              '<div class="details-grid">' +
-              card('Category', recommendation.category) +
-              card('Priority', recommendation.priority) +
-              card('Team', recommendation.team) +
-              card('Assignee', recommendation.assignee === undefined ? 'unchanged' : String(recommendation.assignee)) +
-              card('Status', recommendation.ticketStatus ?? 'unchanged') +
-              card('Tags', Array.isArray(recommendation.tags) ? recommendation.tags.join(', ') : 'unchanged') +
-              '</div>' +
-            '</details>' +
+            renderRecommendationReason(recommendation) +
+            renderTechnicalEvidence(recommendation) +
             renderPreviousRecommendations();
         }
         if (!preserveApprovalInputs) {
@@ -1223,12 +1470,181 @@ export const approvalDeskHtml = `<!doctype html>
         updateControls();
       }
 
+      function renderWorkflowSteps(recommendation) {
+        const responseState = isTaskDoneWaitingForReply()
+          ? 'Done. Waiting for the next customer reply.'
+          : isApprovedWorkflow()
+            ? 'Ready to mark done from the action bar.'
+            : 'Ready for human review from the action bar.';
+        return '<section class="hero-card description"><strong>Workflow steps</strong>' +
+          '<p><strong>Step 1: Ticket evaluated</strong> ' + escapeHtml(recommendation.category + ' · ' + recommendation.priority + ' · ' + (recommendation.supportState ?? 'not assessed')) + '</p>' +
+          '<p><strong>Step 2: GPT-assisted response</strong> ' + escapeHtml(recommendation.draftCustomerResponseSource ?? 'drafted') + ' response ready.</p>' +
+          '<p><strong>Step 3: Task status</strong> ' + escapeHtml(responseState) + '</p>' +
+        '</section>';
+      }
+
+      function renderRecommendationSummary(recommendation) {
+        const missing = Array.isArray(recommendation.missingEvidence) ? recommendation.missingEvidence : [];
+        const evidenceState = missing.length === 0 ? 'complete' : missing.length + ' missing';
+        return '<section class="hero-card"><strong>Recommendation Summary</strong>' +
+          '<div class="chips">' +
+            chip('Category: ' + recommendation.category) +
+            chip('Priority: ' + recommendation.priority) +
+            chip('Team: ' + recommendation.team) +
+            chip('Lifecycle: ' + (recommendation.supportState ?? 'not assessed')) +
+            chip('Evidence: ' + evidenceState) +
+          '</div>' +
+          '<p class="hint">The action bar controls evaluation, response review, done status, and customer replies.</p>' +
+        '</section>';
+      }
+
+      function renderRecommendationReason(recommendation) {
+        const reason = recommendation.rationale ?? 'The recommendation is based on the ticket text, conversation history, and retrieved support knowledge.';
+        const nextAction = recommendation.recommendedNextAction ?? 'Review the recommendation before approval.';
+        return '<section class="hero-card description"><strong>Why this recommendation?</strong>' +
+          '<p>' + escapeHtml(reason) + '</p>' +
+          '<p class="meta"><strong>Next step</strong> ' + escapeHtml(nextAction) + '</p>' +
+        '</section>';
+      }
+
+      function renderTechnicalEvidence(recommendation) {
+        return '<details><summary>Show technical evidence</summary>' +
+          '<div class="details-grid">' +
+            card('Confidence', String(recommendation.confidence)) +
+            card('Knowledge used', formatList(recommendation.knowledgeArticleIds)) +
+            card('Outage risk', recommendation.outageRisk) +
+            card('Security risk', recommendation.securityRisk) +
+            card('SLA risk', recommendation.slaRisk) +
+            card('Known cause', recommendation.knownCause ?? 'none') +
+            card('Escalation', recommendation.escalationRequired ? 'required' : 'not required') +
+            card('Draft checks', formatDraftCheckSummary(recommendation.draftCustomerResponseChecks)) +
+          '</div>' +
+          '<div class="card description"><strong>Classifier signals</strong>' + escapeHtml(formatClassifierSignals(recommendation.classificationSignals)) + '</div>' +
+          '<div class="card description"><strong>Evidence requirements</strong>' +
+            '<p class="meta"><strong>Provided</strong> ' + escapeHtml(formatEvidenceLabels(recommendation.providedEvidence)) + '</p>' +
+            '<p class="meta"><strong>Missing</strong> ' + escapeHtml(formatEvidenceLabels(recommendation.missingEvidence)) + '</p>' +
+          '</div>' +
+          '<div class="card description"><strong>Audit identifiers</strong>' +
+            '<p class="meta">Recommendation ' + escapeHtml(recommendation.id) + ' from ticket revision ' + escapeHtml(String(recommendation.sourceRevision)) + '.</p>' +
+          '</div>' +
+        '</details>';
+      }
+
+      function formatClassifierSignals(signals) {
+        if (!Array.isArray(signals) || signals.length === 0) {
+          return 'No classifier signal snapshot stored for this recommendation.';
+        }
+        return signals.map(function (signal) {
+          return signal.ruleId + ': ' + signal.reason;
+        }).join('\\n');
+      }
+
       function renderRecommendationStageControls() {
         const hasRecommendation = state.recommendation !== null;
-        els.continueApproval.textContent = isApprovedWorkflow() ? 'Cancel approval' : 'Continue to approval';
-        els.continueApproval.hidden = !(hasRecommendation && (state.stage === 'draft' || isApprovedWorkflow()));
+        const approvedWorkflow = isApprovedWorkflow();
+        const waitingForReply = isTaskDoneWaitingForReply();
+        const customerReplyReady = latestUnconsumedCustomerReply() !== null;
+        const workflowActionReady = shouldShowCreateUpdatedRecommendation() || shouldShowDiagnoseAction() || shouldShowFixAction();
+        els.setupControls.hidden = hasRecommendation;
+        els.decisionControls.hidden = !hasRecommendation || (waitingForReply && !workflowActionReady) || state.stage === 'approval' || state.stage === 'reject';
+        els.editApprovalControls.hidden = !(hasRecommendation && state.stage === 'approval');
+        els.rejectControls.hidden = !(hasRecommendation && state.stage === 'reject');
+        els.replyControls.hidden = !shouldShowReplyControls();
+        els.approvalStage.hidden = true;
+        els.actionBarTitle.textContent = actionBarTitle();
+        els.actionBarHint.textContent = actionBarHint();
+        els.continueApproval.textContent = 'Edit';
+        els.reviewDraftButton.textContent = 'Response';
+        els.approveButton.textContent = 'Done';
+        els.approveEditedButton.textContent = 'Done';
+        els.continueApproval.hidden = !hasRecommendation || approvedWorkflow || shouldShowCreateUpdatedRecommendation();
+        els.markSentButton.hidden = true;
+        els.createUpdatedRecommendation.hidden = !shouldShowCreateUpdatedRecommendation();
+        els.diagnoseButton.hidden = !shouldShowDiagnoseAction();
+        els.fixButton.hidden = !shouldShowFixAction();
+        els.approveButton.hidden = shouldShowCreateUpdatedRecommendation();
+        els.startRejectButton.hidden = approvedWorkflow;
         els.backToRecommendation.hidden = !(hasRecommendation && state.stage === 'approval');
-        els.approvalStage.hidden = !(hasRecommendation && state.stage === 'approval');
+        els.decisionChips.innerHTML = hasRecommendation ? renderDecisionChips(state.recommendation) : '';
+        els.decisionSummary.textContent = hasRecommendation ? decisionSummaryText(state.recommendation) : 'Review the draft and evidence, then approve or edit.';
+        els.pendingReplyPreview.innerHTML = renderPendingReplyPreview();
+        if (customerReplyReady || latestUnevaluatedWorkflowEvent() !== null) {
+          els.createUpdatedRecommendation.textContent = createUpdatedRecommendationLabel();
+        }
+      }
+
+      function actionBarTitle() {
+        if (state.recommendation === null) {
+          return 'Evaluate ticket';
+        }
+        if (latestUnevaluatedWorkflowEvent() !== null && shouldShowCreateUpdatedRecommendation()) {
+          return 'Diagnosis update';
+        }
+        if (shouldShowCreateUpdatedRecommendation()) {
+          return 'Customer replied';
+        }
+        if (isTaskDoneWaitingForReply()) {
+          return 'Waiting for customer';
+        }
+        if (isApprovedWorkflow()) {
+          return 'Response ready';
+        }
+        if (state.stage === 'approval') {
+          return 'Edit response';
+        }
+        if (state.stage === 'reject') {
+          return 'Reject response';
+        }
+        return 'Response ready';
+      }
+
+      function actionBarHint() {
+        if (state.recommendation === null) {
+          return 'Classify the ticket and draft a response.';
+        }
+        if (latestUnevaluatedWorkflowEvent() !== null && shouldShowCreateUpdatedRecommendation()) {
+          return 'Draft the customer update from the latest diagnosis or fix.';
+        }
+        if (shouldShowCreateUpdatedRecommendation()) {
+          return 'Evaluate again from the new customer reply.';
+        }
+        if (isTaskDoneWaitingForReply()) {
+          return 'Add a reply when the customer responds.';
+        }
+        if (isApprovedWorkflow()) {
+          return 'Done approves and sends the response.';
+        }
+        if (state.stage === 'approval') {
+          return 'Adjust only what needs changing.';
+        }
+        if (state.stage === 'reject') {
+          return 'Feedback is logged to the audit trail.';
+        }
+        return 'Review the response on the right, then mark done.';
+      }
+
+      function renderDecisionChips(recommendation) {
+        const missing = Array.isArray(recommendation.missingEvidence) ? recommendation.missingEvidence : [];
+        return [
+          'Evaluation: ' + recommendation.category,
+          'Priority: ' + recommendation.priority,
+          'Team: ' + recommendation.team,
+          missing.length === 0 ? 'Evidence complete' : missing.length + ' evidence items missing',
+          'Response ready'
+        ].map(chip).join('');
+      }
+
+      function decisionSummaryText(recommendation) {
+        if (latestUnevaluatedWorkflowEvent() !== null && shouldShowCreateUpdatedRecommendation()) {
+          return 'A workflow update is waiting. Draft the next customer response from the diagnosis or fix.';
+        }
+        if (shouldShowCreateUpdatedRecommendation()) {
+          return 'A customer reply is waiting. Evaluate again to refresh classification, evidence, and response text.';
+        }
+        if (isApprovedWorkflow()) {
+          return 'The response is ready. Done applies the proposed values and logs the response as sent.';
+        }
+        return 'Done applies the proposed triage values and the visible customer response draft.';
       }
 
       function renderMarkSentAction() {
@@ -1244,14 +1660,145 @@ export const approvalDeskHtml = `<!doctype html>
         return approved && !isCurrentRecommendationSent();
       }
 
+      function shouldShowCreateUpdatedRecommendation() {
+        return state.selectedTicket !== null &&
+          state.recommendation !== null &&
+          (latestUnconsumedCustomerReply() !== null || latestUnevaluatedWorkflowEvent() !== null) &&
+          canCreateRecommendation();
+      }
+
+      function shouldShowDiagnoseAction() {
+        if (state.selectedTicket === null || state.recommendation === null) {
+          return false;
+        }
+        const missing = Array.isArray(state.recommendation.missingEvidence) ? state.recommendation.missingEvidence : [];
+        const supportState = state.recommendation.supportState ?? '';
+        return isTaskDoneWaitingForReply() &&
+          latestUnconsumedCustomerReply() === null &&
+          missing.length === 0 &&
+          (supportState === 'diagnosing' || supportState === 'waiting-on-platform-fix') &&
+          latestTimelineItem('diagnosis') === null;
+      }
+
+      function shouldShowFixAction() {
+        if (state.selectedTicket === null || state.recommendation === null) {
+          return false;
+        }
+        const diagnosis = latestTimelineItem('diagnosis');
+        if (diagnosis === null || latestTimelineItem('fix') !== null) {
+          return false;
+        }
+        const supportAfterDiagnosis = latestTimelineItem('support-response-sent');
+        return isTaskDoneWaitingForReply() &&
+          latestUnconsumedCustomerReply() === null &&
+          supportAfterDiagnosis !== null &&
+          String(supportAfterDiagnosis.timestamp ?? '') >= String(diagnosis.timestamp ?? '');
+      }
+
+      function renderPendingReplyPreview() {
+        const latestReply = latestUnconsumedCustomerReply();
+        if (latestReply !== null) {
+          return '<strong>New customer reply waiting for evaluation</strong>' +
+            '<span>' + escapeHtml(previewRecommendationDraft(latestReply.body ?? latestReply.summary ?? '')) + '</span>';
+        }
+        const workflowEvent = latestUnevaluatedWorkflowEvent();
+        if (workflowEvent !== null) {
+          return '<strong>Workflow update waiting for evaluation</strong>' +
+            '<span>' + escapeHtml(previewRecommendationDraft(workflowEvent.summary ?? workflowEvent.kind ?? '')) + '</span>';
+        }
+        if (isTaskDoneWaitingForReply()) {
+          return '<strong>Waiting for customer reply</strong><span>Add the next customer message here when it arrives.</span>';
+        }
+        return '<strong>Customer reply</strong><span>Add a reply here whenever the customer sends new information.</span>';
+      }
+
+      function shouldShowReplyControls() {
+        return state.selectedTicket !== null &&
+          (isTaskDoneWaitingForReply() || latestUnconsumedCustomerReply() !== null);
+      }
+
+      function latestCustomerReply() {
+        if (!Array.isArray(state.conversationTimeline)) {
+          return null;
+        }
+        const replies = state.conversationTimeline.filter(function (item) {
+          return item.kind === 'customer-reply';
+        });
+        return replies.length === 0 ? null : replies[replies.length - 1];
+      }
+
+      function latestTimelineItem(kind) {
+        if (!Array.isArray(state.conversationTimeline)) {
+          return null;
+        }
+        const items = state.conversationTimeline
+          .filter(function (item) { return item.kind === kind; })
+          .sort(function (left, right) {
+            return String(right.timestamp ?? '').localeCompare(String(left.timestamp ?? ''));
+          });
+        return items[0] ?? null;
+      }
+
+      function latestUnevaluatedWorkflowEvent() {
+        if (!Array.isArray(state.conversationTimeline) || state.recommendation?.createdAt === undefined) {
+          return null;
+        }
+        const baseline = String(state.recommendation.createdAt);
+        const items = state.conversationTimeline
+          .filter(function (item) {
+            return (item.kind === 'diagnosis' || item.kind === 'fix') &&
+              String(item.timestamp ?? '') >= baseline;
+          })
+          .sort(function (left, right) {
+            return String(right.timestamp ?? '').localeCompare(String(left.timestamp ?? ''));
+          });
+        return items[0] ?? null;
+      }
+
+      function latestUnconsumedCustomerReply() {
+        const latestReply = latestCustomerReply();
+        if (latestReply === null) {
+          return null;
+        }
+        const latestTimestamp = String(latestReply.timestamp ?? '');
+        const recommendationCreatedAt = String(state.recommendation?.createdAt ?? '');
+        const consumedAt = String(state.consumedCustomerReplyTimestamp ?? '');
+        const baseline = consumedAt > recommendationCreatedAt ? consumedAt : recommendationCreatedAt;
+        return baseline === '' || latestTimestamp > baseline ? latestReply : null;
+      }
+
+      function latestCustomerReplyTimestamp() {
+        const latestReply = latestCustomerReply();
+        return latestReply === null ? null : String(latestReply.timestamp ?? '');
+      }
+
+      function isTaskDoneWaitingForReply() {
+        const summary = state.selectedTicket?.recommendationSummary ?? {};
+        const sent = isCurrentRecommendationSent() ||
+          (summary.hasSentResponse === true && summary.latestRecommendationId === state.recommendation?.id);
+        return state.recommendation !== null &&
+          isApprovedWorkflow() &&
+          sent &&
+          latestUnconsumedCustomerReply() === null;
+      }
+
       function isCurrentRecommendationSent() {
         const recommendationId = state.recommendation?.id ?? state.selectedTicket?.recommendationSummary?.latestRecommendationId;
         if (recommendationId === undefined) {
           return false;
         }
-        return Array.isArray(state.conversationTimeline) && state.conversationTimeline.some(function (item) {
+        return isCurrentRecommendationSentFor(recommendationId);
+      }
+
+      function isCurrentRecommendationSentFor(recommendationId) {
+        const exactTimelineMatch = Array.isArray(state.conversationTimeline) && state.conversationTimeline.some(function (item) {
           return item.kind === 'support-response-sent' && item.recommendationId === recommendationId;
         });
+        if (exactTimelineMatch) {
+          return true;
+        }
+        const summary = state.selectedTicket?.recommendationSummary ?? {};
+        return summary.hasSentResponse === true && summary.latestRecommendationId === recommendationId;
       }
 
       function renderPreviousRecommendations() {
@@ -1305,16 +1852,31 @@ export const approvalDeskHtml = `<!doctype html>
         const actorPresent = els.actor.value.trim().length > 0;
         const fields = selectedFields();
         const hasFields = fields.length > 0;
-        const confirmed = els.confirmApproval.checked;
+        const confirmed = true;
         const customerResponseReady =
           !fields.includes('customerResponse') ||
           els.editedCustomerResponse.value.trim().length > 0;
         const feedbackPresent = els.feedback.value.trim().length > 0;
 
-        els.approveButton.disabled = !(hasRecommendation && !approvedWorkflow && actorPresent && confirmed && hasFields && customerResponseReady);
+        const doneReady = hasRecommendation &&
+          actorPresent &&
+          (
+            (!approvedWorkflow && confirmed && hasFields && customerResponseReady) ||
+            (approvedWorkflow && shouldShowMarkSentAction())
+          );
+        els.approveButton.disabled = !doneReady;
+        els.approveEditedButton.disabled = els.approveButton.disabled;
         els.rejectButton.disabled = !(hasRecommendation && !approvedWorkflow && actorPresent && feedbackPresent);
+        els.startRejectButton.disabled = !(hasRecommendation && !approvedWorkflow && actorPresent);
+        els.markSentButton.disabled = !(hasRecommendation && approvedWorkflow && actorPresent && shouldShowMarkSentAction());
+        els.diagnoseButton.disabled = !(actorPresent && shouldShowDiagnoseAction());
+        els.fixButton.disabled = !(actorPresent && shouldShowFixAction());
         els.createRecommendation.disabled = !canCreateRecommendation();
-        els.createRecommendation.textContent = createRecommendationLabel();
+        els.createUpdatedRecommendation.disabled = !shouldShowCreateUpdatedRecommendation();
+        els.createRecommendation.textContent = 'Evaluate';
+        els.createRecommendation.title = createRecommendationLabel();
+        els.createUpdatedRecommendation.textContent = createUpdatedRecommendationLabel();
+        els.createUpdatedRecommendation.title = createRecommendationLabel();
       }
 
       async function loadQueue() {
@@ -1403,6 +1965,10 @@ export const approvalDeskHtml = `<!doctype html>
       }
 
       async function selectTicket(id) {
+        const previousTicketId = state.selectedTicket?.id;
+        if (previousTicketId !== undefined && previousTicketId !== id) {
+          state.consumedCustomerReplyTimestamp = null;
+        }
         const data = await requestJson('/api/tickets/' + encodeURIComponent(id));
         state.selectedTicket = data.recommendationSummary === undefined
           ? data.ticket
@@ -1439,7 +2005,7 @@ export const approvalDeskHtml = `<!doctype html>
           state.recommendation = null;
           state.stage = 'empty';
         }
-        els.recommendationPanel.innerHTML = '<div class="hero-card"><strong>Generating GPT draft and assist...</strong><p class="hint">Creating a guarded recommendation from local ticket facts and retrieved knowledge.</p></div>';
+        els.recommendationPanel.innerHTML = renderRecommendationLoadingCard();
         els.createRecommendation.disabled = true;
         try {
           const data = await requestJson('/api/tickets/' + encodeURIComponent(state.selectedTicket.id) + '/recommendations', {
@@ -1451,6 +2017,7 @@ export const approvalDeskHtml = `<!doctype html>
           });
           state.recommendation = data.recommendation;
           state.stage = 'draft';
+          state.consumedCustomerReplyTimestamp = latestCustomerReplyTimestamp();
           markSelectedTicketWorkflow(data.recommendation, 'draft-ready');
           renderRecommendation();
           setResult(data);
@@ -1458,6 +2025,9 @@ export const approvalDeskHtml = `<!doctype html>
             await selectTicket(state.selectedTicket.id);
           }
           await refreshEvidenceBestEffort();
+        } catch (error) {
+          renderRecommendationError(error);
+          setResult({ error: error instanceof Error ? error.message : 'Recommendation failed.' });
         } finally {
           els.createRecommendation.disabled = false;
         }
@@ -1550,6 +2120,58 @@ export const approvalDeskHtml = `<!doctype html>
         await refreshEvidenceBestEffort();
       }
 
+      async function completeTask() {
+        if (state.recommendation === null || state.selectedTicket === null) {
+          return;
+        }
+        const recommendationToComplete = state.recommendation;
+        const ticketId = state.selectedTicket.id;
+        const actor = els.actor.value.trim() || 'approval-desk';
+        if (!isApprovedWorkflow()) {
+          const approvedFields = selectedFields();
+          const body = {
+            ticketId,
+            expectedRevision: recommendationToComplete.sourceRevision,
+            approvedFields,
+            actor,
+            confirm: true
+          };
+          if (approvedFields.includes('customerResponse')) {
+            body.editedCustomerResponse = els.editedCustomerResponse.value.trim();
+          }
+          const fieldOverrides = collectFieldOverrides(approvedFields);
+          if (Object.keys(fieldOverrides).length > 0) {
+            body.fieldOverrides = fieldOverrides;
+          }
+          const approvalData = await requestJson('/api/recommendations/' + encodeURIComponent(recommendationToComplete.id) + '/approve', {
+            method: 'POST',
+            body: JSON.stringify(body)
+          });
+          state.recommendation = { ...recommendationToComplete, resolution: 'approved' };
+          state.stage = 'approved';
+          state.selectedTicket = withRecommendationSummary(approvalData.ticket, state.recommendation, 'draft-ready');
+          replaceTicket(state.selectedTicket);
+          resetApprovalControls();
+        }
+        if (!isCurrentRecommendationSentFor(recommendationToComplete.id)) {
+          const sentData = await requestJson('/api/recommendations/' + encodeURIComponent(recommendationToComplete.id) + '/mark-sent', {
+            method: 'POST',
+            body: JSON.stringify({
+              ticketId,
+              actor
+            })
+          });
+          els.replyComposer.open = true;
+          setResult(sentData);
+          await refreshSelectedTicketQueueAndEvidence();
+          await loadMetrics(sentData);
+          return;
+        }
+        renderTicket();
+        renderTicketList();
+        renderRecommendation();
+      }
+
       async function markResponseSent() {
         if (state.recommendation === null || state.selectedTicket === null) {
           return;
@@ -1558,6 +2180,34 @@ export const approvalDeskHtml = `<!doctype html>
           method: 'POST',
           body: JSON.stringify({
             ticketId: state.selectedTicket.id,
+            actor: els.actor.value.trim() || 'approval-desk'
+          })
+        });
+        setResult(data);
+        await refreshSelectedTicketQueueAndEvidence();
+      }
+
+      async function recordDiagnosis() {
+        if (state.selectedTicket === null) {
+          return;
+        }
+        const data = await requestJson('/api/tickets/' + encodeURIComponent(state.selectedTicket.id) + '/diagnosis', {
+          method: 'POST',
+          body: JSON.stringify({
+            actor: els.actor.value.trim() || 'approval-desk'
+          })
+        });
+        setResult(data);
+        await refreshSelectedTicketQueueAndEvidence();
+      }
+
+      async function recordFix() {
+        if (state.selectedTicket === null) {
+          return;
+        }
+        const data = await requestJson('/api/tickets/' + encodeURIComponent(state.selectedTicket.id) + '/fix', {
+          method: 'POST',
+          body: JSON.stringify({
             actor: els.actor.value.trim() || 'approval-desk'
           })
         });
@@ -1598,6 +2248,8 @@ export const approvalDeskHtml = `<!doctype html>
           })
         });
         els.customerReplyBody.value = '';
+        els.predictedReply.value = '';
+        els.replyComposer.open = false;
         await refreshSelectedTicketQueueAndEvidence();
       }
 
@@ -1777,6 +2429,50 @@ export const approvalDeskHtml = `<!doctype html>
 
       function chip(value) {
         return '<span class="chip">' + escapeHtml(value) + '</span>';
+      }
+
+      function renderCurrentStateCard(recommendation) {
+        const missing = Array.isArray(recommendation.missingEvidence) ? recommendation.missingEvidence : [];
+        const evidenceState = missing.length === 0 ? 'complete' : missing.length + ' missing';
+        return '<div class="hero-card current-state-card"><strong>Current state</strong>' +
+          '<div class="chips">' +
+            chip('Lifecycle: ' + (recommendation.supportState ?? 'not assessed')) +
+            chip('Evidence: ' + evidenceState) +
+            chip('Likely issue: ' + recommendation.category + ' / ' + recommendation.team) +
+            chip('Draft source: ' + (recommendation.draftCustomerResponseSource ?? 'legacy')) +
+          '</div>' +
+          '<p class="hint">' + escapeHtml(recommendation.recommendedNextAction ?? 'Review the recommendation before approval.') + '</p>' +
+          renderDraftStatusNote(recommendation) +
+        '</div>';
+      }
+
+      function renderDraftStatusNote(recommendation) {
+        const checks = Array.isArray(recommendation.draftCustomerResponseChecks)
+          ? recommendation.draftCustomerResponseChecks
+          : [];
+        const fallback = checks.find(function (check) {
+          return check.id === 'fallback-used' || check.label === 'Fallback used';
+        });
+        if (fallback === undefined) {
+          return '<p class="meta">Draft completed through the configured provider and local validators.</p>';
+        }
+        return '<p class="warning"><strong>Fallback used</strong> ' + escapeHtml(fallback.message ?? 'The deterministic draft was used after provider validation.') + '</p>';
+      }
+
+      function renderRecommendationLoadingCard() {
+        return '<div class="hero-card loading-card"><strong>Drafting recommendation...</strong>' +
+          '<p class="hint">Creating a guarded recommendation from local ticket facts, conversation history, retrieved knowledge, and draft validators.</p>' +
+          '<p class="meta">If GPT drafting is slow, the backend will fall back to deterministic wording instead of leaving the workflow blocked.</p>' +
+        '</div>';
+      }
+
+      function renderRecommendationError(error) {
+        const message = error instanceof Error ? error.message : 'Recommendation failed.';
+        els.recommendationPanel.innerHTML =
+          '<div class="hero-card warning-card"><strong>Recommendation failed</strong>' +
+            '<p>' + escapeHtml(message) + '</p>' +
+            '<p class="hint">Try again after checking the latest conversation context. The ticket has not been changed.</p>' +
+          '</div>';
       }
 
       function renderClassifierEvidenceCard(recommendation) {
@@ -2438,6 +3134,12 @@ export const approvalDeskHtml = `<!doctype html>
           renderRecommendation(true);
         }
       });
+      els.cancelRejectButton.addEventListener('click', function () {
+        if (state.recommendation !== null) {
+          state.stage = 'draft';
+          renderRecommendation(true);
+        }
+      });
       els.confirmApproval.addEventListener('change', updateControls);
       els.continueApproval.addEventListener('click', function () {
         if (state.recommendation !== null) {
@@ -2447,6 +3149,15 @@ export const approvalDeskHtml = `<!doctype html>
             state.stage = 'approval';
             renderRecommendation(true);
           }
+        }
+      });
+      els.reviewDraftButton.addEventListener('click', function () {
+        document.getElementById('customerResponseDraft')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      });
+      els.startRejectButton.addEventListener('click', function () {
+        if (state.recommendation !== null && !isApprovedWorkflow()) {
+          state.stage = 'reject';
+          renderRecommendation(true);
         }
       });
       els.recommendationPanel.addEventListener('click', function (event) {
@@ -2463,8 +3174,19 @@ export const approvalDeskHtml = `<!doctype html>
           void persistDemoCustomerReply(event.target.value).catch(function (error) { setResult({ error: error.message }); });
         }
       });
+      els.predictedReply.addEventListener('change', function () {
+        if (els.predictedReply.value !== '') {
+          els.customerReplyBody.value = conversationScenarioBody(els.predictedReply.value);
+        }
+      });
       els.editedCustomerResponse.addEventListener('input', updateControls);
       els.feedback.addEventListener('input', updateControls);
+      for (const button of els.rejectControls.querySelectorAll('.quick-reason')) {
+        button.addEventListener('click', function () {
+          els.feedback.value = button.value;
+          updateControls();
+        });
+      }
       for (const button of els.fieldChoices.querySelectorAll('.field-approve-button')) {
         button.addEventListener('click', function () {
           toggleFieldApproval(button.value);
@@ -2486,8 +3208,23 @@ export const approvalDeskHtml = `<!doctype html>
       els.createRecommendation.addEventListener('click', function () {
         void createRecommendation().catch(function (error) { setResult({ error: error.message }); });
       });
+      els.createUpdatedRecommendation.addEventListener('click', function () {
+        void createRecommendation().catch(function (error) { setResult({ error: error.message }); });
+      });
+      els.diagnoseButton.addEventListener('click', function () {
+        void recordDiagnosis().catch(function (error) { setResult({ error: error.message }); });
+      });
+      els.fixButton.addEventListener('click', function () {
+        void recordFix().catch(function (error) { setResult({ error: error.message }); });
+      });
       els.approveButton.addEventListener('click', function () {
-        void approveRecommendation().catch(function (error) { setResult({ error: error.message }); });
+        void completeTask().catch(function (error) { setResult({ error: error.message }); });
+      });
+      els.approveEditedButton.addEventListener('click', function () {
+        void completeTask().catch(function (error) { setResult({ error: error.message }); });
+      });
+      els.markSentButton.addEventListener('click', function () {
+        void markResponseSent().catch(function (error) { setResult({ error: error.message }); });
       });
       els.rejectButton.addEventListener('click', function () {
         void rejectRecommendation().catch(function (error) { setResult({ error: error.message }); });

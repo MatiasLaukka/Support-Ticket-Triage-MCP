@@ -200,6 +200,631 @@ describe("createApprovalDeskHttpServer", () => {
     );
   });
 
+  it("creates a TKT-1010 recommendation after complete blank-page evidence without missing knowledge", async () => {
+    const { deps, json } = await startFixture();
+    await deps.tickets.update("TKT-1010", 0, (ticket) => ({
+      ...ticket,
+      category: "performance",
+      priority: "P3",
+      team: "product",
+      tags: [...ticket.tags, "performance"],
+    }));
+
+    const created = await json("/api/tickets/TKT-1010/recommendations", {
+      method: "POST",
+      body: JSON.stringify({
+        actor: "approval-desk",
+        customerReplies: [
+          {
+            id: "reply-complete-blank-page-evidence",
+            createdAt: "2026-06-10T09:35:00.000Z",
+            body:
+              "The campaign name is Summer Flash Sale. The failure timestamp was 2026-06-10 09:15 UTC. I use Chrome, and the page is still blank after signing out and back in. The affected scope appears to be 12 profiles in the latest export.",
+          },
+        ],
+      }),
+    });
+
+    expect(created.status).toBe(201);
+    expect(created.body.recommendation).toMatchObject({
+      ticketId: "TKT-1010",
+      category: "performance",
+      supportState: "diagnosing",
+    });
+    expect(created.body.recommendation.knowledgeArticleIds).toContain(
+      "performance-troubleshooting",
+    );
+  });
+
+  it("records diagnosis only after a done response with complete evidence", async () => {
+    const { deps, json } = await startFixture();
+    await deps.tickets.update("TKT-1010", 0, (ticket) => ({
+      ...ticket,
+      category: "performance",
+      priority: "P3",
+      team: "product",
+      tags: [...ticket.tags, "performance"],
+    }));
+    const created = await json("/api/tickets/TKT-1010/recommendations", {
+      method: "POST",
+      body: JSON.stringify({
+        actor: "approval-desk",
+        customerReplies: [
+          {
+            id: "reply-complete-blank-page-evidence",
+            createdAt: "2026-06-10T09:35:00.000Z",
+            body:
+              "The campaign name is Summer Flash Sale. The failure timestamp was 2026-06-10 09:15 UTC. I use Chrome, and the page is still blank after signing out and back in. The affected scope appears to be 12 profiles in the latest export.",
+          },
+        ],
+      }),
+    });
+    const recommendation = created.body.recommendation;
+    const approved = await json(`/api/recommendations/${recommendation.id}/approve`, {
+      method: "POST",
+      body: JSON.stringify({
+        ticketId: "TKT-1010",
+        expectedRevision: 1,
+        approvedFields: ["category", "priority", "team", "customerResponse"],
+        editedCustomerResponse: recommendation.draftCustomerResponse,
+        actor: "matias-reviewer",
+        confirm: true,
+      }),
+    });
+    expect(approved.status).toBe(200);
+    const sent = await json(`/api/recommendations/${recommendation.id}/mark-sent`, {
+      method: "POST",
+      body: JSON.stringify({
+        ticketId: "TKT-1010",
+        actor: "matias-reviewer",
+      }),
+    });
+    expect(sent.status).toBe(200);
+
+    const diagnosis = await json("/api/tickets/TKT-1010/diagnosis", {
+      method: "POST",
+      body: JSON.stringify({ actor: "product-support" }),
+    });
+
+    expect(diagnosis.status).toBe(201);
+    expect(diagnosis.body.auditEvent).toMatchObject({
+      action: "diagnosis-completed",
+      actor: "product-support",
+      ticketId: "TKT-1010",
+      after: {
+        diagnosis: {
+          status: "completed",
+          causeType: "performance",
+          confidence: "likely",
+          owner: "engineering",
+        },
+      },
+    });
+    expect(diagnosis.body.auditEvent.after.diagnosis.customerSafeSummary).toContain(
+      "campaign editor",
+    );
+  });
+
+  it("rejects diagnosis when required evidence is still missing", async () => {
+    const { json } = await startFixture();
+    const created = await json("/api/tickets/TKT-1001/recommendations", {
+      method: "POST",
+      body: JSON.stringify({ actor: "approval-desk" }),
+    });
+    await approveAndSend(json, "TKT-1001", created.body.recommendation);
+
+    const diagnosis = await json("/api/tickets/TKT-1001/diagnosis", {
+      method: "POST",
+      body: JSON.stringify({ actor: "product-support" }),
+    });
+
+    expect(diagnosis.status).toBe(400);
+    expect(diagnosis.body.error.message).toContain(
+      "all required evidence to be gathered",
+    );
+  });
+
+  it("allows known-cause diagnosis without extra evidence gathering", async () => {
+    const { json } = await startFixture();
+    const created = await json("/api/tickets/TKT-1017/recommendations", {
+      method: "POST",
+      body: JSON.stringify({ actor: "approval-desk" }),
+    });
+    expect(created.body.recommendation).toMatchObject({
+      supportState: "known-cause",
+      knownCause: "sms-quiet-hours",
+    });
+    await approveAndSend(json, "TKT-1017", created.body.recommendation);
+
+    const diagnosis = await json("/api/tickets/TKT-1017/diagnosis", {
+      method: "POST",
+      body: JSON.stringify({ actor: "product-support" }),
+    });
+
+    expect(diagnosis.status).toBe(201);
+    expect(diagnosis.body.auditEvent.action).toBe("diagnosis-completed");
+
+    const update = await json("/api/tickets/TKT-1017/recommendations", {
+      method: "POST",
+      body: JSON.stringify({ actor: "approval-desk" }),
+    });
+    const draft = update.body.recommendation.draftCustomerResponse;
+    expect(draft).toContain("quiet-hour protection");
+    expect(draft).toContain("restricted sending hours");
+    expect(draft).toContain("reschedule");
+    expect(draft).not.toContain("platform-side processing delay");
+    expect(draft).not.toContain("the customer");
+  });
+
+  it("does not treat a probable known cause as diagnosis-ready while evidence is missing", async () => {
+    const { json } = await startFixture();
+    const created = await json("/api/tickets/TKT-1008/recommendations", {
+      method: "POST",
+      body: JSON.stringify({ actor: "approval-desk" }),
+    });
+    expect(created.body.recommendation).toMatchObject({
+      supportState: "needs-information",
+      knownCause: "webhook-secret-rotation",
+    });
+    expect(created.body.recommendation.missingEvidence.length).toBeGreaterThan(0);
+    await approveAndSend(json, "TKT-1008", created.body.recommendation);
+
+    const diagnosis = await json("/api/tickets/TKT-1008/diagnosis", {
+      method: "POST",
+      body: JSON.stringify({ actor: "product-support" }),
+    });
+
+    expect(diagnosis.status).toBe(400);
+    expect(diagnosis.body.error.message).toContain(
+      "all required evidence to be gathered",
+    );
+  });
+
+  it("uses recorded diagnosis context in the next customer response draft", async () => {
+    const { deps, json } = await startFixture();
+    await deps.tickets.update("TKT-1010", 0, (ticket) => ({
+      ...ticket,
+      category: "performance",
+      priority: "P3",
+      team: "product",
+      tags: [...ticket.tags, "performance"],
+    }));
+    const first = await json("/api/tickets/TKT-1010/recommendations", {
+      method: "POST",
+      body: JSON.stringify({
+        actor: "approval-desk",
+        customerReplies: [
+          {
+            id: "reply-complete-blank-page-evidence",
+            createdAt: "2026-06-10T09:35:00.000Z",
+            body:
+              "The campaign name is Summer Flash Sale. The failure timestamp was 2026-06-10 09:15 UTC. I use Chrome, and the page is still blank after signing out and back in. The affected scope appears to be 12 profiles in the latest export.",
+          },
+        ],
+      }),
+    });
+    const firstRecommendation = first.body.recommendation;
+    await json(`/api/recommendations/${firstRecommendation.id}/approve`, {
+      method: "POST",
+      body: JSON.stringify({
+        ticketId: "TKT-1010",
+        expectedRevision: await ticketRevision(json, "TKT-1010"),
+        approvedFields: ["customerResponse"],
+        editedCustomerResponse: firstRecommendation.draftCustomerResponse,
+        actor: "matias-reviewer",
+        confirm: true,
+      }),
+    });
+    await json(`/api/recommendations/${firstRecommendation.id}/mark-sent`, {
+      method: "POST",
+      body: JSON.stringify({
+        ticketId: "TKT-1010",
+        actor: "matias-reviewer",
+      }),
+    });
+    await json("/api/tickets/TKT-1010/diagnosis", {
+      method: "POST",
+      body: JSON.stringify({ actor: "product-support" }),
+    });
+
+    const afterDiagnosis = await json("/api/tickets/TKT-1010/recommendations", {
+      method: "POST",
+      body: JSON.stringify({ actor: "approval-desk" }),
+    });
+
+    expect(afterDiagnosis.status).toBe(201);
+    expect(afterDiagnosis.body.recommendation.draftCustomerResponse).toContain(
+      "campaign editor loading",
+    );
+    expect(afterDiagnosis.body.recommendation.draftCustomerResponse).toContain(
+      "private or incognito window",
+    );
+    expect(afterDiagnosis.body.recommendation.draftCustomerResponse).toContain(
+      "different browser",
+    );
+    expect(afterDiagnosis.body.recommendation.draftCustomerResponse).toContain(
+      "browser console error",
+    );
+    expect(afterDiagnosis.body.recommendation.draftCustomerResponse).toContain(
+      "frontend loading issue",
+    );
+    expect(afterDiagnosis.body.recommendation.draftCustomerResponse).not.toContain(
+      "most likely cause",
+    );
+    expect(afterDiagnosis.body.recommendation.draftCustomerResponse).not.toContain(
+      "We based this on",
+    );
+    expect(afterDiagnosis.body.recommendation.draftCustomerResponse).not.toContain(
+      "applying the mitigation",
+    );
+    expect(afterDiagnosis.body.recommendation.draftCustomerResponse).not.toContain(
+      "Please share a screenshot",
+    );
+    expect(afterDiagnosis.body.recommendation.draftCustomerResponse).not.toContain(
+      "delayed events",
+    );
+    expect(afterDiagnosis.body.recommendation.draftCustomerResponse).not.toContain(
+      "profile timelines",
+    );
+    expect(afterDiagnosis.body.recommendation.draftCustomerResponse).not.toContain(
+      "Please share",
+    );
+  });
+
+  it("keeps internal diagnosis next actions out of customer update drafts", async () => {
+    let currentNow = new Date("2026-06-10T09:00:00.000Z");
+    const { json } = await startFixture({}, { now: () => currentNow });
+
+    const first = await json("/api/tickets/TKT-1001/recommendations", {
+      method: "POST",
+      body: JSON.stringify({ actor: "approval-desk" }),
+    });
+    const firstRecommendation = first.body.recommendation;
+    await approveAndSend(json, "TKT-1001", firstRecommendation);
+
+    currentNow = new Date("2026-06-10T09:05:00.000Z");
+    await json("/api/tickets/TKT-1001/customer-replies", {
+      method: "POST",
+      body: JSON.stringify({
+        actor: "Maya Chen",
+        body: "The affected store URL is https://store.example.test. One affected profile email is customer@example.test.",
+        source: "manual",
+      }),
+    });
+    currentNow = new Date("2026-06-10T09:06:00.000Z");
+    const partial = await json("/api/tickets/TKT-1001/recommendations", {
+      method: "POST",
+      body: JSON.stringify({ actor: "approval-desk" }),
+    });
+    await approveAndSend(json, "TKT-1001", partial.body.recommendation);
+
+    currentNow = new Date("2026-06-10T09:10:00.000Z");
+    await json("/api/tickets/TKT-1001/customer-replies", {
+      method: "POST",
+      body: JSON.stringify({
+        actor: "Maya Chen",
+        body: "The event ID is evt_12345. The request ID is req_12345. The API response status is 400 validation_error.",
+        source: "manual",
+      }),
+    });
+    currentNow = new Date("2026-06-10T09:11:00.000Z");
+    const complete = await json("/api/tickets/TKT-1001/recommendations", {
+      method: "POST",
+      body: JSON.stringify({ actor: "approval-desk" }),
+    });
+    await approveAndSend(json, "TKT-1001", complete.body.recommendation);
+
+    currentNow = new Date("2026-06-10T09:15:00.000Z");
+    await json("/api/tickets/TKT-1001/diagnosis", {
+      method: "POST",
+      body: JSON.stringify({ actor: "product-support" }),
+    });
+    currentNow = new Date("2026-06-10T09:16:00.000Z");
+    const update = await json("/api/tickets/TKT-1001/recommendations", {
+      method: "POST",
+      body: JSON.stringify({ actor: "approval-desk" }),
+    });
+
+    const draft = update.body.recommendation.draftCustomerResponse;
+    expect(draft).toContain(
+      "platform-side processing delay affecting checkout event processing and profile timeline updates",
+    );
+    expect(draft).toContain("working diagnosis");
+    expect(draft).not.toContain("completed the investigation");
+    expect(draft).not.toContain("We based this on");
+    expect(draft).not.toContain("applying the mitigation");
+    expect(draft).not.toContain("Complete platform mitigation");
+    expect(draft).not.toContain("before asking the customer");
+    expect(draft).not.toContain("customer's expected results");
+    expect(draft).not.toContain("when there is something ready");
+    expect(update.body.recommendation.draftCustomerResponseChecks).toContainEqual(
+      expect.objectContaining({
+        id: "customer-addressed-directly",
+        status: "pass",
+      }),
+    );
+  });
+
+  it("uses a customer-safe platform delay fix summary", async () => {
+    let currentNow = new Date("2026-06-10T09:00:00.000Z");
+    const { json } = await startFixture({}, { now: () => currentNow });
+    const diagnosisRecommendation = await createDiagnosedPlatformDelayTicket(
+      json,
+      (value) => {
+        currentNow = new Date(value);
+      },
+    );
+
+    await approveAndSend(json, "TKT-1001", diagnosisRecommendation);
+    const fix = await json("/api/tickets/TKT-1001/fix", {
+      method: "POST",
+      body: JSON.stringify({ actor: "product-support" }),
+    });
+    expect(fix.status).toBe(201);
+
+    const afterFix = await json("/api/tickets/TKT-1001/recommendations", {
+      method: "POST",
+      body: JSON.stringify({ actor: "approval-desk" }),
+    });
+
+    const draft = afterFix.body.recommendation.draftCustomerResponse;
+    expect(draft).toContain(
+      "The event-processing delay mitigation has been applied",
+    );
+    expect(draft).toContain(
+      "Please check the affected profile timelines again",
+    );
+    expect(draft).not.toContain("available for The evidence points");
+    expect(draft).not.toContain("the customer's expected results");
+  });
+
+  it("rejects fix before diagnosis is recorded", async () => {
+    const { deps, json } = await startFixture();
+    await deps.tickets.update("TKT-1010", 0, (ticket) => ({
+      ...ticket,
+      category: "performance",
+      priority: "P3",
+      team: "product",
+      tags: [...ticket.tags, "performance"],
+    }));
+    const created = await json("/api/tickets/TKT-1010/recommendations", {
+      method: "POST",
+      body: JSON.stringify({
+        actor: "approval-desk",
+        customerReplies: [
+          {
+            id: "reply-complete-blank-page-evidence",
+            createdAt: "2026-06-10T09:35:00.000Z",
+            body:
+              "The campaign name is Summer Flash Sale. The failure timestamp was 2026-06-10 09:15 UTC. I use Chrome, and the page is still blank after signing out and back in. The affected scope appears to be 12 profiles in the latest export.",
+          },
+        ],
+      }),
+    });
+    const recommendation = created.body.recommendation;
+    await json(`/api/recommendations/${recommendation.id}/approve`, {
+      method: "POST",
+      body: JSON.stringify({
+        ticketId: "TKT-1010",
+        expectedRevision: 1,
+        approvedFields: ["customerResponse"],
+        editedCustomerResponse: recommendation.draftCustomerResponse,
+        actor: "matias-reviewer",
+        confirm: true,
+      }),
+    });
+    await json(`/api/recommendations/${recommendation.id}/mark-sent`, {
+      method: "POST",
+      body: JSON.stringify({
+        ticketId: "TKT-1010",
+        actor: "matias-reviewer",
+      }),
+    });
+
+    const fix = await json("/api/tickets/TKT-1010/fix", {
+      method: "POST",
+      body: JSON.stringify({ actor: "product-support" }),
+    });
+
+    expect(fix.status).toBe(400);
+    expect(fix.body.error.message).toBe(
+      "A completed diagnosis is required before marking a fix available.",
+    );
+  });
+
+  it("uses recorded fix context in the next customer response draft", async () => {
+    const { deps, json } = await startFixture();
+    await deps.tickets.update("TKT-1010", 0, (ticket) => ({
+      ...ticket,
+      category: "performance",
+      priority: "P3",
+      team: "product",
+      tags: [...ticket.tags, "performance"],
+    }));
+    const first = await json("/api/tickets/TKT-1010/recommendations", {
+      method: "POST",
+      body: JSON.stringify({
+        actor: "approval-desk",
+        customerReplies: [
+          {
+            id: "reply-complete-blank-page-evidence",
+            createdAt: "2026-06-10T09:35:00.000Z",
+            body:
+              "The campaign name is Summer Flash Sale. The failure timestamp was 2026-06-10 09:15 UTC. I use Chrome, and the page is still blank after signing out and back in. The affected scope appears to be 12 profiles in the latest export.",
+          },
+        ],
+      }),
+    });
+    const firstRecommendation = first.body.recommendation;
+    await json(`/api/recommendations/${firstRecommendation.id}/approve`, {
+      method: "POST",
+      body: JSON.stringify({
+        ticketId: "TKT-1010",
+        expectedRevision: 1,
+        approvedFields: ["customerResponse"],
+        editedCustomerResponse: firstRecommendation.draftCustomerResponse,
+        actor: "matias-reviewer",
+        confirm: true,
+      }),
+    });
+    await json(`/api/recommendations/${firstRecommendation.id}/mark-sent`, {
+      method: "POST",
+      body: JSON.stringify({ ticketId: "TKT-1010", actor: "matias-reviewer" }),
+    });
+    await json("/api/tickets/TKT-1010/diagnosis", {
+      method: "POST",
+      body: JSON.stringify({ actor: "product-support" }),
+    });
+    const diagnosisDraft = await json("/api/tickets/TKT-1010/recommendations", {
+      method: "POST",
+      body: JSON.stringify({ actor: "approval-desk" }),
+    });
+    const diagnosisRecommendation = diagnosisDraft.body.recommendation;
+    await json(`/api/recommendations/${diagnosisRecommendation.id}/approve`, {
+      method: "POST",
+      body: JSON.stringify({
+        ticketId: "TKT-1010",
+        expectedRevision: await ticketRevision(json, "TKT-1010"),
+        approvedFields: ["customerResponse"],
+        editedCustomerResponse: diagnosisRecommendation.draftCustomerResponse,
+        actor: "matias-reviewer",
+        confirm: true,
+      }),
+    });
+    await json(`/api/recommendations/${diagnosisRecommendation.id}/mark-sent`, {
+      method: "POST",
+      body: JSON.stringify({ ticketId: "TKT-1010", actor: "matias-reviewer" }),
+    });
+    const fix = await json("/api/tickets/TKT-1010/fix", {
+      method: "POST",
+      body: JSON.stringify({ actor: "product-support" }),
+    });
+    expect(fix.status).toBe(201);
+
+    const afterFix = await json("/api/tickets/TKT-1010/recommendations", {
+      method: "POST",
+      body: JSON.stringify({ actor: "approval-desk" }),
+    });
+
+    expect(afterFix.status).toBe(201);
+    expect(afterFix.body.recommendation.draftCustomerResponse).toContain(
+      "mitigation has been applied",
+    );
+    expect(afterFix.body.recommendation.draftCustomerResponse).toContain(
+      "Let us know whether the editor now loads normally",
+    );
+    expect(afterFix.body.recommendation.draftCustomerResponse).not.toContain(
+      "Please share",
+    );
+  });
+
+  it("automatically adds a ticket-specific customer reply after a fix response is done", async () => {
+    const { deps, json } = await startFixture();
+    await deps.tickets.update("TKT-1010", 0, (ticket) => ({
+      ...ticket,
+      category: "performance",
+      priority: "P3",
+      team: "product",
+      tags: [...ticket.tags, "performance"],
+    }));
+    const first = await json("/api/tickets/TKT-1010/recommendations", {
+      method: "POST",
+      body: JSON.stringify({
+        actor: "approval-desk",
+        customerReplies: [
+          {
+            id: "reply-complete-blank-page-evidence",
+            createdAt: "2026-06-10T09:35:00.000Z",
+            body:
+              "The campaign name is Summer Flash Sale. The failure timestamp was 2026-06-10 09:15 UTC. I use Chrome, and the page is still blank after signing out and back in. The affected scope appears to be 12 profiles in the latest export.",
+          },
+        ],
+      }),
+    });
+    const firstRecommendation = first.body.recommendation;
+    await json(`/api/recommendations/${firstRecommendation.id}/approve`, {
+      method: "POST",
+      body: JSON.stringify({
+        ticketId: "TKT-1010",
+        expectedRevision: 1,
+        approvedFields: ["customerResponse"],
+        editedCustomerResponse: firstRecommendation.draftCustomerResponse,
+        actor: "matias-reviewer",
+        confirm: true,
+      }),
+    });
+    await json(`/api/recommendations/${firstRecommendation.id}/mark-sent`, {
+      method: "POST",
+      body: JSON.stringify({ ticketId: "TKT-1010", actor: "matias-reviewer" }),
+    });
+    await json("/api/tickets/TKT-1010/diagnosis", {
+      method: "POST",
+      body: JSON.stringify({ actor: "product-support" }),
+    });
+    const diagnosisDraft = await json("/api/tickets/TKT-1010/recommendations", {
+      method: "POST",
+      body: JSON.stringify({ actor: "approval-desk" }),
+    });
+    const diagnosisRecommendation = diagnosisDraft.body.recommendation;
+    await json(`/api/recommendations/${diagnosisRecommendation.id}/approve`, {
+      method: "POST",
+      body: JSON.stringify({
+        ticketId: "TKT-1010",
+        expectedRevision: 1,
+        approvedFields: ["customerResponse"],
+        editedCustomerResponse: diagnosisRecommendation.draftCustomerResponse,
+        actor: "matias-reviewer",
+        confirm: true,
+      }),
+    });
+    await json(`/api/recommendations/${diagnosisRecommendation.id}/mark-sent`, {
+      method: "POST",
+      body: JSON.stringify({ ticketId: "TKT-1010", actor: "matias-reviewer" }),
+    });
+    await json("/api/tickets/TKT-1010/fix", {
+      method: "POST",
+      body: JSON.stringify({ actor: "product-support" }),
+    });
+    const fixDraft = await json("/api/tickets/TKT-1010/recommendations", {
+      method: "POST",
+      body: JSON.stringify({ actor: "approval-desk" }),
+    });
+    const fixRecommendation = fixDraft.body.recommendation;
+    await json(`/api/recommendations/${fixRecommendation.id}/approve`, {
+      method: "POST",
+      body: JSON.stringify({
+        ticketId: "TKT-1010",
+        expectedRevision: await ticketRevision(json, "TKT-1010"),
+        approvedFields: ["customerResponse"],
+        editedCustomerResponse: fixRecommendation.draftCustomerResponse,
+        actor: "matias-reviewer",
+        confirm: true,
+      }),
+    });
+
+    const sent = await json(`/api/recommendations/${fixRecommendation.id}/mark-sent`, {
+      method: "POST",
+      body: JSON.stringify({ ticketId: "TKT-1010", actor: "matias-reviewer" }),
+    });
+    const detail = await json("/api/tickets/TKT-1010");
+
+    expect(sent.status).toBe(200);
+    expect(sent.body.automaticReply).toMatchObject({
+      action: "customer-reply-received",
+      after: {
+        body: expect.stringContaining("It works now"),
+        source: "demo-auto-reply",
+      },
+    });
+    expect(detail.body.recommendationSummary.workflowState).toBe("customer-replied");
+    expect(detail.body.conversationTimeline).toContainEqual(
+      expect.objectContaining({
+        kind: "customer-reply",
+        body: expect.stringContaining("It works now"),
+      }),
+    );
+  });
+
   it("creates recommendations with a provider draft from cited knowledge", async () => {
     const seenArticleBodies: string[] = [];
     const seenResponseStyles: string[] = [];
@@ -1225,4 +1850,97 @@ async function startFixture(
       };
     },
   };
+}
+
+async function ticketRevision(
+  json: Awaited<ReturnType<typeof startFixture>>["json"],
+  ticketId: string,
+): Promise<number> {
+  const detail = await json(`/api/tickets/${ticketId}`);
+  return detail.body.ticket.revision;
+}
+
+async function approveAndSend(
+  json: Awaited<ReturnType<typeof startFixture>>["json"],
+  ticketId: string,
+  recommendation: { id: string; draftCustomerResponse: string },
+): Promise<void> {
+  const approved = await json(`/api/recommendations/${recommendation.id}/approve`, {
+    method: "POST",
+    body: JSON.stringify({
+      ticketId,
+      expectedRevision: await ticketRevision(json, ticketId),
+      approvedFields: ["customerResponse"],
+      editedCustomerResponse: recommendation.draftCustomerResponse,
+      actor: "matias-reviewer",
+      confirm: true,
+    }),
+  });
+  expect(approved.status).toBe(200);
+  const sent = await json(`/api/recommendations/${recommendation.id}/mark-sent`, {
+    method: "POST",
+    body: JSON.stringify({
+      ticketId,
+      actor: "matias-reviewer",
+    }),
+  });
+  expect(sent.status).toBe(200);
+}
+
+async function createDiagnosedPlatformDelayTicket(
+  json: Awaited<ReturnType<typeof startFixture>>["json"],
+  setNow: (value: string) => void = () => {},
+): Promise<{ id: string; draftCustomerResponse: string }> {
+  setNow("2026-06-10T09:00:00.000Z");
+  const first = await json("/api/tickets/TKT-1001/recommendations", {
+    method: "POST",
+    body: JSON.stringify({ actor: "approval-desk" }),
+  });
+  await approveAndSend(json, "TKT-1001", first.body.recommendation);
+
+  setNow("2026-06-10T09:05:00.000Z");
+  await json("/api/tickets/TKT-1001/customer-replies", {
+    method: "POST",
+    body: JSON.stringify({
+      actor: "Maya Chen",
+      body: "The affected store URL is https://store.example.test. One affected profile email is customer@example.test.",
+      source: "manual",
+    }),
+  });
+  setNow("2026-06-10T09:06:00.000Z");
+  const partial = await json("/api/tickets/TKT-1001/recommendations", {
+    method: "POST",
+    body: JSON.stringify({ actor: "approval-desk" }),
+  });
+  await approveAndSend(json, "TKT-1001", partial.body.recommendation);
+
+  setNow("2026-06-10T09:10:00.000Z");
+  await json("/api/tickets/TKT-1001/customer-replies", {
+    method: "POST",
+    body: JSON.stringify({
+      actor: "Maya Chen",
+      body: "The event ID is evt_12345. The request ID is req_12345. The API response status is 400 validation_error.",
+      source: "manual",
+    }),
+  });
+  setNow("2026-06-10T09:11:00.000Z");
+  const complete = await json("/api/tickets/TKT-1001/recommendations", {
+    method: "POST",
+    body: JSON.stringify({ actor: "approval-desk" }),
+  });
+  await approveAndSend(json, "TKT-1001", complete.body.recommendation);
+
+  setNow("2026-06-10T09:15:00.000Z");
+  const diagnosis = await json("/api/tickets/TKT-1001/diagnosis", {
+    method: "POST",
+    body: JSON.stringify({ actor: "product-support" }),
+  });
+  expect(diagnosis.status).toBe(201);
+  setNow("2026-06-10T09:16:00.000Z");
+  const update = await json("/api/tickets/TKT-1001/recommendations", {
+    method: "POST",
+    body: JSON.stringify({ actor: "approval-desk" }),
+  });
+  expect(update.status).toBe(201);
+  return update.body.recommendation;
 }

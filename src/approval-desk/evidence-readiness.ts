@@ -56,6 +56,13 @@ const EVIDENCE_CATALOG: Readonly<Record<string, Omit<EvidenceRequirement, "sourc
     customerQuestion: "Bounce samples or bounce codes",
     aliases: ["bounce sample", "bounce code", "bounce reason"],
   },
+  "browser-session-details": {
+    id: "browser-session-details",
+    label: "Browser or session details",
+    customerQuestion:
+      "browser and whether the same issue happens after signing out and back in",
+    aliases: ["browser", "session", "signed out", "signing out", "cache"],
+  },
   "campaign-name": {
     id: "campaign-name",
     label: "Campaign or flow name",
@@ -169,6 +176,25 @@ const EVIDENCE_CATALOG: Readonly<Record<string, Omit<EvidenceRequirement, "sourc
     label: "Affected object ID",
     customerQuestion: "Affected object ID, SKU, order number, or profile ID",
     aliases: ["object id", "sku", "order number", "profile id"],
+  },
+  "problem-summary": {
+    id: "problem-summary",
+    label: "Problem summary",
+    customerQuestion:
+      "what you were trying to do, what happened, and where it happened",
+    aliases: ["not working", "does not work", "problem", "expected to happen"],
+  },
+  "reproduction-steps": {
+    id: "reproduction-steps",
+    label: "Steps taken",
+    customerQuestion: "steps you took, if you remember them",
+    aliases: ["steps", "clicked", "opened", "selected", "tried"],
+  },
+  "screenshot-or-error": {
+    id: "screenshot-or-error",
+    label: "Screenshot or error",
+    customerQuestion: "screenshot or exact message, if you can share one",
+    aliases: ["screenshot", "screen recording", "error message", "error"],
   },
   "opt-out-timestamp": {
     id: "opt-out-timestamp",
@@ -337,6 +363,12 @@ const KNOWLEDGE_EVIDENCE: Readonly<Record<string, readonly string[]>> = {
     "request-id",
     "catalog-sync-time",
   ],
+  "performance-troubleshooting": [
+    "problem-summary",
+    "failure-timestamp",
+    "browser-session-details",
+    "affected-scope",
+  ],
   "security-incident-response": [
     "key-identifier",
     "exposure-location",
@@ -422,6 +454,34 @@ function evidenceForIssuePattern(input: {
     return evidenceForKnowledge(["security-incident-response"], "policy");
   }
   if (
+    input.outcome.category === "other" &&
+    input.outcome.knowledgeArticleIds.length === 0
+  ) {
+    return evidenceForIds(
+      ["problem-summary", "reproduction-steps", "screenshot-or-error"],
+      "policy",
+    );
+  }
+  if (
+    input.outcome.category === "performance" &&
+    input.outcome.team === "product" &&
+    /\bcampaign editor\b.{0,80}\b(?:blank|not loading|stayed blank|empty page)|\b(?:blank|stayed blank|empty page)\b.{0,80}\bcampaign editor\b/i.test(
+      ticketText(input.ticket),
+    )
+  ) {
+    return evidenceForIds(
+      [
+        "campaign-name",
+        "failure-timestamp",
+        "browser-session-details",
+        "affected-scope",
+        "problem-summary",
+        "reproduction-steps",
+      ],
+      "policy",
+    );
+  }
+  if (
     input.outcome.requiredEscalations.includes("outage") &&
     input.outcome.knowledgeArticleIds.includes("event-tracking-debugging")
   ) {
@@ -434,6 +494,17 @@ function evidenceForIssuePattern(input: {
       "api-response-status",
       "timeline-visibility",
       ],
+      "policy",
+    );
+  }
+  if (
+    input.outcome.knowledgeArticleIds.includes("shopify-integration-sync") &&
+    input.outcome.knowledgeArticleIds.includes("coupon-catalog-sync") &&
+    /\b(?:product|catalog|sku)\b/i.test(ticketText(input.ticket)) &&
+    !/\b(?:coupon|promo(?:tion)? code|discount code)\b/i.test(ticketText(input.ticket))
+  ) {
+    return evidenceForIds(
+      ["store-url", "object-id", "catalog-sync-time", "product-reference"],
       "policy",
     );
   }
@@ -570,6 +641,22 @@ function isEvidenceProvided(
       return /\b(request id|req[-_][a-z0-9]+)\b/i.test(text);
     case "delivery-id":
       return /\b(delivery id|deliv[-_][a-z0-9]+)\b/i.test(text);
+    case "problem-summary":
+      return hasSpecificProblemSummary(
+        [ticket.subject, ticket.description].join(" "),
+      );
+    case "reproduction-steps":
+      return /\b(?:steps?|clicked|opened|selected|submitted|tried|attempted|when i|when we|after i|after we)\b/i.test(
+        text,
+      );
+    case "screenshot-or-error":
+      return /\b(?:screenshot|screen recording|recording|error message|error code|banner says|message says)\b/i.test(
+        text,
+      );
+    case "browser-session-details":
+      return /\b(?:chrome|firefox|safari|edge|browser|incognito|cache|signed out|signing out|session)\b/i.test(
+        text,
+      );
     case "key-identifier":
       return hasConcreteKeyIdentifier(text);
     case "exposure-location":
@@ -626,10 +713,16 @@ function hasExposureLocation(text: string): boolean {
 
 function hasKnownKeyUsageStatus(text: string): boolean {
   const subject = "(?:used|usage|actions taken)";
-  if (hasUnknownQualification(text, subject)) return false;
-  return /\b(?:key|credential|token|secret|password)\b.{0,50}\b(?:was|has been|had been|was not|has not been|never) used\b|\bno (?:post-exposure )?usage\b|\bactions taken (?:were|include|included|:)\b/i.test(
+  const hasConcreteUsageStatus =
+    /\b(?:key|credential|token|secret|password)\b.{0,50}\b(?:was|has been|had been|was not|has not been|never) used\b|\bno (?:post-exposure )?usage\b|\bactions taken (?:were|include|included|:)\b/i.test(
     text,
-  );
+    ) ||
+    /\b(?:cannot|can't|could not|couldn't)\s+see\s+any\b.{0,40}\b(?:post-exposure\s+)?(?:key\s+)?usage\b/i.test(
+      text,
+    );
+  if (hasConcreteUsageStatus) return true;
+  if (hasUnknownQualification(text, subject)) return false;
+  return false;
 }
 
 function hasKnownRotationStatus(text: string): boolean {
@@ -653,6 +746,23 @@ function hasKnownAffectedScope(text: string): boolean {
   if (hasUnknownQualification(text, subject)) return false;
   return /\b\d+\s+(?:profiles?|accounts?|logs?|actions?)\b|\b(?:affected|accessed|exposed|impacted)\s+(?:profiles?|accounts?|logs?|actions?)\b|\b(?:profiles?|accounts?) were (?:accessed|exposed|affected)\b/i.test(
     text,
+  );
+}
+
+function hasSpecificProblemSummary(text: string): boolean {
+  const trimmed = text.trim().replace(/\s+/g, " ");
+  const vagueOnly =
+    /^(?:(?:problem|issue|bug)[.!?\s]*)?(?:it (?:does not|doesn'?t|isn'?t|won'?t) work|not working|broken|problem|issue|bug)[.!?\s]*$/i;
+  if (vagueOnly.test(trimmed)) {
+    return false;
+  }
+  return (
+    /\b(?:cannot|can'?t|failed|fails|missing|delayed|blocked|stuck|invalid|not showing|not sending|not syncing|not loading|error|broken)\b/i.test(
+      text,
+    ) ||
+    /\b(?:blank page|page (?:stayed|is|was)(?: still)? blank|screen (?:stayed|is|was)(?: still)? blank|nothing (?:loaded|loads|happened)|stayed blank)\b/i.test(
+      text,
+    )
   );
 }
 

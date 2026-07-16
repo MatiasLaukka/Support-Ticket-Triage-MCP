@@ -129,6 +129,162 @@ describe("Approval Desk recommendation builder", () => {
     );
   });
 
+  it("keeps product catalog delay drafts separate from coupon-pool wording", async () => {
+    const outcomes = await loadExpectedOutcomes(
+      resolve("data/seed/expected-outcomes.json"),
+    );
+    const ticket = await loadSeedTicket("TKT-1020");
+
+    const input = buildApprovalDeskRecommendationInput({
+      ticket,
+      outcome: outcomes.get("TKT-1020")!,
+      actor: "approval-desk",
+    });
+
+    expect(input.draftCustomerResponse).toContain(
+      "product catalog sync delay",
+    );
+    expect(input.draftCustomerResponse).toContain("Affected store URL");
+    expect(input.draftCustomerResponse).toContain("Last catalog sync time");
+    expect(input.draftCustomerResponse).not.toContain("coupon");
+    expect(input.draftCustomerResponse).not.toContain("Coupon pool");
+    expect(input.draftCustomerResponse).not.toContain("unused coupon");
+  });
+
+  it("adapts vague ticket classification and draft after campaign editor blank-page reply", async () => {
+    const ticket = await loadSeedTicket("TKT-1010");
+    const input = buildApprovalDeskRecommendationInput({
+      ticket,
+      actor: "approval-desk",
+      customerReplies: [
+        {
+          id: "reply-1",
+          ticketId: "TKT-1010",
+          createdAt: "2026-06-10T09:05:00.000Z",
+          body:
+            "I was trying to open the campaign editor, but the page stayed blank. The steps were: I opened the campaign, clicked Edit, and then the page stayed blank.",
+        },
+      ],
+    });
+
+    expect(input.category).toBe("performance");
+    expect(input.team).toBe("product");
+    expect(input.supportState).toMatch(/diagnosing|information-received/);
+    expect(input.providedEvidence?.map((requirement) => requirement.id)).toEqual(
+      expect.arrayContaining(["problem-summary", "reproduction-steps"]),
+    );
+    expect(input.missingEvidence?.map((requirement) => requirement.id)).not.toContain(
+      "screenshot-or-error",
+    );
+    expect(input.missingEvidence?.map((requirement) => requirement.id)).toEqual(
+      expect.arrayContaining([
+        "campaign-name",
+        "failure-timestamp",
+        "browser-session-details",
+        "affected-scope",
+      ]),
+    );
+    expect(input.draftCustomerResponse).toContain("campaign editor");
+    expect(input.draftCustomerResponse).toContain("loading");
+    expect(input.draftCustomerResponse).not.toContain("screenshot or exact message");
+  });
+
+  it("uses bounded GPT advisory signals to classify ambiguous vague replies", async () => {
+    const ticket = TicketSchema.parse({
+      ...(await loadSeedTicket("TKT-1010")),
+      subject: "Problem",
+      description: "It does not work.",
+      category: "other",
+      team: "support",
+      tags: [],
+    });
+
+    const input = buildApprovalDeskRecommendationInput({
+      ticket,
+      actor: "approval-desk",
+      customerReplies: [
+        {
+          id: "reply-1",
+          ticketId: "TKT-1010",
+          createdAt: "2026-06-10T09:05:00.000Z",
+          body:
+            "The editor opens but the content area never finishes loading after I click edit.",
+        },
+      ],
+      advisoryClassificationSignals: [
+        {
+          ruleId: "gpt-advisory-campaign-editor-category",
+          target: "category:performance",
+          weight: 4,
+          reason:
+            "GPT interpreted the content area never finishing loading as a campaign editor loading issue.",
+        },
+        {
+          ruleId: "gpt-advisory-campaign-editor-team",
+          target: "team:product",
+          weight: 4,
+          reason:
+            "GPT suggested product routing because the editor UI fails after opening.",
+        },
+        {
+          ruleId: "gpt-advisory-campaign-editor-knowledge",
+          target: "knowledge:campaign-send-failures",
+          weight: 3,
+          reason:
+            "GPT suggested campaign troubleshooting context for the editor failure.",
+        },
+      ],
+    });
+
+    expect(input.category).toBe("performance");
+    expect(input.team).toBe("product");
+    expect(input.classificationSignals).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          ruleId: "gpt-advisory-campaign-editor-category",
+          target: "category:performance",
+        }),
+      ]),
+    );
+  });
+
+  it("does not let GPT advisory signals override deterministic security classification", async () => {
+    const ticket = TicketSchema.parse({
+      ...(await loadSeedTicket("TKT-1010")),
+      subject: "Problem",
+      description: "It does not work.",
+      category: "other",
+      team: "support",
+      tags: [],
+    });
+
+    const input = buildApprovalDeskRecommendationInput({
+      ticket,
+      actor: "approval-desk",
+      customerReplies: [
+        {
+          id: "reply-1",
+          ticketId: "TKT-1010",
+          createdAt: "2026-06-10T09:05:00.000Z",
+          body: "A private API key was pasted into shared logs.",
+        },
+      ],
+      advisoryClassificationSignals: [
+        {
+          ruleId: "gpt-advisory-performance-category",
+          target: "category:performance",
+          weight: 4,
+          reason: "GPT guessed performance.",
+        },
+      ],
+    });
+
+    expect(input.category).toBe("security");
+    expect(input.team).toBe("security");
+    expect(input.priority).toBe("P1");
+    expect(input.escalationReasons).toContain("security");
+  });
+
   it("adapts webhook known-cause drafts across customer follow-up turns", async () => {
     const outcomes = await loadExpectedOutcomes(
       resolve("data/seed/expected-outcomes.json"),
@@ -234,6 +390,498 @@ describe("Approval Desk recommendation builder", () => {
       "Glad to hear that resolved it.",
     );
     expect(customerConfirmed.missingInformation).toEqual([]);
+  });
+
+  it("keeps needs-information when a vague reply adds no recognized evidence", async () => {
+    const outcomes = await loadExpectedOutcomes(
+      resolve("data/seed/expected-outcomes.json"),
+    );
+    const ticket = await loadSeedTicket("TKT-1008");
+
+    const input = buildApprovalDeskRecommendationInput({
+      ticket,
+      outcome: outcomes.get("TKT-1008")!,
+      actor: "approval-desk",
+      customerReplies: [
+        {
+          id: "reply-vague",
+          ticketId: "TKT-1008",
+          createdAt: "2026-06-10T09:05:00.000Z",
+          body: "It is still happening, but I am not sure where to find the technical details.",
+        },
+      ],
+    });
+
+    expect(input.supportState).toBe("needs-information");
+    expect(input.draftCustomerResponse).toContain(
+      "Thanks for getting back to us.",
+    );
+    expect(input.draftCustomerResponse).toContain(
+      "we still need the specific details below",
+    );
+  });
+
+  it("passes compact conversation context to GPT drafting for vague follow-ups", async () => {
+    const outcomes = await loadExpectedOutcomes(
+      resolve("data/seed/expected-outcomes.json"),
+    );
+    const ticket = await loadSeedTicket("TKT-1008");
+    let capturedDraftInput: any;
+
+    await buildApprovalDeskRecommendationInputWithDrafting({
+      ticket,
+      outcome: outcomes.get("TKT-1008")!,
+      actor: "approval-desk",
+      knowledgeArticles: [],
+      customerReplies: [
+        {
+          id: "reply-vague",
+          ticketId: "TKT-1008",
+          createdAt: "2026-06-10T09:05:00.000Z",
+          body: "It is still happening, but I am not sure where to find the technical details.",
+        },
+      ],
+      draftProvider: {
+        draft: async (draftInput) => {
+          capturedDraftInput = draftInput;
+          return {
+            source: "openai",
+            response:
+              "Thanks for getting back to us. We still need the endpoint URL, delivery ID, and raw body handling details before we can confirm the safest next step.",
+            assist: {
+              source: "openai",
+              missingInfoSuggestions: [
+                "Share the endpoint URL, delivery ID, and raw body handling details.",
+              ],
+              investigationSteps: [
+                "Compare the latest customer reply with the remaining evidence checklist.",
+              ],
+              tone: "empathetic",
+              recommendedTone: "empathetic",
+              selectedTone: "empathetic",
+              toneReason:
+                "The customer replied but needs help finding technical details.",
+              audience: "developer",
+              checks: [],
+            },
+          };
+        },
+      },
+    });
+
+    expect(capturedDraftInput.conversationContext).toMatchObject({
+      turnType: "vague-follow-up",
+      hasCustomerReply: true,
+      recognizedEvidenceProgress: false,
+      latestCustomerReply: {
+        body: "It is still happening, but I am not sure where to find the technical details.",
+        createdAt: "2026-06-10T09:05:00.000Z",
+      },
+    });
+  });
+
+  it("infers lifecycle state from reply content rather than reply order", async () => {
+    const outcomes = await loadExpectedOutcomes(
+      resolve("data/seed/expected-outcomes.json"),
+    );
+    const ticket = await loadSeedTicket("TKT-1008");
+    const outcome = outcomes.get("TKT-1008")!;
+
+    const completeKnownCauseFirst = buildApprovalDeskRecommendationInput({
+      ticket,
+      outcome,
+      actor: "approval-desk",
+      customerReplies: [
+        {
+          id: "reply-complete-known-cause",
+          ticketId: "TKT-1008",
+          createdAt: "2026-06-10T09:05:00.000Z",
+          body:
+            "Endpoint URL is https://hooks.juniper.example/webhooks/orders. Delivery ID is deliv_7788. Raw body handling has not changed since yesterday.",
+        },
+      ],
+    });
+
+    expect(completeKnownCauseFirst.supportState).toBe("known-cause");
+    expect(completeKnownCauseFirst.missingEvidence).toEqual([]);
+    expect(completeKnownCauseFirst.draftCustomerResponse).toContain(
+      "current signing secret",
+    );
+
+    const resolvedAsFirstReply = buildApprovalDeskRecommendationInput({
+      ticket,
+      outcome,
+      actor: "approval-desk",
+      customerReplies: [
+        {
+          id: "reply-resolved",
+          ticketId: "TKT-1008",
+          createdAt: "2026-06-10T09:05:00.000Z",
+          body: "This works now. The issue is resolved on our end.",
+        },
+      ],
+    });
+
+    expect(resolvedAsFirstReply.supportState).toBe("ready-for-close");
+    expect(resolvedAsFirstReply.draftCustomerResponse).toContain(
+      "Glad to hear that resolved it.",
+    );
+
+    const negatedKnownCause = buildApprovalDeskRecommendationInput({
+      ticket,
+      outcome,
+      actor: "approval-desk",
+      customerReplies: [
+        {
+          id: "reply-ruled-out",
+          ticketId: "TKT-1008",
+          createdAt: "2026-06-10T09:05:00.000Z",
+          body:
+            "We ruled out signing secret rotation. Endpoint URL is https://hooks.juniper.example/webhooks/orders and delivery ID is deliv_7788.",
+        },
+      ],
+    });
+
+    expect(negatedKnownCause.knownCause).not.toBe("webhook-secret-rotation");
+  });
+
+  it("can infer waiting-on-platform-fix from first context when impact is platform-side", async () => {
+    const outcomes = await loadExpectedOutcomes(
+      resolve("data/seed/expected-outcomes.json"),
+    );
+    const ticket = await loadSeedTicket("TKT-1001");
+    const input = buildApprovalDeskRecommendationInput({
+      ticket,
+      outcome: outcomes.get("TKT-1001")!,
+      actor: "approval-desk",
+      customerReplies: [
+        {
+          id: "reply-platform-impact",
+          ticketId: "TKT-1001",
+          createdAt: "2026-06-10T09:05:00.000Z",
+          body:
+            "This is affecting all EU stores and recent Checkout Started events are delayed even though the API accepted them.",
+        },
+      ],
+    });
+
+    expect(input.supportState).toBe("waiting-on-platform-fix");
+    expect(input.draftCustomerResponse).toContain(
+      "possible platform delay affecting event processing",
+    );
+  });
+
+  it("answers platform-fix ETA follow-ups without repeating the first diagnostic ask", async () => {
+    const outcomes = await loadExpectedOutcomes(
+      resolve("data/seed/expected-outcomes.json"),
+    );
+    const ticket = await loadSeedTicket("TKT-1001");
+
+    const input = buildApprovalDeskRecommendationInput({
+      ticket,
+      outcome: outcomes.get("TKT-1001")!,
+      actor: "approval-desk",
+      previousSupportResponse: {
+        sentAt: "2026-06-10T09:00:00.000Z",
+        body:
+          "We are investigating this as a possible platform delay affecting event processing and will share the next update after confirming impact and mitigation.",
+      },
+      customerReplies: [
+        {
+          id: "reply-eta",
+          ticketId: "TKT-1001",
+          createdAt: "2026-06-10T09:20:00.000Z",
+          body: "How long do we have to wait for a fix?",
+        },
+      ],
+    });
+
+    expect(input.supportState).toBe("waiting-on-platform-fix");
+    expect(input.draftCustomerResponse).toContain(
+      "Thanks for checking in",
+    );
+    expect(input.draftCustomerResponse).toContain("confirmed ETA");
+    expect(input.draftCustomerResponse).toContain("next update");
+    expect(input.draftCustomerResponse).not.toContain(
+      "please share:",
+    );
+    expect(input.draftCustomerResponse).not.toContain("Affected store URL");
+  });
+
+  it("answers platform-fix explanation requests without repeating the first diagnostic ask", async () => {
+    const outcomes = await loadExpectedOutcomes(
+      resolve("data/seed/expected-outcomes.json"),
+    );
+    const ticket = await loadSeedTicket("TKT-1001");
+
+    const input = buildApprovalDeskRecommendationInput({
+      ticket,
+      outcome: outcomes.get("TKT-1001")!,
+      actor: "approval-desk",
+      previousSupportResponse: {
+        sentAt: "2026-06-10T09:00:00.000Z",
+        body:
+          "We are investigating this as a possible platform delay affecting event processing and will share the next update after confirming impact and mitigation.",
+      },
+      customerReplies: [
+        {
+          id: "reply-explanation",
+          ticketId: "TKT-1001",
+          createdAt: "2026-06-10T09:20:00.000Z",
+          body: "Okay. What's the problem?",
+        },
+      ],
+    });
+
+    expect(input.supportState).toBe("waiting-on-platform-fix");
+    expect(input.draftCustomerResponse).toContain("Thanks for checking in");
+    expect(input.draftCustomerResponse).toContain(
+      "we are looking at a possible delay",
+    );
+    expect(input.draftCustomerResponse).toContain(
+      "not yet a confirmed root cause",
+    );
+    expect(input.draftCustomerResponse).not.toContain("please share:");
+    expect(input.draftCustomerResponse).not.toContain("Affected store URL");
+  });
+
+  it("falls back when an OpenAI status-follow-up draft repeats the diagnostic ask", async () => {
+    const outcomes = await loadExpectedOutcomes(
+      resolve("data/seed/expected-outcomes.json"),
+    );
+    const ticket = await loadSeedTicket("TKT-1001");
+
+    const input = await buildApprovalDeskRecommendationInputWithDrafting({
+      ticket,
+      outcome: outcomes.get("TKT-1001")!,
+      actor: "approval-desk",
+      knowledgeArticles: [],
+      previousSupportResponse: {
+        sentAt: "2026-06-10T09:00:00.000Z",
+        body:
+          "We are investigating this as a possible platform delay affecting event processing and will share the next update after confirming impact and mitigation.",
+      },
+      customerReplies: [
+        {
+          id: "reply-eta",
+          ticketId: "TKT-1001",
+          createdAt: "2026-06-10T09:20:00.000Z",
+          body: "How long do we have to wait for a fix?",
+        },
+      ],
+      draftProvider: {
+        draft: async () => ({
+          source: "openai",
+          response:
+            "Thanks for getting back to us. To move this forward, please share the affected store URL and request ID.",
+          assist: {
+            source: "openai",
+            missingInfoSuggestions: [
+              "Share the affected store URL and request ID.",
+            ],
+            investigationSteps: [
+              "Collect the missing evidence before recommending the next update.",
+            ],
+            tone: "balanced",
+            recommendedTone: "balanced",
+            selectedTone: "balanced",
+            toneReason: "Balanced tone fits the support update.",
+            audience: "merchant-admin",
+            checks: [],
+          },
+        }),
+      },
+    });
+
+    expect(input.draftCustomerResponseSource).toBe("fallback");
+    expect(input.draftCustomerResponse).toContain("Thanks for checking in");
+    expect(input.draftCustomerResponse).toContain("confirmed ETA");
+    expect(input.draftCustomerResponse).not.toContain("please share");
+    expect(input.draftCustomerResponseChecks).toContainEqual(
+      expect.objectContaining({
+        id: "status-follow-up-does-not-repeat-diagnostics",
+        status: "warn",
+      }),
+    );
+  });
+
+  it("falls back when an OpenAI explanation-request draft repeats the diagnostic ask", async () => {
+    const outcomes = await loadExpectedOutcomes(
+      resolve("data/seed/expected-outcomes.json"),
+    );
+    const ticket = await loadSeedTicket("TKT-1001");
+
+    const input = await buildApprovalDeskRecommendationInputWithDrafting({
+      ticket,
+      outcome: outcomes.get("TKT-1001")!,
+      actor: "approval-desk",
+      knowledgeArticles: [],
+      previousSupportResponse: {
+        sentAt: "2026-06-10T09:00:00.000Z",
+        body:
+          "We are investigating this as a possible platform delay affecting event processing and will share the next update after confirming impact and mitigation.",
+      },
+      customerReplies: [
+        {
+          id: "reply-explanation",
+          ticketId: "TKT-1001",
+          createdAt: "2026-06-10T09:20:00.000Z",
+          body: "Okay. What's the problem?",
+        },
+      ],
+      draftProvider: {
+        draft: async () => ({
+          source: "openai",
+          response:
+            "Thanks for getting back to us. To move this forward, please share the affected store URL and request ID.",
+          assist: {
+            source: "openai",
+            missingInfoSuggestions: [
+              "Share the affected store URL and request ID.",
+            ],
+            investigationSteps: [
+              "Collect the missing evidence before recommending the next update.",
+            ],
+            tone: "balanced",
+            recommendedTone: "balanced",
+            selectedTone: "balanced",
+            toneReason: "Balanced tone fits the support update.",
+            audience: "merchant-admin",
+            checks: [],
+          },
+        }),
+      },
+    });
+
+    expect(input.draftCustomerResponseSource).toBe("fallback");
+    expect(input.draftCustomerResponse).toContain(
+      "we are looking at a possible delay",
+    );
+    expect(input.draftCustomerResponse).toContain(
+      "not yet a confirmed root cause",
+    );
+    expect(input.draftCustomerResponse).not.toContain("please share");
+    expect(input.draftCustomerResponseChecks).toContainEqual(
+      expect.objectContaining({
+        id: "explanation-request-does-not-repeat-diagnostics",
+        status: "warn",
+      }),
+    );
+  });
+
+  it("makes platform-delay context authoritative over a preexisting known cause", async () => {
+    const outcomes = await loadExpectedOutcomes(
+      resolve("data/seed/expected-outcomes.json"),
+    );
+    const ticket = await loadSeedTicket("TKT-1008");
+
+    const input = buildApprovalDeskRecommendationInput({
+      ticket,
+      outcome: outcomes.get("TKT-1008")!,
+      actor: "approval-desk",
+      customerReplies: [
+        {
+          id: "reply-platform-impact",
+          ticketId: "TKT-1008",
+          createdAt: "2026-06-10T09:05:00.000Z",
+          body:
+            "This is affecting all EU stores and recent Checkout Started events are delayed even though the API accepted them.",
+        },
+      ],
+    });
+
+    expect(input.supportState).toBe("waiting-on-platform-fix");
+    expect(input.knownCause).not.toBe("webhook-secret-rotation");
+    expect(input.draftCustomerResponse).toContain(
+      "possible platform delay affecting event processing",
+    );
+    expect(input.draftCustomerResponse).not.toContain("secret rotation");
+    expect(input.draftCustomerResponse).not.toContain("current signing secret");
+  });
+
+  it("does not infer a platform fix from negated platform impact", async () => {
+    const outcomes = await loadExpectedOutcomes(
+      resolve("data/seed/expected-outcomes.json"),
+    );
+    const ticket = await loadSeedTicket("TKT-1008");
+
+    const input = buildApprovalDeskRecommendationInput({
+      ticket,
+      outcome: outcomes.get("TKT-1008")!,
+      actor: "approval-desk",
+      customerReplies: [
+        {
+          id: "reply-negated-platform-impact",
+          ticketId: "TKT-1008",
+          createdAt: "2026-06-10T09:05:00.000Z",
+          body:
+            "This is not affecting all stores, but recent Checkout Started events are delayed even though the API accepted them.",
+        },
+      ],
+    });
+
+    expect(input.supportState).not.toBe("waiting-on-platform-fix");
+  });
+
+  it.each([
+    "Only one store is affected, not all stores, although recent Checkout Started events are delayed even though the API accepted them.",
+    "One account is affected, not multiple accounts, although recent Checkout Started events are delayed even though the API accepted them.",
+  ])(
+    "does not infer a platform fix when limited impact is stated after the quantity phrase",
+    async (body) => {
+      const outcomes = await loadExpectedOutcomes(
+        resolve("data/seed/expected-outcomes.json"),
+      );
+      const ticket = await loadSeedTicket("TKT-1001");
+
+      const input = buildApprovalDeskRecommendationInput({
+        ticket,
+        outcome: outcomes.get("TKT-1001")!,
+        actor: "approval-desk",
+        customerReplies: [
+          {
+            id: "reply-limited-platform-impact",
+            ticketId: "TKT-1001",
+            createdAt: "2026-06-10T09:05:00.000Z",
+            body,
+          },
+        ],
+      });
+
+      expect(input.supportState).not.toBe("waiting-on-platform-fix");
+    },
+  );
+
+  it("uses reply-enriched known-cause evidence when choosing the deterministic draft style", async () => {
+    const outcomes = await loadExpectedOutcomes(
+      resolve("data/seed/expected-outcomes.json"),
+    );
+    const originalTicket = await loadSeedTicket("TKT-1008");
+    const ticket = TicketSchema.parse({
+      ...originalTicket,
+      subject: "Webhook signature verification fails",
+      description: "Our endpoint rejects webhook HMAC signatures.",
+    });
+
+    const input = buildApprovalDeskRecommendationInput({
+      ticket,
+      outcome: outcomes.get("TKT-1008")!,
+      actor: "approval-desk",
+      customerReplies: [
+        {
+          id: "reply-known-cause-evidence",
+          ticketId: "TKT-1008",
+          createdAt: "2026-06-10T09:05:00.000Z",
+          body:
+            "Since the secret rotation, webhook signature verification fails. Endpoint URL is https://hooks.juniper.example/webhooks/orders. Delivery ID is deliv_7788. Raw body handling has not changed since yesterday.",
+        },
+      ],
+    });
+
+    expect(input.supportState).toBe("known-cause");
+    expect(input.missingEvidence).toEqual([]);
+    expect(input.draftCustomerResponse).toContain("post-rotation issue");
+    expect(input.draftCustomerResponse).toContain("current signing secret");
   });
 
   it("ignores customer replies from other tickets when building lifecycle drafts", async () => {
@@ -611,6 +1259,173 @@ describe("Approval Desk recommendation builder", () => {
     });
   });
 
+  it("rejects AI webhook secret guidance when platform-fix context is authoritative", async () => {
+    const outcomes = await loadExpectedOutcomes(
+      resolve("data/seed/expected-outcomes.json"),
+    );
+    const ticket = await loadSeedTicket("TKT-1008");
+
+    const input = await buildApprovalDeskRecommendationInputWithDrafting({
+      ticket,
+      outcome: outcomes.get("TKT-1008")!,
+      actor: "approval-desk",
+      knowledgeArticles: [],
+      customerReplies: [
+        {
+          id: "reply-platform-delay",
+          ticketId: "TKT-1008",
+          createdAt: "2026-06-10T09:05:00.000Z",
+          body:
+            "This is affecting all EU stores and recent Checkout Started events are delayed even though the API accepted them.",
+        },
+      ],
+      draftProvider: {
+        draft: async () => ({
+          source: "openai",
+          response:
+            "Please verify the current signing secret configured for the webhook endpoint.",
+          assist: {
+            source: "openai",
+            missingInfoSuggestions: [
+              "Confirm whether secret rotation changed recently.",
+            ],
+            investigationSteps: [
+              "Compare the signed webhook payload with the endpoint response.",
+            ],
+            tone: "technical",
+            recommendedTone: "technical",
+            selectedTone: "technical",
+            toneReason: "Webhook troubleshooting needs integration details.",
+            audience: "developer",
+            checks: [],
+          },
+        }),
+      },
+    });
+
+    expect(input.supportState).toBe("waiting-on-platform-fix");
+    expect(input.draftCustomerResponseSource).toBe("fallback");
+    expect(input.draftCustomerResponse).toContain(
+      "possible platform delay affecting event processing",
+    );
+    expect(input.draftCustomerResponse).not.toContain("current signing secret");
+    expect(input.draftCustomerResponseChecks).toContainEqual(
+      expect.objectContaining({
+        id: "fallback-used",
+        status: "warn",
+        message: expect.stringContaining("platform-fix lifecycle state"),
+      }),
+    );
+  });
+
+  it("rejects AI active-webhook-secret guidance when platform-fix context is authoritative", async () => {
+    const outcomes = await loadExpectedOutcomes(
+      resolve("data/seed/expected-outcomes.json"),
+    );
+    const ticket = await loadSeedTicket("TKT-1008");
+
+    const input = await buildApprovalDeskRecommendationInputWithDrafting({
+      ticket,
+      outcome: outcomes.get("TKT-1008")!,
+      actor: "approval-desk",
+      knowledgeArticles: [],
+      customerReplies: [
+        {
+          id: "reply-platform-delay",
+          ticketId: "TKT-1008",
+          createdAt: "2026-06-10T09:05:00.000Z",
+          body:
+            "This is affecting all EU stores and recent Checkout Started events are delayed even though the API accepted them.",
+        },
+      ],
+      draftProvider: {
+        draft: async () => ({
+          source: "openai",
+          response: "Please confirm the webhook uses the active secret.",
+          assist: {
+            source: "openai",
+            missingInfoSuggestions: [
+              "Confirm which webhook secret is configured.",
+            ],
+            investigationSteps: [
+              "Verify the active secret configured for the webhook endpoint.",
+            ],
+            tone: "technical",
+            recommendedTone: "technical",
+            selectedTone: "technical",
+            toneReason: "Webhook troubleshooting needs integration details.",
+            audience: "developer",
+            checks: [],
+          },
+        }),
+      },
+    });
+
+    expect(input.supportState).toBe("waiting-on-platform-fix");
+    expect(input.draftCustomerResponseSource).toBe("fallback");
+    expect(input.draftCustomerResponse).toContain(
+      "possible platform delay affecting event processing",
+    );
+    expect(input.draftCustomerResponseChecks).toContainEqual(
+      expect.objectContaining({
+        id: "fallback-used",
+        status: "warn",
+        message: expect.stringContaining("platform-fix lifecycle state"),
+      }),
+    );
+  });
+
+  it("rejects AI signature guidance for a secret that is currently active during a platform fix", async () => {
+    const outcomes = await loadExpectedOutcomes(
+      resolve("data/seed/expected-outcomes.json"),
+    );
+    const ticket = await loadSeedTicket("TKT-1008");
+
+    const input = await buildApprovalDeskRecommendationInputWithDrafting({
+      ticket,
+      outcome: outcomes.get("TKT-1008")!,
+      actor: "approval-desk",
+      knowledgeArticles: [],
+      customerReplies: [
+        {
+          id: "reply-platform-delay",
+          ticketId: "TKT-1008",
+          createdAt: "2026-06-10T09:05:00.000Z",
+          body:
+            "This is affecting all EU stores and recent Checkout Started events are delayed even though the API accepted them.",
+        },
+      ],
+      draftProvider: {
+        draft: async () => ({
+          source: "openai",
+          response:
+            "Make sure the endpoint validates signatures with the secret that is currently active.",
+          assist: {
+            source: "openai",
+            missingInfoSuggestions: ["No additional details are needed."],
+            investigationSteps: ["Review the reported processing delay."],
+            tone: "technical",
+            recommendedTone: "technical",
+            selectedTone: "technical",
+            toneReason: "The requester is technical.",
+            audience: "developer",
+            checks: [],
+          },
+        }),
+      },
+    });
+
+    expect(input.supportState).toBe("waiting-on-platform-fix");
+    expect(input.draftCustomerResponseSource).toBe("fallback");
+    expect(input.draftCustomerResponseChecks).toContainEqual(
+      expect.objectContaining({
+        id: "fallback-used",
+        status: "warn",
+        message: expect.stringContaining("platform-fix lifecycle state"),
+      }),
+    );
+  });
+
   it("keeps manual draft style overrides separate from the recommended tone", async () => {
     const outcomes = await loadExpectedOutcomes(
       resolve("data/seed/expected-outcomes.json"),
@@ -661,6 +1476,40 @@ describe("Approval Desk recommendation builder", () => {
       ]),
     );
     expect(input.rationale).toContain("classifier");
+  });
+
+  it("asks for basic problem evidence for vague classifier-driven tickets", async () => {
+    const ticket = await loadSeedTicket("TKT-1010");
+
+    const input = buildApprovalDeskRecommendationInput({
+      ticket,
+      outcome: undefined,
+      actor: "approval-desk",
+    });
+
+    expect(input.category).toBe("other");
+    expect(input.supportState).toBe("needs-information");
+    expect(input.missingInformation).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("what you were trying to do"),
+        expect.stringContaining("steps you took"),
+        expect.stringContaining("screenshot or exact message"),
+      ]),
+    );
+    expect(input.draftCustomerResponse).toContain(
+      "I am sorry this is getting in your way.",
+    );
+    expect(input.draftCustomerResponse).toContain(
+      "To move this forward, please share:",
+    );
+    expect(input.draftCustomerResponse).toContain(
+      "what you were trying to do",
+    );
+    expect(input.draftCustomerResponse).not.toContain(
+      "We do not need any additional information",
+    );
+    expect(input.draftCustomerResponse).not.toContain("Once we have those details");
+    expect(input.draftCustomerResponse).not.toContain("activity timeline");
   });
 
   it("throws when the expected outcome belongs to a different ticket", async () => {

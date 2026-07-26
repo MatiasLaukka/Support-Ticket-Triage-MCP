@@ -6,7 +6,7 @@ export const responseQualityContracts: Readonly<Record<string, ResponseQualityCo
   "ordinary-outage-triage": contract({
     scenarioId: "ordinary-outage-triage",
     requiredConcepts: [
-      ["platform delay", "event processing delay"],
+      ["platform delay", "platform processing delay", "event processing delay"],
       ["profile activity timeline", "profile activity timelines", "profile timeline", "profile timelines"],
     ],
     forbiddenConcepts: [],
@@ -58,7 +58,7 @@ export const responseQualityContracts: Readonly<Record<string, ResponseQualityCo
     scenarioId: "out-of-window-known-cause",
     requiredConcepts: [
       ["webhook deliveries", "webhook delivery"],
-      ["source event time", "dispatch delay"],
+      ["source event time", "source event creation time", "dispatch delay"],
     ],
     forbiddenConcepts: [],
     requiredEvidence: [

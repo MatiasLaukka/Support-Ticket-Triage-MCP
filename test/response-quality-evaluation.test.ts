@@ -89,6 +89,29 @@ describe("response quality evaluation", () => {
     expect(score.failures).not.toContain("missing escalation: incident review");
   });
 
+  it("accepts platform processing delay wording from a live draft", () => {
+    const score = evaluateResponseQuality({
+      draft: "We are investigating a platform processing delay affecting event processing and profile timelines under incident and platform review. Please share the store URL, profile email, event ID, request ID, and API response status.",
+      contract: incidentContract,
+      deterministicChecks: [],
+    });
+
+    expect(score.hardPass).toBe(true);
+    expect(score.requiredConceptRecall).toBe(1);
+  });
+
+  it("accepts source event creation time wording from a live draft", () => {
+    const score = evaluateResponseQuality({
+      draft: "The webhook deliveries are delayed after the source event creation time. Please share the delivery ID, source event creation time, delivery attempt time, endpoint response code, and retry history.",
+      contract: responseQualityContracts["out-of-window-known-cause"]!,
+      deterministicChecks: [],
+    });
+
+    expect(score.hardPass).toBe(true);
+    expect(score.requiredConceptRecall).toBe(1);
+    expect(score.requiredEvidenceRecall).toBe(1);
+  });
+
   it("counts bullet-list confirmation requests as relevant evidence", () => {
     const score = evaluateResponseQuality({
       draft: "To move this forward, please confirm:\n- The signing secret rotation time in UTC\n- Whether raw request-body handling changed recently",

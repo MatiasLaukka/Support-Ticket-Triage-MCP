@@ -745,6 +745,35 @@ Controlled response-quality scorecard (local simulation, 2026-07-26):
 - GPT-labelled lanes use the local controlled simulation; use the opt-in
   `--live` run for a fresh live-model observation.
 
+Live response-quality scorecard (last authenticated run, 2026-07-27,
+`gpt-5.6-luna`):
+
+- GPT-assisted classification agreed with the expected classification contract
+  in 20/20 GPT classification evaluations.
+- The GPT-classification/deterministic-draft lane passed 11/11 scenarios.
+- The deterministic-classification/GPT-draft lane passed 8/11 scenarios; the
+  full GPT-classification/GPT-draft lane passed 6/11. Overall, GPT-containing
+  lanes passed 25/33 scenario runs.
+- GPT drafting produced 10/17 strict response-quality passes. The remaining
+  misses were wording/evidence-state and tight-length contract misses, not
+  unsafe customer claims. One stale-reply candidate was rejected and safely
+  fell back to the deterministic draft.
+- No forbidden customer-facing claims were detected. Three final response
+  quality gates still failed in the report (evidence-state, deterministic
+  safety-check, and/or length checks); candidate-level violations and fallback
+  reasons remain visible separately instead of being hidden behind the lane
+  score.
+
+These live numbers are an observation, not a reproducible guarantee: they
+depend on the selected model and prompt response. The controlled 44/44 result
+is the regression baseline. The live run is useful because it demonstrates the
+portfolio boundary in practice: GPT can improve classification evidence and
+wording, while deterministic contracts, safety gates, and fallback behavior
+remain authoritative. The two evaluator aliases added after that run cover
+the exact phrases `platform processing delay` and `source event creation time`
+seen in the live drafts; a new network run is not required to validate those
+local contract changes.
+
 ## Extension To Zendesk Or Jira
 
 No live connector is included. A future adapter can preserve the current

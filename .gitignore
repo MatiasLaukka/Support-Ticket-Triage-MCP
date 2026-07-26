@@ -5,4 +5,6 @@ coverage/
 data/runtime/*
 !data/runtime/.gitkeep
 .approval-desk*.log
+reports/ai-comparison/live-latest.md
+reports/ai-comparison/live-latest.json
 .superpowers/sdd/

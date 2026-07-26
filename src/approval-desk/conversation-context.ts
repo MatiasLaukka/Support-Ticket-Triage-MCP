@@ -45,7 +45,9 @@ export function buildConversationContextForTicket(
     input.ticket.description,
   ]
     .filter(Boolean)
-    .join("\n");
+    // Keep the original fields lexically contiguous so deterministic rules
+    // can recognize evidence that spans the subject and description.
+    .join(" ");
   const customerReplyText = customerReplies
     .map((reply) => reply.body)
     .join("\n\n");

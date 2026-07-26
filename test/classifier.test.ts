@@ -7,6 +7,27 @@ import { buildConversationContextForTicket } from "../src/approval-desk/conversa
 import { TicketSchema, type Ticket } from "../src/domain.js";
 
 describe("classifyTicket", () => {
+  it("preserves cross-field flow evidence when classifying a conversation context", () => {
+    const ticket = makeTicket({
+      subject: "Browse Abandonment flow skipped new profiles",
+      description: "New profiles with Viewed Product events are not entering the Browse Abandonment flow.",
+      category: "integration",
+      team: "integrations",
+      priority: "P2",
+      tags: ["flow"],
+    });
+    const contextClassification = classifyTicketFromContext(
+      buildConversationContextForTicket({ ticket }),
+    );
+
+    expect(contextClassification.knowledgeArticleIds).toEqual(
+      expect.arrayContaining([
+        "flow-trigger-troubleshooting",
+        "event-tracking-debugging",
+      ]),
+    );
+  });
+
   it("reclassifies a vague ticket as product performance after campaign editor blank-page reply", () => {
     const ticket = makeTicket({
       subject: "Problem",

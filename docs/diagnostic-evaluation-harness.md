@@ -86,6 +86,15 @@ repository's existing environment-backed OpenAI adapters. Provider errors are
 recorded as safe deterministic fallbacks, not as passing GPT-quality results.
 The controlled run remains available even when no live provider is configured.
 
+Each run also writes the complete sanitized report to `reports/ai-comparison/`:
+
+- `controlled-latest.md` or `live-latest.md` for human review, including every
+  scenario/lane draft;
+- the matching `.json` file for structured inspection and automation.
+
+The terminal report is still printed unchanged. Live reports should be treated
+as observations rather than committed benchmark fixtures.
+
 Prompt-injection preflight is applied before either GPT stage. For an
 injection scenario, both advisory classification and GPT drafting are skipped,
 the deterministic path continues, and the customer draft does not expose the

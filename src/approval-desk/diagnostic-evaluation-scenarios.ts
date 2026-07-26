@@ -23,19 +23,23 @@ export async function loadDiagnosticEvaluationScenarios(): Promise<
     subject: "Campaign editor is blank",
     description: "The campaign editor stays blank after opening a campaign.",
     category: "performance",
-    priority: "P2",
+    priority: "P3",
     team: "product",
     tags: ["performance"],
   });
   const campaignOutcome: ExpectedOutcome = {
     ticketId: "TKT-1010",
     category: "performance",
-    acceptablePriorities: ["P2"],
+    acceptablePriorities: ["P3"],
     team: "product",
     requiredEscalations: [],
     knowledgeArticleIds: ["performance-troubleshooting"],
   };
   const webhookOutcome = outcomes.get("TKT-1028")!;
+  const boundedEscalationOutcome: ExpectedOutcome = {
+    ...campaignOutcome,
+    requiredEscalations: ["diagnostic-ambiguity"],
+  };
 
   return [
     {
@@ -66,7 +70,7 @@ export async function loadDiagnosticEvaluationScenarios(): Promise<
       expected: { category: "performance", knownCause: null, knownEventId: null, supportState: "needs-information", diagnosisOutcome: "likely", mustStopAtApproval: true },
     },
     {
-      id: "bounded-escalation", family: "escalation", ticket: campaignTicket, outcome: campaignOutcome, audits: escalationAudits("TKT-1010"),
+      id: "bounded-escalation", family: "escalation", ticket: campaignTicket, outcome: boundedEscalationOutcome, audits: escalationAudits("TKT-1010"),
       expected: { category: "performance", diagnosisOutcome: "escalated", mustStopAtApproval: true },
     },
     {

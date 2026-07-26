@@ -1,4 +1,5 @@
-import { resolve } from "node:path";
+import { mkdir, writeFile } from "node:fs/promises";
+import { join, resolve } from "node:path";
 import process from "node:process";
 import {
   type AiComparisonAgreement,
@@ -173,27 +174,7 @@ export async function runAiComparisonCommand(input: {
 export function serializeAiComparisonReport(
   report: AiComparisonSerializationInput,
 ): string {
-  const safeReport = {
-    mode: report.mode,
-    providerProvenance: report.providerProvenance,
-    lanes: report.reports.map((lane) => ({
-      lane: lane.lane,
-      scenarioCount: lane.scenarioCount,
-      passedScenarioCount: lane.passedScenarioCount,
-      scenarios: lane.observations.map((observation) => ({
-        scenarioId: observation.scenarioId,
-        operatorStage: observation.operatorStage,
-        actualDraft: safeCustomerDraft(observation.draftCustomerResponse),
-        overallResult: observation.failures.length === 0 ? "pass" : "fail",
-        classificationAgreement: observation.classificationAgreement,
-        classificationDelta: classificationDelta(observation),
-        hardSafety: observation.responseQuality.hardPass,
-        failureReasons: safeFailureReasons(observation.failures),
-        qualityBreakdown: qualityBreakdown(observation.responseQuality),
-        providerProvenance: stageProvenance(observation),
-      })),
-    })),
-  };
+  const safeReport = safeAiComparisonReport(report);
   const lines = [
     "# AI Comparison Evaluation",
     "",
@@ -234,6 +215,47 @@ export function serializeAiComparisonReport(
   return lines.join("\n");
 }
 
+export async function writeAiComparisonReports(
+  input: AiComparisonSerializationInput & { outputDir: string },
+): Promise<{ markdownPath: string; jsonPath: string }> {
+  await mkdir(input.outputDir, { recursive: true });
+  const markdownPath = join(input.outputDir, `${input.mode}-latest.md`);
+  const jsonPath = join(input.outputDir, `${input.mode}-latest.json`);
+  await Promise.all([
+    writeFile(markdownPath, `${serializeAiComparisonReport(input)}\n`, "utf8"),
+    writeFile(
+      jsonPath,
+      `${JSON.stringify(safeAiComparisonReport(input), null, 2)}\n`,
+      "utf8",
+    ),
+  ]);
+  return { markdownPath, jsonPath };
+}
+
+function safeAiComparisonReport(report: AiComparisonSerializationInput) {
+  return {
+    mode: report.mode,
+    providerProvenance: report.providerProvenance,
+    lanes: report.reports.map((lane) => ({
+      lane: lane.lane,
+      scenarioCount: lane.scenarioCount,
+      passedScenarioCount: lane.passedScenarioCount,
+      scenarios: lane.observations.map((observation) => ({
+        scenarioId: observation.scenarioId,
+        operatorStage: observation.operatorStage,
+        actualDraft: safeCustomerDraft(observation.draftCustomerResponse),
+        overallResult: observation.failures.length === 0 ? "pass" : "fail",
+        classificationAgreement: observation.classificationAgreement,
+        classificationDelta: classificationDelta(observation),
+        hardSafety: observation.responseQuality.hardPass,
+        failureReasons: safeFailureReasons(observation.failures),
+        qualityBreakdown: qualityBreakdown(observation.responseQuality),
+        providerProvenance: stageProvenance(observation),
+      })),
+    })),
+  };
+}
+
 export async function runAiComparisonCli(
   options: AiComparisonCliOptions,
 ): Promise<void> {
@@ -243,6 +265,10 @@ export async function runAiComparisonCli(
     cwd: options.cwd,
     mode,
     env,
+  });
+  await writeAiComparisonReports({
+    ...report,
+    outputDir: resolve(options.cwd, "reports", "ai-comparison"),
   });
   (options.writeStdout ?? ((text) => process.stdout.write(text)))(
     `${serializeAiComparisonReport(report)}\n`,

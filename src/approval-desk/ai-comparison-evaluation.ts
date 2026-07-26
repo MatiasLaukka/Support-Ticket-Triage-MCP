@@ -148,7 +148,10 @@ export async function runAiComparisonEvaluation(input: {
     });
     const failures = [
       ...agreementFailures("expected", classificationAgreement),
-      ...laneInvariantFailures(input.lane, aiExecutionTrace),
+      ...laneInvariantFailures(input.lane, aiExecutionTrace, {
+        diagnosticEscalated:
+          workflowContext.diagnosisContext?.diagnosticState?.state === "escalated",
+      }),
       ...responseQuality.failures.map((failure) => `response quality: ${failure}`),
     ];
     const materializedRecommendation = materializeRecommendation(
@@ -188,6 +191,7 @@ export async function runAiComparisonEvaluation(input: {
 function laneInvariantFailures(
   lane: AiComparisonLane,
   trace: AiExecutionTrace,
+  options: { diagnosticEscalated: boolean } = { diagnosticEscalated: false },
 ): string[] {
   const injectionSkip = trace.safety?.promptInjectionDetected === true;
   return [
@@ -204,6 +208,7 @@ function laneInvariantFailures(
       status: trace.drafting.status,
       fallbackCategory: trace.drafting.fallback?.category,
       gptExpected: !injectionSkip &&
+        !options.diagnosticEscalated &&
         (lane === "deterministic-gpt" || lane === "gpt-gpt"),
       injectionSkip,
     }),

@@ -715,6 +715,21 @@ stages, while deterministic safety policy remains authoritative. Read the
 and its [sanitized controlled-local example](docs/ai-comparison-example.md)
 before interpreting results.
 
+The command also saves the full sanitized output under
+`reports/ai-comparison/controlled-latest.md` and
+`reports/ai-comparison/controlled-latest.json` (or the corresponding `live-`
+`latest` files for `--live`). These files contain the complete per-lane
+customer drafts, not just the shortened documentation example.
+
+Controlled response-quality scorecard:
+
+- 11/11 scenarios passed response-quality contracts in each lane.
+- 44/44 lane/scenario drafts passed the hard-safety and quality checks.
+- Checks cover required concepts and evidence, evidence precision, forbidden
+  claims, unnecessary questions, tone, length, and deterministic safety checks.
+- GPT-labelled lanes use the local controlled simulation; they do not claim
+  live-model prose quality. Use the opt-in `--live` run for that observation.
+
 ## Extension To Zendesk Or Jira
 
 No live connector is included. A future adapter can preserve the current

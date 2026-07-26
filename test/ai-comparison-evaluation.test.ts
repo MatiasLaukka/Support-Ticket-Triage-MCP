@@ -1,4 +1,6 @@
 import { resolve } from "node:path";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { describe, expect, it } from "vitest";
 import {
   type ClassificationReasoningProvider,
@@ -16,6 +18,7 @@ import {
   main as mainAiComparisonCli,
   runAiComparisonCommand,
   serializeAiComparisonReport,
+  writeAiComparisonReports,
 } from "../scripts/evaluate-ai-comparison.js";
 import {
   CONTROLLED_EVALUATION_MODEL,
@@ -119,6 +122,46 @@ function serializedObservation(input: {
 }
 
 describe("AI comparison evaluation", () => {
+  it("writes complete sanitized Markdown and JSON reports", async () => {
+    const outputDir = await mkdtemp(resolve(tmpdir(), "ai-comparison-report-"));
+    try {
+      const result = await writeAiComparisonReports({
+        outputDir,
+        mode: "controlled",
+        providerProvenance: {
+          classification: "controlled-local-simulation",
+          drafting: "controlled-local-simulation",
+          networkPolicy: "disabled",
+        },
+        reports: [{
+          lane: "gpt-gpt",
+          scenarioCount: 1,
+          passedScenarioCount: 1,
+          observations: [{
+            ...serializedObservation({
+              scenarioId: "report-output",
+              hardPass: true,
+              failures: [],
+            }),
+            draftCustomerResponse: "Line one\nLine two sk-secret",
+          }],
+        }],
+      });
+
+      expect(result.markdownPath).toContain("controlled-latest.md");
+      expect(result.jsonPath).toContain("controlled-latest.json");
+      const markdown = await readFile(result.markdownPath, "utf8");
+      const json = await readFile(result.jsonPath, "utf8");
+      expect(markdown).toContain("Line one");
+      expect(markdown).toContain("Line two [redacted]");
+      expect(json).toContain('"actualDraft": "Line one\\nLine two [redacted]"');
+      expect(markdown).not.toContain("sk-secret");
+      expect(json).not.toContain("sk-secret");
+    } finally {
+      await rm(outputDir, { recursive: true, force: true });
+    }
+  });
+
   it("serializes safe per-scenario comparison results with provenance", () => {
     const serialized = serializeAiComparisonReport({
       mode: "controlled",
@@ -581,6 +624,28 @@ describe("AI comparison evaluation", () => {
       expect.arrayContaining([expect.stringMatching(/stage expected/i)]),
     );
   });
+
+  it.each<AiComparisonLane>(["deterministic-gpt", "gpt-gpt"])(
+    "accepts deterministic drafting for an already escalated diagnostic in %s",
+    async (lane) => {
+      const scenario = (await loadDiagnosticEvaluationScenarios()).find(
+        ({ id }) => id === "bounded-escalation",
+      )!;
+      const report = await runAiComparisonEvaluation({
+        scenarios: [scenario],
+        lane,
+        allKnowledgeArticles: await loadKnowledgeArticles(),
+        classificationProvider,
+        draftProvider,
+      });
+      const observation = report.observations[0]!;
+
+      expect(observation.aiExecutionTrace.drafting.status).toBe("skipped");
+      expect(observation.failures).not.toEqual(
+        expect.arrayContaining([expect.stringMatching(/GPT drafting expected used/i)]),
+      );
+    },
+  );
 
   it.each<{
     lane: AiComparisonLane;

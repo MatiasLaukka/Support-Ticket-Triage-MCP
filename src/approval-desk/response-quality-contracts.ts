@@ -183,7 +183,10 @@ export const responseQualityContracts: Readonly<Record<string, ResponseQualityCo
     requiredEscalation: null,
     forbiddenClaims: ["approved", "skip review", "fixed"],
     tone: "balanced",
-    maxWords: 100,
+    // The governed flow-evidence response names both the storefront event
+    // and the flow articles, so allow the complete safe checklist without
+    // rewarding internal prompt-injection details.
+    maxWords: 110,
   }),
 };
 

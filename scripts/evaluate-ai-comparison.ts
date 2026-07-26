@@ -183,7 +183,7 @@ export function serializeAiComparisonReport(
       scenarios: lane.observations.map((observation) => ({
         scenarioId: observation.scenarioId,
         operatorStage: observation.operatorStage,
-        actualDraft: observation.draftCustomerResponse,
+        actualDraft: safeCustomerDraft(observation.draftCustomerResponse),
         overallResult: observation.failures.length === 0 ? "pass" : "fail",
         classificationAgreement: observation.classificationAgreement,
         classificationDelta: classificationDelta(observation),
@@ -220,7 +220,7 @@ export function serializeAiComparisonReport(
         ...formatFailureReasons(observation.failures),
         `- Provider provenance: ${formatStageProvenance(observation)}.`,
         "- Actual draft:",
-        ...quoteMarkdown(observation.draftCustomerResponse),
+        ...quoteMarkdown(safeCustomerDraft(observation.draftCustomerResponse)),
         "",
       ]),
     ]),
@@ -308,7 +308,7 @@ function stageProvenance(
   return {
     classification: {
       status: observation.aiExecutionTrace.classification.status,
-      model: observation.aiExecutionTrace.classification.model ?? "not-used",
+      model: safeTraceIdentifier(observation.aiExecutionTrace.classification.model ?? "not-used"),
       ...(observation.aiExecutionTrace.classification.latencyMs === undefined
         ? {}
         : { latencyMs: observation.aiExecutionTrace.classification.latencyMs }),
@@ -322,7 +322,7 @@ function stageProvenance(
     drafting: {
       status: observation.aiExecutionTrace.drafting.status,
       source: observation.aiExecutionTrace.drafting.source,
-      model: observation.aiExecutionTrace.drafting.model ?? "not-used",
+      model: safeTraceIdentifier(observation.aiExecutionTrace.drafting.model ?? "not-used"),
       ...(observation.aiExecutionTrace.drafting.latencyMs === undefined
         ? {}
         : { latencyMs: observation.aiExecutionTrace.drafting.latencyMs }),
@@ -510,6 +510,15 @@ function safeTraceIdentifier(value: string): string {
 function safeTraceMessage(value: string): string {
   const normalized = safeFailureReason(value);
   return unsafeTraceText.test(normalized) ? "[redacted]" : normalized;
+}
+
+function safeCustomerDraft(value: string): string {
+  return value
+    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, " ")
+    .replace(/sk-[A-Za-z0-9_-]+/gi, "[redacted]")
+    .replace(/\b(?:api[-_ ]?key|access[-_ ]?token)\s*[=:]\s*\S+/gi, "[redacted]")
+    .replace(/\bauthorization\s*:\s*\S+/gi, "[redacted]")
+    .replace(/\bbearer\s+\S+/gi, "[redacted]");
 }
 
 const unsafeTraceText =

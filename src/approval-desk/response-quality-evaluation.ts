@@ -105,7 +105,7 @@ function scoreEvidence(draft: string, requiredEvidence: readonly ResponseQuality
   const requests = (draft.match(/[^?.!]+[?.!]?/g) ?? []).filter(
     (sentence) =>
       sentence.includes("?") ||
-      /\bplease\s+(?:share|send|provide|confirm|try)\b/.test(sentence) ||
+      /\bplease\s+(?:share|send|provide)\b/.test(sentence) ||
       /\b(?:we\s+(?:still\s+)?need|to\s+move\s+this\s+forward,?\s+we\s+(?:still\s+)?need)\b/.test(
         sentence,
       ),
@@ -164,8 +164,14 @@ function hasUnnegatedPhrase(draft: string, phrase: string): boolean {
     if (matchedPhrase === undefined || match.index === undefined) continue;
     const index = match.index + match[0].indexOf(matchedPhrase);
     const before = draft.slice(Math.max(0, index - 48), index);
-    const negation = before.match(
-      /\b(?:not|never|cannot|can't|isn't|wasn't|weren't|hasn't|haven't|hadn't|without|no)\b(?:\s+[a-z'-]+){0,4}\s*$/,
+    const directConfirmation = before.match(
+      /\b(?:cannot|can't)\s+confirm(?:\s+[a-z'-]+){0,8}\s*$/,
+    )?.[0];
+    const negation = directConfirmation !== undefined &&
+        !/\b(?:but|however|although|because|while|and)\b/.test(directConfirmation)
+      ? directConfirmation
+      : before.match(
+      /\b(?:not|never|isn't|wasn't|weren't|hasn't|haven't|hadn't|without|no)\b(?:\s+[a-z'-]+){0,4}\s*$/,
     )?.[0];
     if (
       negation === undefined ||

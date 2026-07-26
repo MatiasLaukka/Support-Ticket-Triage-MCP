@@ -22,6 +22,7 @@ import {
   createControlledClassificationProvider,
   createControlledDraftProvider,
 } from "../src/approval-desk/controlled-evaluation-providers.js";
+import { AuditEventSchema } from "../src/domain.js";
 
 const classificationProvider: ClassificationReasoningProvider = {
   async reason() {
@@ -681,6 +682,102 @@ describe("AI comparison evaluation", () => {
     expect(stale.draftCustomerResponse).not.toBe(
       withoutAudit.observations[0]!.draftCustomerResponse,
     );
+  });
+
+  it("uses persisted fix context instead of regenerating a generic fix", async () => {
+    const scenario = (await loadDiagnosticEvaluationScenarios()).find(
+      ({ id }) => id === "ambiguous-campaign-editor",
+    )!;
+    const fixAudit = AuditEventSchema.parse({
+      id: "40000000-0000-4000-8000-000000000001",
+      timestamp: "2026-06-10T09:40:00.000Z",
+      actor: "diagnostic-evaluation",
+      action: "fix-available",
+      ticketId: scenario.ticket.id,
+      before: {},
+      after: {
+        fix: {
+          status: "available",
+          customerSafeSummary: "The Safari-specific editor mitigation is available.",
+          customerAction: "Please reopen the campaign in Safari and try editing again.",
+          verificationRequest: "Tell us whether the editor now loads in Safari.",
+        },
+      },
+      rationale: "Persisted fix context for evaluation.",
+      knowledgeArticleIds: ["performance-troubleshooting"],
+      result: "success",
+    });
+    const report = await runAiComparisonEvaluation({
+      scenarios: [{ ...scenario, audits: [fixAudit] }],
+      lane: "deterministic-deterministic",
+      allKnowledgeArticles: await loadKnowledgeArticles(),
+    });
+
+    expect(report.observations[0]!.draftCustomerResponse).toContain("Safari");
+    expect(report.observations[0]!.draftCustomerResponse).not.toContain("Chrome");
+  });
+
+  it("redacts draft and model secrets from serialized reports", async () => {
+    const scenario = (await loadDiagnosticEvaluationScenarios()).find(
+      ({ id }) => id === "ordinary-outage-triage",
+    )!;
+    const report = await runAiComparisonEvaluation({
+      scenarios: [scenario],
+      lane: "gpt-gpt",
+      allKnowledgeArticles: await loadKnowledgeArticles(),
+      classificationProvider: {
+        async reason() {
+          return {
+            reasoning: {
+              issueType: "webhook-delivery",
+              candidateCategory: "incident",
+              candidateTeam: "engineering",
+              candidatePriority: "P2",
+              knowledgeArticleIds: [],
+              confidence: 0.4,
+              evidence: [],
+              missingEvidenceThatWouldChangeClassification: [],
+              explanation: "safe",
+            },
+            telemetry: { model: "sk-classification-secret", latencyMs: 1 },
+          };
+        },
+      },
+      draftProvider: {
+        async draft() {
+          return {
+            source: "openai",
+            response: "sk-draft-secret",
+            assist: {
+              source: "openai",
+              missingInfoSuggestions: [],
+              investigationSteps: [],
+              tone: "technical",
+              recommendedTone: "technical",
+              selectedTone: "technical",
+              toneReason: "safe",
+              audience: "developer",
+              checks: [],
+            },
+            telemetry: { model: "sk-draft-model-secret", latencyMs: 1 },
+          };
+        },
+      },
+    });
+    const serialized = serializeAiComparisonReport({
+      mode: "controlled",
+      providerProvenance: {
+        classification: "controlled-local-simulation",
+        drafting: "controlled-local-simulation",
+        networkPolicy: "disabled",
+      },
+      reports: [report],
+    });
+
+    expect(serialized).not.toContain("sk-classification-secret");
+    expect(serialized).not.toContain("sk-draft-model-secret");
+    expect(serialized).not.toContain("sk-draft-secret");
+    expect(serialized).toContain("redacted");
   });
 
   it("accepts any priority allowed by the expected outcome contract", async () => {

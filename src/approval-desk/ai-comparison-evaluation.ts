@@ -18,8 +18,9 @@ import type { ClassificationReasoningProvider } from "./classification-reasoning
 import { classifyTicketFromContext } from "./classifier.js";
 import { buildConversationContextForTicket } from "./conversation-context.js";
 import {
+  diagnosisContextFromAudit,
   diagnosisContextForTicket,
-  fixContextForTicket,
+  latestFixContextFromAudits,
 } from "./diagnostic-workflow.js";
 import type { CustomerResponseDraftProvider } from "./draft-response-provider.js";
 import type {
@@ -350,35 +351,50 @@ function scenarioWorkflowContext(input: {
 }): { diagnosisContext?: DiagnosisContext; fixContext?: FixContext } {
   const audits = input.scenario.audits ?? [];
   const diagnosisAudit = latestDiagnosisAudit(audits);
-  if (diagnosisAudit === undefined) {
+  const persistedFix = latestFixContextFromAudits(audits);
+  if (diagnosisAudit === undefined && persistedFix === undefined) {
     return {};
   }
-  const preliminary = buildApprovalDeskRecommendationInput({
-    ticket: input.scenario.ticket,
-    outcome: outcomeFromClassification(input.scenario.ticket.id, input.baseline),
-    actor: "ai-comparison-evaluation",
-    customerReplies: input.conversation.customerReplies,
-    previousSupportResponse: input.conversation.previousSupportResponse,
-  });
-  const materialized = materializeRecommendation(
-    preliminary,
-    input.scenario,
-    input.index,
-  );
-  const diagnosisContext = diagnosisContextForTicket(
-    input.scenario.ticket,
-    materialized,
-    audits,
-  );
-  const hasFix = audits.some(
-    (event) => event.action === "fix-available" &&
-      typeof event.after.fix === "object" && event.after.fix !== null,
-  );
+  let diagnosisContext: DiagnosisContext | undefined;
+  if (diagnosisAudit !== undefined) {
+    const preliminary = buildApprovalDeskRecommendationInput({
+      ticket: input.scenario.ticket,
+      outcome: outcomeFromClassification(input.scenario.ticket.id, input.baseline),
+      actor: "ai-comparison-evaluation",
+      customerReplies: input.conversation.customerReplies,
+      previousSupportResponse: input.conversation.previousSupportResponse,
+    });
+    const materialized = materializeRecommendation(
+      preliminary,
+      input.scenario,
+      input.index,
+    );
+    const persistedDiagnosis = diagnosisContextFromAudit(diagnosisAudit);
+    const currentDiagnosis = diagnosisContextForTicket(
+      input.scenario.ticket,
+      materialized,
+      audits,
+    );
+    const stateChanged = persistedDiagnosis?.diagnosticState !== undefined &&
+      currentDiagnosis.diagnosticState !== undefined &&
+      JSON.stringify(persistedDiagnosis.diagnosticState) !==
+        JSON.stringify(currentDiagnosis.diagnosticState);
+    diagnosisContext = persistedDiagnosis === undefined
+      ? currentDiagnosis
+      : {
+          ...persistedDiagnosis,
+          // Re-run only the shared state transition logic so new replies can
+          // advance the persisted snapshot without replacing its evidence or
+          // customer-safe wording.
+          ...(stateChanged ? { confidence: currentDiagnosis.confidence } : {}),
+          ...(currentDiagnosis.diagnosticState === undefined
+            ? {}
+            : { diagnosticState: currentDiagnosis.diagnosticState }),
+        };
+  }
   return {
     diagnosisContext,
-    ...(hasFix
-      ? { fixContext: fixContextForTicket(input.scenario.ticket, diagnosisAudit) }
-      : {}),
+    ...(persistedFix === undefined ? {} : { fixContext: persistedFix }),
   };
 }
 

@@ -197,6 +197,79 @@ describe("response quality evaluation", () => {
     expect(score.hardPass).toBe(true);
   });
 
+  it("allows a longer safe negation window", () => {
+    const score = evaluateResponseQuality({
+      draft: "We cannot confirm that the campaign editor is resolved.",
+      contract: {
+        scenarioId: "long-safe-negation",
+        requiredConcepts: [],
+        forbiddenConcepts: [],
+        requiredEvidence: [],
+        requiredEscalation: null,
+        forbiddenClaims: ["resolved"],
+        tone: "balanced",
+        maxWords: 20,
+      },
+      deterministicChecks: [],
+    });
+
+    expect(score.forbiddenClaimCount).toBe(0);
+    expect(score.hardPass).toBe(true);
+  });
+
+  it("still rejects affirmative resolution claims after unrelated negation wording", () => {
+    const score = evaluateResponseQuality({
+      draft: "It is not surprising that the campaign editor is resolved.",
+      contract: {
+        scenarioId: "affirmative-after-unrelated-negation",
+        requiredConcepts: [],
+        forbiddenConcepts: [],
+        requiredEvidence: [],
+        requiredEscalation: null,
+        forbiddenClaims: ["resolved"],
+        tone: "balanced",
+        maxWords: 20,
+      },
+      deterministicChecks: [],
+    });
+
+    expect(score.forbiddenClaimCount).toBe(1);
+    expect(score.hardPass).toBe(false);
+  });
+
+  it("does not let a causal clause hide an affirmative resolution claim", () => {
+    const score = evaluateResponseQuality({
+      draft: "We cannot confirm the cause because the issue is resolved.",
+      contract: {
+        scenarioId: "causal-affirmative-resolution",
+        requiredConcepts: [],
+        forbiddenConcepts: [],
+        requiredEvidence: [],
+        requiredEscalation: null,
+        forbiddenClaims: ["resolved"],
+        tone: "balanced",
+        maxWords: 20,
+      },
+      deterministicChecks: [],
+    });
+
+    expect(score.forbiddenClaimCount).toBe(1);
+    expect(score.hardPass).toBe(false);
+  });
+
+  it("rejects stale-reply drafts that say no information is needed before asking for confirmation", () => {
+    const score = evaluateResponseQuality({
+      draft: "We do not need any additional information before the next update. Please confirm the endpoint uses the current signing secret.",
+      contract: responseQualityContracts["stale-reply"]!,
+      deterministicChecks: [],
+    });
+
+    expect(score.hardPass).toBe(false);
+    expect(score.failures).toContain(
+      "forbidden claim: do not need any additional information",
+    );
+  });
+
   it("still rejects an affirmative resolved claim", () => {
     const score = evaluateResponseQuality({
       draft: "The campaign editor is resolved.",

@@ -975,7 +975,12 @@ function formatEvidenceRequest(
   replyStage: CustomerReplyStage,
 ): string {
   if (evidenceReadiness.missingEvidence.length === 0) {
-    return "We do not need any additional information from you before the next update.";
+    // A known-cause response already contains its concrete customer action;
+    // avoid appending a generic no-information sentence before that action.
+    return evidenceReadiness.supportState === "known-cause" &&
+      replyStage !== "first-contact"
+      ? ""
+      : "We do not need any additional information from you before the next update.";
   }
 
   return [

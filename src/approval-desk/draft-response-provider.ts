@@ -154,6 +154,8 @@ export interface ValidatedCustomerResponseDraft {
   checks: DraftCustomerResponseCheck[];
   assist: GptAssist;
   telemetry?: CustomerResponseDraft["telemetry"];
+  candidateHardFailure?: boolean;
+  candidateHardFailureCount?: number;
   fallback?: {
     category: AiFallbackCategory;
     message: string;
@@ -457,11 +459,15 @@ export async function draftCustomerResponseWithFallback(input: {
           checks: validation.checks,
         },
         ...(candidate.telemetry === undefined ? {} : { telemetry: candidate.telemetry }),
+        ...(candidate.source === "openai"
+          ? { candidateHardFailure: false, candidateHardFailureCount: 0 }
+          : {}),
         candidateChecks: validation.candidateChecks,
       };
     }
 
     const openAiCandidate = candidate.source === "openai";
+    const candidateHardFailureCount = validation.blockingMessages.length;
     if (openAiCandidate && isRepairableCustomerResponseDraftProvider(provider)) {
       const failedObligationIds = validation.failedObligationIds;
       const repairTelemetry = {
@@ -509,6 +515,8 @@ export async function draftCustomerResponseWithFallback(input: {
             checks,
             assist: { ...repaired.assist, checks },
             ...(telemetry === undefined ? {} : { telemetry }),
+            candidateHardFailure: candidateHardFailureCount > 0,
+            candidateHardFailureCount,
             candidateChecks: repairedValidation.candidateChecks,
           };
         }
@@ -529,6 +537,8 @@ export async function draftCustomerResponseWithFallback(input: {
           ...(candidate.telemetry ?? { model: DEFAULT_OPENAI_MODEL, latencyMs: 0 }),
           ...repairTelemetry,
         }),
+        candidateHardFailure: true,
+        candidateHardFailureCount,
       });
     }
     return fallbackDraft({
@@ -551,6 +561,9 @@ export async function draftCustomerResponseWithFallback(input: {
       ...(openAiCandidate && candidate.telemetry !== undefined
         ? { telemetry: sanitizeDraftTelemetry(candidate.telemetry) }
         : {}),
+      ...(openAiCandidate
+        ? { candidateHardFailure: true, candidateHardFailureCount }
+        : {}),
     });
   } catch (error) {
     return fallbackDraft({
@@ -569,6 +582,8 @@ function fallbackDraft(input: {
   candidateChecks?: AiGuardrailCheck[];
   rejectedCandidateChecks?: DraftCustomerResponseCheck[];
   telemetry?: CustomerResponseDraft["telemetry"];
+  candidateHardFailure?: boolean;
+  candidateHardFailureCount?: number;
 }): ValidatedCustomerResponseDraft {
   let fallbackAssist = buildDeterministicGptAssist(
     input.draftInput,
@@ -639,6 +654,12 @@ function fallbackDraft(input: {
     },
     fallback: input.fallback,
     candidateChecks: input.candidateChecks ?? [],
+    ...(input.candidateHardFailure === undefined
+      ? {}
+      : { candidateHardFailure: input.candidateHardFailure }),
+    ...(input.candidateHardFailureCount === undefined
+      ? {}
+      : { candidateHardFailureCount: input.candidateHardFailureCount }),
     ...(input.telemetry === undefined ? {} : { telemetry: input.telemetry }),
   };
 }

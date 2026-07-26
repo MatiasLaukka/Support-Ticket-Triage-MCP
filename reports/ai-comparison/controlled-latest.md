@@ -7,7 +7,7 @@
 ## deterministic-deterministic
 
 - Scenarios: 11; passed: 11.
-- Draft contract outcomes: candidate passes=0; repaired passes=0; deterministic fallbacks=0; hard safety violations=0.
+- Draft contract outcomes: candidate passes=0; repaired passes=0; deterministic fallbacks=0; candidate hard safety violations=0; final-response hard safety violations=0.
 
 ### ordinary-outage-triage
 
@@ -281,7 +281,7 @@
 ## gpt-deterministic
 
 - Scenarios: 11; passed: 11.
-- Draft contract outcomes: candidate passes=0; repaired passes=0; deterministic fallbacks=0; hard safety violations=0.
+- Draft contract outcomes: candidate passes=0; repaired passes=0; deterministic fallbacks=0; candidate hard safety violations=0; final-response hard safety violations=0.
 
 ### ordinary-outage-triage
 
@@ -555,7 +555,7 @@
 ## deterministic-gpt
 
 - Scenarios: 11; passed: 11.
-- Draft contract outcomes: candidate passes=0; repaired passes=0; deterministic fallbacks=0; hard safety violations=0.
+- Draft contract outcomes: candidate passes=0; repaired passes=0; deterministic fallbacks=0; candidate hard safety violations=0; final-response hard safety violations=0.
 
 ### ordinary-outage-triage
 
@@ -829,7 +829,7 @@
 ## gpt-gpt
 
 - Scenarios: 11; passed: 11.
-- Draft contract outcomes: candidate passes=0; repaired passes=0; deterministic fallbacks=0; hard safety violations=0.
+- Draft contract outcomes: candidate passes=0; repaired passes=0; deterministic fallbacks=0; candidate hard safety violations=0; final-response hard safety violations=0.
 
 ### ordinary-outage-triage
 
@@ -1119,7 +1119,8 @@
         "candidateContractPasses": 0,
         "repairedPasses": 0,
         "deterministicFallbacks": 0,
-        "hardSafetyViolations": 0
+        "hardSafetyViolations": 0,
+        "finalResponseHardSafetyViolations": 0
       },
       "scenarios": [
         {
@@ -1995,7 +1996,8 @@
         "candidateContractPasses": 0,
         "repairedPasses": 0,
         "deterministicFallbacks": 0,
-        "hardSafetyViolations": 0
+        "hardSafetyViolations": 0,
+        "finalResponseHardSafetyViolations": 0
       },
       "scenarios": [
         {
@@ -3248,7 +3250,8 @@
         "candidateContractPasses": 0,
         "repairedPasses": 0,
         "deterministicFallbacks": 0,
-        "hardSafetyViolations": 0
+        "hardSafetyViolations": 0,
+        "finalResponseHardSafetyViolations": 0
       },
       "scenarios": [
         {
@@ -4133,7 +4136,8 @@
         "candidateContractPasses": 0,
         "repairedPasses": 0,
         "deterministicFallbacks": 0,
-        "hardSafetyViolations": 0
+        "hardSafetyViolations": 0,
+        "finalResponseHardSafetyViolations": 0
       },
       "scenarios": [
         {

@@ -87,6 +87,22 @@ export interface AiComparisonDraftingContractSummary {
   repairedPasses: number;
   deterministicFallbacks: number;
   hardSafetyViolations: number;
+  finalResponseHardSafetyViolations: number;
+}
+
+export interface AiComparisonDraftingTrace {
+  status: "skipped" | "used" | "fallback";
+  source: string;
+  repairAttempted?: boolean;
+  repairSucceeded?: boolean;
+  candidateHardFailure?: boolean;
+  candidateHardFailureCount?: number;
+}
+
+export interface AiComparisonDraftingSummaryObservation {
+  draftingContract?: AiComparisonDraftingContractOutcome;
+  responseQuality: Pick<ResponseQualityScore, "hardPass">;
+  aiExecutionTrace: { drafting: AiComparisonDraftingTrace };
 }
 
 export interface AiComparisonReport {
@@ -159,7 +175,11 @@ export async function runAiComparisonEvaluation(input: {
     const responseQuality = evaluateResponseQuality({
       draft: recommendation.draftCustomerResponse,
       contract,
-      deterministicChecks: recommendation.draftCustomerResponseChecks ?? [],
+      deterministicChecks: recommendation.draftCustomerResponseSource === "fallback"
+        ? (recommendation.draftCustomerResponseChecks ?? []).filter(
+            (check) => check.status === "pass",
+          )
+        : recommendation.draftCustomerResponseChecks ?? [],
     });
     const failures = [
       ...agreementFailures("expected", classificationAgreement),
@@ -205,8 +225,8 @@ export async function runAiComparisonEvaluation(input: {
   };
 }
 
-function draftingContractOutcome(
-  trace: AiExecutionTrace,
+export function draftingContractOutcome(
+  trace: { drafting: AiComparisonDraftingTrace },
 ): AiComparisonDraftingContractOutcome {
   if (trace.drafting.source === "fallback") return "deterministic-fallback";
   if (
@@ -222,23 +242,30 @@ function draftingContractOutcome(
   return "not-applicable";
 }
 
-function summarizeDraftingContracts(
-  observations: readonly AiComparisonObservation[],
+export function summarizeDraftingContracts(
+  observations: readonly AiComparisonDraftingSummaryObservation[],
 ): AiComparisonDraftingContractSummary {
-  return observations.reduce<AiComparisonDraftingContractSummary>((summary, observation) => ({
-    candidateContractPasses: summary.candidateContractPasses +
-      (observation.draftingContract === "candidate-pass" ? 1 : 0),
-    repairedPasses: summary.repairedPasses +
-      (observation.draftingContract === "repaired-pass" ? 1 : 0),
-    deterministicFallbacks: summary.deterministicFallbacks +
-      (observation.draftingContract === "deterministic-fallback" ? 1 : 0),
-    hardSafetyViolations: summary.hardSafetyViolations +
-      (observation.responseQuality.hardPass ? 0 : 1),
-  }), {
+  return observations.reduce<AiComparisonDraftingContractSummary>((summary, observation) => {
+    const outcome = observation.draftingContract ??
+      draftingContractOutcome(observation.aiExecutionTrace);
+    return {
+      candidateContractPasses: summary.candidateContractPasses +
+        (outcome === "candidate-pass" ? 1 : 0),
+      repairedPasses: summary.repairedPasses +
+        (outcome === "repaired-pass" ? 1 : 0),
+      deterministicFallbacks: summary.deterministicFallbacks +
+        (outcome === "deterministic-fallback" ? 1 : 0),
+      hardSafetyViolations: summary.hardSafetyViolations +
+        (observation.aiExecutionTrace.drafting.candidateHardFailure === true ? 1 : 0),
+      finalResponseHardSafetyViolations: summary.finalResponseHardSafetyViolations +
+        (observation.responseQuality.hardPass ? 0 : 1),
+    };
+  }, {
     candidateContractPasses: 0,
     repairedPasses: 0,
     deterministicFallbacks: 0,
     hardSafetyViolations: 0,
+    finalResponseHardSafetyViolations: 0,
   });
 }
 

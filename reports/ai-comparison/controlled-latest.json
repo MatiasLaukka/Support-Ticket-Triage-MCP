@@ -14,7 +14,8 @@
         "candidateContractPasses": 0,
         "repairedPasses": 0,
         "deterministicFallbacks": 0,
-        "hardSafetyViolations": 0
+        "hardSafetyViolations": 0,
+        "finalResponseHardSafetyViolations": 0
       },
       "scenarios": [
         {
@@ -890,7 +891,8 @@
         "candidateContractPasses": 0,
         "repairedPasses": 0,
         "deterministicFallbacks": 0,
-        "hardSafetyViolations": 0
+        "hardSafetyViolations": 0,
+        "finalResponseHardSafetyViolations": 0
       },
       "scenarios": [
         {
@@ -2143,7 +2145,8 @@
         "candidateContractPasses": 0,
         "repairedPasses": 0,
         "deterministicFallbacks": 0,
-        "hardSafetyViolations": 0
+        "hardSafetyViolations": 0,
+        "finalResponseHardSafetyViolations": 0
       },
       "scenarios": [
         {
@@ -3028,7 +3031,8 @@
         "candidateContractPasses": 0,
         "repairedPasses": 0,
         "deterministicFallbacks": 0,
-        "hardSafetyViolations": 0
+        "hardSafetyViolations": 0,
+        "finalResponseHardSafetyViolations": 0
       },
       "scenarios": [
         {

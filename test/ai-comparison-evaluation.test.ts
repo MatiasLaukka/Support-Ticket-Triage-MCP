@@ -7,6 +7,7 @@ import {
 } from "../src/approval-desk/classification-reasoning-provider.js";
 import {
   type CustomerResponseDraftProvider,
+  type RepairableCustomerResponseDraftProvider,
 } from "../src/approval-desk/draft-response-provider.js";
 import {
   type AiComparisonLane,
@@ -65,6 +66,25 @@ const draftProvider: CustomerResponseDraftProvider = {
     };
   },
 };
+
+function openAiDraft(input: Parameters<CustomerResponseDraftProvider["draft"]>[0], response: string) {
+  return {
+    source: "openai" as const,
+    response,
+    assist: {
+      source: "openai" as const,
+      missingInfoSuggestions: [],
+      investigationSteps: [],
+      tone: input.responseStyle === "auto" ? "technical" as const : input.responseStyle,
+      recommendedTone: "technical" as const,
+      selectedTone: "technical" as const,
+      toneReason: "The provider draft uses the deterministic contract context.",
+      audience: "developer" as const,
+      checks: [],
+    },
+    telemetry: { model: "comparison-draft-fake", latencyMs: 1 },
+  };
+}
 
 function serializedObservation(input: {
   scenarioId: string;
@@ -312,14 +332,94 @@ describe("AI comparison evaluation", () => {
       }],
     });
 
-    expect(serialized).toContain("Draft contract outcomes: candidate passes=1; repaired passes=1; deterministic fallbacks=1; hard safety violations=1.");
+    expect(serialized).toContain("Draft contract outcomes: candidate passes=1; repaired passes=1; deterministic fallbacks=1; candidate hard safety violations=0; final-response hard safety violations=1.");
     expect(serialized).toContain('"candidateContractPasses": 1');
     expect(serialized).toContain('"repairedPasses": 1');
     expect(serialized).toContain('"deterministicFallbacks": 1');
-    expect(serialized).toContain('"hardSafetyViolations": 1');
+    expect(serialized).toContain('"hardSafetyViolations": 0');
+    expect(serialized).toContain('"finalResponseHardSafetyViolations": 1');
     expect(serialized).toContain('"draftingContract": "repaired-pass"');
     expect(serialized).toContain('"draftingContract": "deterministic-fallback"');
     expect(serialized).not.toContain("candidate response containing sk-secret");
+  });
+
+  it("summarizes accepted, repaired, and rejected candidate outcomes from real provider paths", async () => {
+    const scenario = (await loadDiagnosticEvaluationScenarios()).find(
+      ({ id }) => id === "active-known-event",
+    )!;
+    const allKnowledgeArticles = await loadKnowledgeArticles();
+    const accepted = await runAiComparisonEvaluation({
+      scenarios: [scenario],
+      lane: "deterministic-gpt",
+      allKnowledgeArticles,
+      draftProvider: {
+        async draft(input) {
+          return openAiDraft(input, input.deterministicDraft);
+        },
+      },
+    });
+    const repairableDraftProvider: RepairableCustomerResponseDraftProvider = {
+      async draft(input) {
+        return openAiDraft(input, "The event-ingestion delay is under review.");
+      },
+      async repair(input) {
+        return openAiDraft(input.draftInput, input.draftInput.deterministicDraft);
+      },
+    };
+    const repaired = await runAiComparisonEvaluation({
+      scenarios: [scenario],
+      lane: "deterministic-gpt",
+      allKnowledgeArticles,
+      draftProvider: repairableDraftProvider,
+    });
+    const fallback = await runAiComparisonEvaluation({
+      scenarios: [scenario],
+      lane: "deterministic-gpt",
+      allKnowledgeArticles,
+      draftProvider: {
+        async draft(input) {
+          return openAiDraft(input, "We guarantee this issue is fixed. sk-candidate-secret");
+        },
+      },
+    });
+
+    expect(accepted.draftingContractSummary).toMatchObject({
+      candidateContractPasses: 1,
+      repairedPasses: 0,
+      deterministicFallbacks: 0,
+      hardSafetyViolations: 0,
+      finalResponseHardSafetyViolations: 0,
+    });
+    expect(repaired.draftingContractSummary).toMatchObject({
+      candidateContractPasses: 0,
+      repairedPasses: 1,
+      deterministicFallbacks: 0,
+      hardSafetyViolations: 1,
+      finalResponseHardSafetyViolations: 0,
+    });
+    expect(fallback.draftingContractSummary).toMatchObject({
+      candidateContractPasses: 0,
+      repairedPasses: 0,
+      deterministicFallbacks: 1,
+      hardSafetyViolations: 1,
+      finalResponseHardSafetyViolations: 0,
+    });
+
+    const serialized = serializeAiComparisonReport({
+      mode: "controlled",
+      providerProvenance: {
+        classification: "controlled-local-simulation",
+        drafting: "controlled-local-simulation",
+        networkPolicy: "disabled",
+      },
+      reports: [accepted, repaired, fallback],
+    });
+    expect(serialized).toContain('"hardSafetyViolations": 1');
+    expect(serialized).toContain('"finalResponseHardSafetyViolations": 0');
+    expect(serialized).toContain('"draftingContract": "candidate-pass"');
+    expect(serialized).toContain('"draftingContract": "repaired-pass"');
+    expect(serialized).toContain('"draftingContract": "deterministic-fallback"');
+    expect(serialized).not.toContain("sk-candidate-secret");
   });
 
   it("serializes the governed GPT classification delta without raw payload text", () => {
@@ -674,6 +774,7 @@ describe("AI comparison evaluation", () => {
       repairedPasses: 0,
       deterministicFallbacks: 0,
       hardSafetyViolations: 0,
+      finalResponseHardSafetyViolations: 0,
     });
   });
 

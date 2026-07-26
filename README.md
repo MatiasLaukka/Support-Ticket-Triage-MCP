@@ -734,8 +734,9 @@ Controlled response-quality scorecard (local simulation, 2026-07-26):
 - 11/11 scenarios passed in each of the four lanes (44/44 lane/scenario runs).
 - Classification agreement is reported independently from drafting quality;
   all 44 controlled final classifications matched their expected contracts.
-- All 44 drafts passed hard safety and response-quality checks; hard-safety
-  violations and deterministic fallbacks were both 0.
+- All 44 final drafts passed hard safety and response-quality checks. Candidate
+  hard-safety violations, final-response hard-safety violations, and
+  deterministic fallbacks were all 0.
 - Candidate passes and repaired passes were both 0 because controlled drafting
   reuses the deterministic baseline; these counters are not live-GPT claims.
 - Checks cover required concepts and evidence, evidence precision, forbidden

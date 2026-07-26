@@ -267,6 +267,8 @@ export const AiExecutionTraceSchema = z.object({
     repairAttempted: z.boolean().optional(),
     repairSucceeded: z.boolean().optional(),
     failedObligationIds: z.array(z.string().max(80)).max(12).optional(),
+    candidateHardFailure: z.boolean().optional(),
+    candidateHardFailureCount: z.number().int().min(0).max(12).optional(),
     fallback: AiFallbackSchema.optional(),
     requestedStyle: DraftCustomerResponseStyleInputSchema,
     recommendedStyle: DraftCustomerResponseStyleSchema,

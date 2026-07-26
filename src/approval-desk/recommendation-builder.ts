@@ -334,6 +334,12 @@ export async function buildApprovalDeskRecommendationInputWithDrafting(input: {
         : "skipped",
     source: draft.source,
     ...(draft.telemetry ?? {}),
+    ...(draft.candidateHardFailure === undefined
+      ? {}
+      : { candidateHardFailure: draft.candidateHardFailure }),
+    ...(draft.candidateHardFailureCount === undefined
+      ? {}
+      : { candidateHardFailureCount: draft.candidateHardFailureCount }),
     ...(draft.fallback === undefined ? {} : { fallback: draft.fallback }),
     requestedStyle: input.responseStyle ?? "auto",
     recommendedStyle: draft.assist.recommendedTone,

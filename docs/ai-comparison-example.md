@@ -15,7 +15,7 @@ claim that an external model produced the drafts.
 ## deterministic-deterministic
 
 - Scenarios: 11; passed: 11.
-- Draft contract outcomes: candidate passes=0; repaired passes=0; deterministic fallbacks=0; hard safety violations=0.
+- Draft contract outcomes: candidate passes=0; repaired passes=0; deterministic fallbacks=0; candidate hard safety violations=0; final-response hard safety violations=0.
 
 ### active-known-event
 
@@ -38,7 +38,7 @@ claim that an external model produced the drafts.
 ## gpt-gpt
 
 - Scenarios: 11; passed: 11.
-- Draft contract outcomes: candidate passes=0; repaired passes=0; deterministic fallbacks=0; hard safety violations=0.
+- Draft contract outcomes: candidate passes=0; repaired passes=0; deterministic fallbacks=0; candidate hard safety violations=0; final-response hard safety violations=0.
 
 ### known-cause-sms
 

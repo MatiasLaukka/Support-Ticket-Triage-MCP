@@ -18,6 +18,7 @@ import {
 } from "../scripts/evaluate-ai-comparison.js";
 import {
   CONTROLLED_EVALUATION_MODEL,
+  createControlledClassificationProvider,
   createControlledDraftProvider,
 } from "../src/approval-desk/controlled-evaluation-providers.js";
 
@@ -137,11 +138,15 @@ describe("AI comparison evaluation", () => {
             classification: {
               status: "used",
               model: "controlled-local-simulation",
+              latencyMs: 9,
+              usage: { inputTokens: 10, outputTokens: 3, totalTokens: 13 },
             },
             drafting: {
               status: "used",
               source: "deterministic",
               model: "controlled-local-simulation",
+              latencyMs: 7,
+              usage: { inputTokens: 12, outputTokens: 4, totalTokens: 16 },
             },
           },
         }],
@@ -154,6 +159,10 @@ describe("AI comparison evaluation", () => {
     expect(serialized).toContain("Classification agreement: pass");
     expect(serialized).toContain("Hard safety: pass");
     expect(serialized).toContain("controlled-local-simulation");
+    expect(serialized).toContain("latency=9ms");
+    expect(serialized).toContain("usage=10/3/13");
+    expect(serialized).toContain('"latencyMs": 9');
+    expect(serialized).toContain('"totalTokens": 13');
   });
 
   it("distinguishes overall failure from hard-safety status in serialized reports", () => {
@@ -265,6 +274,100 @@ describe("AI comparison evaluation", () => {
     });
     expect(promptInjection.aiExecutionTrace.classification.status).toBe("skipped");
     expect(promptInjection.aiExecutionTrace.drafting.status).toBe("skipped");
+  });
+
+  it("does not invoke live provider factories without --live", async () => {
+    let controlledClassificationFactoryCalls = 0;
+    let controlledDraftFactoryCalls = 0;
+    let liveClassificationFactoryCalls = 0;
+    let liveDraftFactoryCalls = 0;
+
+    const report = await runAiComparisonCommand({
+      cwd: resolve(),
+      mode: "controlled",
+      env: {},
+      providerFactories: {
+        createControlledClassificationProvider: () => {
+          controlledClassificationFactoryCalls += 1;
+          return createControlledClassificationProvider();
+        },
+        createControlledDraftProvider: () => {
+          controlledDraftFactoryCalls += 1;
+          return createControlledDraftProvider();
+        },
+        createLiveClassificationProvider: () => {
+          liveClassificationFactoryCalls += 1;
+          throw new Error("live classification factory must not be called");
+        },
+        createLiveDraftProvider: () => {
+          liveDraftFactoryCalls += 1;
+          throw new Error("live draft factory must not be called");
+        },
+      },
+    });
+
+    expect(report.reports).toHaveLength(4);
+    expect(controlledClassificationFactoryCalls).toBe(1);
+    expect(controlledDraftFactoryCalls).toBe(1);
+    expect(liveClassificationFactoryCalls).toBe(0);
+    expect(liveDraftFactoryCalls).toBe(0);
+  });
+
+  it("keeps controlled deterministic lanes available when live factories are unavailable", async () => {
+    const report = await runAiComparisonCommand({
+      cwd: resolve(),
+      mode: "controlled",
+      env: {},
+      providerFactories: {
+        createControlledClassificationProvider,
+        createControlledDraftProvider,
+        createLiveClassificationProvider: () => undefined,
+        createLiveDraftProvider: () => undefined,
+      },
+    });
+
+    expect(report.reports.map(({ lane }) => lane)).toEqual([
+      "deterministic-deterministic",
+      "gpt-deterministic",
+      "deterministic-gpt",
+      "gpt-gpt",
+    ]);
+  });
+
+  it("runs only GPT-containing lanes through explicit live providers", async () => {
+    let liveClassificationFactoryCalls = 0;
+    let liveDraftFactoryCalls = 0;
+
+    const report = await runAiComparisonCommand({
+      cwd: resolve(),
+      mode: "live",
+      env: { OPENAI_API_KEY: "test-key" },
+      providerFactories: {
+        createControlledClassificationProvider,
+        createControlledDraftProvider,
+        createLiveClassificationProvider: () => {
+          liveClassificationFactoryCalls += 1;
+          return classificationProvider;
+        },
+        createLiveDraftProvider: () => {
+          liveDraftFactoryCalls += 1;
+          return draftProvider;
+        },
+      },
+    });
+
+    expect(liveClassificationFactoryCalls).toBe(1);
+    expect(liveDraftFactoryCalls).toBe(1);
+    expect(report.providerProvenance).toEqual({
+      classification: "live-openai-adapter",
+      drafting: "live-openai-adapter",
+      networkPolicy: "live-provider-allowed",
+    });
+    expect(report.reports.map(({ lane }) => lane)).toEqual([
+      "gpt-deterministic",
+      "deterministic-gpt",
+      "gpt-gpt",
+    ]);
   });
 
   it("keeps the deterministic lane provider-free", async () => {

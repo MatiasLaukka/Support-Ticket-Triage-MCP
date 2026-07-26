@@ -687,6 +687,32 @@ work. The evaluator requires recommendation ticket IDs to match the expected
 outcome set exactly and counts any non-pending sample recommendation as an
 approval-safety violation.
 
+### AI Comparison Evaluation
+
+`npm run evaluate:ai-comparison` adds a network-free, controlled-local
+comparison of deterministic classification/drafting, advisory classification,
+and drafting providers across the eleven diagnostic scenarios. Its four lanes
+are reproducible local simulations, not live-model observations. The report
+shows actual drafts, agreement, quality, hard-safety status, safe failure
+reasons, and provider provenance without recording API keys or raw provider
+payloads.
+
+For an explicit live OpenAI observation, set `OPENAI_API_KEY` in the shell and
+run:
+
+```powershell
+npm run evaluate:ai-comparison -- --live
+```
+
+Live mode runs only GPT-containing lanes, labels them
+`live-openai-adapter`, and records returned model/latency/token metadata. It
+is opt-in and non-reproducible; default tests and the default comparison
+command do not make network calls. Prompt-injection scenarios skip both GPT
+stages, while deterministic safety policy remains authoritative. Read the
+[AI comparison evaluation guide](docs/diagnostic-evaluation-harness.md#ai-comparison-evaluation)
+and its [sanitized controlled-local example](docs/ai-comparison-example.md)
+before interpreting results.
+
 ## Extension To Zendesk Or Jira
 
 No live connector is included. A future adapter can preserve the current
@@ -743,6 +769,7 @@ webhook payloads, provider comments, and imported macros remain untrusted.
 - [Case study](docs/case-study.md)
 - [Demo script](docs/demo-script.md)
 - [Demo results and examples](docs/demo-results.md)
+- [AI comparison evaluation example](docs/ai-comparison-example.md)
 - [Screenshot and demo capture guide](docs/capture-guide.md)
 - [Project roadmap](docs/roadmap.md)
 - [Security policy](SECURITY.md)

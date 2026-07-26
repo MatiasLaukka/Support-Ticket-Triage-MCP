@@ -12,12 +12,15 @@ import {
 } from "../src/approval-desk/controlled-evaluation-providers.js";
 import {
   createClassificationReasoningProviderFromEnv,
+  type ClassificationReasoningProvider,
 } from "../src/approval-desk/classification-reasoning-provider.js";
 import {
   createCustomerResponseDraftProviderFromEnv,
+  type CustomerResponseDraftProvider,
 } from "../src/approval-desk/draft-response-provider.js";
 import { loadDiagnosticEvaluationScenarios } from "../src/approval-desk/diagnostic-evaluation-scenarios.js";
 import type { ResponseQualityScore } from "../src/approval-desk/response-quality-evaluation.js";
+import type { AiUsage } from "../src/domain.js";
 import { KnowledgeRepository } from "../src/knowledge-repository.js";
 
 const LANES: readonly AiComparisonLane[] = [
@@ -52,11 +55,15 @@ export interface AiComparisonSerializationInput {
         classification: {
           status: "skipped" | "used" | "fallback";
           model?: string;
+          latencyMs?: number;
+          usage?: AiUsage;
         };
         drafting: {
           status: "skipped" | "used" | "fallback";
           source: string;
           model?: string;
+          latencyMs?: number;
+          usage?: AiUsage;
         };
       };
     }>;
@@ -71,6 +78,29 @@ export interface AiComparisonCliOptions {
   writeStderr?: (text: string) => void;
 }
 
+export interface AiComparisonProviderFactories {
+  createControlledClassificationProvider: () => ClassificationReasoningProvider;
+  createControlledDraftProvider: () => CustomerResponseDraftProvider;
+  createLiveClassificationProvider: (
+    env: NodeJS.ProcessEnv,
+  ) => ClassificationReasoningProvider | undefined;
+  createLiveDraftProvider: (
+    env: NodeJS.ProcessEnv,
+  ) => CustomerResponseDraftProvider | undefined;
+}
+
+const defaultProviderFactories: AiComparisonProviderFactories = {
+  createControlledClassificationProvider,
+  createControlledDraftProvider,
+  createLiveClassificationProvider: (env) =>
+    createClassificationReasoningProviderFromEnv(env, { preferOpenAi: true }),
+  createLiveDraftProvider: (env) =>
+    createCustomerResponseDraftProviderFromEnv(env, {
+      responseStyle: "auto",
+      preferOpenAi: true,
+    }),
+};
+
 export function parseAiComparisonArgs(
   args: readonly string[],
 ): AiComparisonEvaluationMode {
@@ -83,6 +113,7 @@ export async function runAiComparisonCommand(input: {
   cwd: string;
   mode: AiComparisonEvaluationMode;
   env?: NodeJS.ProcessEnv;
+  providerFactories?: AiComparisonProviderFactories;
 }): Promise<{
   mode: AiComparisonEvaluationMode;
   providerProvenance: AiComparisonProviderProvenance;
@@ -94,10 +125,14 @@ export async function runAiComparisonCommand(input: {
   const allKnowledgeArticles = await new KnowledgeRepository(
     resolve(input.cwd, "data/knowledge"),
   ).list();
-  const providers = providersForMode(input.mode, env);
+  const providers = providersForMode(
+    input.mode,
+    env,
+    input.providerFactories ?? defaultProviderFactories,
+  );
   const reports: AiComparisonReport[] = [];
 
-  for (const lane of LANES) {
+  for (const lane of lanesForMode(input.mode)) {
     reports.push(await runAiComparisonEvaluation({
       scenarios,
       lane,
@@ -204,24 +239,26 @@ export async function main(options: AiComparisonCliOptions): Promise<number> {
 function providersForMode(
   mode: AiComparisonEvaluationMode,
   env: NodeJS.ProcessEnv,
+  factories: AiComparisonProviderFactories,
 ) {
   if (mode === "controlled") {
     return {
-      classificationProvider: createControlledClassificationProvider(),
-      draftProvider: createControlledDraftProvider(),
+      classificationProvider: factories.createControlledClassificationProvider(),
+      draftProvider: factories.createControlledDraftProvider(),
     };
   }
-  const classificationProvider = createClassificationReasoningProviderFromEnv(env, {
-    preferOpenAi: true,
-  });
-  const draftProvider = createCustomerResponseDraftProviderFromEnv(env, {
-    responseStyle: "auto",
-    preferOpenAi: true,
-  });
+  const classificationProvider = factories.createLiveClassificationProvider(env);
+  const draftProvider = factories.createLiveDraftProvider(env);
   if (classificationProvider === undefined || draftProvider === undefined) {
     throw new Error("Live AI comparison providers are unavailable.");
   }
   return { classificationProvider, draftProvider };
+}
+
+function lanesForMode(mode: AiComparisonEvaluationMode): readonly AiComparisonLane[] {
+  return mode === "controlled"
+    ? LANES
+    : LANES.filter((lane) => lane !== "deterministic-deterministic");
 }
 
 function providerProvenanceForMode(
@@ -247,11 +284,23 @@ function stageProvenance(
     classification: {
       status: observation.aiExecutionTrace.classification.status,
       model: observation.aiExecutionTrace.classification.model ?? "not-used",
+      ...(observation.aiExecutionTrace.classification.latencyMs === undefined
+        ? {}
+        : { latencyMs: observation.aiExecutionTrace.classification.latencyMs }),
+      ...(observation.aiExecutionTrace.classification.usage === undefined
+        ? {}
+        : { usage: observation.aiExecutionTrace.classification.usage }),
     },
     drafting: {
       status: observation.aiExecutionTrace.drafting.status,
       source: observation.aiExecutionTrace.drafting.source,
       model: observation.aiExecutionTrace.drafting.model ?? "not-used",
+      ...(observation.aiExecutionTrace.drafting.latencyMs === undefined
+        ? {}
+        : { latencyMs: observation.aiExecutionTrace.drafting.latencyMs }),
+      ...(observation.aiExecutionTrace.drafting.usage === undefined
+        ? {}
+        : { usage: observation.aiExecutionTrace.drafting.usage }),
     },
   };
 }
@@ -260,7 +309,24 @@ function formatStageProvenance(
   observation: AiComparisonSerializationInput["reports"][number]["observations"][number],
 ): string {
   const provenance = stageProvenance(observation);
-  return `classification=${provenance.classification.status}/${provenance.classification.model}; drafting=${provenance.drafting.status}/${provenance.drafting.source}/${provenance.drafting.model}`;
+  return `classification=${formatProviderStage(provenance.classification)}; drafting=${formatProviderStage(provenance.drafting)}`;
+}
+
+function formatProviderStage(input: {
+  status: "skipped" | "used" | "fallback";
+  model: string;
+  latencyMs?: number;
+  usage?: AiUsage;
+  source?: string;
+}): string {
+  const stage = [input.status, ...(input.source === undefined ? [] : [input.source]), input.model];
+  const metadata = [
+    ...(input.latencyMs === undefined ? [] : [`latency=${input.latencyMs}ms`]),
+    ...(input.usage === undefined
+      ? []
+      : [`usage=${input.usage.inputTokens}/${input.usage.outputTokens}/${input.usage.totalTokens}`]),
+  ];
+  return [...stage, ...metadata].join("/");
 }
 
 function quoteMarkdown(text: string): string[] {

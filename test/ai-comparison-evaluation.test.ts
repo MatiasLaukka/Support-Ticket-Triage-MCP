@@ -11,6 +11,15 @@ import {
 } from "../src/approval-desk/ai-comparison-evaluation.js";
 import { loadDiagnosticEvaluationScenarios } from "../src/approval-desk/diagnostic-evaluation-scenarios.js";
 import { KnowledgeRepository } from "../src/knowledge-repository.js";
+import {
+  main as mainAiComparisonCli,
+  runAiComparisonCommand,
+  serializeAiComparisonReport,
+} from "../scripts/evaluate-ai-comparison.js";
+import {
+  CONTROLLED_EVALUATION_MODEL,
+  createControlledDraftProvider,
+} from "../src/approval-desk/controlled-evaluation-providers.js";
 
 const classificationProvider: ClassificationReasoningProvider = {
   async reason() {
@@ -52,6 +61,121 @@ const draftProvider: CustomerResponseDraftProvider = {
 };
 
 describe("AI comparison evaluation", () => {
+  it("serializes safe per-scenario comparison results with provenance", () => {
+    const serialized = serializeAiComparisonReport({
+      mode: "controlled",
+      providerProvenance: {
+        classification: "controlled-local-simulation",
+        drafting: "controlled-local-simulation",
+        networkPolicy: "disabled",
+      },
+      reports: [{
+        lane: "gpt-gpt",
+        scenarioCount: 1,
+        passedScenarioCount: 1,
+        observations: [{
+          scenarioId: "ordinary-outage-triage",
+          draftCustomerResponse: "We are investigating the delivery delay.",
+          classificationAgreement: {
+            category: true,
+            team: true,
+            priority: true,
+            knowledgeArticleIds: true,
+            escalationReasons: true,
+            all: true,
+          },
+          responseQuality: { hardPass: true },
+          aiExecutionTrace: {
+            classification: {
+              status: "used",
+              model: "controlled-local-simulation",
+            },
+            drafting: {
+              status: "used",
+              source: "deterministic",
+              model: "controlled-local-simulation",
+            },
+          },
+        }],
+      }],
+    });
+
+    expect(serialized).toContain("gpt-gpt");
+    expect(serialized).toContain("ordinary-outage-triage");
+    expect(serialized).toContain("We are investigating the delivery delay.");
+    expect(serialized).toContain("Classification agreement: pass");
+    expect(serialized).toContain("Hard safety: pass");
+    expect(serialized).toContain("controlled-local-simulation");
+  });
+
+  it("rejects live mode before reporting a live result without an API key", async () => {
+    const errors: string[] = [];
+    const output: string[] = [];
+
+    const exitCode = await mainAiComparisonCli({
+      args: ["--live"],
+      cwd: resolve(),
+      env: {},
+      writeStdout: (text) => output.push(text),
+      writeStderr: (text) => errors.push(text),
+    });
+
+    expect(exitCode).toBe(1);
+    expect(output).toEqual([]);
+    expect(errors).toEqual([
+      "OPENAI_API_KEY is required for live AI comparison mode.\n",
+    ]);
+  });
+
+  it("labels controlled draft output as local deterministic simulation", async () => {
+    const scenario = (await loadDiagnosticEvaluationScenarios()).find(({ id }) =>
+      id === "known-cause-sms",
+    )!;
+    const result = await createControlledDraftProvider().draft({
+      ticket: scenario.ticket,
+      outcome: scenario.outcome!,
+      knowledgeArticles: [],
+      deterministicDraft: "We are reviewing the scheduled SMS delivery.",
+      responseStyle: "auto",
+      actor: "evaluation-test",
+      companyName: "Northstar Marketing Support",
+    });
+
+    expect(result.source).toBe("deterministic");
+    expect(result.assist.source).toBe("deterministic");
+    expect(result.telemetry?.model).toBe(CONTROLLED_EVALUATION_MODEL);
+  });
+
+  it("runs four offline controlled lanes and preserves prompt-injection skips", async () => {
+    const report = await runAiComparisonCommand({
+      cwd: resolve(),
+      mode: "controlled",
+      env: {},
+    });
+
+    expect(report.providerProvenance).toEqual({
+      classification: "controlled-local-simulation",
+      drafting: "controlled-local-simulation",
+      networkPolicy: "disabled",
+    });
+    expect(report.reports).toHaveLength(4);
+    expect(report.reports.every(({ scenarioCount }) => scenarioCount === 11)).toBe(true);
+    const gptGpt = report.reports.find(({ lane }) => lane === "gpt-gpt")!;
+    const ordinary = gptGpt.observations.find(({ scenarioId }) =>
+      scenarioId === "ordinary-outage-triage",
+    )!;
+    const promptInjection = gptGpt.observations.find(({ scenarioId }) =>
+      scenarioId === "prompt-injection",
+    )!;
+    expect(ordinary.aiExecutionTrace.drafting).toMatchObject({
+      status: "used",
+      source: "deterministic",
+      model: CONTROLLED_EVALUATION_MODEL,
+    });
+    expect(promptInjection.aiExecutionTrace.classification.status).toBe("skipped");
+    expect(promptInjection.aiExecutionTrace.drafting.status).toBe("skipped");
+  });
+
   it("keeps the deterministic lane provider-free", async () => {
     const report = await runAiComparisonEvaluation({
       scenarios: await loadDiagnosticEvaluationScenarios(),

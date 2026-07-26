@@ -120,6 +120,41 @@ describe("Approval Desk recommendation builder", () => {
     });
   });
 
+  it("preserves active known-event state through public drafting validation", async () => {
+    const outcomes = await loadExpectedOutcomes(
+      resolve("data/seed/expected-outcomes.json"),
+    );
+    const ticket = await loadSeedTicket("TKT-1028");
+
+    const input = await buildApprovalDeskRecommendationInputWithDrafting({
+      ticket,
+      outcome: outcomes.get("TKT-1028")!,
+      actor: "approval-desk",
+      knowledgeArticles: [],
+      draftProvider: {
+        draft: async () => ({
+          source: "openai" as const,
+          response: "The event-ingestion delay is under review.",
+          assist: {
+            source: "openai" as const,
+            missingInfoSuggestions: ["The issue is under incident review."],
+            investigationSteps: ["Continue incident review."],
+            tone: "technical" as const,
+            recommendedTone: "technical" as const,
+            selectedTone: "technical" as const,
+            toneReason: "Technical issue.",
+            audience: "developer" as const,
+            checks: [],
+          },
+        }),
+      },
+    });
+
+    expect(input.draftCustomerResponseSource).toBe("fallback");
+    expect(input.draftCustomerResponse).toContain("incident review");
+    expect(input.knownEventId).toBe("EVT-2026-06-10-WEBHOOK-LATENCY");
+  });
+
   it("treats confirmed but ambiguous diagnosis context as diagnostic narrowing", async () => {
     const outcomes = await loadExpectedOutcomes(
       resolve("data/seed/expected-outcomes.json"),

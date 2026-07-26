@@ -35,6 +35,33 @@ const CUSTOMER_CONFIRMATION_ALIASES = [
   "working now",
 ];
 
+const ESCALATION_OBLIGATIONS: Readonly<Record<
+  CustomerResponseDraftInput["outcome"]["requiredEscalations"][number],
+  Omit<DraftObligation, "id"> | undefined
+>> = {
+  security: {
+    kind: "escalation",
+    customerText: "State that the issue is receiving specialist security review.",
+    aliases: ["security review", "security specialist"],
+    hard: true,
+  },
+  outage: {
+    kind: "escalation",
+    customerText: "State that the issue is under incident or platform review.",
+    aliases: INCIDENT_REVIEW_ALIASES,
+    hard: true,
+  },
+  // These remain authoritative workflow gates, but have no customer-facing
+  // disclosure requirement: wording must not expose internal confidence,
+  // SLA, policy, or diagnostic-routing details. Missing-information is
+  // represented by the evidence obligations above.
+  "low-confidence": undefined,
+  sla: undefined,
+  "missing-information": undefined,
+  "diagnostic-ambiguity": undefined,
+  "policy-conflict": undefined,
+};
+
 export function buildDraftObligations(
   input: CustomerResponseDraftInput,
 ): DraftObligation[] {
@@ -47,7 +74,7 @@ export function buildDraftObligations(
 
   if (
     !isCustomerConfirmedReadyForClose(input) &&
-    input.evidenceReadiness?.knownEventId === undefined &&
+    input.evidenceReadiness?.knownEventId == null &&
     !input.outcome.requiredEscalations.includes("outage") &&
     /\b(?:webhook|signature)\b/i.test(authoritativeText)
   ) {
@@ -70,17 +97,19 @@ export function buildDraftObligations(
     });
   }
 
-  const requiresIncidentReview = input.outcome.requiredEscalations.includes("outage") ||
-    input.evidenceReadiness?.knownEventId !== undefined &&
-      input.evidenceReadiness.knownEventId !== null;
-  if (requiresIncidentReview) {
-    obligations.push({
-      id: "escalation:incident-review",
-      kind: "escalation",
-      customerText: "State that the issue is under incident or platform review.",
-      aliases: INCIDENT_REVIEW_ALIASES,
-      hard: true,
-    });
+  const escalationReasons = new Set(input.outcome.requiredEscalations);
+  if (input.evidenceReadiness?.knownEventId != null) {
+    escalationReasons.add("outage");
+  }
+  for (const reason of escalationReasons) {
+    const obligation = ESCALATION_OBLIGATIONS[reason];
+    if (obligation === undefined) continue;
+    const id = reason === "outage"
+      ? "escalation:incident-review"
+      : "escalation:security-review";
+    if (!obligations.some((candidate) => candidate.id === id)) {
+      obligations.push({ id, ...obligation });
+    }
   }
 
   if (isCustomerConfirmedReadyForClose(input)) {
@@ -93,14 +122,19 @@ export function buildDraftObligations(
     });
   }
 
-  for (const requirement of input.evidenceReadiness?.providedEvidence ?? []) {
-    obligations.push({
-      id: `evidence:no-repeat:${requirement.id}`,
-      kind: "evidence",
-      customerText: `Do not request ${requirement.label} again.`,
-      aliases: [requirement.customerQuestion, requirement.label, ...requirement.aliases],
-      hard: true,
-    });
+  if (
+    input.conversationContext?.turnType === "status-follow-up" ||
+    input.conversationContext?.turnType === "explanation-request"
+  ) {
+    for (const requirement of input.evidenceReadiness?.providedEvidence ?? []) {
+      obligations.push({
+        id: `evidence:no-repeat:${requirement.id}`,
+        kind: "evidence",
+        customerText: `Do not request ${requirement.label} again.`,
+        aliases: [requirement.customerQuestion, requirement.label, ...requirement.aliases],
+        hard: true,
+      });
+    }
   }
 
   if (input.diagnosisContext !== undefined) {
@@ -126,7 +160,9 @@ export function buildDraftObligations(
 }
 
 export function validateDraftContract(input: DraftContractInput): DraftContractResult {
-  const searchableText = ` ${normalize(`${input.response} ${input.assistText}`)} `;
+  // The contract governs the customer-facing candidate. Assist content is
+  // reviewer-facing and must never satisfy or violate its response obligations.
+  const searchableText = ` ${normalize(input.response)} `;
   const checks: DraftCustomerResponseCheck[] = [];
   const blockingMessages: string[] = [];
   const failedObligationIds: string[] = [];
@@ -159,7 +195,7 @@ function isCustomerConfirmedReadyForClose(input: CustomerResponseDraftInput): bo
 }
 
 function containsEvidenceRequest(text: string, aliases: readonly string[]): boolean {
-  if (!/(?:please share|share|send us|send|provide|can you provide|could you provide|need)/.test(text)) {
+  if (!/\b(?:please share|please send|send us|can you(?: please)? (?:share|send|provide)|could you(?: please)? (?:share|send|provide)|share (?:your|the)|provide (?:your|the))\b/.test(text)) {
     return false;
   }
   return containsAlias(text, aliases);

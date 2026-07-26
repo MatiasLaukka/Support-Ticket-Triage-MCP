@@ -3,7 +3,10 @@ import {
   buildDraftObligations,
   validateDraftContract,
 } from "../src/approval-desk/draft-contract.js";
-import type { CustomerResponseDraftInput } from "../src/approval-desk/draft-response-provider.js";
+import {
+  draftCustomerResponseWithFallback,
+  type CustomerResponseDraftInput,
+} from "../src/approval-desk/draft-response-provider.js";
 
 const ticket = {
   id: "TKT-contract",
@@ -95,12 +98,84 @@ describe("draft contract", () => {
     });
   });
 
+  it("does not let internal assist text satisfy a public escalation obligation", async () => {
+    const result = await draftCustomerResponseWithFallback({
+      provider: {
+        draft: async () => ({
+          source: "openai" as const,
+          response: "The event-ingestion delay is under review.",
+          assist: {
+            source: "openai" as const,
+            missingInfoSuggestions: ["The issue is under incident review."],
+            investigationSteps: ["Continue incident review."],
+            tone: "technical" as const,
+            recommendedTone: "technical" as const,
+            selectedTone: "technical" as const,
+            toneReason: "Technical issue.",
+            audience: "developer" as const,
+            checks: [],
+          },
+        }),
+      },
+      draftInput: activeKnownEventInput,
+    });
+
+    expect(result).toMatchObject({
+      source: "fallback",
+      fallback: { category: "guardrail-rejected" },
+    });
+    expect(result.response).toContain("incident review");
+  });
+
   it("accepts declared aliases after normalizing punctuation and whitespace", () => {
     expect(validateDraftContract({
       input: partialEvidenceInput,
       response: "We are reviewing the signature-validation mismatch. Please share the rotation time.",
       assistText: "",
     }).failedObligationIds).toEqual([]);
+  });
+
+  it("keeps the webhook-signature obligation when no known event is represented by null", () => {
+    const noKnownEventInput: CustomerResponseDraftInput = {
+      ...partialEvidenceInput,
+      evidenceReadiness: {
+        ...partialEvidenceInput.evidenceReadiness!,
+        knownEventId: null,
+      },
+    };
+
+    expect(buildDraftObligations(noKnownEventInput)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "concept:webhook-signature", hard: true }),
+    ]));
+  });
+
+  it("maps customer-safe escalation reasons and keeps internal routing reasons undisclosed", () => {
+    const escalationInput: CustomerResponseDraftInput = {
+      ...baseInput,
+      outcome: {
+        ...baseInput.outcome,
+        requiredEscalations: [
+          "security",
+          "outage",
+          "low-confidence",
+          "sla",
+          "missing-information",
+          "diagnostic-ambiguity",
+          "policy-conflict",
+        ],
+      },
+    };
+
+    expect(buildDraftObligations(escalationInput)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "escalation:security-review", hard: true }),
+      expect.objectContaining({ id: "escalation:incident-review", hard: true }),
+    ]));
+    expect(buildDraftObligations(escalationInput)).not.toContainEqual(
+      expect.objectContaining({ id: "escalation:missing-information" }),
+    );
+    expect(buildDraftObligations(escalationInput)).not.toContainEqual(
+      expect.objectContaining({ id: "escalation:specialist-review" }),
+    );
   });
 
   it("rejects a stale reply that requests evidence already provided", () => {

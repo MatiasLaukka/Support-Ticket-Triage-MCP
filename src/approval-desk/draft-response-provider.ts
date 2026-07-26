@@ -483,6 +483,13 @@ function fallbackDraft(input: {
     fallbackAssist = boundedSafetyFallbackAssist(fallbackAssist);
     validation = validateFallback();
   }
+  if (
+    validation.blockingMessages.length > 0 &&
+    validation.blockingMessages.length === validation.contractBlockingMessages.length
+  ) {
+    response = appendRequiredContractLanguage(response, input.draftInput);
+    validation = validateFallback();
+  }
   if (validation.blockingMessages.length > 0) {
     response = boundedSafetyFallbackResponse(input.draftInput);
     validation = validateFallback();
@@ -529,6 +536,31 @@ function boundedSafetyFallbackResponse(input: CustomerResponseDraftInput): strin
         ? "Thank you for your patience. Our support team is reviewing the webhook signature issue."
         : "Thank you for your patience. Our support team is reviewing the issue and will update you as soon as possible.";
   return `${body}\n\n${formatDraftSignOff(input)}`;
+}
+
+function appendRequiredContractLanguage(
+  response: string,
+  input: CustomerResponseDraftInput,
+): string {
+  const additions = buildDraftObligations(input).flatMap((obligation) => {
+    switch (obligation.id) {
+      case "concept:webhook-signature":
+        return ["We are reviewing the webhook signature issue."];
+      case "escalation:incident-review":
+        return ["This issue is under incident review."];
+      case "escalation:security-review":
+        return ["This issue is receiving specialist security review."];
+      case "escalation:specialist-review":
+        return ["This issue is receiving specialist review."];
+      case "escalation:priority-review":
+        return ["This issue is receiving priority review."];
+      case "lifecycle:customer-confirmation":
+        return ["Thank you for confirming that resolved it."];
+      default:
+        return [];
+    }
+  });
+  return additions.length === 0 ? response : `${response}\n\n${additions.join(" ")}`;
 }
 
 function boundedSafetyFallbackAssist(assist: GptAssist): GptAssist {
@@ -604,6 +636,7 @@ function validateCustomerResponseDraft(input: {
 }): {
   checks: DraftCustomerResponseCheck[];
   blockingMessages: string[];
+  contractBlockingMessages: string[];
   candidateChecks: AiGuardrailCheck[];
 } {
   const response = input.response.trim();
@@ -755,6 +788,7 @@ function validateCustomerResponseDraft(input: {
       ...quality.blockingMessages,
       ...contract.blockingMessages,
     ],
+    contractBlockingMessages: contract.blockingMessages,
     candidateChecks: quality.checks,
   };
 }

@@ -304,6 +304,8 @@ export async function buildApprovalDeskRecommendationInputWithDrafting(input: {
       evidenceReadiness: {
         supportState: base.supportState ?? "diagnosing",
         knownCause: base.knownCause,
+        knownEventId: base.knownEventId,
+        knownEventMatchReasons: base.knownEventMatchReasons,
         requiredEvidence: base.requiredEvidence ?? [],
         providedEvidence: base.providedEvidence ?? [],
         missingEvidence: base.missingEvidence ?? [],

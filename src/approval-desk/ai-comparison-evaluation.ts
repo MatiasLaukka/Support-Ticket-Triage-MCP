@@ -97,7 +97,13 @@ export async function runAiComparisonEvaluation(input: {
           knowledgeArticleIds: scenario.outcome.knowledgeArticleIds,
           escalationReasons: scenario.outcome.requiredEscalations,
         };
-    const classificationAgreement = compareClassification(recommendation, expected);
+    const classificationAgreement = compareClassification(
+      recommendation,
+      expected,
+      scenario.outcome === undefined
+        ? undefined
+        : scenario.outcome.acceptablePriorities.includes(recommendation.priority),
+    );
     const baselineAgreement = compareClassification(recommendation, baseline);
     const contract = responseQualityContracts[scenario.id];
     if (contract === undefined) {
@@ -187,10 +193,11 @@ function deterministicBaseline(
 function compareClassification(
   recommendation: Omit<SubmitRecommendationInput, "submittedAt">,
   expected: ClassificationComparable,
+  priorityMatches = recommendation.priority === expected.priority,
 ): AiComparisonAgreement {
   const category = recommendation.category === expected.category;
   const team = recommendation.team === expected.team;
-  const priority = recommendation.priority === expected.priority;
+  const priority = priorityMatches;
   const knowledgeArticleIds = sameMembers(
     recommendation.knowledgeArticleIds,
     expected.knowledgeArticleIds,

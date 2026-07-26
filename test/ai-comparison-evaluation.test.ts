@@ -65,6 +65,26 @@ describe("AI comparison evaluation", () => {
     )).toBe(true);
   });
 
+  it("accepts any priority allowed by the expected outcome contract", async () => {
+    const outageScenario = (await loadDiagnosticEvaluationScenarios()).find(({ id }) =>
+      id === "ordinary-outage-triage")!;
+    const report = await runAiComparisonEvaluation({
+      scenarios: [{
+        ...outageScenario,
+        outcome: {
+          ...outageScenario.outcome!,
+          acceptablePriorities: ["P2", "P1"],
+        },
+      }],
+      lane: "deterministic-deterministic",
+      allKnowledgeArticles: await loadKnowledgeArticles(),
+    });
+
+    const observation = report.observations[0]!;
+    expect(observation.finalRecommendation.priority).toBe("P1");
+    expect(observation.classificationAgreement.priority).toBe(true);
+  });
+
   it("uses injected GPT classification advice without a GPT draft", async () => {
     const report = await runAiComparisonEvaluation({
       scenarios: (await loadDiagnosticEvaluationScenarios()).filter(({ id }) =>

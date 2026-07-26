@@ -47,6 +47,32 @@ export interface ClassificationReasoningExecution {
   telemetry: AiProviderTelemetry;
 }
 
+export type ClassificationSchemaFailureStage =
+  | "response-envelope"
+  | "reasoning-json"
+  | "reasoning-fields";
+
+export class InvalidClassificationSchemaError extends Error {
+  readonly name = "InvalidClassificationSchemaError";
+  readonly fields: readonly string[];
+
+  constructor(
+    readonly stage: ClassificationSchemaFailureStage,
+    fields: readonly string[],
+  ) {
+    const safeFields = [...new Set(fields)]
+      .map((field) => field.trim())
+      .filter((field) => /^[A-Za-z0-9_.<>-]+$/.test(field))
+      .slice(0, 8);
+    super(
+      `OpenAI classification ${stage} validation failed for ${
+        safeFields.length === 0 ? "unknown-fields" : safeFields.join(", ")
+      }.`,
+    );
+    this.fields = safeFields;
+  }
+}
+
 export interface ClassificationReasoningProvider {
   reason(input: GptClassificationReasoningInput): Promise<ClassificationReasoningExecution>;
 }
@@ -83,8 +109,21 @@ export class OpenAiClassificationReasoningProvider
       fetch: this.options.fetch ?? fetch,
       input,
     });
+    let parsedReasoning: unknown;
+    try {
+      parsedReasoning = JSON.parse(envelope.outputText);
+    } catch {
+      throw new InvalidClassificationSchemaError("reasoning-json", ["outputText"]);
+    }
+    const reasoning = ReasoningSchema.safeParse(parsedReasoning);
+    if (!reasoning.success) {
+      throw new InvalidClassificationSchemaError(
+        "reasoning-fields",
+        schemaIssuePaths(reasoning.error),
+      );
+    }
     return {
-      reasoning: ReasoningSchema.parse(JSON.parse(envelope.outputText)),
+      reasoning: reasoning.data,
       telemetry: {
         model,
         latencyMs: Math.max(0, now() - startedAt),
@@ -126,7 +165,7 @@ async function requestReasoning(input: {
       signal: abortController.signal,
       body: JSON.stringify({
         model: input.model,
-        instructions: "Classify the support ticket using only the provided context. Return structured advisory reasoning without operational actions.",
+        instructions: "Classify the support ticket using only the provided context. Return exactly the requested structured advisory reasoning, use null for unknown candidate fields, use only the listed enum values, and do not include operational actions or extra fields.",
         input: buildReasoningInput(input.input),
         store: false,
         text: {
@@ -150,7 +189,13 @@ async function requestReasoning(input: {
   });
   const raw = await response.text();
   if (!response.ok) throw new Error("OpenAI classification request failed.");
-  const parsed = z.object({
+  let rawPayload: unknown;
+  try {
+    rawPayload = JSON.parse(raw);
+  } catch {
+    throw new InvalidClassificationSchemaError("response-envelope", ["response"]);
+  }
+  const parsedResult = z.object({
     output: z.array(z.object({
       content: z.array(z.object({ type: z.string(), text: z.string().optional() })),
     })),
@@ -159,17 +204,40 @@ async function requestReasoning(input: {
       output_tokens: z.number().int().nonnegative(),
       total_tokens: z.number().int().nonnegative(),
     }).optional(),
-  }).passthrough().parse(JSON.parse(raw));
+  }).passthrough().safeParse(rawPayload);
+  if (!parsedResult.success) {
+    throw new InvalidClassificationSchemaError(
+      "response-envelope",
+      schemaIssuePaths(parsedResult.error),
+    );
+  }
+  const parsed = parsedResult.data;
   const outputText = parsed.output
     .flatMap((item) => item.content)
     .find((content) => content.type === "output_text")?.text;
   if (outputText === undefined) throw new Error("OpenAI classification response did not include output text.");
-  const usage = parsed.usage === undefined ? undefined : AiUsageSchema.parse({
-    inputTokens: parsed.usage.input_tokens,
-    outputTokens: parsed.usage.output_tokens,
-    totalTokens: parsed.usage.total_tokens,
-  });
+  let usage: AiUsage | undefined;
+  if (parsed.usage !== undefined) {
+    const usageResult = AiUsageSchema.safeParse({
+      inputTokens: parsed.usage.input_tokens,
+      outputTokens: parsed.usage.output_tokens,
+      totalTokens: parsed.usage.total_tokens,
+    });
+    if (!usageResult.success) {
+      throw new InvalidClassificationSchemaError(
+        "response-envelope",
+        schemaIssuePaths(usageResult.error).map((path) => `usage.${path}`),
+      );
+    }
+    usage = usageResult.data;
+  }
   return { outputText, ...(usage === undefined ? {} : { usage }) };
+}
+
+function schemaIssuePaths(error: z.ZodError): string[] {
+  return error.issues.map((issue) =>
+    issue.path.length === 0 ? "<root>" : issue.path.join("."),
+  );
 }
 
 function buildReasoningInput(input: GptClassificationReasoningInput): string {
@@ -197,15 +265,30 @@ const reasoningJsonSchema = {
   type: "object",
   additionalProperties: false,
   properties: {
-    issueType: { type: "string" },
-    candidateCategory: { type: ["string", "null"] },
-    candidateTeam: { type: ["string", "null"] },
-    candidatePriority: { type: ["string", "null"] },
-    knowledgeArticleIds: { type: "array", items: { type: "string" } },
-    confidence: { type: "number" },
-    evidence: { type: "array", items: { type: "string" } },
-    missingEvidenceThatWouldChangeClassification: { type: "array", items: { type: "string" } },
-    explanation: { type: "string" },
+    issueType: { type: "string", minLength: 1 },
+    candidateCategory: {
+      type: ["string", "null"],
+      enum: [...CategorySchema.options, null],
+    },
+    candidateTeam: {
+      type: ["string", "null"],
+      enum: [...TeamSchema.options, null],
+    },
+    candidatePriority: {
+      type: ["string", "null"],
+      enum: [...PrioritySchema.options, null],
+    },
+    knowledgeArticleIds: {
+      type: "array",
+      items: { type: "string", pattern: "^[a-z0-9]+(?:-[a-z0-9]+)*$" },
+    },
+    confidence: { type: "number", minimum: 0, maximum: 1 },
+    evidence: { type: "array", items: { type: "string", minLength: 1 } },
+    missingEvidenceThatWouldChangeClassification: {
+      type: "array",
+      items: { type: "string", minLength: 1 },
+    },
+    explanation: { type: "string", minLength: 1, maxLength: 240 },
   },
   required: [
     "issueType",

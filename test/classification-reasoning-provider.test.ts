@@ -97,9 +97,82 @@ describe("OpenAiClassificationReasoningProvider", () => {
     const schema = request.text.format.schema;
     expect(request).toMatchObject({ store: false });
     expect(schema.required).toEqual(expect.arrayContaining(Object.keys(schema.properties)));
-    expect(schema.properties.candidateCategory).toEqual({ type: ["string", "null"] });
-    expect(schema.properties.candidateTeam).toEqual({ type: ["string", "null"] });
-    expect(schema.properties.candidatePriority).toEqual({ type: ["string", "null"] });
+    expect(schema.properties.candidateCategory).toMatchObject({ type: ["string", "null"] });
+    expect(schema.properties.candidateTeam).toMatchObject({ type: ["string", "null"] });
+    expect(schema.properties.candidatePriority).toMatchObject({ type: ["string", "null"] });
+    expect(schema.properties.candidateCategory.enum).toEqual([
+      "account-access",
+      "authentication",
+      "billing",
+      "api",
+      "integration",
+      "performance",
+      "incident",
+      "security",
+      "feature-request",
+      "other",
+      null,
+    ]);
+  });
+
+  it("reports sanitized reasoning field paths for invalid structured output", async () => {
+    const provider = new OpenAiClassificationReasoningProvider({
+      apiKey: "sk-test",
+      fetch: async () => ({
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({
+          output: [{ content: [{
+            type: "output_text",
+            text: JSON.stringify({
+              issueType: "campaign-editor",
+              candidateCategory: "performance",
+              candidateTeam: "product",
+              candidatePriority: "urgent",
+              knowledgeArticleIds: ["performance-troubleshooting"],
+              confidence: 0.9,
+              evidence: ["editor loading failure"],
+              missingEvidenceThatWouldChangeClassification: [],
+              explanation: "The reply describes an editor loading failure.",
+            }),
+          }] }],
+        }),
+      }),
+    });
+
+    const error = await provider.reason(providerInput()).catch((caught) => caught);
+
+    expect(error).toMatchObject({
+      name: "InvalidClassificationSchemaError",
+      stage: "reasoning-fields",
+      fields: expect.arrayContaining(["candidatePriority"]),
+    });
+    expect(classifyAiFailure(error)).toMatchObject({
+      category: "invalid-schema",
+      message: expect.stringContaining("candidatePriority"),
+    });
+    expect((error as Error).message).not.toContain("urgent");
+    expect((error as Error).message).not.toContain("sk-test");
+  });
+
+  it("reports the response-envelope stage without exposing the provider payload", async () => {
+    const provider = new OpenAiClassificationReasoningProvider({
+      apiKey: "sk-test",
+      fetch: async () => ({
+        ok: true,
+        status: 200,
+        text: async () => "not-json-provider-payload",
+      }),
+    });
+
+    const error = await provider.reason(providerInput()).catch((caught) => caught);
+
+    expect(error).toMatchObject({
+      name: "InvalidClassificationSchemaError",
+      stage: "response-envelope",
+      fields: ["response"],
+    });
+    expect((error as Error).message).not.toContain("not-json-provider-payload");
   });
 
   it("converts null candidate fields to optional reasoning fields", async () => {

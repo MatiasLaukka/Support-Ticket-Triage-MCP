@@ -569,6 +569,12 @@ export function classifyAiFailure(error: unknown): {
   if (error instanceof OpenAiTimeoutError) {
     return { category: "timeout", message: "OpenAI timed out; deterministic output was used." };
   }
+  if (error instanceof Error && error.name === "InvalidClassificationSchemaError") {
+    return {
+      category: "invalid-schema",
+      message: `${sanitizeValidationMessage(error.message)} Deterministic output was used.`,
+    };
+  }
   if (error instanceof z.ZodError || error instanceof SyntaxError) {
     return { category: "invalid-schema", message: "OpenAI returned invalid structured output; deterministic output was used." };
   }

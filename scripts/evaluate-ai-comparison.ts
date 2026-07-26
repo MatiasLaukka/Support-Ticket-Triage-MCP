@@ -17,6 +17,7 @@ import {
   createCustomerResponseDraftProviderFromEnv,
 } from "../src/approval-desk/draft-response-provider.js";
 import { loadDiagnosticEvaluationScenarios } from "../src/approval-desk/diagnostic-evaluation-scenarios.js";
+import type { ResponseQualityScore } from "../src/approval-desk/response-quality-evaluation.js";
 import { KnowledgeRepository } from "../src/knowledge-repository.js";
 
 const LANES: readonly AiComparisonLane[] = [
@@ -45,7 +46,8 @@ export interface AiComparisonSerializationInput {
       scenarioId: string;
       draftCustomerResponse: string;
       classificationAgreement: AiComparisonAgreement;
-      responseQuality: { hardPass: boolean };
+      responseQuality: ResponseQualityScore;
+      failures: readonly string[];
       aiExecutionTrace: {
         classification: {
           status: "skipped" | "used" | "fallback";
@@ -125,8 +127,11 @@ export function serializeAiComparisonReport(
       scenarios: lane.observations.map((observation) => ({
         scenarioId: observation.scenarioId,
         actualDraft: observation.draftCustomerResponse,
+        overallResult: observation.failures.length === 0 ? "pass" : "fail",
         classificationAgreement: observation.classificationAgreement,
         hardSafety: observation.responseQuality.hardPass,
+        failureReasons: safeFailureReasons(observation.failures),
+        qualityBreakdown: qualityBreakdown(observation.responseQuality),
         providerProvenance: stageProvenance(observation),
       })),
     })),
@@ -148,8 +153,11 @@ export function serializeAiComparisonReport(
       ...lane.observations.flatMap((observation) => [
         `### ${observation.scenarioId}`,
         "",
+        `- Overall result: ${observation.failures.length === 0 ? "pass" : "fail"}.`,
         `- Classification agreement: ${observation.classificationAgreement.all ? "pass" : "fail"}.`,
         `- Hard safety: ${observation.responseQuality.hardPass ? "pass" : "fail"}.`,
+        `- Quality breakdown: ${formatQualityBreakdown(observation.responseQuality)}.`,
+        ...formatFailureReasons(observation.failures),
         `- Provider provenance: ${formatStageProvenance(observation)}.`,
         "- Actual draft:",
         ...quoteMarkdown(observation.draftCustomerResponse),
@@ -257,6 +265,52 @@ function formatStageProvenance(
 
 function quoteMarkdown(text: string): string[] {
   return text.split("\n").map((line) => `> ${line}`);
+}
+
+function qualityBreakdown(responseQuality: ResponseQualityScore) {
+  return {
+    requiredConceptRecall: responseQuality.requiredConceptRecall,
+    relevantEvidencePrecision: responseQuality.relevantEvidencePrecision,
+    forbiddenClaimCount: responseQuality.forbiddenClaimCount,
+    unnecessaryQuestionCount: responseQuality.unnecessaryQuestionCount,
+    tone: responseQuality.tone,
+    length: responseQuality.length,
+    failures: safeFailureReasons(responseQuality.failures),
+  };
+}
+
+function formatQualityBreakdown(responseQuality: ResponseQualityScore): string {
+  return [
+    `required concepts=${formatRatio(responseQuality.requiredConceptRecall)}`,
+    `evidence precision=${formatRatio(responseQuality.relevantEvidencePrecision)}`,
+    `forbidden claims=${responseQuality.forbiddenClaimCount}`,
+    `unnecessary questions=${responseQuality.unnecessaryQuestionCount}`,
+    `tone=${responseQuality.tone.pass ? "pass" : "fail"}`,
+    `length=${responseQuality.length.wordCount}/${responseQuality.length.maxWords} (${responseQuality.length.pass ? "pass" : "fail"})`,
+  ].join("; ");
+}
+
+function formatRatio(value: number): string {
+  return `${Math.round(value * 100)}%`;
+}
+
+function formatFailureReasons(failures: readonly string[]): string[] {
+  const reasons = safeFailureReasons(failures);
+  return reasons.length === 0
+    ? ["- Failure reasons: none."]
+    : ["- Failure reasons:", ...reasons.map((reason) => `  - ${reason}`)];
+}
+
+function safeFailureReasons(failures: readonly string[]): string[] {
+  return [...new Set(failures.map(safeFailureReason).filter((reason) => reason !== ""))];
+}
+
+function safeFailureReason(value: string): string {
+  return value
+    .replace(/[\u0000-\u001F\u007F]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 240);
 }
 
 function requireLiveConfiguration(

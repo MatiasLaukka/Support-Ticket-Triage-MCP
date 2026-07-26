@@ -60,6 +60,44 @@ const draftProvider: CustomerResponseDraftProvider = {
   },
 };
 
+function serializedObservation(input: {
+  scenarioId: string;
+  hardPass: boolean;
+  failures: string[];
+}) {
+  return {
+    scenarioId: input.scenarioId,
+    draftCustomerResponse: "We are reviewing the issue.",
+    classificationAgreement: {
+      category: true,
+      team: true,
+      priority: true,
+      knowledgeArticleIds: true,
+      escalationReasons: true,
+      all: true,
+    },
+    responseQuality: {
+      hardPass: input.hardPass,
+      requiredConceptRecall: 0.5,
+      relevantEvidencePrecision: 0.5,
+      forbiddenClaimCount: 0,
+      unnecessaryQuestionCount: 0,
+      tone: { expected: "balanced" as const, pass: true },
+      length: { wordCount: 5, maxWords: 90, pass: true },
+      failures: input.failures,
+    },
+    failures: input.failures,
+    aiExecutionTrace: {
+      classification: { status: "used" as const, model: "controlled-local-simulation" },
+      drafting: {
+        status: "used" as const,
+        source: "deterministic",
+        model: "controlled-local-simulation",
+      },
+    },
+  };
+}
+
 describe("AI comparison evaluation", () => {
   it("serializes safe per-scenario comparison results with provenance", () => {
     const serialized = serializeAiComparisonReport({
@@ -84,7 +122,17 @@ describe("AI comparison evaluation", () => {
             escalationReasons: true,
             all: true,
           },
-          responseQuality: { hardPass: true },
+          responseQuality: {
+            hardPass: true,
+            requiredConceptRecall: 1,
+            relevantEvidencePrecision: 1,
+            forbiddenClaimCount: 0,
+            unnecessaryQuestionCount: 0,
+            tone: { expected: "balanced", pass: true },
+            length: { wordCount: 6, maxWords: 90, pass: true },
+            failures: [],
+          },
+          failures: [],
           aiExecutionTrace: {
             classification: {
               status: "used",
@@ -106,6 +154,49 @@ describe("AI comparison evaluation", () => {
     expect(serialized).toContain("Classification agreement: pass");
     expect(serialized).toContain("Hard safety: pass");
     expect(serialized).toContain("controlled-local-simulation");
+  });
+
+  it("distinguishes overall failure from hard-safety status in serialized reports", () => {
+    const serialized = serializeAiComparisonReport({
+      mode: "controlled",
+      providerProvenance: {
+        classification: "controlled-local-simulation",
+        drafting: "controlled-local-simulation",
+        networkPolicy: "disabled",
+      },
+      reports: [{
+        lane: "gpt-gpt",
+        scenarioCount: 2,
+        passedScenarioCount: 0,
+        observations: [
+          serializedObservation({
+            scenarioId: "quality-only-failure",
+            hardPass: true,
+            failures: ["response quality: missing concept: request id"],
+          }),
+          serializedObservation({
+            scenarioId: "hard-safety-failure",
+            hardPass: false,
+            failures: ["response quality: missing escalation: incident response"],
+          }),
+        ],
+      }],
+    });
+
+    const qualityOnly = serialized.slice(
+      serialized.indexOf("### quality-only-failure"),
+      serialized.indexOf("### hard-safety-failure"),
+    );
+    const hardSafety = serialized.slice(serialized.indexOf("### hard-safety-failure"));
+    expect(qualityOnly).toContain("Overall result: fail");
+    expect(qualityOnly).toContain("Hard safety: pass");
+    expect(qualityOnly).toContain("response quality: missing concept: request id");
+    expect(hardSafety).toContain("Overall result: fail");
+    expect(hardSafety).toContain("Hard safety: fail");
+    expect(hardSafety).toContain("response quality: missing escalation: incident response");
+    expect(serialized).toContain('"overallResult": "fail"');
+    expect(serialized).toContain('"qualityBreakdown"');
+    expect(serialized).toContain('"failureReasons"');
   });
 
   it("rejects live mode before reporting a live result without an API key", async () => {

@@ -7,6 +7,7 @@
 ## deterministic-deterministic
 
 - Scenarios: 11; passed: 11.
+- Draft contract outcomes: candidate passes=0; repaired passes=0; deterministic fallbacks=0; hard safety violations=0.
 
 ### ordinary-outage-triage
 
@@ -15,6 +16,7 @@
 - Classification agreement: pass.
 - Classification delta: baseline={"category":"incident","team":"incident-response","priority":"P1","knowledgeArticleIds":["event-tracking-debugging","shopify-integration-sync"],"escalationReasons":["outage","sla"]}; candidate=null; accepted=[]; rejected=[]; overrides=[]; final={"category":"incident","team":"incident-response","priority":"P1","knowledgeArticleIds":["event-tracking-debugging","shopify-integration-sync"],"confidence":0.95,"escalationReasons":["outage","sla"]}.
 - Hard safety: pass.
+- Draft contract provenance: not-applicable.
 - Quality breakdown: required concepts=100%; required evidence=100%; evidence precision=100%; forbidden claims=0; unnecessary questions=0; tone=pass; length=87/120 (pass).
 - Failure reasons: none.
 - Provider provenance: classification=skipped/not-used; drafting=skipped/deterministic/not-used.
@@ -40,6 +42,7 @@
 - Classification agreement: pass.
 - Classification delta: baseline={"category":"api","team":"api-platform","priority":"P2","knowledgeArticleIds":["sms-compliance"],"escalationReasons":[]}; candidate=null; accepted=[]; rejected=[]; overrides=[]; final={"category":"api","team":"api-platform","priority":"P2","knowledgeArticleIds":["sms-compliance"],"confidence":0.8833333333333333,"escalationReasons":[]}.
 - Hard safety: pass.
+- Draft contract provenance: not-applicable.
 - Quality breakdown: required concepts=100%; required evidence=100%; evidence precision=100%; forbidden claims=0; unnecessary questions=0; tone=pass; length=68/100 (pass).
 - Failure reasons: none.
 - Provider provenance: classification=skipped/not-used; drafting=skipped/deterministic/not-used.
@@ -60,6 +63,7 @@
 - Classification agreement: pass.
 - Classification delta: baseline={"category":"integration","team":"integrations","priority":"P2","knowledgeArticleIds":["webhook-signature-validation"],"escalationReasons":[]}; candidate=null; accepted=[]; rejected=[]; overrides=[]; final={"category":"integration","team":"integrations","priority":"P2","knowledgeArticleIds":["webhook-signature-validation"],"confidence":0.8833333333333333,"escalationReasons":[]}.
 - Hard safety: pass.
+- Draft contract provenance: not-applicable.
 - Quality breakdown: required concepts=100%; required evidence=100%; evidence precision=100%; forbidden claims=0; unnecessary questions=0; tone=pass; length=84/120 (pass).
 - Failure reasons: none.
 - Provider provenance: classification=skipped/not-used; drafting=skipped/deterministic/not-used.
@@ -85,6 +89,7 @@
 - Classification agreement: pass.
 - Classification delta: baseline={"category":"integration","team":"integrations","priority":"P2","knowledgeArticleIds":["webhook-signature-validation"],"escalationReasons":[]}; candidate=null; accepted=[]; rejected=[]; overrides=[]; final={"category":"integration","team":"integrations","priority":"P2","knowledgeArticleIds":["webhook-signature-validation"],"confidence":0.8833333333333333,"escalationReasons":[]}.
 - Hard safety: pass.
+- Draft contract provenance: not-applicable.
 - Quality breakdown: required concepts=100%; required evidence=100%; evidence precision=100%; forbidden claims=0; unnecessary questions=0; tone=pass; length=82/115 (pass).
 - Failure reasons: none.
 - Provider provenance: classification=skipped/not-used; drafting=skipped/deterministic/not-used.
@@ -110,6 +115,7 @@
 - Classification agreement: pass.
 - Classification delta: baseline={"category":"integration","team":"integrations","priority":"P2","knowledgeArticleIds":["webhook-signature-validation"],"escalationReasons":[]}; candidate=null; accepted=[]; rejected=[]; overrides=[]; final={"category":"integration","team":"integrations","priority":"P2","knowledgeArticleIds":["webhook-signature-validation"],"confidence":0.8833333333333333,"escalationReasons":[]}.
 - Hard safety: pass.
+- Draft contract provenance: not-applicable.
 - Quality breakdown: required concepts=100%; required evidence=100%; evidence precision=100%; forbidden claims=0; unnecessary questions=0; tone=pass; length=85/115 (pass).
 - Failure reasons: none.
 - Provider provenance: classification=skipped/not-used; drafting=skipped/deterministic/not-used.
@@ -133,6 +139,7 @@
 - Classification agreement: pass.
 - Classification delta: baseline={"category":"performance","team":"product","priority":"P3","knowledgeArticleIds":["performance-troubleshooting"],"escalationReasons":[]}; candidate=null; accepted=[]; rejected=[]; overrides=[]; final={"category":"performance","team":"product","priority":"P3","knowledgeArticleIds":["performance-troubleshooting"],"confidence":0.95,"escalationReasons":[]}.
 - Hard safety: pass.
+- Draft contract provenance: not-applicable.
 - Quality breakdown: required concepts=100%; required evidence=100%; evidence precision=100%; forbidden claims=0; unnecessary questions=0; tone=pass; length=123/135 (pass).
 - Failure reasons: none.
 - Provider provenance: classification=skipped/not-used; drafting=skipped/deterministic/not-used.
@@ -159,6 +166,7 @@
 - Classification agreement: pass.
 - Classification delta: baseline={"category":"performance","team":"product","priority":"P3","knowledgeArticleIds":["performance-troubleshooting"],"escalationReasons":[]}; candidate=null; accepted=[]; rejected=[]; overrides=[]; final={"category":"performance","team":"product","priority":"P3","knowledgeArticleIds":["performance-troubleshooting"],"confidence":0.95,"escalationReasons":["diagnostic-ambiguity"]}.
 - Hard safety: pass.
+- Draft contract provenance: not-applicable.
 - Quality breakdown: required concepts=100%; required evidence=100%; evidence precision=100%; forbidden claims=0; unnecessary questions=0; tone=pass; length=62/105 (pass).
 - Failure reasons: none.
 - Provider provenance: classification=skipped/not-used; drafting=skipped/deterministic/not-used.
@@ -182,6 +190,7 @@
 - Classification agreement: pass.
 - Classification delta: baseline={"category":"performance","team":"product","priority":"P3","knowledgeArticleIds":["performance-troubleshooting"],"escalationReasons":[]}; candidate=null; accepted=[]; rejected=[]; overrides=[]; final={"category":"performance","team":"product","priority":"P3","knowledgeArticleIds":["performance-troubleshooting"],"confidence":0.95,"escalationReasons":[]}.
 - Hard safety: pass.
+- Draft contract provenance: not-applicable.
 - Quality breakdown: required concepts=100%; required evidence=100%; evidence precision=100%; forbidden claims=0; unnecessary questions=0; tone=pass; length=107/120 (pass).
 - Failure reasons: none.
 - Provider provenance: classification=skipped/not-used; drafting=skipped/deterministic/not-used.
@@ -207,6 +216,7 @@
 - Classification agreement: pass.
 - Classification delta: baseline={"category":"performance","team":"product","priority":"P3","knowledgeArticleIds":["performance-troubleshooting"],"escalationReasons":[]}; candidate=null; accepted=[]; rejected=[]; overrides=[]; final={"category":"performance","team":"product","priority":"P3","knowledgeArticleIds":["performance-troubleshooting"],"confidence":0.95,"escalationReasons":[]}.
 - Hard safety: pass.
+- Draft contract provenance: not-applicable.
 - Quality breakdown: required concepts=100%; required evidence=100%; evidence precision=100%; forbidden claims=0; unnecessary questions=0; tone=pass; length=35/70 (pass).
 - Failure reasons: none.
 - Provider provenance: classification=skipped/not-used; drafting=skipped/deterministic/not-used.
@@ -228,6 +238,7 @@
 - Classification agreement: pass.
 - Classification delta: baseline={"category":"integration","team":"integrations","priority":"P2","knowledgeArticleIds":["webhook-signature-validation"],"escalationReasons":[]}; candidate=null; accepted=[]; rejected=[]; overrides=[]; final={"category":"integration","team":"integrations","priority":"P2","knowledgeArticleIds":["webhook-signature-validation"],"confidence":0.8833333333333333,"escalationReasons":[]}.
 - Hard safety: pass.
+- Draft contract provenance: not-applicable.
 - Quality breakdown: required concepts=100%; required evidence=100%; evidence precision=100%; forbidden claims=0; unnecessary questions=0; tone=pass; length=61/100 (pass).
 - Failure reasons: none.
 - Provider provenance: classification=skipped/not-used; drafting=skipped/deterministic/not-used.
@@ -248,6 +259,7 @@
 - Classification agreement: pass.
 - Classification delta: baseline={"category":"integration","team":"integrations","priority":"P2","knowledgeArticleIds":["event-tracking-debugging","flow-trigger-troubleshooting"],"escalationReasons":["policy-conflict"]}; candidate=null; accepted=[]; rejected=[]; overrides=[]; final={"category":"integration","team":"integrations","priority":"P2","knowledgeArticleIds":["event-tracking-debugging","flow-trigger-troubleshooting"],"confidence":0.95,"escalationReasons":["policy-conflict"]}.
 - Hard safety: pass.
+- Draft contract provenance: not-applicable.
 - Quality breakdown: required concepts=100%; required evidence=100%; evidence precision=100%; forbidden claims=0; unnecessary questions=0; tone=pass; length=101/110 (pass).
 - Failure reasons: none.
 - Provider provenance: classification=skipped/not-used; drafting=skipped/deterministic/not-used.
@@ -269,6 +281,7 @@
 ## gpt-deterministic
 
 - Scenarios: 11; passed: 11.
+- Draft contract outcomes: candidate passes=0; repaired passes=0; deterministic fallbacks=0; hard safety violations=0.
 
 ### ordinary-outage-triage
 
@@ -277,6 +290,7 @@
 - Classification agreement: pass.
 - Classification delta: baseline={"category":"incident","team":"incident-response","priority":"P1","knowledgeArticleIds":["event-tracking-debugging","shopify-integration-sync"],"escalationReasons":["outage","sla"]}; candidate={"issueType":"incident-support-request","category":"incident","team":"incident-response","priority":"P1","knowledgeArticleIds":["event-tracking-debugging","shopify-integration-sync"],"confidence":0.9,"explanation":"GPT classification advice was evaluated as advisory evidence."}; accepted=[{"ruleId":"gpt-advisory-incident-support-request-category","target":"category:incident","weight":4,"reason":"GPT classification advice was evaluated as advisory evidence."},{"ruleId":"gpt-advisory-incident-support-request-team","target":"team:incident-response","weight":4,"reason":"GPT classification advice was evaluated as advisory evidence."},{"ruleId":"gpt-advisory-incident-support-request-priority","target":"priority:P1","weight":4,"reason":"GPT classification advice was evaluated as advisory evidence."},{"ruleId":"gpt-advisory-incident-support-request-event-tracking-debugging","target":"knowledge:event-tracking-debugging","weight":3,"reason":"GPT classification advice was evaluated as advisory evidence."},{"ruleId":"gpt-advisory-incident-support-request-shopify-integration-sync","target":"knowledge:shopify-integration-sync","weight":3,"reason":"GPT classification advice was evaluated as advisory evidence."}]; rejected=[]; overrides=[]; final={"category":"incident","team":"incident-response","priority":"P1","knowledgeArticleIds":["event-tracking-debugging","shopify-integration-sync"],"confidence":0.95,"escalationReasons":["outage","sla"]}.
 - Hard safety: pass.
+- Draft contract provenance: not-applicable.
 - Quality breakdown: required concepts=100%; required evidence=100%; evidence precision=100%; forbidden claims=0; unnecessary questions=0; tone=pass; length=87/120 (pass).
 - Failure reasons: none.
 - Provider provenance: classification=used/controlled-local-simulation/latency=0ms; drafting=skipped/deterministic/not-used.
@@ -302,6 +316,7 @@
 - Classification agreement: pass.
 - Classification delta: baseline={"category":"api","team":"api-platform","priority":"P2","knowledgeArticleIds":["sms-compliance"],"escalationReasons":[]}; candidate={"issueType":"api-support-request","category":"api","team":"api-platform","priority":"P2","knowledgeArticleIds":["sms-compliance"],"confidence":0.9,"explanation":"GPT classification advice was evaluated as advisory evidence."}; accepted=[{"ruleId":"gpt-advisory-api-support-request-category","target":"category:api","weight":4,"reason":"GPT classification advice was evaluated as advisory evidence."},{"ruleId":"gpt-advisory-api-support-request-team","target":"team:api-platform","weight":4,"reason":"GPT classification advice was evaluated as advisory evidence."},{"ruleId":"gpt-advisory-api-support-request-priority","target":"priority:P2","weight":4,"reason":"GPT classification advice was evaluated as advisory evidence."},{"ruleId":"gpt-advisory-api-support-request-sms-compliance","target":"knowledge:sms-compliance","weight":3,"reason":"GPT classification advice was evaluated as advisory evidence."}]; rejected=[]; overrides=[]; final={"category":"api","team":"api-platform","priority":"P2","knowledgeArticleIds":["sms-compliance"],"confidence":0.95,"escalationReasons":[]}.
 - Hard safety: pass.
+- Draft contract provenance: not-applicable.
 - Quality breakdown: required concepts=100%; required evidence=100%; evidence precision=100%; forbidden claims=0; unnecessary questions=0; tone=pass; length=68/100 (pass).
 - Failure reasons: none.
 - Provider provenance: classification=used/controlled-local-simulation/latency=0ms; drafting=skipped/deterministic/not-used.
@@ -322,6 +337,7 @@
 - Classification agreement: pass.
 - Classification delta: baseline={"category":"integration","team":"integrations","priority":"P2","knowledgeArticleIds":["webhook-signature-validation"],"escalationReasons":[]}; candidate={"issueType":"integration-support-request","category":"integration","team":"integrations","priority":"P2","knowledgeArticleIds":["webhook-signature-validation"],"confidence":0.9,"explanation":"GPT classification advice was evaluated as advisory evidence."}; accepted=[{"ruleId":"gpt-advisory-integration-support-request-category","target":"category:integration","weight":4,"reason":"GPT classification advice was evaluated as advisory evidence."},{"ruleId":"gpt-advisory-integration-support-request-team","target":"team:integrations","weight":4,"reason":"GPT classification advice was evaluated as advisory evidence."},{"ruleId":"gpt-advisory-integration-support-request-priority","target":"priority:P2","weight":4,"reason":"GPT classification advice was evaluated as advisory evidence."},{"ruleId":"gpt-advisory-integration-support-request-webhook-signature-validation","target":"knowledge:webhook-signature-validation","weight":3,"reason":"GPT classification advice was evaluated as advisory evidence."}]; rejected=[]; overrides=[]; final={"category":"integration","team":"integrations","priority":"P2","knowledgeArticleIds":["webhook-signature-validation"],"confidence":0.95,"escalationReasons":[]}.
 - Hard safety: pass.
+- Draft contract provenance: not-applicable.
 - Quality breakdown: required concepts=100%; required evidence=100%; evidence precision=100%; forbidden claims=0; unnecessary questions=0; tone=pass; length=84/120 (pass).
 - Failure reasons: none.
 - Provider provenance: classification=used/controlled-local-simulation/latency=0ms; drafting=skipped/deterministic/not-used.
@@ -347,6 +363,7 @@
 - Classification agreement: pass.
 - Classification delta: baseline={"category":"integration","team":"integrations","priority":"P2","knowledgeArticleIds":["webhook-signature-validation"],"escalationReasons":[]}; candidate={"issueType":"integration-support-request","category":"integration","team":"integrations","priority":"P2","knowledgeArticleIds":["webhook-signature-validation"],"confidence":0.9,"explanation":"GPT classification advice was evaluated as advisory evidence."}; accepted=[{"ruleId":"gpt-advisory-integration-support-request-category","target":"category:integration","weight":4,"reason":"GPT classification advice was evaluated as advisory evidence."},{"ruleId":"gpt-advisory-integration-support-request-team","target":"team:integrations","weight":4,"reason":"GPT classification advice was evaluated as advisory evidence."},{"ruleId":"gpt-advisory-integration-support-request-priority","target":"priority:P2","weight":4,"reason":"GPT classification advice was evaluated as advisory evidence."},{"ruleId":"gpt-advisory-integration-support-request-webhook-signature-validation","target":"knowledge:webhook-signature-validation","weight":3,"reason":"GPT classification advice was evaluated as advisory evidence."}]; rejected=[]; overrides=[]; final={"category":"integration","team":"integrations","priority":"P2","knowledgeArticleIds":["webhook-signature-validation"],"confidence":0.95,"escalationReasons":[]}.
 - Hard safety: pass.
+- Draft contract provenance: not-applicable.
 - Quality breakdown: required concepts=100%; required evidence=100%; evidence precision=100%; forbidden claims=0; unnecessary questions=0; tone=pass; length=82/115 (pass).
 - Failure reasons: none.
 - Provider provenance: classification=used/controlled-local-simulation/latency=0ms; drafting=skipped/deterministic/not-used.
@@ -372,6 +389,7 @@
 - Classification agreement: pass.
 - Classification delta: baseline={"category":"integration","team":"integrations","priority":"P2","knowledgeArticleIds":["webhook-signature-validation"],"escalationReasons":[]}; candidate={"issueType":"integration-support-request","category":"integration","team":"integrations","priority":"P2","knowledgeArticleIds":["webhook-signature-validation"],"confidence":0.9,"explanation":"GPT classification advice was evaluated as advisory evidence."}; accepted=[{"ruleId":"gpt-advisory-integration-support-request-category","target":"category:integration","weight":4,"reason":"GPT classification advice was evaluated as advisory evidence."},{"ruleId":"gpt-advisory-integration-support-request-team","target":"team:integrations","weight":4,"reason":"GPT classification advice was evaluated as advisory evidence."},{"ruleId":"gpt-advisory-integration-support-request-priority","target":"priority:P2","weight":4,"reason":"GPT classification advice was evaluated as advisory evidence."},{"ruleId":"gpt-advisory-integration-support-request-webhook-signature-validation","target":"knowledge:webhook-signature-validation","weight":3,"reason":"GPT classification advice was evaluated as advisory evidence."}]; rejected=[]; overrides=[]; final={"category":"integration","team":"integrations","priority":"P2","knowledgeArticleIds":["webhook-signature-validation"],"confidence":0.95,"escalationReasons":[]}.
 - Hard safety: pass.
+- Draft contract provenance: not-applicable.
 - Quality breakdown: required concepts=100%; required evidence=100%; evidence precision=100%; forbidden claims=0; unnecessary questions=0; tone=pass; length=85/115 (pass).
 - Failure reasons: none.
 - Provider provenance: classification=used/controlled-local-simulation/latency=0ms; drafting=skipped/deterministic/not-used.
@@ -395,6 +413,7 @@
 - Classification agreement: pass.
 - Classification delta: baseline={"category":"performance","team":"product","priority":"P3","knowledgeArticleIds":["performance-troubleshooting"],"escalationReasons":[]}; candidate={"issueType":"campaign-editor-ambiguity","category":"performance","team":"product","priority":"P3","knowledgeArticleIds":["performance-troubleshooting"],"confidence":0.55,"explanation":"GPT classification advice was evaluated as advisory evidence."}; accepted=[{"ruleId":"gpt-advisory-campaign-editor-ambiguity-category","target":"category:performance","weight":2,"reason":"GPT classification advice was evaluated as advisory evidence."},{"ruleId":"gpt-advisory-campaign-editor-ambiguity-team","target":"team:product","weight":2,"reason":"GPT classification advice was evaluated as advisory evidence."},{"ruleId":"gpt-advisory-campaign-editor-ambiguity-priority","target":"priority:P3","weight":2,"reason":"GPT classification advice was evaluated as advisory evidence."},{"ruleId":"gpt-advisory-campaign-editor-ambiguity-performance-troubleshooting","target":"knowledge:performance-troubleshooting","weight":1,"reason":"GPT classification advice was evaluated as advisory evidence."}]; rejected=[]; overrides=[]; final={"category":"performance","team":"product","priority":"P3","knowledgeArticleIds":["performance-troubleshooting"],"confidence":0.95,"escalationReasons":[]}.
 - Hard safety: pass.
+- Draft contract provenance: not-applicable.
 - Quality breakdown: required concepts=100%; required evidence=100%; evidence precision=100%; forbidden claims=0; unnecessary questions=0; tone=pass; length=123/135 (pass).
 - Failure reasons: none.
 - Provider provenance: classification=used/controlled-local-simulation/latency=0ms; drafting=skipped/deterministic/not-used.
@@ -421,6 +440,7 @@
 - Classification agreement: pass.
 - Classification delta: baseline={"category":"performance","team":"product","priority":"P3","knowledgeArticleIds":["performance-troubleshooting"],"escalationReasons":[]}; candidate={"issueType":"campaign-editor-ambiguity","category":"performance","team":"product","priority":"P3","knowledgeArticleIds":["performance-troubleshooting"],"confidence":0.55,"explanation":"GPT classification advice was evaluated as advisory evidence."}; accepted=[{"ruleId":"gpt-advisory-campaign-editor-ambiguity-category","target":"category:performance","weight":2,"reason":"GPT classification advice was evaluated as advisory evidence."},{"ruleId":"gpt-advisory-campaign-editor-ambiguity-team","target":"team:product","weight":2,"reason":"GPT classification advice was evaluated as advisory evidence."},{"ruleId":"gpt-advisory-campaign-editor-ambiguity-priority","target":"priority:P3","weight":2,"reason":"GPT classification advice was evaluated as advisory evidence."},{"ruleId":"gpt-advisory-campaign-editor-ambiguity-performance-troubleshooting","target":"knowledge:performance-troubleshooting","weight":1,"reason":"GPT classification advice was evaluated as advisory evidence."}]; rejected=[]; overrides=[]; final={"category":"performance","team":"product","priority":"P3","knowledgeArticleIds":["performance-troubleshooting"],"confidence":0.95,"escalationReasons":["diagnostic-ambiguity"]}.
 - Hard safety: pass.
+- Draft contract provenance: not-applicable.
 - Quality breakdown: required concepts=100%; required evidence=100%; evidence precision=100%; forbidden claims=0; unnecessary questions=0; tone=pass; length=62/105 (pass).
 - Failure reasons: none.
 - Provider provenance: classification=used/controlled-local-simulation/latency=0ms; drafting=skipped/deterministic/not-used.
@@ -444,6 +464,7 @@
 - Classification agreement: pass.
 - Classification delta: baseline={"category":"performance","team":"product","priority":"P3","knowledgeArticleIds":["performance-troubleshooting"],"escalationReasons":[]}; candidate={"issueType":"campaign-editor-ambiguity","category":"performance","team":"product","priority":"P3","knowledgeArticleIds":["performance-troubleshooting"],"confidence":0.55,"explanation":"GPT classification advice was evaluated as advisory evidence."}; accepted=[{"ruleId":"gpt-advisory-campaign-editor-ambiguity-category","target":"category:performance","weight":2,"reason":"GPT classification advice was evaluated as advisory evidence."},{"ruleId":"gpt-advisory-campaign-editor-ambiguity-team","target":"team:product","weight":2,"reason":"GPT classification advice was evaluated as advisory evidence."},{"ruleId":"gpt-advisory-campaign-editor-ambiguity-priority","target":"priority:P3","weight":2,"reason":"GPT classification advice was evaluated as advisory evidence."},{"ruleId":"gpt-advisory-campaign-editor-ambiguity-performance-troubleshooting","target":"knowledge:performance-troubleshooting","weight":1,"reason":"GPT classification advice was evaluated as advisory evidence."}]; rejected=[]; overrides=[]; final={"category":"performance","team":"product","priority":"P3","knowledgeArticleIds":["performance-troubleshooting"],"confidence":0.95,"escalationReasons":[]}.
 - Hard safety: pass.
+- Draft contract provenance: not-applicable.
 - Quality breakdown: required concepts=100%; required evidence=100%; evidence precision=100%; forbidden claims=0; unnecessary questions=0; tone=pass; length=107/120 (pass).
 - Failure reasons: none.
 - Provider provenance: classification=used/controlled-local-simulation/latency=0ms; drafting=skipped/deterministic/not-used.
@@ -469,6 +490,7 @@
 - Classification agreement: pass.
 - Classification delta: baseline={"category":"performance","team":"product","priority":"P3","knowledgeArticleIds":["performance-troubleshooting"],"escalationReasons":[]}; candidate={"issueType":"campaign-editor-ambiguity","category":"performance","team":"product","priority":"P3","knowledgeArticleIds":["performance-troubleshooting"],"confidence":0.55,"explanation":"GPT classification advice was evaluated as advisory evidence."}; accepted=[{"ruleId":"gpt-advisory-campaign-editor-ambiguity-category","target":"category:performance","weight":2,"reason":"GPT classification advice was evaluated as advisory evidence."},{"ruleId":"gpt-advisory-campaign-editor-ambiguity-team","target":"team:product","weight":2,"reason":"GPT classification advice was evaluated as advisory evidence."},{"ruleId":"gpt-advisory-campaign-editor-ambiguity-priority","target":"priority:P3","weight":2,"reason":"GPT classification advice was evaluated as advisory evidence."},{"ruleId":"gpt-advisory-campaign-editor-ambiguity-performance-troubleshooting","target":"knowledge:performance-troubleshooting","weight":1,"reason":"GPT classification advice was evaluated as advisory evidence."}]; rejected=[]; overrides=[]; final={"category":"performance","team":"product","priority":"P3","knowledgeArticleIds":["performance-troubleshooting"],"confidence":0.95,"escalationReasons":[]}.
 - Hard safety: pass.
+- Draft contract provenance: not-applicable.
 - Quality breakdown: required concepts=100%; required evidence=100%; evidence precision=100%; forbidden claims=0; unnecessary questions=0; tone=pass; length=35/70 (pass).
 - Failure reasons: none.
 - Provider provenance: classification=used/controlled-local-simulation/latency=0ms; drafting=skipped/deterministic/not-used.
@@ -490,6 +512,7 @@
 - Classification agreement: pass.
 - Classification delta: baseline={"category":"integration","team":"integrations","priority":"P2","knowledgeArticleIds":["webhook-signature-validation"],"escalationReasons":[]}; candidate={"issueType":"integration-support-request","category":"integration","team":"integrations","priority":"P2","knowledgeArticleIds":["webhook-signature-validation"],"confidence":0.9,"explanation":"GPT classification advice was evaluated as advisory evidence."}; accepted=[{"ruleId":"gpt-advisory-integration-support-request-category","target":"category:integration","weight":4,"reason":"GPT classification advice was evaluated as advisory evidence."},{"ruleId":"gpt-advisory-integration-support-request-team","target":"team:integrations","weight":4,"reason":"GPT classification advice was evaluated as advisory evidence."},{"ruleId":"gpt-advisory-integration-support-request-priority","target":"priority:P2","weight":4,"reason":"GPT classification advice was evaluated as advisory evidence."},{"ruleId":"gpt-advisory-integration-support-request-webhook-signature-validation","target":"knowledge:webhook-signature-validation","weight":3,"reason":"GPT classification advice was evaluated as advisory evidence."}]; rejected=[]; overrides=[]; final={"category":"integration","team":"integrations","priority":"P2","knowledgeArticleIds":["webhook-signature-validation"],"confidence":0.95,"escalationReasons":[]}.
 - Hard safety: pass.
+- Draft contract provenance: not-applicable.
 - Quality breakdown: required concepts=100%; required evidence=100%; evidence precision=100%; forbidden claims=0; unnecessary questions=0; tone=pass; length=61/100 (pass).
 - Failure reasons: none.
 - Provider provenance: classification=used/controlled-local-simulation/latency=0ms; drafting=skipped/deterministic/not-used.
@@ -510,6 +533,7 @@
 - Classification agreement: pass.
 - Classification delta: baseline={"category":"integration","team":"integrations","priority":"P2","knowledgeArticleIds":["event-tracking-debugging","flow-trigger-troubleshooting"],"escalationReasons":["policy-conflict"]}; candidate=null; accepted=[]; rejected=[]; overrides=[]; final={"category":"integration","team":"integrations","priority":"P2","knowledgeArticleIds":["event-tracking-debugging","flow-trigger-troubleshooting"],"confidence":0.95,"escalationReasons":["policy-conflict"]}.
 - Hard safety: pass.
+- Draft contract provenance: not-applicable.
 - Quality breakdown: required concepts=100%; required evidence=100%; evidence precision=100%; forbidden claims=0; unnecessary questions=0; tone=pass; length=101/110 (pass).
 - Failure reasons: none.
 - Provider provenance: classification=skipped/not-used; drafting=skipped/deterministic/not-used.
@@ -531,6 +555,7 @@
 ## deterministic-gpt
 
 - Scenarios: 11; passed: 11.
+- Draft contract outcomes: candidate passes=0; repaired passes=0; deterministic fallbacks=0; hard safety violations=0.
 
 ### ordinary-outage-triage
 
@@ -539,6 +564,7 @@
 - Classification agreement: pass.
 - Classification delta: baseline={"category":"incident","team":"incident-response","priority":"P1","knowledgeArticleIds":["event-tracking-debugging","shopify-integration-sync"],"escalationReasons":["outage","sla"]}; candidate=null; accepted=[]; rejected=[]; overrides=[]; final={"category":"incident","team":"incident-response","priority":"P1","knowledgeArticleIds":["event-tracking-debugging","shopify-integration-sync"],"confidence":0.95,"escalationReasons":["outage","sla"]}.
 - Hard safety: pass.
+- Draft contract provenance: not-applicable.
 - Quality breakdown: required concepts=100%; required evidence=100%; evidence precision=100%; forbidden claims=0; unnecessary questions=0; tone=pass; length=87/120 (pass).
 - Failure reasons: none.
 - Provider provenance: classification=skipped/not-used; drafting=used/deterministic/controlled-local-simulation/latency=0ms.
@@ -564,6 +590,7 @@
 - Classification agreement: pass.
 - Classification delta: baseline={"category":"api","team":"api-platform","priority":"P2","knowledgeArticleIds":["sms-compliance"],"escalationReasons":[]}; candidate=null; accepted=[]; rejected=[]; overrides=[]; final={"category":"api","team":"api-platform","priority":"P2","knowledgeArticleIds":["sms-compliance"],"confidence":0.8833333333333333,"escalationReasons":[]}.
 - Hard safety: pass.
+- Draft contract provenance: not-applicable.
 - Quality breakdown: required concepts=100%; required evidence=100%; evidence precision=100%; forbidden claims=0; unnecessary questions=0; tone=pass; length=68/100 (pass).
 - Failure reasons: none.
 - Provider provenance: classification=skipped/not-used; drafting=used/deterministic/controlled-local-simulation/latency=0ms.
@@ -584,6 +611,7 @@
 - Classification agreement: pass.
 - Classification delta: baseline={"category":"integration","team":"integrations","priority":"P2","knowledgeArticleIds":["webhook-signature-validation"],"escalationReasons":[]}; candidate=null; accepted=[]; rejected=[]; overrides=[]; final={"category":"integration","team":"integrations","priority":"P2","knowledgeArticleIds":["webhook-signature-validation"],"confidence":0.8833333333333333,"escalationReasons":[]}.
 - Hard safety: pass.
+- Draft contract provenance: not-applicable.
 - Quality breakdown: required concepts=100%; required evidence=100%; evidence precision=100%; forbidden claims=0; unnecessary questions=0; tone=pass; length=84/120 (pass).
 - Failure reasons: none.
 - Provider provenance: classification=skipped/not-used; drafting=used/deterministic/controlled-local-simulation/latency=0ms.
@@ -609,6 +637,7 @@
 - Classification agreement: pass.
 - Classification delta: baseline={"category":"integration","team":"integrations","priority":"P2","knowledgeArticleIds":["webhook-signature-validation"],"escalationReasons":[]}; candidate=null; accepted=[]; rejected=[]; overrides=[]; final={"category":"integration","team":"integrations","priority":"P2","knowledgeArticleIds":["webhook-signature-validation"],"confidence":0.8833333333333333,"escalationReasons":[]}.
 - Hard safety: pass.
+- Draft contract provenance: not-applicable.
 - Quality breakdown: required concepts=100%; required evidence=100%; evidence precision=100%; forbidden claims=0; unnecessary questions=0; tone=pass; length=82/115 (pass).
 - Failure reasons: none.
 - Provider provenance: classification=skipped/not-used; drafting=used/deterministic/controlled-local-simulation/latency=0ms.
@@ -634,6 +663,7 @@
 - Classification agreement: pass.
 - Classification delta: baseline={"category":"integration","team":"integrations","priority":"P2","knowledgeArticleIds":["webhook-signature-validation"],"escalationReasons":[]}; candidate=null; accepted=[]; rejected=[]; overrides=[]; final={"category":"integration","team":"integrations","priority":"P2","knowledgeArticleIds":["webhook-signature-validation"],"confidence":0.8833333333333333,"escalationReasons":[]}.
 - Hard safety: pass.
+- Draft contract provenance: not-applicable.
 - Quality breakdown: required concepts=100%; required evidence=100%; evidence precision=100%; forbidden claims=0; unnecessary questions=0; tone=pass; length=85/115 (pass).
 - Failure reasons: none.
 - Provider provenance: classification=skipped/not-used; drafting=used/deterministic/controlled-local-simulation/latency=0ms.
@@ -657,6 +687,7 @@
 - Classification agreement: pass.
 - Classification delta: baseline={"category":"performance","team":"product","priority":"P3","knowledgeArticleIds":["performance-troubleshooting"],"escalationReasons":[]}; candidate=null; accepted=[]; rejected=[]; overrides=[]; final={"category":"performance","team":"product","priority":"P3","knowledgeArticleIds":["performance-troubleshooting"],"confidence":0.95,"escalationReasons":[]}.
 - Hard safety: pass.
+- Draft contract provenance: not-applicable.
 - Quality breakdown: required concepts=100%; required evidence=100%; evidence precision=100%; forbidden claims=0; unnecessary questions=0; tone=pass; length=123/135 (pass).
 - Failure reasons: none.
 - Provider provenance: classification=skipped/not-used; drafting=used/deterministic/controlled-local-simulation/latency=0ms.
@@ -683,6 +714,7 @@
 - Classification agreement: pass.
 - Classification delta: baseline={"category":"performance","team":"product","priority":"P3","knowledgeArticleIds":["performance-troubleshooting"],"escalationReasons":[]}; candidate=null; accepted=[]; rejected=[]; overrides=[]; final={"category":"performance","team":"product","priority":"P3","knowledgeArticleIds":["performance-troubleshooting"],"confidence":0.95,"escalationReasons":["diagnostic-ambiguity"]}.
 - Hard safety: pass.
+- Draft contract provenance: not-applicable.
 - Quality breakdown: required concepts=100%; required evidence=100%; evidence precision=100%; forbidden claims=0; unnecessary questions=0; tone=pass; length=62/105 (pass).
 - Failure reasons: none.
 - Provider provenance: classification=skipped/not-used; drafting=skipped/deterministic/not-used.
@@ -706,6 +738,7 @@
 - Classification agreement: pass.
 - Classification delta: baseline={"category":"performance","team":"product","priority":"P3","knowledgeArticleIds":["performance-troubleshooting"],"escalationReasons":[]}; candidate=null; accepted=[]; rejected=[]; overrides=[]; final={"category":"performance","team":"product","priority":"P3","knowledgeArticleIds":["performance-troubleshooting"],"confidence":0.95,"escalationReasons":[]}.
 - Hard safety: pass.
+- Draft contract provenance: not-applicable.
 - Quality breakdown: required concepts=100%; required evidence=100%; evidence precision=100%; forbidden claims=0; unnecessary questions=0; tone=pass; length=107/120 (pass).
 - Failure reasons: none.
 - Provider provenance: classification=skipped/not-used; drafting=used/deterministic/controlled-local-simulation/latency=0ms.
@@ -731,6 +764,7 @@
 - Classification agreement: pass.
 - Classification delta: baseline={"category":"performance","team":"product","priority":"P3","knowledgeArticleIds":["performance-troubleshooting"],"escalationReasons":[]}; candidate=null; accepted=[]; rejected=[]; overrides=[]; final={"category":"performance","team":"product","priority":"P3","knowledgeArticleIds":["performance-troubleshooting"],"confidence":0.95,"escalationReasons":[]}.
 - Hard safety: pass.
+- Draft contract provenance: not-applicable.
 - Quality breakdown: required concepts=100%; required evidence=100%; evidence precision=100%; forbidden claims=0; unnecessary questions=0; tone=pass; length=35/70 (pass).
 - Failure reasons: none.
 - Provider provenance: classification=skipped/not-used; drafting=used/deterministic/controlled-local-simulation/latency=0ms.
@@ -752,6 +786,7 @@
 - Classification agreement: pass.
 - Classification delta: baseline={"category":"integration","team":"integrations","priority":"P2","knowledgeArticleIds":["webhook-signature-validation"],"escalationReasons":[]}; candidate=null; accepted=[]; rejected=[]; overrides=[]; final={"category":"integration","team":"integrations","priority":"P2","knowledgeArticleIds":["webhook-signature-validation"],"confidence":0.8833333333333333,"escalationReasons":[]}.
 - Hard safety: pass.
+- Draft contract provenance: not-applicable.
 - Quality breakdown: required concepts=100%; required evidence=100%; evidence precision=100%; forbidden claims=0; unnecessary questions=0; tone=pass; length=61/100 (pass).
 - Failure reasons: none.
 - Provider provenance: classification=skipped/not-used; drafting=used/deterministic/controlled-local-simulation/latency=0ms.
@@ -772,6 +807,7 @@
 - Classification agreement: pass.
 - Classification delta: baseline={"category":"integration","team":"integrations","priority":"P2","knowledgeArticleIds":["event-tracking-debugging","flow-trigger-troubleshooting"],"escalationReasons":["policy-conflict"]}; candidate=null; accepted=[]; rejected=[]; overrides=[]; final={"category":"integration","team":"integrations","priority":"P2","knowledgeArticleIds":["event-tracking-debugging","flow-trigger-troubleshooting"],"confidence":0.95,"escalationReasons":["policy-conflict"]}.
 - Hard safety: pass.
+- Draft contract provenance: not-applicable.
 - Quality breakdown: required concepts=100%; required evidence=100%; evidence precision=100%; forbidden claims=0; unnecessary questions=0; tone=pass; length=101/110 (pass).
 - Failure reasons: none.
 - Provider provenance: classification=skipped/not-used; drafting=skipped/deterministic/not-used.
@@ -793,6 +829,7 @@
 ## gpt-gpt
 
 - Scenarios: 11; passed: 11.
+- Draft contract outcomes: candidate passes=0; repaired passes=0; deterministic fallbacks=0; hard safety violations=0.
 
 ### ordinary-outage-triage
 
@@ -801,6 +838,7 @@
 - Classification agreement: pass.
 - Classification delta: baseline={"category":"incident","team":"incident-response","priority":"P1","knowledgeArticleIds":["event-tracking-debugging","shopify-integration-sync"],"escalationReasons":["outage","sla"]}; candidate={"issueType":"incident-support-request","category":"incident","team":"incident-response","priority":"P1","knowledgeArticleIds":["event-tracking-debugging","shopify-integration-sync"],"confidence":0.9,"explanation":"GPT classification advice was evaluated as advisory evidence."}; accepted=[{"ruleId":"gpt-advisory-incident-support-request-category","target":"category:incident","weight":4,"reason":"GPT classification advice was evaluated as advisory evidence."},{"ruleId":"gpt-advisory-incident-support-request-team","target":"team:incident-response","weight":4,"reason":"GPT classification advice was evaluated as advisory evidence."},{"ruleId":"gpt-advisory-incident-support-request-priority","target":"priority:P1","weight":4,"reason":"GPT classification advice was evaluated as advisory evidence."},{"ruleId":"gpt-advisory-incident-support-request-event-tracking-debugging","target":"knowledge:event-tracking-debugging","weight":3,"reason":"GPT classification advice was evaluated as advisory evidence."},{"ruleId":"gpt-advisory-incident-support-request-shopify-integration-sync","target":"knowledge:shopify-integration-sync","weight":3,"reason":"GPT classification advice was evaluated as advisory evidence."}]; rejected=[]; overrides=[]; final={"category":"incident","team":"incident-response","priority":"P1","knowledgeArticleIds":["event-tracking-debugging","shopify-integration-sync"],"confidence":0.95,"escalationReasons":["outage","sla"]}.
 - Hard safety: pass.
+- Draft contract provenance: not-applicable.
 - Quality breakdown: required concepts=100%; required evidence=100%; evidence precision=100%; forbidden claims=0; unnecessary questions=0; tone=pass; length=87/120 (pass).
 - Failure reasons: none.
 - Provider provenance: classification=used/controlled-local-simulation/latency=0ms; drafting=used/deterministic/controlled-local-simulation/latency=0ms.
@@ -826,6 +864,7 @@
 - Classification agreement: pass.
 - Classification delta: baseline={"category":"api","team":"api-platform","priority":"P2","knowledgeArticleIds":["sms-compliance"],"escalationReasons":[]}; candidate={"issueType":"api-support-request","category":"api","team":"api-platform","priority":"P2","knowledgeArticleIds":["sms-compliance"],"confidence":0.9,"explanation":"GPT classification advice was evaluated as advisory evidence."}; accepted=[{"ruleId":"gpt-advisory-api-support-request-category","target":"category:api","weight":4,"reason":"GPT classification advice was evaluated as advisory evidence."},{"ruleId":"gpt-advisory-api-support-request-team","target":"team:api-platform","weight":4,"reason":"GPT classification advice was evaluated as advisory evidence."},{"ruleId":"gpt-advisory-api-support-request-priority","target":"priority:P2","weight":4,"reason":"GPT classification advice was evaluated as advisory evidence."},{"ruleId":"gpt-advisory-api-support-request-sms-compliance","target":"knowledge:sms-compliance","weight":3,"reason":"GPT classification advice was evaluated as advisory evidence."}]; rejected=[]; overrides=[]; final={"category":"api","team":"api-platform","priority":"P2","knowledgeArticleIds":["sms-compliance"],"confidence":0.95,"escalationReasons":[]}.
 - Hard safety: pass.
+- Draft contract provenance: not-applicable.
 - Quality breakdown: required concepts=100%; required evidence=100%; evidence precision=100%; forbidden claims=0; unnecessary questions=0; tone=pass; length=68/100 (pass).
 - Failure reasons: none.
 - Provider provenance: classification=used/controlled-local-simulation/latency=0ms; drafting=used/deterministic/controlled-local-simulation/latency=0ms.
@@ -846,6 +885,7 @@
 - Classification agreement: pass.
 - Classification delta: baseline={"category":"integration","team":"integrations","priority":"P2","knowledgeArticleIds":["webhook-signature-validation"],"escalationReasons":[]}; candidate={"issueType":"integration-support-request","category":"integration","team":"integrations","priority":"P2","knowledgeArticleIds":["webhook-signature-validation"],"confidence":0.9,"explanation":"GPT classification advice was evaluated as advisory evidence."}; accepted=[{"ruleId":"gpt-advisory-integration-support-request-category","target":"category:integration","weight":4,"reason":"GPT classification advice was evaluated as advisory evidence."},{"ruleId":"gpt-advisory-integration-support-request-team","target":"team:integrations","weight":4,"reason":"GPT classification advice was evaluated as advisory evidence."},{"ruleId":"gpt-advisory-integration-support-request-priority","target":"priority:P2","weight":4,"reason":"GPT classification advice was evaluated as advisory evidence."},{"ruleId":"gpt-advisory-integration-support-request-webhook-signature-validation","target":"knowledge:webhook-signature-validation","weight":3,"reason":"GPT classification advice was evaluated as advisory evidence."}]; rejected=[]; overrides=[]; final={"category":"integration","team":"integrations","priority":"P2","knowledgeArticleIds":["webhook-signature-validation"],"confidence":0.95,"escalationReasons":[]}.
 - Hard safety: pass.
+- Draft contract provenance: not-applicable.
 - Quality breakdown: required concepts=100%; required evidence=100%; evidence precision=100%; forbidden claims=0; unnecessary questions=0; tone=pass; length=84/120 (pass).
 - Failure reasons: none.
 - Provider provenance: classification=used/controlled-local-simulation/latency=0ms; drafting=used/deterministic/controlled-local-simulation/latency=0ms.
@@ -871,6 +911,7 @@
 - Classification agreement: pass.
 - Classification delta: baseline={"category":"integration","team":"integrations","priority":"P2","knowledgeArticleIds":["webhook-signature-validation"],"escalationReasons":[]}; candidate={"issueType":"integration-support-request","category":"integration","team":"integrations","priority":"P2","knowledgeArticleIds":["webhook-signature-validation"],"confidence":0.9,"explanation":"GPT classification advice was evaluated as advisory evidence."}; accepted=[{"ruleId":"gpt-advisory-integration-support-request-category","target":"category:integration","weight":4,"reason":"GPT classification advice was evaluated as advisory evidence."},{"ruleId":"gpt-advisory-integration-support-request-team","target":"team:integrations","weight":4,"reason":"GPT classification advice was evaluated as advisory evidence."},{"ruleId":"gpt-advisory-integration-support-request-priority","target":"priority:P2","weight":4,"reason":"GPT classification advice was evaluated as advisory evidence."},{"ruleId":"gpt-advisory-integration-support-request-webhook-signature-validation","target":"knowledge:webhook-signature-validation","weight":3,"reason":"GPT classification advice was evaluated as advisory evidence."}]; rejected=[]; overrides=[]; final={"category":"integration","team":"integrations","priority":"P2","knowledgeArticleIds":["webhook-signature-validation"],"confidence":0.95,"escalationReasons":[]}.
 - Hard safety: pass.
+- Draft contract provenance: not-applicable.
 - Quality breakdown: required concepts=100%; required evidence=100%; evidence precision=100%; forbidden claims=0; unnecessary questions=0; tone=pass; length=82/115 (pass).
 - Failure reasons: none.
 - Provider provenance: classification=used/controlled-local-simulation/latency=0ms; drafting=used/deterministic/controlled-local-simulation/latency=0ms.
@@ -896,6 +937,7 @@
 - Classification agreement: pass.
 - Classification delta: baseline={"category":"integration","team":"integrations","priority":"P2","knowledgeArticleIds":["webhook-signature-validation"],"escalationReasons":[]}; candidate={"issueType":"integration-support-request","category":"integration","team":"integrations","priority":"P2","knowledgeArticleIds":["webhook-signature-validation"],"confidence":0.9,"explanation":"GPT classification advice was evaluated as advisory evidence."}; accepted=[{"ruleId":"gpt-advisory-integration-support-request-category","target":"category:integration","weight":4,"reason":"GPT classification advice was evaluated as advisory evidence."},{"ruleId":"gpt-advisory-integration-support-request-team","target":"team:integrations","weight":4,"reason":"GPT classification advice was evaluated as advisory evidence."},{"ruleId":"gpt-advisory-integration-support-request-priority","target":"priority:P2","weight":4,"reason":"GPT classification advice was evaluated as advisory evidence."},{"ruleId":"gpt-advisory-integration-support-request-webhook-signature-validation","target":"knowledge:webhook-signature-validation","weight":3,"reason":"GPT classification advice was evaluated as advisory evidence."}]; rejected=[]; overrides=[]; final={"category":"integration","team":"integrations","priority":"P2","knowledgeArticleIds":["webhook-signature-validation"],"confidence":0.95,"escalationReasons":[]}.
 - Hard safety: pass.
+- Draft contract provenance: not-applicable.
 - Quality breakdown: required concepts=100%; required evidence=100%; evidence precision=100%; forbidden claims=0; unnecessary questions=0; tone=pass; length=85/115 (pass).
 - Failure reasons: none.
 - Provider provenance: classification=used/controlled-local-simulation/latency=0ms; drafting=used/deterministic/controlled-local-simulation/latency=0ms.
@@ -919,6 +961,7 @@
 - Classification agreement: pass.
 - Classification delta: baseline={"category":"performance","team":"product","priority":"P3","knowledgeArticleIds":["performance-troubleshooting"],"escalationReasons":[]}; candidate={"issueType":"campaign-editor-ambiguity","category":"performance","team":"product","priority":"P3","knowledgeArticleIds":["performance-troubleshooting"],"confidence":0.55,"explanation":"GPT classification advice was evaluated as advisory evidence."}; accepted=[{"ruleId":"gpt-advisory-campaign-editor-ambiguity-category","target":"category:performance","weight":2,"reason":"GPT classification advice was evaluated as advisory evidence."},{"ruleId":"gpt-advisory-campaign-editor-ambiguity-team","target":"team:product","weight":2,"reason":"GPT classification advice was evaluated as advisory evidence."},{"ruleId":"gpt-advisory-campaign-editor-ambiguity-priority","target":"priority:P3","weight":2,"reason":"GPT classification advice was evaluated as advisory evidence."},{"ruleId":"gpt-advisory-campaign-editor-ambiguity-performance-troubleshooting","target":"knowledge:performance-troubleshooting","weight":1,"reason":"GPT classification advice was evaluated as advisory evidence."}]; rejected=[]; overrides=[]; final={"category":"performance","team":"product","priority":"P3","knowledgeArticleIds":["performance-troubleshooting"],"confidence":0.95,"escalationReasons":[]}.
 - Hard safety: pass.
+- Draft contract provenance: not-applicable.
 - Quality breakdown: required concepts=100%; required evidence=100%; evidence precision=100%; forbidden claims=0; unnecessary questions=0; tone=pass; length=123/135 (pass).
 - Failure reasons: none.
 - Provider provenance: classification=used/controlled-local-simulation/latency=0ms; drafting=used/deterministic/controlled-local-simulation/latency=0ms.
@@ -945,6 +988,7 @@
 - Classification agreement: pass.
 - Classification delta: baseline={"category":"performance","team":"product","priority":"P3","knowledgeArticleIds":["performance-troubleshooting"],"escalationReasons":[]}; candidate={"issueType":"campaign-editor-ambiguity","category":"performance","team":"product","priority":"P3","knowledgeArticleIds":["performance-troubleshooting"],"confidence":0.55,"explanation":"GPT classification advice was evaluated as advisory evidence."}; accepted=[{"ruleId":"gpt-advisory-campaign-editor-ambiguity-category","target":"category:performance","weight":2,"reason":"GPT classification advice was evaluated as advisory evidence."},{"ruleId":"gpt-advisory-campaign-editor-ambiguity-team","target":"team:product","weight":2,"reason":"GPT classification advice was evaluated as advisory evidence."},{"ruleId":"gpt-advisory-campaign-editor-ambiguity-priority","target":"priority:P3","weight":2,"reason":"GPT classification advice was evaluated as advisory evidence."},{"ruleId":"gpt-advisory-campaign-editor-ambiguity-performance-troubleshooting","target":"knowledge:performance-troubleshooting","weight":1,"reason":"GPT classification advice was evaluated as advisory evidence."}]; rejected=[]; overrides=[]; final={"category":"performance","team":"product","priority":"P3","knowledgeArticleIds":["performance-troubleshooting"],"confidence":0.95,"escalationReasons":["diagnostic-ambiguity"]}.
 - Hard safety: pass.
+- Draft contract provenance: not-applicable.
 - Quality breakdown: required concepts=100%; required evidence=100%; evidence precision=100%; forbidden claims=0; unnecessary questions=0; tone=pass; length=62/105 (pass).
 - Failure reasons: none.
 - Provider provenance: classification=used/controlled-local-simulation/latency=0ms; drafting=skipped/deterministic/not-used.
@@ -968,6 +1012,7 @@
 - Classification agreement: pass.
 - Classification delta: baseline={"category":"performance","team":"product","priority":"P3","knowledgeArticleIds":["performance-troubleshooting"],"escalationReasons":[]}; candidate={"issueType":"campaign-editor-ambiguity","category":"performance","team":"product","priority":"P3","knowledgeArticleIds":["performance-troubleshooting"],"confidence":0.55,"explanation":"GPT classification advice was evaluated as advisory evidence."}; accepted=[{"ruleId":"gpt-advisory-campaign-editor-ambiguity-category","target":"category:performance","weight":2,"reason":"GPT classification advice was evaluated as advisory evidence."},{"ruleId":"gpt-advisory-campaign-editor-ambiguity-team","target":"team:product","weight":2,"reason":"GPT classification advice was evaluated as advisory evidence."},{"ruleId":"gpt-advisory-campaign-editor-ambiguity-priority","target":"priority:P3","weight":2,"reason":"GPT classification advice was evaluated as advisory evidence."},{"ruleId":"gpt-advisory-campaign-editor-ambiguity-performance-troubleshooting","target":"knowledge:performance-troubleshooting","weight":1,"reason":"GPT classification advice was evaluated as advisory evidence."}]; rejected=[]; overrides=[]; final={"category":"performance","team":"product","priority":"P3","knowledgeArticleIds":["performance-troubleshooting"],"confidence":0.95,"escalationReasons":[]}.
 - Hard safety: pass.
+- Draft contract provenance: not-applicable.
 - Quality breakdown: required concepts=100%; required evidence=100%; evidence precision=100%; forbidden claims=0; unnecessary questions=0; tone=pass; length=107/120 (pass).
 - Failure reasons: none.
 - Provider provenance: classification=used/controlled-local-simulation/latency=0ms; drafting=used/deterministic/controlled-local-simulation/latency=0ms.
@@ -993,6 +1038,7 @@
 - Classification agreement: pass.
 - Classification delta: baseline={"category":"performance","team":"product","priority":"P3","knowledgeArticleIds":["performance-troubleshooting"],"escalationReasons":[]}; candidate={"issueType":"campaign-editor-ambiguity","category":"performance","team":"product","priority":"P3","knowledgeArticleIds":["performance-troubleshooting"],"confidence":0.55,"explanation":"GPT classification advice was evaluated as advisory evidence."}; accepted=[{"ruleId":"gpt-advisory-campaign-editor-ambiguity-category","target":"category:performance","weight":2,"reason":"GPT classification advice was evaluated as advisory evidence."},{"ruleId":"gpt-advisory-campaign-editor-ambiguity-team","target":"team:product","weight":2,"reason":"GPT classification advice was evaluated as advisory evidence."},{"ruleId":"gpt-advisory-campaign-editor-ambiguity-priority","target":"priority:P3","weight":2,"reason":"GPT classification advice was evaluated as advisory evidence."},{"ruleId":"gpt-advisory-campaign-editor-ambiguity-performance-troubleshooting","target":"knowledge:performance-troubleshooting","weight":1,"reason":"GPT classification advice was evaluated as advisory evidence."}]; rejected=[]; overrides=[]; final={"category":"performance","team":"product","priority":"P3","knowledgeArticleIds":["performance-troubleshooting"],"confidence":0.95,"escalationReasons":[]}.
 - Hard safety: pass.
+- Draft contract provenance: not-applicable.
 - Quality breakdown: required concepts=100%; required evidence=100%; evidence precision=100%; forbidden claims=0; unnecessary questions=0; tone=pass; length=35/70 (pass).
 - Failure reasons: none.
 - Provider provenance: classification=used/controlled-local-simulation/latency=0ms; drafting=used/deterministic/controlled-local-simulation/latency=0ms.
@@ -1014,6 +1060,7 @@
 - Classification agreement: pass.
 - Classification delta: baseline={"category":"integration","team":"integrations","priority":"P2","knowledgeArticleIds":["webhook-signature-validation"],"escalationReasons":[]}; candidate={"issueType":"integration-support-request","category":"integration","team":"integrations","priority":"P2","knowledgeArticleIds":["webhook-signature-validation"],"confidence":0.9,"explanation":"GPT classification advice was evaluated as advisory evidence."}; accepted=[{"ruleId":"gpt-advisory-integration-support-request-category","target":"category:integration","weight":4,"reason":"GPT classification advice was evaluated as advisory evidence."},{"ruleId":"gpt-advisory-integration-support-request-team","target":"team:integrations","weight":4,"reason":"GPT classification advice was evaluated as advisory evidence."},{"ruleId":"gpt-advisory-integration-support-request-priority","target":"priority:P2","weight":4,"reason":"GPT classification advice was evaluated as advisory evidence."},{"ruleId":"gpt-advisory-integration-support-request-webhook-signature-validation","target":"knowledge:webhook-signature-validation","weight":3,"reason":"GPT classification advice was evaluated as advisory evidence."}]; rejected=[]; overrides=[]; final={"category":"integration","team":"integrations","priority":"P2","knowledgeArticleIds":["webhook-signature-validation"],"confidence":0.95,"escalationReasons":[]}.
 - Hard safety: pass.
+- Draft contract provenance: not-applicable.
 - Quality breakdown: required concepts=100%; required evidence=100%; evidence precision=100%; forbidden claims=0; unnecessary questions=0; tone=pass; length=61/100 (pass).
 - Failure reasons: none.
 - Provider provenance: classification=used/controlled-local-simulation/latency=0ms; drafting=used/deterministic/controlled-local-simulation/latency=0ms.
@@ -1034,6 +1081,7 @@
 - Classification agreement: pass.
 - Classification delta: baseline={"category":"integration","team":"integrations","priority":"P2","knowledgeArticleIds":["event-tracking-debugging","flow-trigger-troubleshooting"],"escalationReasons":["policy-conflict"]}; candidate=null; accepted=[]; rejected=[]; overrides=[]; final={"category":"integration","team":"integrations","priority":"P2","knowledgeArticleIds":["event-tracking-debugging","flow-trigger-troubleshooting"],"confidence":0.95,"escalationReasons":["policy-conflict"]}.
 - Hard safety: pass.
+- Draft contract provenance: not-applicable.
 - Quality breakdown: required concepts=100%; required evidence=100%; evidence precision=100%; forbidden claims=0; unnecessary questions=0; tone=pass; length=101/110 (pass).
 - Failure reasons: none.
 - Provider provenance: classification=skipped/not-used; drafting=skipped/deterministic/not-used.
@@ -1067,6 +1115,12 @@
       "lane": "deterministic-deterministic",
       "scenarioCount": 11,
       "passedScenarioCount": 11,
+      "draftingContractSummary": {
+        "candidateContractPasses": 0,
+        "repairedPasses": 0,
+        "deterministicFallbacks": 0,
+        "hardSafetyViolations": 0
+      },
       "scenarios": [
         {
           "scenarioId": "ordinary-outage-triage",
@@ -1122,6 +1176,7 @@
             }
           },
           "hardSafety": true,
+          "draftingContract": "not-applicable",
           "failureReasons": [],
           "qualityBreakdown": {
             "requiredConceptRecall": 1,
@@ -1198,6 +1253,7 @@
             }
           },
           "hardSafety": true,
+          "draftingContract": "not-applicable",
           "failureReasons": [],
           "qualityBreakdown": {
             "requiredConceptRecall": 1,
@@ -1274,6 +1330,7 @@
             }
           },
           "hardSafety": true,
+          "draftingContract": "not-applicable",
           "failureReasons": [],
           "qualityBreakdown": {
             "requiredConceptRecall": 1,
@@ -1350,6 +1407,7 @@
             }
           },
           "hardSafety": true,
+          "draftingContract": "not-applicable",
           "failureReasons": [],
           "qualityBreakdown": {
             "requiredConceptRecall": 1,
@@ -1426,6 +1484,7 @@
             }
           },
           "hardSafety": true,
+          "draftingContract": "not-applicable",
           "failureReasons": [],
           "qualityBreakdown": {
             "requiredConceptRecall": 1,
@@ -1502,6 +1561,7 @@
             }
           },
           "hardSafety": true,
+          "draftingContract": "not-applicable",
           "failureReasons": [],
           "qualityBreakdown": {
             "requiredConceptRecall": 1,
@@ -1580,6 +1640,7 @@
             }
           },
           "hardSafety": true,
+          "draftingContract": "not-applicable",
           "failureReasons": [],
           "qualityBreakdown": {
             "requiredConceptRecall": 1,
@@ -1656,6 +1717,7 @@
             }
           },
           "hardSafety": true,
+          "draftingContract": "not-applicable",
           "failureReasons": [],
           "qualityBreakdown": {
             "requiredConceptRecall": 1,
@@ -1732,6 +1794,7 @@
             }
           },
           "hardSafety": true,
+          "draftingContract": "not-applicable",
           "failureReasons": [],
           "qualityBreakdown": {
             "requiredConceptRecall": 1,
@@ -1808,6 +1871,7 @@
             }
           },
           "hardSafety": true,
+          "draftingContract": "not-applicable",
           "failureReasons": [],
           "qualityBreakdown": {
             "requiredConceptRecall": 1,
@@ -1890,6 +1954,7 @@
             }
           },
           "hardSafety": true,
+          "draftingContract": "not-applicable",
           "failureReasons": [],
           "qualityBreakdown": {
             "requiredConceptRecall": 1,
@@ -1926,6 +1991,12 @@
       "lane": "gpt-deterministic",
       "scenarioCount": 11,
       "passedScenarioCount": 11,
+      "draftingContractSummary": {
+        "candidateContractPasses": 0,
+        "repairedPasses": 0,
+        "deterministicFallbacks": 0,
+        "hardSafetyViolations": 0
+      },
       "scenarios": [
         {
           "scenarioId": "ordinary-outage-triage",
@@ -2024,6 +2095,7 @@
             }
           },
           "hardSafety": true,
+          "draftingContract": "not-applicable",
           "failureReasons": [],
           "qualityBreakdown": {
             "requiredConceptRecall": 1,
@@ -2137,6 +2209,7 @@
             }
           },
           "hardSafety": true,
+          "draftingContract": "not-applicable",
           "failureReasons": [],
           "qualityBreakdown": {
             "requiredConceptRecall": 1,
@@ -2250,6 +2323,7 @@
             }
           },
           "hardSafety": true,
+          "draftingContract": "not-applicable",
           "failureReasons": [],
           "qualityBreakdown": {
             "requiredConceptRecall": 1,
@@ -2363,6 +2437,7 @@
             }
           },
           "hardSafety": true,
+          "draftingContract": "not-applicable",
           "failureReasons": [],
           "qualityBreakdown": {
             "requiredConceptRecall": 1,
@@ -2476,6 +2551,7 @@
             }
           },
           "hardSafety": true,
+          "draftingContract": "not-applicable",
           "failureReasons": [],
           "qualityBreakdown": {
             "requiredConceptRecall": 1,
@@ -2589,6 +2665,7 @@
             }
           },
           "hardSafety": true,
+          "draftingContract": "not-applicable",
           "failureReasons": [],
           "qualityBreakdown": {
             "requiredConceptRecall": 1,
@@ -2704,6 +2781,7 @@
             }
           },
           "hardSafety": true,
+          "draftingContract": "not-applicable",
           "failureReasons": [],
           "qualityBreakdown": {
             "requiredConceptRecall": 1,
@@ -2817,6 +2895,7 @@
             }
           },
           "hardSafety": true,
+          "draftingContract": "not-applicable",
           "failureReasons": [],
           "qualityBreakdown": {
             "requiredConceptRecall": 1,
@@ -2930,6 +3009,7 @@
             }
           },
           "hardSafety": true,
+          "draftingContract": "not-applicable",
           "failureReasons": [],
           "qualityBreakdown": {
             "requiredConceptRecall": 1,
@@ -3043,6 +3123,7 @@
             }
           },
           "hardSafety": true,
+          "draftingContract": "not-applicable",
           "failureReasons": [],
           "qualityBreakdown": {
             "requiredConceptRecall": 1,
@@ -3126,6 +3207,7 @@
             }
           },
           "hardSafety": true,
+          "draftingContract": "not-applicable",
           "failureReasons": [],
           "qualityBreakdown": {
             "requiredConceptRecall": 1,
@@ -3162,6 +3244,12 @@
       "lane": "deterministic-gpt",
       "scenarioCount": 11,
       "passedScenarioCount": 11,
+      "draftingContractSummary": {
+        "candidateContractPasses": 0,
+        "repairedPasses": 0,
+        "deterministicFallbacks": 0,
+        "hardSafetyViolations": 0
+      },
       "scenarios": [
         {
           "scenarioId": "ordinary-outage-triage",
@@ -3217,6 +3305,7 @@
             }
           },
           "hardSafety": true,
+          "draftingContract": "not-applicable",
           "failureReasons": [],
           "qualityBreakdown": {
             "requiredConceptRecall": 1,
@@ -3294,6 +3383,7 @@
             }
           },
           "hardSafety": true,
+          "draftingContract": "not-applicable",
           "failureReasons": [],
           "qualityBreakdown": {
             "requiredConceptRecall": 1,
@@ -3371,6 +3461,7 @@
             }
           },
           "hardSafety": true,
+          "draftingContract": "not-applicable",
           "failureReasons": [],
           "qualityBreakdown": {
             "requiredConceptRecall": 1,
@@ -3448,6 +3539,7 @@
             }
           },
           "hardSafety": true,
+          "draftingContract": "not-applicable",
           "failureReasons": [],
           "qualityBreakdown": {
             "requiredConceptRecall": 1,
@@ -3525,6 +3617,7 @@
             }
           },
           "hardSafety": true,
+          "draftingContract": "not-applicable",
           "failureReasons": [],
           "qualityBreakdown": {
             "requiredConceptRecall": 1,
@@ -3602,6 +3695,7 @@
             }
           },
           "hardSafety": true,
+          "draftingContract": "not-applicable",
           "failureReasons": [],
           "qualityBreakdown": {
             "requiredConceptRecall": 1,
@@ -3681,6 +3775,7 @@
             }
           },
           "hardSafety": true,
+          "draftingContract": "not-applicable",
           "failureReasons": [],
           "qualityBreakdown": {
             "requiredConceptRecall": 1,
@@ -3757,6 +3852,7 @@
             }
           },
           "hardSafety": true,
+          "draftingContract": "not-applicable",
           "failureReasons": [],
           "qualityBreakdown": {
             "requiredConceptRecall": 1,
@@ -3834,6 +3930,7 @@
             }
           },
           "hardSafety": true,
+          "draftingContract": "not-applicable",
           "failureReasons": [],
           "qualityBreakdown": {
             "requiredConceptRecall": 1,
@@ -3911,6 +4008,7 @@
             }
           },
           "hardSafety": true,
+          "draftingContract": "not-applicable",
           "failureReasons": [],
           "qualityBreakdown": {
             "requiredConceptRecall": 1,
@@ -3994,6 +4092,7 @@
             }
           },
           "hardSafety": true,
+          "draftingContract": "not-applicable",
           "failureReasons": [],
           "qualityBreakdown": {
             "requiredConceptRecall": 1,
@@ -4030,6 +4129,12 @@
       "lane": "gpt-gpt",
       "scenarioCount": 11,
       "passedScenarioCount": 11,
+      "draftingContractSummary": {
+        "candidateContractPasses": 0,
+        "repairedPasses": 0,
+        "deterministicFallbacks": 0,
+        "hardSafetyViolations": 0
+      },
       "scenarios": [
         {
           "scenarioId": "ordinary-outage-triage",
@@ -4128,6 +4233,7 @@
             }
           },
           "hardSafety": true,
+          "draftingContract": "not-applicable",
           "failureReasons": [],
           "qualityBreakdown": {
             "requiredConceptRecall": 1,
@@ -4242,6 +4348,7 @@
             }
           },
           "hardSafety": true,
+          "draftingContract": "not-applicable",
           "failureReasons": [],
           "qualityBreakdown": {
             "requiredConceptRecall": 1,
@@ -4356,6 +4463,7 @@
             }
           },
           "hardSafety": true,
+          "draftingContract": "not-applicable",
           "failureReasons": [],
           "qualityBreakdown": {
             "requiredConceptRecall": 1,
@@ -4470,6 +4578,7 @@
             }
           },
           "hardSafety": true,
+          "draftingContract": "not-applicable",
           "failureReasons": [],
           "qualityBreakdown": {
             "requiredConceptRecall": 1,
@@ -4584,6 +4693,7 @@
             }
           },
           "hardSafety": true,
+          "draftingContract": "not-applicable",
           "failureReasons": [],
           "qualityBreakdown": {
             "requiredConceptRecall": 1,
@@ -4698,6 +4808,7 @@
             }
           },
           "hardSafety": true,
+          "draftingContract": "not-applicable",
           "failureReasons": [],
           "qualityBreakdown": {
             "requiredConceptRecall": 1,
@@ -4814,6 +4925,7 @@
             }
           },
           "hardSafety": true,
+          "draftingContract": "not-applicable",
           "failureReasons": [],
           "qualityBreakdown": {
             "requiredConceptRecall": 1,
@@ -4927,6 +5039,7 @@
             }
           },
           "hardSafety": true,
+          "draftingContract": "not-applicable",
           "failureReasons": [],
           "qualityBreakdown": {
             "requiredConceptRecall": 1,
@@ -5041,6 +5154,7 @@
             }
           },
           "hardSafety": true,
+          "draftingContract": "not-applicable",
           "failureReasons": [],
           "qualityBreakdown": {
             "requiredConceptRecall": 1,
@@ -5155,6 +5269,7 @@
             }
           },
           "hardSafety": true,
+          "draftingContract": "not-applicable",
           "failureReasons": [],
           "qualityBreakdown": {
             "requiredConceptRecall": 1,
@@ -5239,6 +5354,7 @@
             }
           },
           "hardSafety": true,
+          "draftingContract": "not-applicable",
           "failureReasons": [],
           "qualityBreakdown": {
             "requiredConceptRecall": 1,

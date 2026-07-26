@@ -4,6 +4,8 @@ import process from "node:process";
 import {
   type AiComparisonAgreement,
   type AiComparisonClassification,
+  type AiComparisonDraftingContractOutcome,
+  type AiComparisonDraftingContractSummary,
   type AiComparisonLane,
   type AiComparisonReport,
   runAiComparisonEvaluation,
@@ -51,6 +53,7 @@ export interface AiComparisonSerializationInput {
     lane: AiComparisonLane;
     scenarioCount: number;
     passedScenarioCount: number;
+    draftingContractSummary?: AiComparisonDraftingContractSummary;
     observations: ReadonlyArray<{
       scenarioId: string;
       operatorStage: string;
@@ -59,6 +62,7 @@ export interface AiComparisonSerializationInput {
       classificationAgreement: AiComparisonAgreement;
       baselineAgreement: AiComparisonAgreement;
       responseQuality: ResponseQualityScore;
+      draftingContract?: AiComparisonDraftingContractOutcome;
       failures: readonly string[];
       aiExecutionTrace: {
         classification: {
@@ -82,6 +86,9 @@ export interface AiComparisonSerializationInput {
           model?: string;
           latencyMs?: number;
           usage?: AiUsage;
+          repairAttempted?: boolean;
+          repairSucceeded?: boolean;
+          failedObligationIds?: string[];
           fallback?: {
             category: AiFallbackCategory;
             message: string;
@@ -188,6 +195,7 @@ export function serializeAiComparisonReport(
       `## ${lane.lane}`,
       "",
       `- Scenarios: ${lane.scenarioCount}; passed: ${lane.passedScenarioCount}.`,
+      `- Draft contract outcomes: ${formatDraftingContractSummary(draftingContractSummary(lane))}.`,
       "",
       ...lane.observations.flatMap((observation) => [
         `### ${observation.scenarioId}`,
@@ -197,6 +205,7 @@ export function serializeAiComparisonReport(
         `- Classification agreement: ${observation.classificationAgreement.all ? "pass" : "fail"}.`,
         `- Classification delta: ${formatClassificationDelta(observation)}.`,
         `- Hard safety: ${observation.responseQuality.hardPass ? "pass" : "fail"}.`,
+        `- Draft contract provenance: ${observation.draftingContract ?? draftingContractOutcome(observation.aiExecutionTrace)}.`,
         `- Quality breakdown: ${formatQualityBreakdown(observation.responseQuality)}.`,
         ...formatFailureReasons(observation.failures),
         `- Provider provenance: ${formatStageProvenance(observation)}.`,
@@ -240,6 +249,7 @@ function safeAiComparisonReport(report: AiComparisonSerializationInput) {
       lane: lane.lane,
       scenarioCount: lane.scenarioCount,
       passedScenarioCount: lane.passedScenarioCount,
+      draftingContractSummary: draftingContractSummary(lane),
       scenarios: lane.observations.map((observation) => ({
         scenarioId: observation.scenarioId,
         operatorStage: observation.operatorStage,
@@ -248,6 +258,8 @@ function safeAiComparisonReport(report: AiComparisonSerializationInput) {
         classificationAgreement: observation.classificationAgreement,
         classificationDelta: classificationDelta(observation),
         hardSafety: observation.responseQuality.hardPass,
+        draftingContract: observation.draftingContract ??
+          draftingContractOutcome(observation.aiExecutionTrace),
         failureReasons: safeFailureReasons(observation.failures),
         qualityBreakdown: qualityBreakdown(observation.responseQuality),
         providerProvenance: stageProvenance(observation),
@@ -355,6 +367,18 @@ function stageProvenance(
       ...(observation.aiExecutionTrace.drafting.usage === undefined
         ? {}
         : { usage: observation.aiExecutionTrace.drafting.usage }),
+      ...(observation.aiExecutionTrace.drafting.repairAttempted === undefined
+        ? {}
+        : { repairAttempted: observation.aiExecutionTrace.drafting.repairAttempted }),
+      ...(observation.aiExecutionTrace.drafting.repairSucceeded === undefined
+        ? {}
+        : { repairSucceeded: observation.aiExecutionTrace.drafting.repairSucceeded }),
+      ...(observation.aiExecutionTrace.drafting.failedObligationIds === undefined
+        ? {}
+        : {
+            failedObligationIds: observation.aiExecutionTrace.drafting.failedObligationIds
+              .map(safeTraceIdentifier),
+          }),
       ...(observation.aiExecutionTrace.drafting.fallback === undefined
         ? {}
         : { fallback: safeFallback(observation.aiExecutionTrace.drafting.fallback) }),
@@ -379,6 +403,9 @@ function formatProviderStage(input: {
     message: string;
   };
   source?: string;
+  repairAttempted?: boolean;
+  repairSucceeded?: boolean;
+  failedObligationIds?: string[];
 }): string {
   const stage = [input.status, ...(input.source === undefined ? [] : [input.source]), input.model];
   const metadata = [
@@ -389,6 +416,15 @@ function formatProviderStage(input: {
     ...(input.fallback === undefined
       ? []
       : [`fallback=${input.fallback.category}/${input.fallback.message}`]),
+    ...(input.repairAttempted === undefined
+      ? []
+      : [`repair-attempted=${input.repairAttempted}`]),
+    ...(input.repairSucceeded === undefined
+      ? []
+      : [`repair-succeeded=${input.repairSucceeded}`]),
+    ...(input.failedObligationIds === undefined
+      ? []
+      : [`failed-obligations=${input.failedObligationIds.join(",")}`]),
   ];
   return [...stage, ...metadata].join("/");
 }
@@ -419,6 +455,60 @@ const knownSafeFallbackMessages = new Set([
 
 function quoteMarkdown(text: string): string[] {
   return text.split("\n").map((line) => `> ${line}`);
+}
+
+function draftingContractSummary(
+  lane: AiComparisonSerializationInput["reports"][number],
+): AiComparisonDraftingContractSummary {
+  if (lane.draftingContractSummary !== undefined) {
+    return lane.draftingContractSummary;
+  }
+  return lane.observations.reduce<AiComparisonDraftingContractSummary>((summary, observation) => {
+    const outcome = observation.draftingContract ??
+      draftingContractOutcome(observation.aiExecutionTrace);
+    return {
+      candidateContractPasses:
+        summary.candidateContractPasses + (outcome === "candidate-pass" ? 1 : 0),
+      repairedPasses: summary.repairedPasses + (outcome === "repaired-pass" ? 1 : 0),
+      deterministicFallbacks:
+        summary.deterministicFallbacks + (outcome === "deterministic-fallback" ? 1 : 0),
+      hardSafetyViolations:
+        summary.hardSafetyViolations + (observation.responseQuality.hardPass ? 0 : 1),
+    };
+  }, {
+    candidateContractPasses: 0,
+    repairedPasses: 0,
+    deterministicFallbacks: 0,
+    hardSafetyViolations: 0,
+  });
+}
+
+function formatDraftingContractSummary(
+  summary: AiComparisonDraftingContractSummary,
+): string {
+  return `candidate passes=${summary.candidateContractPasses}; repaired passes=${summary.repairedPasses}; deterministic fallbacks=${summary.deterministicFallbacks}; hard safety violations=${summary.hardSafetyViolations}`;
+}
+
+function draftingContractOutcome(input: {
+  drafting: {
+    status: "skipped" | "used" | "fallback";
+    source: string;
+    repairAttempted?: boolean;
+    repairSucceeded?: boolean;
+  };
+}): AiComparisonDraftingContractOutcome {
+  if (input.drafting.source === "fallback") return "deterministic-fallback";
+  if (
+    input.drafting.source === "openai" &&
+    input.drafting.status === "used" &&
+    input.drafting.repairSucceeded === true
+  ) return "repaired-pass";
+  if (
+    input.drafting.source === "openai" &&
+    input.drafting.status === "used" &&
+    input.drafting.repairAttempted !== true
+  ) return "candidate-pass";
+  return "not-applicable";
 }
 
 function qualityBreakdown(responseQuality: ResponseQualityScore) {

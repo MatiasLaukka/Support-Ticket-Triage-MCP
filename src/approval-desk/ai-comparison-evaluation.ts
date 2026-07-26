@@ -72,13 +72,28 @@ export interface AiComparisonObservation {
   classificationAgreement: AiComparisonAgreement;
   baselineAgreement: AiComparisonAgreement;
   responseQuality: ResponseQualityScore;
+  draftingContract: AiComparisonDraftingContractOutcome;
   failures: string[];
+}
+
+export type AiComparisonDraftingContractOutcome =
+  | "candidate-pass"
+  | "repaired-pass"
+  | "deterministic-fallback"
+  | "not-applicable";
+
+export interface AiComparisonDraftingContractSummary {
+  candidateContractPasses: number;
+  repairedPasses: number;
+  deterministicFallbacks: number;
+  hardSafetyViolations: number;
 }
 
 export interface AiComparisonReport {
   lane: AiComparisonLane;
   scenarioCount: number;
   passedScenarioCount: number;
+  draftingContractSummary: AiComparisonDraftingContractSummary;
   observations: AiComparisonObservation[];
 }
 
@@ -176,6 +191,7 @@ export async function runAiComparisonEvaluation(input: {
       classificationAgreement,
       baselineAgreement,
       responseQuality,
+      draftingContract: draftingContractOutcome(aiExecutionTrace),
       failures,
     };
   }));
@@ -184,8 +200,46 @@ export async function runAiComparisonEvaluation(input: {
     lane: input.lane,
     scenarioCount: input.scenarios.length,
     passedScenarioCount: observations.filter(({ failures }) => failures.length === 0).length,
+    draftingContractSummary: summarizeDraftingContracts(observations),
     observations,
   };
+}
+
+function draftingContractOutcome(
+  trace: AiExecutionTrace,
+): AiComparisonDraftingContractOutcome {
+  if (trace.drafting.source === "fallback") return "deterministic-fallback";
+  if (
+    trace.drafting.source === "openai" &&
+    trace.drafting.status === "used" &&
+    trace.drafting.repairSucceeded === true
+  ) return "repaired-pass";
+  if (
+    trace.drafting.source === "openai" &&
+    trace.drafting.status === "used" &&
+    trace.drafting.repairAttempted !== true
+  ) return "candidate-pass";
+  return "not-applicable";
+}
+
+function summarizeDraftingContracts(
+  observations: readonly AiComparisonObservation[],
+): AiComparisonDraftingContractSummary {
+  return observations.reduce<AiComparisonDraftingContractSummary>((summary, observation) => ({
+    candidateContractPasses: summary.candidateContractPasses +
+      (observation.draftingContract === "candidate-pass" ? 1 : 0),
+    repairedPasses: summary.repairedPasses +
+      (observation.draftingContract === "repaired-pass" ? 1 : 0),
+    deterministicFallbacks: summary.deterministicFallbacks +
+      (observation.draftingContract === "deterministic-fallback" ? 1 : 0),
+    hardSafetyViolations: summary.hardSafetyViolations +
+      (observation.responseQuality.hardPass ? 0 : 1),
+  }), {
+    candidateContractPasses: 0,
+    repairedPasses: 0,
+    deterministicFallbacks: 0,
+    hardSafetyViolations: 0,
+  });
 }
 
 function laneInvariantFailures(

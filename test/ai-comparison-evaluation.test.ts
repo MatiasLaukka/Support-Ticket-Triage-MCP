@@ -244,6 +244,84 @@ describe("AI comparison evaluation", () => {
     expect(serialized).toContain('"totalTokens": 13');
   });
 
+  it("reports separate drafting contract outcomes without candidate model text", () => {
+    const serialized = serializeAiComparisonReport({
+      mode: "controlled",
+      providerProvenance: {
+        classification: "controlled-local-simulation",
+        drafting: "controlled-local-simulation",
+        networkPolicy: "disabled",
+      },
+      reports: [{
+        lane: "gpt-gpt",
+        scenarioCount: 4,
+        passedScenarioCount: 3,
+        observations: [
+          {
+            ...serializedObservation({
+              scenarioId: "candidate-contract-pass",
+              hardPass: true,
+              failures: [],
+            }),
+            aiExecutionTrace: {
+              classification: { status: "used" as const },
+              drafting: { status: "used" as const, source: "openai" },
+            },
+          },
+          {
+            ...serializedObservation({
+              scenarioId: "repaired-contract-pass",
+              hardPass: true,
+              failures: [],
+            }),
+            aiExecutionTrace: {
+              classification: { status: "used" as const },
+              drafting: {
+                status: "used" as const,
+                source: "openai",
+                repairAttempted: true,
+                repairSucceeded: true,
+                failedObligationIds: ["escalation:incident-review"],
+              },
+            },
+          },
+          {
+            ...serializedObservation({
+              scenarioId: "deterministic-fallback",
+              hardPass: true,
+              failures: [],
+            }),
+            aiExecutionTrace: {
+              classification: { status: "used" as const },
+              drafting: {
+                status: "fallback" as const,
+                source: "fallback",
+                fallback: {
+                  category: "guardrail-rejected",
+                  message: "candidate response containing sk-secret must not be reported",
+                },
+              },
+            },
+          },
+          serializedObservation({
+            scenarioId: "hard-safety-violation",
+            hardPass: false,
+            failures: ["response quality: missing escalation: incident response"],
+          }),
+        ],
+      }],
+    });
+
+    expect(serialized).toContain("Draft contract outcomes: candidate passes=1; repaired passes=1; deterministic fallbacks=1; hard safety violations=1.");
+    expect(serialized).toContain('"candidateContractPasses": 1');
+    expect(serialized).toContain('"repairedPasses": 1');
+    expect(serialized).toContain('"deterministicFallbacks": 1');
+    expect(serialized).toContain('"hardSafetyViolations": 1');
+    expect(serialized).toContain('"draftingContract": "repaired-pass"');
+    expect(serialized).toContain('"draftingContract": "deterministic-fallback"');
+    expect(serialized).not.toContain("candidate response containing sk-secret");
+  });
+
   it("serializes the governed GPT classification delta without raw payload text", () => {
     const serialized = serializeAiComparisonReport({
       mode: "controlled",
@@ -590,6 +668,13 @@ describe("AI comparison evaluation", () => {
       aiExecutionTrace.classification.status === "skipped" &&
       aiExecutionTrace.drafting.status === "skipped",
     )).toBe(true);
+    expect(report.passedScenarioCount).toBe(report.scenarioCount);
+    expect(report.draftingContractSummary).toEqual({
+      candidateContractPasses: 0,
+      repairedPasses: 0,
+      deterministicFallbacks: 0,
+      hardSafetyViolations: 0,
+    });
   });
 
   it.each<{

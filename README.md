@@ -721,14 +721,28 @@ The command also saves the full sanitized output under
 `latest` files for `--live`). These files contain the complete per-lane
 customer drafts, not just the shortened documentation example.
 
-Controlled response-quality scorecard:
+Customer-response drafting is contract-first: the deterministic baseline and
+authoritative workflow state define customer-safe obligations before an
+optional GPT draft is considered. A GPT candidate must pass that local
+contract, may receive one bounded repair attempt, and otherwise falls back to
+the deterministic draft. The report records only the candidate/repair/fallback
+outcome and sanitized obligation identifiers; it never adds candidate model
+text to provenance.
 
-- 11/11 scenarios passed response-quality contracts in each lane.
-- 44/44 lane/scenario drafts passed the hard-safety and quality checks.
+Controlled response-quality scorecard (local simulation, 2026-07-26):
+
+- 11/11 scenarios passed in each of the four lanes (44/44 lane/scenario runs).
+- Classification agreement is reported independently from drafting quality;
+  all 44 controlled final classifications matched their expected contracts.
+- All 44 drafts passed hard safety and response-quality checks; hard-safety
+  violations and deterministic fallbacks were both 0.
+- Candidate passes and repaired passes were both 0 because controlled drafting
+  reuses the deterministic baseline; these counters are not live-GPT claims.
 - Checks cover required concepts and evidence, evidence precision, forbidden
-  claims, unnecessary questions, tone, length, and deterministic safety checks.
-- GPT-labelled lanes use the local controlled simulation; they do not claim
-  live-model prose quality. Use the opt-in `--live` run for that observation.
+  claims, unnecessary questions, tone, length, deterministic safety checks,
+  and contract repair/fallback provenance.
+- GPT-labelled lanes use the local controlled simulation; use the opt-in
+  `--live` run for a fresh live-model observation.
 
 ## Extension To Zendesk Or Jira
 

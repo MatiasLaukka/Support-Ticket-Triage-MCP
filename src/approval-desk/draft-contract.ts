@@ -76,7 +76,7 @@ export function buildDraftObligations(
     !isCustomerConfirmedReadyForClose(input) &&
     input.evidenceReadiness?.knownEventId == null &&
     !input.outcome.requiredEscalations.includes("outage") &&
-    /\b(?:webhook|signature)\b/i.test(authoritativeText)
+    /\bsignature\b/i.test(authoritativeText)
   ) {
     obligations.push({
       id: "concept:webhook-signature",
@@ -87,7 +87,11 @@ export function buildDraftObligations(
     });
   }
 
-  for (const requirement of input.evidenceReadiness?.missingEvidence ?? []) {
+  const diagnosticEscalated =
+    input.diagnosisContext?.diagnosticState?.state === "escalated";
+  for (const requirement of diagnosticEscalated
+    ? []
+    : input.evidenceReadiness?.missingEvidence ?? []) {
     obligations.push({
       id: `evidence:${requirement.id}`,
       kind: "evidence",

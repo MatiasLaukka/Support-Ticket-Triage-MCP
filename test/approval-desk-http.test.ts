@@ -1645,7 +1645,7 @@ describe("createApprovalDeskHttpServer", () => {
           return {
             source: "openai",
             response:
-              "We are checking the webhook delivery timestamp, endpoint response, and signing configuration before recommending the next update.",
+              "We are checking the webhook signature validation, delivery timestamp, endpoint response, and signing configuration before recommending the next update.",
             assist: {
               source: "openai",
               missingInfoSuggestions: [
@@ -1682,7 +1682,7 @@ describe("createApprovalDeskHttpServer", () => {
       draftCustomerResponseSource: "openai",
       draftCustomerResponseStyle: "technical",
       draftCustomerResponse:
-        "We are checking the webhook delivery timestamp, endpoint response, and signing configuration before recommending the next update.\n\nKind regards,\nSupport Team\nNorthstar Marketing Support",
+        "We are checking the webhook signature validation, delivery timestamp, endpoint response, and signing configuration before recommending the next update.\n\nKind regards,\nSupport Team\nNorthstar Marketing Support",
       gptAssist: {
         source: "openai",
         tone: "technical",

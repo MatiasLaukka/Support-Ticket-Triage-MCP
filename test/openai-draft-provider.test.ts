@@ -520,6 +520,71 @@ describe("OpenAiCustomerResponseDraftProvider", () => {
     }));
   });
 
+  it("gives repair safe feedback for a non-contract safety rejection", async () => {
+    let repairInput: unknown;
+    const rejectedCandidate = "We guarantee this issue is fixed.";
+    const result = await draftCustomerResponseWithFallback({
+      provider: {
+        draft: async () => openAiDraft(rejectedCandidate),
+        repair: async (input) => {
+          repairInput = input;
+          return openAiDraft("We are reviewing the issue and will provide an update.");
+        },
+      },
+      draftInput: {
+        ticket,
+        outcome,
+        knowledgeArticles: [],
+        deterministicDraft: "We are reviewing the issue and will provide an update.",
+        responseStyle: "balanced",
+        actor: "approval-desk",
+        companyName: "Northstar Marketing Support",
+      },
+    });
+
+    expect(result.source).toBe("openai");
+    expect(repairInput).toMatchObject({
+      failedObligationIds: [],
+      failedMessages: ["The draft promised a resolution that has not been verified."],
+    });
+    expect((repairInput as { failedMessages: string[] }).failedMessages.join(" "))
+      .not.toContain(rejectedCandidate);
+  });
+
+  it("removes excess runtime telemetry from a successful repaired draft", async () => {
+    const result = await draftCustomerResponseWithFallback({
+      provider: {
+        draft: async () => openAiDraft("We are reviewing the delivery delay and will update you."),
+        repair: async () => ({
+          ...openAiDraft("We are reviewing the delivery delay under incident review and will update you."),
+          telemetry: {
+            model: "gpt-5.6-luna",
+            latencyMs: 2,
+            rawOutput: "secret candidate response",
+            apiKey: "sk-test-secret",
+          },
+        }),
+      },
+      draftInput: {
+        ticket,
+        outcome: { ...outcome, requiredEscalations: ["outage"] },
+        knowledgeArticles: [],
+        deterministicDraft: "We are reviewing this under incident review and will update you.",
+        responseStyle: "balanced",
+        actor: "approval-desk",
+        companyName: "Northstar Marketing Support",
+      },
+    });
+
+    expect(result.telemetry).toEqual({
+      model: "gpt-5.6-luna",
+      latencyMs: 2,
+      repairAttempted: true,
+      repairSucceeded: true,
+      failedObligationIds: ["escalation:incident-review"],
+    });
+  });
+
   it("falls back after an OpenAI repair failure without exposing candidate text", async () => {
     const rejectedCandidate = "Internal candidate text must not be exposed.";
     const result = await draftCustomerResponseWithFallback({

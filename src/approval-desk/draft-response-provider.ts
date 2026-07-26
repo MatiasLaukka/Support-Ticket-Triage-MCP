@@ -474,7 +474,7 @@ export async function draftCustomerResponseWithFallback(input: {
           draftInput: input.draftInput,
           candidateResponse: response,
           failedObligationIds,
-          failedMessages: validation.contractBlockingMessages,
+          failedMessages: sanitizeRepairMessages(validation.blockingMessages),
         });
         const repairedResponse = ensureDraftSignOff(repaired.response, input.draftInput);
         const repairedValidation = validateCustomerResponseDraft({
@@ -493,18 +493,22 @@ export async function draftCustomerResponseWithFallback(input: {
             { id: "repair-attempted", label: "Repair attempted", status: "pass", message: "OpenAI repair satisfied the draft contract." },
             ...repairedValidation.checks,
           ];
+          const telemetry = sanitizeDraftTelemetry({
+            ...(repaired.telemetry ?? candidate.telemetry ?? {
+              model: DEFAULT_OPENAI_MODEL,
+              latencyMs: 0,
+            }),
+            repairAttempted: true,
+            repairSucceeded: true,
+            failedObligationIds,
+          });
           return {
             providerAttempted,
             source: repaired.source,
             response: repairedResponse,
             checks,
             assist: { ...repaired.assist, checks },
-            telemetry: {
-              ...(repaired.telemetry ?? candidate.telemetry ?? { model: DEFAULT_OPENAI_MODEL, latencyMs: 0 }),
-              repairAttempted: true,
-              repairSucceeded: true,
-              failedObligationIds,
-            },
+            ...(telemetry === undefined ? {} : { telemetry }),
             candidateChecks: repairedValidation.candidateChecks,
           };
         }
@@ -708,7 +712,20 @@ function withoutCustomerInformationRequests(assist: GptAssist): GptAssist {
 function sanitizeDraftTelemetry(
   telemetry: NonNullable<CustomerResponseDraft["telemetry"]>,
 ): CustomerResponseDraft["telemetry"] | undefined {
-  const parsed = DraftTelemetrySchema.safeParse(telemetry);
+  const parsed = DraftTelemetrySchema.safeParse({
+    model: telemetry.model,
+    latencyMs: telemetry.latencyMs,
+    ...(telemetry.usage === undefined ? {} : { usage: telemetry.usage }),
+    ...(telemetry.repairAttempted === undefined
+      ? {}
+      : { repairAttempted: telemetry.repairAttempted }),
+    ...(telemetry.repairSucceeded === undefined
+      ? {}
+      : { repairSucceeded: telemetry.repairSucceeded }),
+    ...(telemetry.failedObligationIds === undefined
+      ? {}
+      : { failedObligationIds: telemetry.failedObligationIds }),
+  });
   return parsed.success ? parsed.data : undefined;
 }
 
@@ -1343,4 +1360,8 @@ function containsDirectCustomerInformationAsk(text: string): boolean {
 
 function sanitizeValidationMessage(message: string): string {
   return message.replace(/sk-[A-Za-z0-9_-]+/g, "[redacted-api-key]");
+}
+
+function sanitizeRepairMessages(messages: readonly string[]): string[] {
+  return [...new Set(messages.map(sanitizeValidationMessage))].slice(0, 12);
 }

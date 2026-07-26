@@ -178,6 +178,25 @@ describe("draft contract", () => {
     );
   });
 
+  it("returns a bounded security-review fallback after a non-contract rejection", async () => {
+    const result = await draftCustomerResponseWithFallback({
+      draftInput: {
+        ...baseInput,
+        outcome: {
+          ...baseInput.outcome,
+          requiredEscalations: ["security"],
+        },
+        deterministicDraft: "We guarantee this issue is fixed.",
+      },
+    });
+
+    expect(result).toMatchObject({
+      source: "fallback",
+      fallback: { category: "guardrail-rejected" },
+    });
+    expect(result.response).toContain("specialist security review");
+  });
+
   it("rejects a stale reply that requests evidence already provided", () => {
     const staleInput: CustomerResponseDraftInput = {
       ...baseInput,

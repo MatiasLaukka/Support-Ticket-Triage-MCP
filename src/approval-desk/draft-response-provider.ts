@@ -532,6 +532,10 @@ function boundedSafetyFallbackResponse(input: CustomerResponseDraftInput): strin
     ? "Thank you for confirming that resolved it. This ticket is ready to close."
     : obligationIds.has("escalation:incident-review")
       ? "Thank you for your patience. Our support team is reviewing this under incident review and will update you as soon as possible."
+      : obligationIds.has("escalation:security-review")
+        ? obligationIds.has("concept:webhook-signature")
+          ? "Thank you for your patience. This issue is receiving specialist security review. We are reviewing the webhook signature issue."
+          : "Thank you for your patience. This issue is receiving specialist security review."
       : obligationIds.has("concept:webhook-signature")
         ? "Thank you for your patience. Our support team is reviewing the webhook signature issue."
         : "Thank you for your patience. Our support team is reviewing the issue and will update you as soon as possible.";

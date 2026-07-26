@@ -17,7 +17,7 @@ export const responseQualityContracts: Readonly<Record<string, ResponseQualityCo
       "request id",
       ["api response status", "validation error"],
     ],
-    requiredEscalation: ["incident review", "incident response"],
+    requiredEscalation: ["incident review", "incident response", "incident and platform review"],
     forbiddenClaims: ["fixed", "resolved"],
     tone: "balanced",
     maxWords: 120,
@@ -93,7 +93,7 @@ export const responseQualityContracts: Readonly<Record<string, ResponseQualityCo
     scenarioId: "ambiguous-campaign-editor",
     requiredConcepts: [
       ["campaign editor", "editor loading path"],
-      ["checking", "narrow this down"],
+      ["checking", "check", "investigate", "narrow this down"],
     ],
     forbiddenConcepts: [],
     requiredEvidence: [
@@ -160,7 +160,7 @@ export const responseQualityContracts: Readonly<Record<string, ResponseQualityCo
       ["active signing secret", "current signing secret"],
     ],
     forbiddenConcepts: [],
-    requiredEvidence: [],
+    requiredEvidence: [["current signing secret", "active signing secret", "endpoint uses the current signing secret"]],
     requiredEscalation: null,
     forbiddenClaims: ["fixed", "resolved", "do not need any additional information"],
     tone: "technical",

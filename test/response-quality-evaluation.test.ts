@@ -78,6 +78,39 @@ describe("response quality evaluation", () => {
     expect(score.failures).toContain("missing escalation: incident review");
   });
 
+  it("accepts explicit combined incident and platform review wording", () => {
+    const score = evaluateResponseQuality({
+      draft: "The issue is under incident and platform review while we correlate impact and timing. Please share the store URL, profile email or customer ID, event ID or event time, request ID, and API response status.",
+      contract: incidentContract,
+      deterministicChecks: [],
+    });
+
+    expect(score.hardPass).toBe(true);
+    expect(score.failures).not.toContain("missing escalation: incident review");
+  });
+
+  it("counts bullet-list confirmation requests as relevant evidence", () => {
+    const score = evaluateResponseQuality({
+      draft: "To move this forward, please confirm:\n- The signing secret rotation time in UTC\n- Whether raw request-body handling changed recently",
+      contract: responseQualityContracts["partial-evidence"]!,
+      deterministicChecks: [],
+    });
+
+    expect(score.requiredEvidenceRecall).toBe(1);
+    expect(score.unnecessaryQuestionCount).toBe(0);
+  });
+
+  it("treats current signing-secret confirmation as valid stale-reply evidence", () => {
+    const score = evaluateResponseQuality({
+      draft: responseExemplars["stale-reply"]!,
+      contract: responseQualityContracts["stale-reply"]!,
+      deterministicChecks: [],
+    });
+
+    expect(score.hardPass).toBe(true);
+    expect(score.unnecessaryQuestionCount).toBe(0);
+  });
+
   it("does not apply ordinary required-concept aliases to escalation, evidence, or forbidden gates", () => {
     const score = evaluateResponseQuality({
       draft: "Please share confirmation that it is working again.",

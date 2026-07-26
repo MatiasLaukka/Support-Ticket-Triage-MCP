@@ -116,7 +116,7 @@ function scoreEvidence(draft: string, requiredEvidence: readonly ResponseQuality
   const requests = (draft.match(/[^?.!]+[?.!]?/g) ?? []).filter(
     (sentence) =>
       sentence.includes("?") ||
-      /\bplease\s+(?:share|send|provide)\b/.test(sentence) ||
+      /\bplease\s+(?:share|send|provide|confirm)\b/.test(sentence) ||
       /\b(?:we\s+(?:still\s+)?need|to\s+move\s+this\s+forward,?\s+we\s+(?:still\s+)?need)\b/.test(
         sentence,
       ),

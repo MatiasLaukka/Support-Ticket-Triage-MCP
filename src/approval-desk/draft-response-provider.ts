@@ -29,6 +29,7 @@ import {
   buildCustomerServiceSkillContext,
 } from "./customer-service-drafting-skill.js";
 import { validateDraftQuality } from "./draft-quality-guardrails.js";
+import { buildDraftObligations, validateDraftContract } from "./draft-contract.js";
 
 const DEFAULT_OPENAI_MODEL = "gpt-5.6-luna";
 const DEFAULT_OPENAI_DRAFT_TIMEOUT_MS = 20_000;
@@ -387,6 +388,7 @@ export async function draftCustomerResponseWithFallback(input: {
     const candidate = await provider.draft(input.draftInput);
     const response = ensureDraftSignOff(candidate.response, input.draftInput);
     const validation = validateCustomerResponseDraft({
+      draftInput: input.draftInput,
       response,
       assist: candidate.assist,
       responseStyle: resolvedResponseStyle(input.draftInput, candidate.assist),
@@ -462,6 +464,7 @@ function fallbackDraft(input: {
     input.draftInput,
   );
   const validateFallback = () => validateCustomerResponseDraft({
+      draftInput: input.draftInput,
       response,
       assist: fallbackAssist,
       responseStyle,
@@ -497,7 +500,9 @@ function fallbackDraft(input: {
         : sanitizeValidationMessage(input.reason),
     },
     ...(input.rejectedCandidateChecks ?? []),
-    ...validation.checks,
+    ...validation.checks.filter(
+      (check) => check.status !== "warn" || !check.id.startsWith("evidence-"),
+    ),
   ];
   return {
     providerAttempted: input.providerAttempted,
@@ -515,9 +520,14 @@ function fallbackDraft(input: {
 }
 
 function boundedSafetyFallbackResponse(input: CustomerResponseDraftInput): string {
+  const obligationIds = new Set(buildDraftObligations(input).map(({ id }) => id));
   const body = isCustomerConfirmedReadyForClose(input)
-    ? "Thank you for confirming the issue is resolved. This ticket is ready to close."
-    : "Thank you for your patience. Our support team is reviewing the issue and will update you as soon as possible.";
+    ? "Thank you for confirming that resolved it. This ticket is ready to close."
+    : obligationIds.has("escalation:incident-review")
+      ? "Thank you for your patience. Our support team is reviewing this under incident review and will update you as soon as possible."
+      : obligationIds.has("concept:webhook-signature")
+        ? "Thank you for your patience. Our support team is reviewing the webhook signature issue."
+        : "Thank you for your patience. Our support team is reviewing the issue and will update you as soon as possible.";
   return `${body}\n\n${formatDraftSignOff(input)}`;
 }
 
@@ -582,6 +592,7 @@ export function classifyAiFailure(error: unknown): {
 }
 
 function validateCustomerResponseDraft(input: {
+  draftInput: CustomerResponseDraftInput;
   response: string;
   assist: GptAssist;
   responseStyle: DraftCustomerResponseStyle;
@@ -731,10 +742,19 @@ function validateCustomerResponseDraft(input: {
       message: check.message,
     });
   }
+  const contract = validateDraftContract({
+    input: input.draftInput,
+    response,
+    assistText,
+  });
 
   return {
-    checks,
-    blockingMessages: [...blockingMessages, ...quality.blockingMessages],
+    checks: [...checks, ...contract.checks],
+    blockingMessages: [
+      ...blockingMessages,
+      ...quality.blockingMessages,
+      ...contract.blockingMessages,
+    ],
     candidateChecks: quality.checks,
   };
 }

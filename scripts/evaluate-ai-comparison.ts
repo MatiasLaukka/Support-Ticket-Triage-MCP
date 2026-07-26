@@ -20,7 +20,7 @@ import {
 } from "../src/approval-desk/draft-response-provider.js";
 import { loadDiagnosticEvaluationScenarios } from "../src/approval-desk/diagnostic-evaluation-scenarios.js";
 import type { ResponseQualityScore } from "../src/approval-desk/response-quality-evaluation.js";
-import type { AiUsage } from "../src/domain.js";
+import type { AiFallbackCategory, AiUsage } from "../src/domain.js";
 import { KnowledgeRepository } from "../src/knowledge-repository.js";
 
 const LANES: readonly AiComparisonLane[] = [
@@ -57,6 +57,10 @@ export interface AiComparisonSerializationInput {
           model?: string;
           latencyMs?: number;
           usage?: AiUsage;
+          fallback?: {
+            category: AiFallbackCategory;
+            message: string;
+          };
         };
         drafting: {
           status: "skipped" | "used" | "fallback";
@@ -64,6 +68,10 @@ export interface AiComparisonSerializationInput {
           model?: string;
           latencyMs?: number;
           usage?: AiUsage;
+          fallback?: {
+            category: AiFallbackCategory;
+            message: string;
+          };
         };
       };
     }>;
@@ -290,6 +298,9 @@ function stageProvenance(
       ...(observation.aiExecutionTrace.classification.usage === undefined
         ? {}
         : { usage: observation.aiExecutionTrace.classification.usage }),
+      ...(observation.aiExecutionTrace.classification.fallback === undefined
+        ? {}
+        : { fallback: safeFallback(observation.aiExecutionTrace.classification.fallback) }),
     },
     drafting: {
       status: observation.aiExecutionTrace.drafting.status,
@@ -301,6 +312,9 @@ function stageProvenance(
       ...(observation.aiExecutionTrace.drafting.usage === undefined
         ? {}
         : { usage: observation.aiExecutionTrace.drafting.usage }),
+      ...(observation.aiExecutionTrace.drafting.fallback === undefined
+        ? {}
+        : { fallback: safeFallback(observation.aiExecutionTrace.drafting.fallback) }),
     },
   };
 }
@@ -317,6 +331,10 @@ function formatProviderStage(input: {
   model: string;
   latencyMs?: number;
   usage?: AiUsage;
+  fallback?: {
+    category: AiFallbackCategory;
+    message: string;
+  };
   source?: string;
 }): string {
   const stage = [input.status, ...(input.source === undefined ? [] : [input.source]), input.model];
@@ -325,9 +343,36 @@ function formatProviderStage(input: {
     ...(input.usage === undefined
       ? []
       : [`usage=${input.usage.inputTokens}/${input.usage.outputTokens}/${input.usage.totalTokens}`]),
+    ...(input.fallback === undefined
+      ? []
+      : [`fallback=${input.fallback.category}/${input.fallback.message}`]),
   ];
   return [...stage, ...metadata].join("/");
 }
+
+function safeFallback(input: {
+  category: AiFallbackCategory;
+  message: string;
+}): { category: AiFallbackCategory; message: string } {
+  const message = safeFallbackMessages[input.category];
+  return {
+    category: input.category,
+    message: knownSafeFallbackMessages.has(input.message) ? input.message : message,
+  };
+}
+
+const safeFallbackMessages: Record<AiFallbackCategory, string> = {
+  "not-configured": "OpenAI is not configured; deterministic output was used.",
+  timeout: "OpenAI timed out; deterministic output was used.",
+  "provider-error": "OpenAI was unavailable; deterministic output was used.",
+  "invalid-schema": "OpenAI returned invalid structured output; deterministic output was used.",
+  "guardrail-rejected": "OpenAI output did not pass response guardrails; deterministic output was used.",
+};
+
+const knownSafeFallbackMessages = new Set([
+  ...Object.values(safeFallbackMessages),
+  "Local deterministic draft did not pass response guardrails; bounded local fallback was used.",
+]);
 
 function quoteMarkdown(text: string): string[] {
   return text.split("\n").map((line) => `> ${line}`);

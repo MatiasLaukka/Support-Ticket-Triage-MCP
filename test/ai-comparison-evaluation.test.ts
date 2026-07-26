@@ -208,6 +208,47 @@ describe("AI comparison evaluation", () => {
     expect(serialized).toContain('"failureReasons"');
   });
 
+  it("serializes a safe provider fallback without raw provider payload text", () => {
+    const serialized = serializeAiComparisonReport({
+      mode: "controlled",
+      providerProvenance: {
+        classification: "controlled-local-simulation",
+        drafting: "controlled-local-simulation",
+        networkPolicy: "disabled",
+      },
+      reports: [{
+        lane: "gpt-deterministic",
+        scenarioCount: 1,
+        passedScenarioCount: 0,
+        observations: [{
+          ...serializedObservation({
+            scenarioId: "provider-fallback",
+            hardPass: true,
+            failures: ["GPT classification fallback: provider-error"],
+          }),
+          aiExecutionTrace: {
+            classification: {
+              status: "fallback",
+              fallback: {
+                category: "provider-error",
+                message: "raw provider payload with an API key must not appear",
+              },
+            },
+            drafting: {
+              status: "skipped",
+              source: "deterministic",
+            },
+          },
+        }],
+      }],
+    });
+
+    expect(serialized).toContain('"category": "provider-error"');
+    expect(serialized).toContain("OpenAI was unavailable; deterministic output was used.");
+    expect(serialized).toContain("fallback=provider-error");
+    expect(serialized).not.toContain("raw provider payload");
+  });
+
   it("rejects live mode before reporting a live result without an API key", async () => {
     const errors: string[] = [];
     const output: string[] = [];
@@ -462,6 +503,42 @@ describe("AI comparison evaluation", () => {
     expect(observation.aiExecutionTrace.classification.status).toBe("fallback");
     expect(observation.aiExecutionTrace.drafting.status).toBe("used");
     expect(observation.draftCustomerResponseSource).toBe("openai");
+  });
+
+  it("fails a GPT lane when classification falls back to matching deterministic output", async () => {
+    const failingClassificationProvider: ClassificationReasoningProvider = {
+      async reason() {
+        throw new Error("provider response body must never be reported");
+      },
+    };
+    const report = await runAiComparisonEvaluation({
+      scenarios: (await loadDiagnosticEvaluationScenarios()).filter(({ id }) =>
+        id === "active-known-event"),
+      lane: "gpt-deterministic",
+      allKnowledgeArticles: await loadKnowledgeArticles(),
+      classificationProvider: failingClassificationProvider,
+    });
+
+    const observation = report.observations[0]!;
+    expect(observation.classificationAgreement.all).toBe(true);
+    expect(observation.responseQuality.hardPass).toBe(true);
+    expect(observation.aiExecutionTrace.classification.status).toBe("fallback");
+    expect(observation.failures).toContain(
+      "GPT classification fallback: provider-error",
+    );
+    expect(report.passedScenarioCount).toBe(0);
+
+    const serialized = serializeAiComparisonReport({
+      mode: "controlled",
+      providerProvenance: {
+        classification: "controlled-local-simulation",
+        drafting: "controlled-local-simulation",
+        networkPolicy: "disabled",
+      },
+      reports: [report],
+    });
+    expect(serialized).toContain("Overall result: fail");
+    expect(serialized).toContain("GPT classification fallback: provider-error");
   });
 
   it("runs both injected GPT stages and preserves provider provenance", async () => {

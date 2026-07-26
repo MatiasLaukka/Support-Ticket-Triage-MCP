@@ -68,3 +68,8 @@ of the same safe fields. A live report may add adapter-returned model, latency,
 and token-usage metadata, but it remains an attributable observation rather
 than a reproducible benchmark. Static drafts here are reference anchors for
 human review and quality contracts; they are not exact expected strings.
+
+Each controlled lane currently reports 2 overall passes of 11. That is a
+pre-existing deterministic response-quality/contract limitation shown by this
+comparison harness, not a live-model regression: this example was generated
+without an external model call.

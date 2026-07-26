@@ -116,6 +116,7 @@ export async function runAiComparisonEvaluation(input: {
     });
     const failures = [
       ...agreementFailures("expected", classificationAgreement),
+      ...fallbackFailures(input.lane, aiExecutionTrace),
       ...responseQuality.failures.map((failure) => `response quality: ${failure}`),
     ];
 
@@ -138,6 +139,30 @@ export async function runAiComparisonEvaluation(input: {
     passedScenarioCount: observations.filter(({ failures }) => failures.length === 0).length,
     observations,
   };
+}
+
+function fallbackFailures(
+  lane: AiComparisonLane,
+  trace: AiExecutionTrace,
+): string[] {
+  const failures: string[] = [];
+  if (
+    (lane === "gpt-deterministic" || lane === "gpt-gpt") &&
+    trace.classification.status === "fallback"
+  ) {
+    failures.push(
+      `GPT classification fallback: ${trace.classification.fallback?.category ?? "unknown"}`,
+    );
+  }
+  if (
+    (lane === "deterministic-gpt" || lane === "gpt-gpt") &&
+    trace.drafting.status === "fallback"
+  ) {
+    failures.push(
+      `GPT drafting fallback: ${trace.drafting.fallback?.category ?? "unknown"}`,
+    );
+  }
+  return failures;
 }
 
 function laneInput(input: {

@@ -693,9 +693,11 @@ approval-safety violation.
 comparison of deterministic classification/drafting, advisory classification,
 and drafting providers across the eleven diagnostic scenarios. Its four lanes
 are reproducible local simulations, not live-model observations. The report
-shows actual drafts, agreement, quality, hard-safety status, safe failure
-reasons, and provider provenance without recording API keys or raw provider
-payloads.
+shows actual drafts, operator stage, baseline-versus-final classification,
+sanitized candidate/advisory signals, accepted and rejected advice,
+deterministic overrides, evidence recall and precision, hard-safety status,
+safe failure reasons, and provider provenance without recording API keys or
+raw provider payloads.
 
 For an explicit live OpenAI observation, set `OPENAI_API_KEY` in the shell and
 run:

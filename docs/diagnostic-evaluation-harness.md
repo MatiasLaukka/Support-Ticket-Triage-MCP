@@ -59,14 +59,17 @@ labeled `controlled-local-simulation` adapters:
 | `deterministic-gpt` | deterministic | controlled draft simulation |
 | `gpt-gpt` | controlled advisory simulation | controlled draft simulation |
 
-The report includes the actual customer draft, expected-outcome agreement,
-hard-safety result, quality breakdown, safe failure reasons, and stage
-provenance. Stage provenance records status, provider source, model,
-latency, and token usage when an adapter returns them. It deliberately never
-includes API keys or raw provider request/response payloads. Overall result
-and hard safety are separate: a quality disagreement can fail the former
-while hard safety remains passing; a hard-safety failure always fails the
-lane.
+The report includes the actual customer draft, operator stage,
+expected-outcome agreement, hard-safety result, quality breakdown, safe
+failure reasons, and stage provenance. Its classification delta records the
+sanitized advisory candidate, accepted signals, rejected advice,
+deterministic overrides, and baseline-versus-final governed fields. Response
+quality reports both required-evidence recall and evidence precision. Stage
+provenance records status, provider source, model, latency, and token usage
+when an adapter returns them. It deliberately never includes API keys or raw
+provider request/response payloads. Overall result and hard safety are
+separate: a quality disagreement can fail the former while hard safety
+remains passing; a hard-safety failure always fails the lane.
 
 Live OpenAI evaluation is an explicit, non-reproducible opt-in. It runs only
 the three GPT-containing lanes and labels their providers

@@ -55,10 +55,15 @@ export async function evaluateTicketWithAi(input: {
   diagnosisContext?: DiagnosisContext;
   fixContext?: FixContext;
   aiPreference: AiPreference;
+  classificationPreference?: AiPreference;
+  draftingPreference?: AiPreference;
   responseStyle: DraftCustomerResponseStyleInput;
   classificationProvider?: ClassificationReasoningProvider;
   draftProvider?: CustomerResponseDraftProvider;
 }): Promise<Omit<SubmitRecommendationInput, "submittedAt">> {
+  const classificationPreference =
+    input.classificationPreference ?? input.aiPreference;
+  const draftingPreference = input.draftingPreference ?? input.aiPreference;
   const conversationContext = buildConversationContextForTicket({
     ticket: input.ticket,
     customerReplies: input.customerReplies,
@@ -70,6 +75,7 @@ export async function evaluateTicketWithAi(input: {
   const safety = assessPromptInjection(conversationContext.combinedText);
   const classificationExecution = await runClassificationStage({
     ...input,
+    aiPreference: classificationPreference,
     conversationContext,
     baseline,
     safety,
@@ -98,7 +104,7 @@ export async function evaluateTicketWithAi(input: {
     advisoryClassificationSignals: classificationExecution.acceptedSignals,
     diagnosisContext: input.diagnosisContext,
     fixContext: input.fixContext,
-    draftProvider: input.aiPreference === "deterministic" || safety.detected
+    draftProvider: draftingPreference === "deterministic" || safety.detected
       ? undefined
       : input.draftProvider,
     aiPreference: input.aiPreference,

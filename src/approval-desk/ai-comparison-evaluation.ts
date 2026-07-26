@@ -1,16 +1,26 @@
 import type {
   AiExecutionTrace,
   Category,
+  ExpectedOutcome,
   KnowledgeArticle,
   Priority,
   RequiredEscalation,
   Team,
 } from "../domain.js";
-import type { SubmitRecommendationInput } from "../triage-service.js";
+import { TriageRecommendationSchema } from "../domain.js";
+import type {
+  DiagnosisContext,
+  FixContext,
+  SubmitRecommendationInput,
+} from "../triage-service.js";
 import { evaluateTicketWithAi } from "./ai-evaluation.js";
 import type { ClassificationReasoningProvider } from "./classification-reasoning-provider.js";
 import { classifyTicketFromContext } from "./classifier.js";
 import { buildConversationContextForTicket } from "./conversation-context.js";
+import {
+  diagnosisContextForTicket,
+  fixContextForTicket,
+} from "./diagnostic-workflow.js";
 import type { CustomerResponseDraftProvider } from "./draft-response-provider.js";
 import type {
   DiagnosticEvaluationScenario,
@@ -22,6 +32,16 @@ import {
   evaluateResponseQuality,
   type ResponseQualityScore,
 } from "./response-quality-evaluation.js";
+import { buildApprovalDeskRecommendationInput } from "./recommendation-builder.js";
+import {
+  buildOperatorGuidance,
+  latestDiagnosisAudit,
+  type OperatorGuidance,
+} from "./workflow-guidance.js";
+import {
+  customerRepliesFromAudits,
+  latestSupportResponseFromAudits,
+} from "./workflow-read-model.js";
 
 export type AiComparisonLane =
   | "deterministic-deterministic"
@@ -40,12 +60,14 @@ export interface AiComparisonAgreement {
 
 export interface AiComparisonObservation {
   scenarioId: string;
+  operatorStage: OperatorGuidance["stage"];
   finalRecommendation: Omit<SubmitRecommendationInput, "submittedAt">;
   draftCustomerResponse: string;
   draftCustomerResponseSource: NonNullable<
     SubmitRecommendationInput["draftCustomerResponseSource"]
   >;
   aiExecutionTrace: AiExecutionTrace;
+  baselineClassification: AiComparisonClassification;
   classificationAgreement: AiComparisonAgreement;
   baselineAgreement: AiComparisonAgreement;
   responseQuality: ResponseQualityScore;
@@ -59,13 +81,13 @@ export interface AiComparisonReport {
   observations: AiComparisonObservation[];
 }
 
-type ClassificationComparable = {
+export interface AiComparisonClassification {
   category: Category;
   team: Team;
   priority: Priority;
   knowledgeArticleIds: readonly string[];
   escalationReasons: readonly RequiredEscalation[];
-};
+}
 
 export async function runAiComparisonEvaluation(input: {
   scenarios: readonly DiagnosticEvaluationScenario[];
@@ -74,14 +96,23 @@ export async function runAiComparisonEvaluation(input: {
   classificationProvider?: ClassificationReasoningProvider;
   draftProvider?: CustomerResponseDraftProvider;
 }): Promise<AiComparisonReport> {
-  const observations = await Promise.all(input.scenarios.map(async (scenario) => {
-    const baseline = deterministicBaseline(scenario);
+  const observations = await Promise.all(input.scenarios.map(async (scenario, index) => {
+    const conversation = scenarioConversation(scenario);
+    const baseline = deterministicBaseline(scenario, conversation);
+    const workflowContext = scenarioWorkflowContext({
+      scenario,
+      baseline,
+      conversation,
+      index,
+    });
     const recommendation = await evaluateTicketWithAi({
       ticket: scenario.ticket,
       actor: "ai-comparison-evaluation",
       allKnowledgeArticles: input.allKnowledgeArticles,
-      customerReplies: scenario.customerReplies ?? [],
-      previousSupportResponse: scenario.previousSupportResponse,
+      customerReplies: conversation.customerReplies,
+      previousSupportResponse: conversation.previousSupportResponse,
+      diagnosisContext: workflowContext.diagnosisContext,
+      fixContext: workflowContext.fixContext,
       ...laneInput(input),
     });
     const aiExecutionTrace = recommendation.aiExecutionTrace;
@@ -116,16 +147,28 @@ export async function runAiComparisonEvaluation(input: {
     });
     const failures = [
       ...agreementFailures("expected", classificationAgreement),
-      ...fallbackFailures(input.lane, aiExecutionTrace),
+      ...laneInvariantFailures(input.lane, aiExecutionTrace),
       ...responseQuality.failures.map((failure) => `response quality: ${failure}`),
     ];
+    const materializedRecommendation = materializeRecommendation(
+      recommendation,
+      scenario,
+      index + 100,
+    );
+    const operatorStage = buildOperatorGuidance({
+      ticket: scenario.ticket,
+      recommendations: [materializedRecommendation],
+      audits: scenario.audits ?? [],
+    }).stage;
 
     return {
       scenarioId: scenario.id,
+      operatorStage,
       finalRecommendation: recommendation,
       draftCustomerResponse: recommendation.draftCustomerResponse,
       draftCustomerResponseSource: recommendation.draftCustomerResponseSource ?? "deterministic",
       aiExecutionTrace,
+      baselineClassification: baseline,
       classificationAgreement,
       baselineAgreement,
       responseQuality,
@@ -141,28 +184,52 @@ export async function runAiComparisonEvaluation(input: {
   };
 }
 
-function fallbackFailures(
+function laneInvariantFailures(
   lane: AiComparisonLane,
   trace: AiExecutionTrace,
 ): string[] {
-  const failures: string[] = [];
-  if (
-    (lane === "gpt-deterministic" || lane === "gpt-gpt") &&
-    trace.classification.status === "fallback"
-  ) {
-    failures.push(
-      `GPT classification fallback: ${trace.classification.fallback?.category ?? "unknown"}`,
-    );
+  const injectionSkip = trace.safety?.promptInjectionDetected === true;
+  return [
+    ...stageInvariantFailures({
+      stage: "classification",
+      status: trace.classification.status,
+      fallbackCategory: trace.classification.fallback?.category,
+      gptExpected: !injectionSkip &&
+        (lane === "gpt-deterministic" || lane === "gpt-gpt"),
+      injectionSkip,
+    }),
+    ...stageInvariantFailures({
+      stage: "drafting",
+      status: trace.drafting.status,
+      fallbackCategory: trace.drafting.fallback?.category,
+      gptExpected: !injectionSkip &&
+        (lane === "deterministic-gpt" || lane === "gpt-gpt"),
+      injectionSkip,
+    }),
+  ];
+}
+
+function stageInvariantFailures(input: {
+  stage: "classification" | "drafting";
+  status: "skipped" | "used" | "fallback";
+  fallbackCategory?: string;
+  gptExpected: boolean;
+  injectionSkip: boolean;
+}): string[] {
+  if (input.gptExpected) {
+    return input.status === "used"
+      ? []
+      : [
+          `GPT ${input.stage} expected used, got ${input.status}${
+            input.status === "fallback"
+              ? `: ${input.fallbackCategory ?? "unknown"}`
+              : ""
+          }`,
+        ];
   }
-  if (
-    (lane === "deterministic-gpt" || lane === "gpt-gpt") &&
-    trace.drafting.status === "fallback"
-  ) {
-    failures.push(
-      `GPT drafting fallback: ${trace.drafting.fallback?.category ?? "unknown"}`,
-    );
-  }
-  return failures;
+  if (input.status === "skipped") return [];
+  const subject = input.injectionSkip ? "Prompt-injection" : "Deterministic";
+  return [`${subject} ${input.stage} stage expected skipped, got ${input.status}`];
 }
 
 function laneInput(input: {
@@ -172,22 +239,33 @@ function laneInput(input: {
 }) {
   switch (input.lane) {
     case "deterministic-deterministic":
-      return { aiPreference: "deterministic" as const, responseStyle: "auto" as const };
+      return {
+        aiPreference: "deterministic" as const,
+        classificationPreference: "deterministic" as const,
+        draftingPreference: "deterministic" as const,
+        responseStyle: "auto" as const,
+      };
     case "gpt-deterministic":
       return {
         aiPreference: "gpt-preferred" as const,
+        classificationPreference: "gpt-preferred" as const,
+        draftingPreference: "deterministic" as const,
         responseStyle: "auto" as const,
         classificationProvider: input.classificationProvider,
       };
     case "deterministic-gpt":
       return {
         aiPreference: "gpt-preferred" as const,
+        classificationPreference: "deterministic" as const,
+        draftingPreference: "gpt-preferred" as const,
         responseStyle: "auto" as const,
         draftProvider: input.draftProvider,
       };
     case "gpt-gpt":
       return {
         aiPreference: "gpt-preferred" as const,
+        classificationPreference: "gpt-preferred" as const,
+        draftingPreference: "gpt-preferred" as const,
         responseStyle: "auto" as const,
         classificationProvider: input.classificationProvider,
         draftProvider: input.draftProvider,
@@ -197,13 +275,14 @@ function laneInput(input: {
 
 function deterministicBaseline(
   scenario: DiagnosticEvaluationScenario,
-): ClassificationComparable {
+  conversation: ReturnType<typeof scenarioConversation>,
+): AiComparisonClassification {
   const conversationContext = buildConversationContextForTicket({
     ticket: scenario.ticket,
-    customerReplies: scenario.customerReplies ?? [],
-    previousSupportResponses: scenario.previousSupportResponse === undefined
+    customerReplies: conversation.customerReplies,
+    previousSupportResponses: conversation.previousSupportResponse === undefined
       ? []
-      : [scenario.previousSupportResponse],
+      : [conversation.previousSupportResponse],
   });
   const classification = classifyTicketFromContext(conversationContext);
   return {
@@ -217,7 +296,7 @@ function deterministicBaseline(
 
 function compareClassification(
   recommendation: Omit<SubmitRecommendationInput, "submittedAt">,
-  expected: ClassificationComparable,
+  expected: AiComparisonClassification,
   priorityMatches = recommendation.priority === expected.priority,
 ): AiComparisonAgreement {
   const category = recommendation.category === expected.category;
@@ -239,6 +318,100 @@ function compareClassification(
     escalationReasons,
     all: category && team && priority && knowledgeArticleIds && escalationReasons,
   };
+}
+
+function scenarioConversation(scenario: DiagnosticEvaluationScenario) {
+  const auditReplies = customerRepliesFromAudits(
+    scenario.ticket.id,
+    scenario.audits ?? [],
+  );
+  const customerReplies = [...new Map(
+    [...(scenario.customerReplies ?? []), ...auditReplies].map((reply) => [
+      reply.id,
+      reply,
+    ]),
+  ).values()].sort(
+    (left, right) =>
+      left.createdAt.localeCompare(right.createdAt) ||
+      left.id.localeCompare(right.id),
+  );
+  return {
+    customerReplies,
+    previousSupportResponse: scenario.previousSupportResponse ??
+      latestSupportResponseFromAudits(scenario.ticket.id, scenario.audits ?? []),
+  };
+}
+
+function scenarioWorkflowContext(input: {
+  scenario: DiagnosticEvaluationScenario;
+  baseline: AiComparisonClassification;
+  conversation: ReturnType<typeof scenarioConversation>;
+  index: number;
+}): { diagnosisContext?: DiagnosisContext; fixContext?: FixContext } {
+  const audits = input.scenario.audits ?? [];
+  const diagnosisAudit = latestDiagnosisAudit(audits);
+  if (diagnosisAudit === undefined) {
+    return {};
+  }
+  const preliminary = buildApprovalDeskRecommendationInput({
+    ticket: input.scenario.ticket,
+    outcome: outcomeFromClassification(input.scenario.ticket.id, input.baseline),
+    actor: "ai-comparison-evaluation",
+    customerReplies: input.conversation.customerReplies,
+    previousSupportResponse: input.conversation.previousSupportResponse,
+  });
+  const materialized = materializeRecommendation(
+    preliminary,
+    input.scenario,
+    input.index,
+  );
+  const diagnosisContext = diagnosisContextForTicket(
+    input.scenario.ticket,
+    materialized,
+    audits,
+  );
+  const hasFix = audits.some(
+    (event) => event.action === "fix-available" &&
+      typeof event.after.fix === "object" && event.after.fix !== null,
+  );
+  return {
+    diagnosisContext,
+    ...(hasFix
+      ? { fixContext: fixContextForTicket(input.scenario.ticket, diagnosisAudit) }
+      : {}),
+  };
+}
+
+function outcomeFromClassification(
+  ticketId: string,
+  classification: AiComparisonClassification,
+): ExpectedOutcome {
+  return {
+    ticketId,
+    category: classification.category,
+    acceptablePriorities: [classification.priority],
+    team: classification.team,
+    requiredEscalations: [...classification.escalationReasons],
+    knowledgeArticleIds: [...classification.knowledgeArticleIds],
+  };
+}
+
+function materializeRecommendation(
+  recommendation: Omit<SubmitRecommendationInput, "submittedAt">,
+  scenario: DiagnosticEvaluationScenario,
+  index: number,
+) {
+  const {
+    actor: _actor,
+    gptAssist: _gptAssist,
+    ...recommendationInput
+  } = recommendation;
+  return TriageRecommendationSchema.parse({
+    ...recommendationInput,
+    id: `30000000-0000-4000-8000-${String(index + 1).padStart(12, "0")}`,
+    resolution: "pending",
+    createdAt: scenario.evaluationAt ?? scenario.ticket.updatedAt,
+  });
 }
 
 function sameMembers(actual: readonly string[], expected: readonly string[]): boolean {

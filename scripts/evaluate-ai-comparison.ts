@@ -2,6 +2,7 @@ import { resolve } from "node:path";
 import process from "node:process";
 import {
   type AiComparisonAgreement,
+  type AiComparisonClassification,
   type AiComparisonLane,
   type AiComparisonReport,
   runAiComparisonEvaluation,
@@ -20,7 +21,11 @@ import {
 } from "../src/approval-desk/draft-response-provider.js";
 import { loadDiagnosticEvaluationScenarios } from "../src/approval-desk/diagnostic-evaluation-scenarios.js";
 import type { ResponseQualityScore } from "../src/approval-desk/response-quality-evaluation.js";
-import type { AiFallbackCategory, AiUsage } from "../src/domain.js";
+import type {
+  AiExecutionTrace,
+  AiFallbackCategory,
+  AiUsage,
+} from "../src/domain.js";
 import { KnowledgeRepository } from "../src/knowledge-repository.js";
 
 const LANES: readonly AiComparisonLane[] = [
@@ -47,8 +52,11 @@ export interface AiComparisonSerializationInput {
     passedScenarioCount: number;
     observations: ReadonlyArray<{
       scenarioId: string;
+      operatorStage: string;
       draftCustomerResponse: string;
+      baselineClassification: AiComparisonClassification;
       classificationAgreement: AiComparisonAgreement;
+      baselineAgreement: AiComparisonAgreement;
       responseQuality: ResponseQualityScore;
       failures: readonly string[];
       aiExecutionTrace: {
@@ -61,6 +69,11 @@ export interface AiComparisonSerializationInput {
             category: AiFallbackCategory;
             message: string;
           };
+          candidate?: AiExecutionTrace["classification"]["candidate"];
+          acceptedSignals?: AiExecutionTrace["classification"]["acceptedSignals"];
+          rejectedAdvice?: AiExecutionTrace["classification"]["rejectedAdvice"];
+          deterministicOverrides?: AiExecutionTrace["classification"]["deterministicOverrides"];
+          finalOutcome?: AiExecutionTrace["classification"]["finalOutcome"];
         };
         drafting: {
           status: "skipped" | "used" | "fallback";
@@ -169,9 +182,11 @@ export function serializeAiComparisonReport(
       passedScenarioCount: lane.passedScenarioCount,
       scenarios: lane.observations.map((observation) => ({
         scenarioId: observation.scenarioId,
+        operatorStage: observation.operatorStage,
         actualDraft: observation.draftCustomerResponse,
         overallResult: observation.failures.length === 0 ? "pass" : "fail",
         classificationAgreement: observation.classificationAgreement,
+        classificationDelta: classificationDelta(observation),
         hardSafety: observation.responseQuality.hardPass,
         failureReasons: safeFailureReasons(observation.failures),
         qualityBreakdown: qualityBreakdown(observation.responseQuality),
@@ -197,7 +212,9 @@ export function serializeAiComparisonReport(
         `### ${observation.scenarioId}`,
         "",
         `- Overall result: ${observation.failures.length === 0 ? "pass" : "fail"}.`,
+        `- Operator stage: ${observation.operatorStage}.`,
         `- Classification agreement: ${observation.classificationAgreement.all ? "pass" : "fail"}.`,
+        `- Classification delta: ${formatClassificationDelta(observation)}.`,
         `- Hard safety: ${observation.responseQuality.hardPass ? "pass" : "fail"}.`,
         `- Quality breakdown: ${formatQualityBreakdown(observation.responseQuality)}.`,
         ...formatFailureReasons(observation.failures),
@@ -381,6 +398,7 @@ function quoteMarkdown(text: string): string[] {
 function qualityBreakdown(responseQuality: ResponseQualityScore) {
   return {
     requiredConceptRecall: responseQuality.requiredConceptRecall,
+    requiredEvidenceRecall: responseQuality.requiredEvidenceRecall,
     relevantEvidencePrecision: responseQuality.relevantEvidencePrecision,
     forbiddenClaimCount: responseQuality.forbiddenClaimCount,
     unnecessaryQuestionCount: responseQuality.unnecessaryQuestionCount,
@@ -393,6 +411,7 @@ function qualityBreakdown(responseQuality: ResponseQualityScore) {
 function formatQualityBreakdown(responseQuality: ResponseQualityScore): string {
   return [
     `required concepts=${formatRatio(responseQuality.requiredConceptRecall)}`,
+    `required evidence=${formatRatio(responseQuality.requiredEvidenceRecall)}`,
     `evidence precision=${formatRatio(responseQuality.relevantEvidencePrecision)}`,
     `forbidden claims=${responseQuality.forbiddenClaimCount}`,
     `unnecessary questions=${responseQuality.unnecessaryQuestionCount}`,
@@ -400,6 +419,101 @@ function formatQualityBreakdown(responseQuality: ResponseQualityScore): string {
     `length=${responseQuality.length.wordCount}/${responseQuality.length.maxWords} (${responseQuality.length.pass ? "pass" : "fail"})`,
   ].join("; ");
 }
+
+function classificationDelta(
+  observation: AiComparisonSerializationInput["reports"][number]["observations"][number],
+) {
+  const classification = observation.aiExecutionTrace.classification;
+  return {
+    baseline: sanitizeClassification(observation.baselineClassification),
+    baselineAgreement: observation.baselineAgreement,
+    ...(classification.candidate === undefined
+      ? {}
+      : { candidate: sanitizeCandidate(classification.candidate) }),
+    acceptedSignals: (classification.acceptedSignals ?? []).map((signal) => ({
+      ruleId: safeTraceIdentifier(signal.ruleId),
+      target: safeTraceIdentifier(signal.target),
+      weight: signal.weight,
+      reason: safeTraceMessage(signal.reason),
+    })),
+    rejectedAdvice: (classification.rejectedAdvice ?? []).map((advice) => ({
+      target: safeTraceIdentifier(advice.target),
+      reason: safeTraceMessage(advice.reason),
+    })),
+    deterministicOverrides: (classification.deterministicOverrides ?? []).map(
+      safeTraceMessage,
+    ),
+    final: classification.finalOutcome === undefined
+      ? sanitizeClassification(observation.baselineClassification)
+      : sanitizeFinalClassification(classification.finalOutcome),
+  };
+}
+
+function formatClassificationDelta(
+  observation: AiComparisonSerializationInput["reports"][number]["observations"][number],
+): string {
+  const delta = classificationDelta(observation);
+  return [
+    `baseline=${JSON.stringify(delta.baseline)}`,
+    `candidate=${JSON.stringify(delta.candidate ?? null)}`,
+    `accepted=${JSON.stringify(delta.acceptedSignals)}`,
+    `rejected=${JSON.stringify(delta.rejectedAdvice)}`,
+    `overrides=${JSON.stringify(delta.deterministicOverrides)}`,
+    `final=${JSON.stringify(delta.final)}`,
+  ].join("; ");
+}
+
+function sanitizeClassification(
+  classification: AiComparisonClassification,
+) {
+  return {
+    category: classification.category,
+    team: classification.team,
+    priority: classification.priority,
+    knowledgeArticleIds: classification.knowledgeArticleIds.map(safeTraceIdentifier),
+    escalationReasons: [...classification.escalationReasons],
+  };
+}
+
+function sanitizeFinalClassification(
+  classification: AiExecutionTrace["classification"]["finalOutcome"],
+) {
+  return {
+    category: classification.category,
+    team: classification.team,
+    priority: classification.priority,
+    knowledgeArticleIds: classification.knowledgeArticleIds.map(safeTraceIdentifier),
+    confidence: classification.confidence,
+    escalationReasons: [...classification.escalationReasons],
+  };
+}
+
+function sanitizeCandidate(
+  candidate: NonNullable<AiExecutionTrace["classification"]["candidate"]>,
+) {
+  return {
+    issueType: safeTraceIdentifier(candidate.issueType),
+    ...(candidate.category === undefined ? {} : { category: candidate.category }),
+    ...(candidate.team === undefined ? {} : { team: candidate.team }),
+    ...(candidate.priority === undefined ? {} : { priority: candidate.priority }),
+    knowledgeArticleIds: candidate.knowledgeArticleIds.map(safeTraceIdentifier),
+    confidence: candidate.confidence,
+    explanation: safeTraceMessage(candidate.explanation),
+  };
+}
+
+function safeTraceIdentifier(value: string): string {
+  const normalized = safeFailureReason(value);
+  return unsafeTraceText.test(normalized) ? "redacted" : normalized;
+}
+
+function safeTraceMessage(value: string): string {
+  const normalized = safeFailureReason(value);
+  return unsafeTraceText.test(normalized) ? "[redacted]" : normalized;
+}
+
+const unsafeTraceText =
+  /sk-[A-Za-z0-9_-]+|\b(?:api[-_ ]?key|access[-_ ]?token)\s*[=:]\s*\S+|authorization|bearer\s+|raw\s+(?:provider|model)\s+(?:payload|response)|\b(?:provider|model)\s+(?:payload|response)\s*:/i;
 
 function formatRatio(value: number): string {
   return `${Math.round(value * 100)}%`;

@@ -7,6 +7,7 @@ import {
   type CustomerResponseDraftProvider,
 } from "../src/approval-desk/draft-response-provider.js";
 import {
+  type AiComparisonLane,
   runAiComparisonEvaluation,
 } from "../src/approval-desk/ai-comparison-evaluation.js";
 import { loadDiagnosticEvaluationScenarios } from "../src/approval-desk/diagnostic-evaluation-scenarios.js";
@@ -68,8 +69,24 @@ function serializedObservation(input: {
 }) {
   return {
     scenarioId: input.scenarioId,
+    operatorStage: "review",
     draftCustomerResponse: "We are reviewing the issue.",
+    baselineClassification: {
+      category: "integration" as const,
+      team: "integrations" as const,
+      priority: "P2" as const,
+      knowledgeArticleIds: ["webhook-signature-validation"],
+      escalationReasons: [],
+    },
     classificationAgreement: {
+      category: true,
+      team: true,
+      priority: true,
+      knowledgeArticleIds: true,
+      escalationReasons: true,
+      all: true,
+    },
+    baselineAgreement: {
       category: true,
       team: true,
       priority: true,
@@ -80,6 +97,7 @@ function serializedObservation(input: {
     responseQuality: {
       hardPass: input.hardPass,
       requiredConceptRecall: 0.5,
+      requiredEvidenceRecall: 0.5,
       relevantEvidencePrecision: 0.5,
       forbiddenClaimCount: 0,
       unnecessaryQuestionCount: 0,
@@ -114,8 +132,24 @@ describe("AI comparison evaluation", () => {
         passedScenarioCount: 1,
         observations: [{
           scenarioId: "ordinary-outage-triage",
+          operatorStage: "review",
           draftCustomerResponse: "We are investigating the delivery delay.",
+          baselineClassification: {
+            category: "incident",
+            team: "incident-response",
+            priority: "P1",
+            knowledgeArticleIds: ["event-tracking-debugging"],
+            escalationReasons: ["outage"],
+          },
           classificationAgreement: {
+            category: true,
+            team: true,
+            priority: true,
+            knowledgeArticleIds: true,
+            escalationReasons: true,
+            all: true,
+          },
+          baselineAgreement: {
             category: true,
             team: true,
             priority: true,
@@ -126,6 +160,7 @@ describe("AI comparison evaluation", () => {
           responseQuality: {
             hardPass: true,
             requiredConceptRecall: 1,
+            requiredEvidenceRecall: 1,
             relevantEvidencePrecision: 1,
             forbiddenClaimCount: 0,
             unnecessaryQuestionCount: 0,
@@ -163,6 +198,95 @@ describe("AI comparison evaluation", () => {
     expect(serialized).toContain("usage=10/3/13");
     expect(serialized).toContain('"latencyMs": 9');
     expect(serialized).toContain('"totalTokens": 13');
+  });
+
+  it("serializes the governed GPT classification delta without raw payload text", () => {
+    const serialized = serializeAiComparisonReport({
+      mode: "controlled",
+      providerProvenance: {
+        classification: "controlled-local-simulation",
+        drafting: "controlled-local-simulation",
+        networkPolicy: "disabled",
+      },
+      reports: [{
+        lane: "gpt-deterministic",
+        scenarioCount: 1,
+        passedScenarioCount: 1,
+        observations: [{
+          ...serializedObservation({
+            scenarioId: "deterministic-override",
+            hardPass: true,
+            failures: [],
+          }),
+          baselineClassification: {
+            category: "incident",
+            team: "incident-response",
+            priority: "P1",
+            knowledgeArticleIds: ["event-tracking-debugging"],
+            escalationReasons: ["outage"],
+          },
+          baselineAgreement: {
+            category: true,
+            team: true,
+            priority: true,
+            knowledgeArticleIds: true,
+            escalationReasons: true,
+            all: true,
+          },
+          aiExecutionTrace: {
+            classification: {
+              status: "used",
+              model: "controlled-local-simulation",
+              candidate: {
+                issueType: "webhook-delivery",
+                category: "integration",
+                team: "integrations",
+                priority: "P2",
+                knowledgeArticleIds: [],
+                confidence: 0.8,
+                explanation: "raw provider payload api_key=sk-secret must not appear",
+              },
+              acceptedSignals: [{
+                ruleId: "gpt-advisory-webhook-delivery-category",
+                target: "category:integration",
+                weight: 3,
+                reason: "Bounded advisory routing evidence.",
+              }],
+              rejectedAdvice: [{
+                target: "knowledge:unknown-article",
+                reason: "The proposed article is outside the approved set.",
+              }],
+              deterministicOverrides: [
+                "Deterministic outage policy retained incident routing.",
+              ],
+              finalOutcome: {
+                category: "incident",
+                team: "incident-response",
+                priority: "P1",
+                knowledgeArticleIds: ["event-tracking-debugging"],
+                confidence: 0.95,
+                escalationReasons: ["outage"],
+              },
+            },
+            drafting: {
+              status: "skipped",
+              source: "deterministic",
+            },
+          },
+        }],
+      }],
+    });
+
+    expect(serialized).toContain("Classification delta:");
+    expect(serialized).toContain("gpt-advisory-webhook-delivery-category");
+    expect(serialized).toContain("knowledge:unknown-article");
+    expect(serialized).toContain(
+      "Deterministic outage policy retained incident routing.",
+    );
+    expect(serialized).toContain('"baseline"');
+    expect(serialized).toContain('"final"');
+    expect(serialized).not.toContain("sk-secret");
+    expect(serialized).not.toContain("raw provider payload");
   });
 
   it("distinguishes overall failure from hard-safety status in serialized reports", () => {
@@ -424,6 +548,141 @@ describe("AI comparison evaluation", () => {
     )).toBe(true);
   });
 
+  it.each<{
+    lane: AiComparisonLane;
+    classification: "skipped" | "used";
+    drafting: "skipped" | "used";
+  }>([
+    { lane: "deterministic-deterministic", classification: "skipped", drafting: "skipped" },
+    { lane: "gpt-deterministic", classification: "used", drafting: "skipped" },
+    { lane: "deterministic-gpt", classification: "skipped", drafting: "used" },
+    { lane: "gpt-gpt", classification: "used", drafting: "used" },
+  ])("enforces independent stage intent for $lane", async ({
+    lane,
+    classification,
+    drafting,
+  }) => {
+    const scenario = (await loadDiagnosticEvaluationScenarios()).find(
+      ({ id }) => id === "ordinary-outage-triage",
+    )!;
+    const report = await runAiComparisonEvaluation({
+      scenarios: [scenario],
+      lane,
+      allKnowledgeArticles: await loadKnowledgeArticles(),
+      classificationProvider,
+      draftProvider,
+    });
+    const observation = report.observations[0]!;
+
+    expect(observation.aiExecutionTrace.classification.status).toBe(classification);
+    expect(observation.aiExecutionTrace.drafting.status).toBe(drafting);
+    expect(observation.failures).not.toEqual(
+      expect.arrayContaining([expect.stringMatching(/stage expected/i)]),
+    );
+  });
+
+  it.each<{
+    lane: AiComparisonLane;
+    expectedFailure: string;
+  }>([
+    {
+      lane: "gpt-deterministic",
+      expectedFailure: "GPT classification expected used, got fallback: not-configured",
+    },
+    {
+      lane: "deterministic-gpt",
+      expectedFailure: "GPT drafting expected used, got skipped",
+    },
+  ])("fails $lane when its requested provider is missing", async ({
+    lane,
+    expectedFailure,
+  }) => {
+    const scenario = (await loadDiagnosticEvaluationScenarios()).find(
+      ({ id }) => id === "ordinary-outage-triage",
+    )!;
+    const report = await runAiComparisonEvaluation({
+      scenarios: [scenario],
+      lane,
+      allKnowledgeArticles: await loadKnowledgeArticles(),
+    });
+
+    expect(report.observations[0]!.failures).toContain(expectedFailure);
+    expect(report.passedScenarioCount).toBe(0);
+  });
+
+  it("fails both GPT stages when their providers throw", async () => {
+    const scenario = (await loadDiagnosticEvaluationScenarios()).find(
+      ({ id }) => id === "ordinary-outage-triage",
+    )!;
+    const report = await runAiComparisonEvaluation({
+      scenarios: [scenario],
+      lane: "gpt-gpt",
+      allKnowledgeArticles: await loadKnowledgeArticles(),
+      classificationProvider: {
+        async reason() {
+          throw new Error("raw classification provider payload");
+        },
+      },
+      draftProvider: {
+        async draft() {
+          throw new Error("raw draft provider payload");
+        },
+      },
+    });
+
+    expect(report.observations[0]!.failures).toEqual(
+      expect.arrayContaining([
+        "GPT classification expected used, got fallback: provider-error",
+        "GPT drafting expected used, got fallback: provider-error",
+      ]),
+    );
+    expect(report.passedScenarioCount).toBe(0);
+  });
+
+  it("projects audit-backed lifecycle context into distinct stages and drafts", async () => {
+    const scenarios = await loadDiagnosticEvaluationScenarios();
+    const selected = scenarios.filter(({ id }) =>
+      [
+        "ambiguous-campaign-editor",
+        "bounded-escalation",
+        "failed-fix-recheck",
+        "stale-reply",
+      ].includes(id),
+    );
+    const report = await runAiComparisonEvaluation({
+      scenarios: selected,
+      lane: "deterministic-deterministic",
+      allKnowledgeArticles: await loadKnowledgeArticles(),
+    });
+    const observation = (id: string) => report.observations.find(
+      ({ scenarioId }) => scenarioId === id,
+    )!;
+    const ambiguous = observation("ambiguous-campaign-editor");
+    const bounded = observation("bounded-escalation");
+    const failedFix = observation("failed-fix-recheck");
+    const stale = observation("stale-reply");
+
+    expect(ambiguous.finalRecommendation.supportState).toBe("needs-information");
+    expect(bounded.finalRecommendation.supportState).toBe("escalated");
+    expect(bounded.draftCustomerResponse).toMatch(/escalat.*specialist/is);
+    expect(bounded.draftCustomerResponse).not.toBe(ambiguous.draftCustomerResponse);
+    expect(bounded.responseQuality.failures).toEqual([]);
+    expect(failedFix.responseQuality.failures).toEqual([]);
+    expect(stale.operatorStage).toBe("customer-replied");
+    expect(stale.finalRecommendation.supportState).toBe("known-cause");
+    expect(stale.responseQuality.failures).toEqual([]);
+
+    const staleScenario = selected.find(({ id }) => id === "stale-reply")!;
+    const withoutAudit = await runAiComparisonEvaluation({
+      scenarios: [{ ...staleScenario, audits: [] }],
+      lane: "deterministic-deterministic",
+      allKnowledgeArticles: await loadKnowledgeArticles(),
+    });
+    expect(stale.draftCustomerResponse).not.toBe(
+      withoutAudit.observations[0]!.draftCustomerResponse,
+    );
+  });
+
   it("accepts any priority allowed by the expected outcome contract", async () => {
     const outageScenario = (await loadDiagnosticEvaluationScenarios()).find(({ id }) =>
       id === "ordinary-outage-triage")!;
@@ -488,6 +747,15 @@ describe("AI comparison evaluation", () => {
     expect(observation.aiExecutionTrace.classification.deterministicOverrides).toContain(
       "Deterministic outage policy retained incident routing.",
     );
+    expect(serializeAiComparisonReport({
+      mode: "controlled",
+      providerProvenance: {
+        classification: "controlled-local-simulation",
+        drafting: "controlled-local-simulation",
+        networkPolicy: "disabled",
+      },
+      reports: [report],
+    })).toContain("Deterministic outage policy retained incident routing.");
   });
 
   it("uses an injected GPT draft without GPT classification", async () => {
@@ -500,7 +768,7 @@ describe("AI comparison evaluation", () => {
     });
 
     const observation = report.observations[0]!;
-    expect(observation.aiExecutionTrace.classification.status).toBe("fallback");
+    expect(observation.aiExecutionTrace.classification.status).toBe("skipped");
     expect(observation.aiExecutionTrace.drafting.status).toBe("used");
     expect(observation.draftCustomerResponseSource).toBe("openai");
   });
@@ -524,7 +792,7 @@ describe("AI comparison evaluation", () => {
     expect(observation.responseQuality.hardPass).toBe(true);
     expect(observation.aiExecutionTrace.classification.status).toBe("fallback");
     expect(observation.failures).toContain(
-      "GPT classification fallback: provider-error",
+      "GPT classification expected used, got fallback: provider-error",
     );
     expect(report.passedScenarioCount).toBe(0);
 
@@ -538,7 +806,9 @@ describe("AI comparison evaluation", () => {
       reports: [report],
     });
     expect(serialized).toContain("Overall result: fail");
-    expect(serialized).toContain("GPT classification fallback: provider-error");
+    expect(serialized).toContain(
+      "GPT classification expected used, got fallback: provider-error",
+    );
   });
 
   it("runs both injected GPT stages and preserves provider provenance", async () => {
@@ -629,6 +899,12 @@ describe("AI comparison evaluation", () => {
     expect(observation.aiExecutionTrace.classification.status).toBe("skipped");
     expect(observation.aiExecutionTrace.drafting.status).toBe("skipped");
     expect(observation.finalRecommendation.category).toBe("integration");
+    expect(observation.draftCustomerResponse).not.toMatch(
+      /prompt injection|ignore policy|gpt stages skipped|internal warning/i,
+    );
+    expect(observation.failures).not.toEqual(
+      expect.arrayContaining([expect.stringMatching(/GPT .* expected used/i)]),
+    );
   });
 });
 

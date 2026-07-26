@@ -82,7 +82,7 @@ export async function loadDiagnosticEvaluationScenarios(): Promise<
       expected: { category: "performance", supportState: "ready-for-close", operatorStage: "review", mustStopAtApproval: true },
     },
     {
-      id: "stale-reply", family: "stale", ticket: ticket("TKT-1008"), outcome: outcomes.get("TKT-1008"), audits: [customerReplyAudit("TKT-1008", "2026-06-10T09:00:00.000Z")],
+      id: "stale-reply", family: "stale", ticket: ticket("TKT-1008"), outcome: outcomes.get("TKT-1008"), audits: [customerReplyAudit("TKT-1008", "2026-06-10T09:00:00.000Z", "The endpoint URL is https://hooks.juniper.example/webhooks/orders, delivery ID deliv_8899, and the signing secret was rotated at 08:10 UTC. Raw body handling has not changed.")],
       expected: { operatorStage: "customer-replied", staleContext: true },
     },
     {

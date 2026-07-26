@@ -78,6 +78,27 @@ describe("response quality evaluation", () => {
     expect(score.failures).toContain("missing escalation: incident review");
   });
 
+  it("does not apply ordinary required-concept aliases to escalation, evidence, or forbidden gates", () => {
+    const score = evaluateResponseQuality({
+      draft: "Please share confirmation that it is working again.",
+      contract: {
+        scenarioId: "ordinary-alias-gate-boundary",
+        requiredConcepts: [],
+        forbiddenConcepts: ["resolved it"],
+        requiredEvidence: ["resolved it"],
+        requiredEscalation: "resolved it",
+        forbiddenClaims: [],
+        tone: "balanced",
+        maxWords: 20,
+      },
+      deterministicChecks: [],
+    });
+
+    expect(score.forbiddenClaimCount).toBe(0);
+    expect(score.requiredEvidenceRecall).toBe(0);
+    expect(score.failures).toContain("missing escalation: resolved it");
+  });
+
   it("recognizes relevant evidence in a normal question", () => {
     const score = evaluateResponseQuality({
       draft: "Could you share the request ID?",

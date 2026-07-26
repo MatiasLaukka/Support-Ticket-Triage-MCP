@@ -48,7 +48,7 @@ export function evaluateResponseQuality(input: {
   const failures: string[] = [];
   const hardFailures: string[] = [];
   const missingConcepts = input.contract.requiredConcepts.filter(
-    (concept) => !matchesConcept(draft, concept),
+    (concept) => !matchesRequiredConcept(draft, concept),
   );
   const forbiddenClaims = [
     ...input.contract.forbiddenConcepts.filter((concept) =>
@@ -156,6 +156,11 @@ function matchesTone(draft: string, tone: DraftCustomerResponseStyle): boolean {
 }
 
 function matchesConcept(draft: string, concept: ResponseQualityConcept): boolean {
+  const phrases = typeof concept === "string" ? [concept] : concept;
+  return phrases.some((phrase) => phrasePattern(normalize(phrase)).test(draft));
+}
+
+function matchesRequiredConcept(draft: string, concept: ResponseQualityConcept): boolean {
   const phrases = typeof concept === "string" ? [concept] : concept;
   return phrases
     .flatMap((phrase) => aliasesForOrdinaryConcept(normalize(phrase)))

@@ -73,4 +73,15 @@ describe("customer service drafting skill", () => {
     expect(instructions).toContain("one short acknowledgement");
     expect(instructions).toContain("avoid internal-sounding phrases");
   });
+
+  it("prioritizes complete evidence requests within a concise response budget", () => {
+    const instructions = buildCustomerServiceDraftingInstructions({
+      responseStyle: "auto",
+      signOff: "Kind regards\nSupport Team\nNorthstar Marketing Support",
+    });
+
+    expect(instructions).toContain("target 120 words or fewer before the sign-off");
+    expect(instructions).toContain("include every item in evidenceReadiness.missingEvidence");
+    expect(instructions).toContain("exactly once");
+  });
 });

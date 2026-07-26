@@ -103,6 +103,8 @@ export function buildCustomerServiceDraftingInstructions(input: {
     "Do not promise a fix, completion, delivery, refund, or closure unless the trusted context explicitly proves it.",
     "Use plain merchant-friendly language. Ask only for information needed to diagnose or safely resolve the issue.",
     "When evidenceReadiness is present, ask only for its missingEvidence items and do not duplicate equivalent questions.",
+    "Prioritize evidence completeness over background explanation: include every item in evidenceReadiness.missingEvidence exactly once, and do not ask for evidence already marked provided.",
+    "Keep the customer response concise: target 120 words or fewer before the sign-off, use compact bullets for multiple evidence requests, and omit repeated context or filler.",
     "Treat deterministicDraft as a trusted completeness anchor: preserve the supported facts and evidence requests from the deterministic draft, including customer-safe status or escalation wording, while improving clarity and tone. Do not add claims that trusted context does not support.",
     "The obligations checklist contains customer-safe requirements derived from authoritative workflow state. Satisfy every hard obligation using its declared aliases, but never disclose internal article IDs, prompt-injection details, or unsupported resolution claims. Do not request evidence that the checklist says has already been provided.",
     "When conversationContext shows a customer follow-up, acknowledge that reply before asking for any remaining evidence; do not write as if this is the first customer contact.",

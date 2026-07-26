@@ -19,7 +19,7 @@ const classificationProvider: ClassificationReasoningProvider = {
         issueType: "webhook-delivery",
         candidateCategory: "integration",
         candidateTeam: "integrations",
-        candidatePriority: "P2",
+        candidatePriority: "P1",
         knowledgeArticleIds: ["webhook-delivery-guide"],
         confidence: 0.8,
         evidence: ["The customer reported a webhook delivery issue."],
@@ -97,7 +97,38 @@ describe("AI comparison evaluation", () => {
     const observation = report.observations[0]!;
     expect(observation.aiExecutionTrace.classification.status).toBe("used");
     expect(observation.aiExecutionTrace.drafting.status).toBe("skipped");
-    expect(observation.baselineAgreement.category).toBe(true);
+    expect(observation.baselineAgreement).toMatchObject({
+      category: true,
+      team: true,
+      priority: true,
+      knowledgeArticleIds: true,
+      escalationReasons: true,
+      all: true,
+    });
+    expect(observation.classificationAgreement).toMatchObject({
+      category: true,
+      team: true,
+      priority: true,
+      knowledgeArticleIds: true,
+      escalationReasons: true,
+      all: true,
+    });
+    expect(observation.aiExecutionTrace.classification.candidate).toMatchObject({
+      category: "integration",
+      team: "integrations",
+      priority: "P1",
+      knowledgeArticleIds: [],
+    });
+    expect(observation.aiExecutionTrace.classification.rejectedAdvice).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ target: "knowledge:webhook-delivery-guide" }),
+      ]),
+    );
+    expect(observation.finalRecommendation.escalationRequired).toBe(true);
+    expect(observation.finalRecommendation.escalationReasons).toEqual(["outage", "sla"]);
+    expect(observation.aiExecutionTrace.classification.deterministicOverrides).toContain(
+      "Deterministic outage policy retained incident routing.",
+    );
   });
 
   it("uses an injected GPT draft without GPT classification", async () => {
@@ -113,6 +144,70 @@ describe("AI comparison evaluation", () => {
     expect(observation.aiExecutionTrace.classification.status).toBe("fallback");
     expect(observation.aiExecutionTrace.drafting.status).toBe("used");
     expect(observation.draftCustomerResponseSource).toBe("openai");
+  });
+
+  it("runs both injected GPT stages and preserves provider provenance", async () => {
+    let classificationCalls = 0;
+    let draftCalls = 0;
+    const gptClassificationProvider: ClassificationReasoningProvider = {
+      async reason() {
+        classificationCalls += 1;
+        return {
+          reasoning: {
+            issueType: "webhook-delivery",
+            candidateCategory: "integration",
+            candidateTeam: "integrations",
+            candidatePriority: "P2",
+            knowledgeArticleIds: ["webhook-signature-validation"],
+            confidence: 0.8,
+            evidence: ["The customer reported delayed webhook delivery."],
+            missingEvidenceThatWouldChangeClassification: [],
+            explanation: "The advisory stays within the approved integration policy.",
+          },
+          telemetry: { model: "comparison-classification-fake", latencyMs: 3 },
+        };
+      },
+    };
+    const gptDraftProvider: CustomerResponseDraftProvider = {
+      async draft(input) {
+        draftCalls += 1;
+        return {
+          source: "openai",
+          response: input.deterministicDraft,
+          assist: {
+            source: "openai",
+            missingInfoSuggestions: ["Share the affected delivery ID."],
+            investigationSteps: ["Compare the event and delivery timestamps."],
+            tone: "technical",
+            recommendedTone: "technical",
+            selectedTone: "technical",
+            toneReason: "Webhook delivery context calls for a technical update.",
+            audience: "developer",
+            checks: [],
+          },
+          telemetry: { model: "comparison-draft-fake", latencyMs: 4 },
+        };
+      },
+    };
+    const report = await runAiComparisonEvaluation({
+      scenarios: (await loadDiagnosticEvaluationScenarios()).filter(({ id }) =>
+        id === "active-known-event"),
+      lane: "gpt-gpt",
+      allKnowledgeArticles: await loadKnowledgeArticles(),
+      classificationProvider: gptClassificationProvider,
+      draftProvider: gptDraftProvider,
+    });
+
+    const observation = report.observations[0]!;
+    expect(classificationCalls).toBe(1);
+    expect(draftCalls).toBe(1);
+    expect(observation.aiExecutionTrace.classification.status).toBe("used");
+    expect(observation.aiExecutionTrace.classification.model).toBe("comparison-classification-fake");
+    expect(observation.aiExecutionTrace.drafting.status).toBe("used");
+    expect(observation.aiExecutionTrace.drafting.source).toBe("openai");
+    expect(observation.aiExecutionTrace.drafting.model).toBe("comparison-draft-fake");
+    expect(observation.draftCustomerResponseSource).toBe("openai");
+    expect(observation.baselineAgreement.all).toBe(true);
   });
 
   it("skips both GPT stages for prompt injection", async () => {

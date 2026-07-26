@@ -528,17 +528,23 @@ function fallbackDraft(input: {
 
 function boundedSafetyFallbackResponse(input: CustomerResponseDraftInput): string {
   const obligationIds = new Set(buildDraftObligations(input).map(({ id }) => id));
-  const body = isCustomerConfirmedReadyForClose(input)
-    ? "Thank you for confirming that resolved it. This ticket is ready to close."
-    : obligationIds.has("escalation:incident-review")
+  const sentences = [
+    isCustomerConfirmedReadyForClose(input)
+      ? "Thank you for confirming that resolved it. This ticket is ready to close."
+      : undefined,
+    obligationIds.has("escalation:incident-review")
       ? "Thank you for your patience. Our support team is reviewing this under incident review and will update you as soon as possible."
-      : obligationIds.has("escalation:security-review")
-        ? obligationIds.has("concept:webhook-signature")
-          ? "Thank you for your patience. This issue is receiving specialist security review. We are reviewing the webhook signature issue."
-          : "Thank you for your patience. This issue is receiving specialist security review."
-      : obligationIds.has("concept:webhook-signature")
-        ? "Thank you for your patience. Our support team is reviewing the webhook signature issue."
-        : "Thank you for your patience. Our support team is reviewing the issue and will update you as soon as possible.";
+      : undefined,
+    obligationIds.has("escalation:security-review")
+      ? "This issue is receiving specialist security review."
+      : undefined,
+    obligationIds.has("concept:webhook-signature")
+      ? "We are reviewing the webhook signature issue."
+      : undefined,
+  ].filter((sentence): sentence is string => sentence !== undefined);
+  const body = sentences.length > 0
+    ? sentences.join(" ")
+    : "Thank you for your patience. Our support team is reviewing the issue and will update you as soon as possible.";
   return `${body}\n\n${formatDraftSignOff(input)}`;
 }
 

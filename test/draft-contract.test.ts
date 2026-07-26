@@ -197,6 +197,23 @@ describe("draft contract", () => {
     expect(result.response).toContain("specialist security review");
   });
 
+  it("preserves combined security and incident-review obligations in the bounded fallback", async () => {
+    const result = await draftCustomerResponseWithFallback({
+      draftInput: {
+        ...baseInput,
+        outcome: {
+          ...baseInput.outcome,
+          requiredEscalations: ["security", "outage"],
+        },
+        deterministicDraft: "We guarantee this issue is fixed.",
+      },
+    });
+
+    expect(result).toMatchObject({ source: "fallback" });
+    expect(result.response).toContain("specialist security review");
+    expect(result.response).toContain("incident review");
+  });
+
   it("rejects a stale reply that requests evidence already provided", () => {
     const staleInput: CustomerResponseDraftInput = {
       ...baseInput,

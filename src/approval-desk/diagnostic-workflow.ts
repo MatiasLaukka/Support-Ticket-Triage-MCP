@@ -122,6 +122,59 @@ export function diagnosisContextForTicket(
   };
 }
 
+/** Parse a persisted diagnosis exactly as recorded in the workflow audit. */
+export function diagnosisContextFromAudit(
+  event: AuditEvent | undefined,
+): DiagnosisContext | undefined {
+  if (
+    event === undefined ||
+    typeof event.after.diagnosis !== "object" ||
+    event.after.diagnosis === null
+  ) {
+    return undefined;
+  }
+  const value = event.after.diagnosis as Partial<DiagnosisContext>;
+  if (
+    value.status !== "completed" ||
+    typeof value.causeType !== "string" ||
+    typeof value.customerSafeSummary !== "string" ||
+    !Array.isArray(value.evidenceUsed) ||
+    (value.confidence !== "likely" && value.confidence !== "confirmed") ||
+    typeof value.owner !== "string" ||
+    typeof value.recommendedNextAction !== "string" ||
+    !Array.isArray(value.doNotSay)
+  ) {
+    return undefined;
+  }
+  return {
+    status: "completed",
+    causeType: value.causeType as DiagnosisContext["causeType"],
+    customerSafeSummary: value.customerSafeSummary,
+    evidenceUsed: value.evidenceUsed.filter(
+      (item): item is string => typeof item === "string",
+    ),
+    confidence: value.confidence,
+    owner: value.owner as DiagnosisContext["owner"],
+    recommendedNextAction: value.recommendedNextAction,
+    doNotSay: value.doNotSay.filter(
+      (item): item is string => typeof item === "string",
+    ),
+    ...(typeof value.knownEventId === "string"
+      ? { knownEventId: value.knownEventId }
+      : {}),
+    ...(Array.isArray(value.knownEventMatchReasons)
+      ? {
+          knownEventMatchReasons: value.knownEventMatchReasons.filter(
+            (item): item is string => typeof item === "string",
+          ),
+        }
+      : {}),
+    ...(DiagnosticStateSnapshotSchema.safeParse(value.diagnosticState).success
+      ? { diagnosticState: DiagnosticStateSnapshotSchema.parse(value.diagnosticState) }
+      : {}),
+  };
+}
+
 function applyPersistedDiagnosticState(
   diagnosis: DiagnosisContext,
   ticketId: string,
@@ -260,6 +313,65 @@ export function fixContextForTicket(
     verificationRequest:
       "Let us know whether the issue is resolved or if you still see the same behavior.",
   };
+}
+
+/** Parse a persisted fix exactly as recorded in the workflow audit. */
+export function fixContextFromAudit(
+  event: AuditEvent | undefined,
+): FixContext | undefined {
+  if (
+    event === undefined ||
+    typeof event.after.fix !== "object" ||
+    event.after.fix === null
+  ) {
+    return undefined;
+  }
+  const value = event.after.fix as Partial<FixContext>;
+  if (
+    value.status !== "available" ||
+    typeof value.customerSafeSummary !== "string" ||
+    typeof value.customerAction !== "string" ||
+    typeof value.verificationRequest !== "string"
+  ) {
+    return undefined;
+  }
+  return {
+    status: "available",
+    customerSafeSummary: value.customerSafeSummary,
+    customerAction: value.customerAction,
+    verificationRequest: value.verificationRequest,
+  };
+}
+
+/** Return the latest fix that is still current for the conversation. */
+export function latestFixContextFromAudits(
+  audits: readonly AuditEvent[],
+): FixContext | undefined {
+  const latest = audits
+    .map((event, index) => ({ event, index }))
+    .filter(({ event }) => event.action === "fix-available")
+    .sort(
+      (left, right) =>
+        right.event.timestamp.localeCompare(left.event.timestamp) ||
+        right.index - left.index,
+    )[0];
+  if (latest === undefined) return undefined;
+  const superseded = audits.some((candidate, index) => {
+    if (candidate.action !== "customer-reply-received") return false;
+    const newer = candidate.timestamp > latest.event.timestamp ||
+      (candidate.timestamp === latest.event.timestamp && index > latest.index);
+    if (!newer) return false;
+    const body = typeof candidate.after.body === "string"
+      ? candidate.after.body
+      : "";
+    return !customerReplyCanUseExistingContext(body);
+  });
+  return superseded ? undefined : fixContextFromAudit(latest.event);
+}
+
+function customerReplyCanUseExistingContext(value: string): boolean {
+  return /\b(?:how long|eta|estimated time|when (?:will|can|should)|any update|status update|what'?s (?:the )?(?:current )?status|current status(?: of (?:the )?ticket)?|wait for (?:a )?fix|fix be ready|fixed|resolved)\b/i.test(value) ||
+    /\b(?:what'?s|what is|whats)\s+(?:the\s+)?(?:problem|issue|wrong|happening|going on|cause)|\bwhy\s+(?:is|are|did|does|do)\b.{0,80}\b(?:happening|broken|failing|delayed|missing|not working|not showing)|\bwhat happened\b|\bwhat caused\b|\broot cause\b/i.test(value);
 }
 
 function diagnosisFromAudit(event: AuditEvent): Record<string, unknown> | undefined {

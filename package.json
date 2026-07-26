@@ -16,6 +16,7 @@
     "generate:fixtures": "node dist/scripts/generate-fixtures.js",
     "evaluate": "node dist/scripts/evaluate.js",
     "evaluate:diagnostics": "npm test -- --run test/diagnostic-evaluation.test.ts",
+    "evaluate:ai-comparison": "npm run build && node dist/scripts/evaluate-ai-comparison.js",
     "start": "node dist/src/index.js",
     "approval-desk": "node dist/src/approval-desk.js",
     "demo:approval-desk": "node dist/scripts/demo-approval-desk.js",

@@ -41,7 +41,7 @@ export function evaluateResponseQuality(input: {
   const forbiddenClaims = [
     ...input.contract.forbiddenConcepts,
     ...input.contract.forbiddenClaims,
-  ].filter((concept) => matchesConcept(draft, concept));
+  ].filter((concept) => matchesForbiddenClaim(draft, concept));
   const wordCount = input.draft.trim().match(/\S+/g)?.length ?? 0;
   const tonePass = matchesTone(draft, input.contract.tone);
   const evidence = scoreEvidence(draft, input.contract.requiredEvidence);
@@ -93,7 +93,11 @@ export function evaluateResponseQuality(input: {
 }
 
 function scoreEvidence(draft: string, requiredEvidence: readonly ResponseQualityConcept[]) {
-  const requests = draft.match(/(?:\?|\bplease\s+(?:share|send|provide|confirm|try)\b)[^?.!]*/g) ?? [];
+  const requests = (draft.match(/[^?.!]+[?.!]?/g) ?? []).filter(
+    (sentence) =>
+      sentence.includes("?") ||
+      /\bplease\s+(?:share|send|provide|confirm|try)\b/.test(sentence),
+  );
   const relevantRequests = requests.filter((request) =>
     requiredEvidence.some((evidence) => matchesConcept(request, evidence)),
   ).length;
@@ -123,6 +127,26 @@ function matchesTone(draft: string, tone: DraftCustomerResponseStyle): boolean {
 function matchesConcept(draft: string, concept: ResponseQualityConcept): boolean {
   const phrases = typeof concept === "string" ? [concept] : concept;
   return phrases.some((phrase) => draft.includes(normalize(phrase)));
+}
+
+function matchesForbiddenClaim(
+  draft: string,
+  concept: ResponseQualityConcept,
+): boolean {
+  const phrases = typeof concept === "string" ? [concept] : concept;
+  return phrases.some((phrase) => hasUnnegatedPhrase(draft, normalize(phrase)));
+}
+
+function hasUnnegatedPhrase(draft: string, phrase: string): boolean {
+  let index = draft.indexOf(phrase);
+  while (index !== -1) {
+    const before = draft.slice(Math.max(0, index - 48), index);
+    if (!/\b(?:not|never|cannot|can't|isn't|wasn't|weren't|no)\b(?:\s+[a-z'-]+){0,3}\s*$/.test(before)) {
+      return true;
+    }
+    index = draft.indexOf(phrase, index + phrase.length);
+  }
+  return false;
 }
 
 function displayConcept(concept: ResponseQualityConcept): string {

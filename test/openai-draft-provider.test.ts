@@ -122,6 +122,7 @@ describe("OpenAiCustomerResponseDraftProvider", () => {
     expect(JSON.parse(requests[0]!.init.body).instructions).toContain(
       "Customer service drafting skill",
     );
+    expect(JSON.parse(requests[0]!.init.body).input).toContain('"obligations"');
   });
 
   it("includes the selected response style in the drafting instructions", async () => {
@@ -475,6 +476,79 @@ describe("OpenAiCustomerResponseDraftProvider", () => {
     }));
   });
 
+  it("repairs one contract-failing OpenAI draft and returns the repaired candidate", async () => {
+    const requests: Array<{ url: string; init: any }> = [];
+    const provider = new OpenAiCustomerResponseDraftProvider({
+      apiKey: "sk-test-secret",
+      model: "gpt-5.6-luna",
+      fetch: async (url, init) => {
+        requests.push({ url, init });
+        const response = requests.length === 1
+          ? "We are reviewing the delivery delay and will update you."
+          : "We are reviewing the delivery delay under incident review and will update you.";
+        return openAiDraftResponse(response);
+      },
+    });
+
+    const result = await draftCustomerResponseWithFallback({
+      provider,
+      draftInput: {
+        ticket,
+        outcome: { ...outcome, requiredEscalations: ["outage"] },
+        knowledgeArticles: [],
+        deterministicDraft: "We are reviewing this under incident review and will update you.",
+        responseStyle: "balanced",
+        actor: "approval-desk",
+        companyName: "Northstar Marketing Support",
+      },
+    });
+
+    expect(requests).toHaveLength(2);
+    expect(JSON.parse(requests[1]!.init.body).instructions).toContain("deterministicDraft");
+    expect(result).toMatchObject({
+      source: "openai",
+      response: expect.stringContaining("incident review"),
+      telemetry: {
+        repairAttempted: true,
+        repairSucceeded: true,
+        failedObligationIds: ["escalation:incident-review"],
+      },
+    });
+    expect(result.checks).toContainEqual(expect.objectContaining({
+      id: "repair-attempted",
+      status: "pass",
+    }));
+  });
+
+  it("falls back after an OpenAI repair failure without exposing candidate text", async () => {
+    const rejectedCandidate = "Internal candidate text must not be exposed.";
+    const result = await draftCustomerResponseWithFallback({
+      provider: {
+        draft: async () => openAiDraft(rejectedCandidate),
+        repair: async () => { throw new Error("repair failed"); },
+      },
+      draftInput: {
+        ticket,
+        outcome: { ...outcome, requiredEscalations: ["outage"] },
+        knowledgeArticles: [],
+        deterministicDraft: "We are reviewing this under incident review and will update you.",
+        responseStyle: "balanced",
+        actor: "approval-desk",
+        companyName: "Northstar Marketing Support",
+      },
+    });
+
+    expect(result).toMatchObject({
+      source: "fallback",
+      telemetry: {
+        repairAttempted: true,
+        repairSucceeded: false,
+        failedObligationIds: ["escalation:incident-review"],
+      },
+    });
+    expect(JSON.stringify(result)).not.toContain(rejectedCandidate);
+  });
+
   it.each([
     {
       scenario: "no provider exists",
@@ -719,6 +793,48 @@ describe("OpenAiCustomerResponseDraftProvider", () => {
     expect(result.response).toBe(deterministicDraft);
   });
 });
+
+function openAiDraftResponse(response: string) {
+  return {
+    ok: true,
+    status: 200,
+    text: async () => JSON.stringify({
+      output: [{
+        content: [{
+          type: "output_text",
+          text: JSON.stringify({
+            draftCustomerResponse: response,
+            missingInfoSuggestions: ["No additional customer evidence is needed."],
+            investigationSteps: ["Review the incident status before the next update."],
+            tone: "balanced",
+            recommendedTone: "balanced",
+            toneReason: "A clear status update is appropriate.",
+            audience: "merchant-admin",
+          }),
+        }],
+      }],
+    }),
+  };
+}
+
+function openAiDraft(response: string) {
+  return {
+    source: "openai" as const,
+    response,
+    assist: {
+      source: "openai" as const,
+      missingInfoSuggestions: ["No additional customer evidence is needed."],
+      investigationSteps: ["Review the incident status before the next update."],
+      tone: "balanced" as const,
+      recommendedTone: "balanced" as const,
+      selectedTone: "balanced" as const,
+      toneReason: "A clear status update is appropriate.",
+      audience: "merchant-admin" as const,
+      checks: [],
+    },
+    telemetry: { model: "gpt-5.6-luna", latencyMs: 1 },
+  };
+}
 
 const ticket: Ticket = {
   id: "TKT-1005",

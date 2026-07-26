@@ -41,6 +41,10 @@ const DraftTelemetrySchema = AiExecutionTraceSchema.shape.drafting.pick({
   model: true,
   latencyMs: true,
   usage: true,
+}).extend({
+  repairAttempted: z.boolean().optional(),
+  repairSucceeded: z.boolean().optional(),
+  failedObligationIds: z.array(z.string().max(80)).max(12).optional(),
 }).required({ model: true, latencyMs: true });
 const OpenAiDraftResponseSchema = z
   .object({
@@ -97,11 +101,32 @@ export interface CustomerResponseDraft {
     model: string;
     latencyMs: number;
     usage?: AiUsage;
+    repairAttempted?: boolean;
+    repairSucceeded?: boolean;
+    failedObligationIds?: string[];
   };
 }
 
 export interface CustomerResponseDraftProvider {
   draft(input: CustomerResponseDraftInput): Promise<CustomerResponseDraft>;
+}
+
+export interface CustomerResponseRepairInput {
+  draftInput: CustomerResponseDraftInput;
+  candidateResponse: string;
+  failedObligationIds: string[];
+  failedMessages: string[];
+}
+
+export interface RepairableCustomerResponseDraftProvider
+  extends CustomerResponseDraftProvider {
+  repair(input: CustomerResponseRepairInput): Promise<CustomerResponseDraft>;
+}
+
+function isRepairableCustomerResponseDraftProvider(
+  provider: CustomerResponseDraftProvider,
+): provider is RepairableCustomerResponseDraftProvider {
+  return "repair" in provider && typeof provider.repair === "function";
 }
 
 export interface GptClassificationReasoning {
@@ -178,7 +203,7 @@ export class UnavailableOpenAiDraftProvider
 }
 
 export class OpenAiCustomerResponseDraftProvider
-  implements CustomerResponseDraftProvider
+  implements RepairableCustomerResponseDraftProvider
 {
   constructor(
     private readonly options: {
@@ -192,6 +217,32 @@ export class OpenAiCustomerResponseDraftProvider
   ) {}
 
   async draft(input: CustomerResponseDraftInput): Promise<CustomerResponseDraft> {
+    return this.requestDraft(
+      input,
+      buildDraftInstructions(
+        input.responseStyle ?? this.options.responseStyle ?? "balanced",
+        formatDraftSignOff(input),
+      ),
+      buildDraftInput(input),
+    );
+  }
+
+  async repair(input: CustomerResponseRepairInput): Promise<CustomerResponseDraft> {
+    return this.requestDraft(
+      input.draftInput,
+      buildRepairInstructions(
+        input.draftInput.responseStyle ?? this.options.responseStyle ?? "balanced",
+        formatDraftSignOff(input.draftInput),
+      ),
+      buildRepairInput(input),
+    );
+  }
+
+  private async requestDraft(
+    input: CustomerResponseDraftInput,
+    instructions: string,
+    requestInput: string,
+  ): Promise<CustomerResponseDraft> {
     const model = this.options.model ?? DEFAULT_OPENAI_MODEL;
     const now = this.options.now ?? Date.now;
     const startedAt = now();
@@ -209,11 +260,8 @@ export class OpenAiCustomerResponseDraftProvider
         signal: abortController.signal,
         body: JSON.stringify({
           model,
-          instructions: buildDraftInstructions(
-            input.responseStyle ?? this.options.responseStyle ?? "balanced",
-            formatDraftSignOff(input),
-          ),
-          input: buildDraftInput(input),
+          instructions,
+          input: requestInput,
           store: false,
           text: {
             format: {
@@ -378,7 +426,7 @@ function parseOpenAiDraftTimeoutMs(value: string | undefined): number {
 }
 
 export async function draftCustomerResponseWithFallback(input: {
-  provider?: CustomerResponseDraftProvider;
+  provider?: CustomerResponseDraftProvider | RepairableCustomerResponseDraftProvider;
   draftInput: CustomerResponseDraftInput;
 }): Promise<ValidatedCustomerResponseDraft> {
   const deterministic = new DeterministicCustomerResponseDraftProvider();
@@ -414,6 +462,71 @@ export async function draftCustomerResponseWithFallback(input: {
     }
 
     const openAiCandidate = candidate.source === "openai";
+    if (openAiCandidate && isRepairableCustomerResponseDraftProvider(provider)) {
+      const failedObligationIds = validation.failedObligationIds;
+      const repairTelemetry = {
+        repairAttempted: true,
+        repairSucceeded: false,
+        failedObligationIds,
+      };
+      try {
+        const repaired = await provider.repair({
+          draftInput: input.draftInput,
+          candidateResponse: response,
+          failedObligationIds,
+          failedMessages: validation.contractBlockingMessages,
+        });
+        const repairedResponse = ensureDraftSignOff(repaired.response, input.draftInput);
+        const repairedValidation = validateCustomerResponseDraft({
+          draftInput: input.draftInput,
+          response: repairedResponse,
+          assist: repaired.assist,
+          responseStyle: resolvedResponseStyle(input.draftInput, repaired.assist),
+          knowledgeArticleIds: input.draftInput.outcome.knowledgeArticleIds,
+          evidenceReadiness: input.draftInput.evidenceReadiness,
+          conversationContext: input.draftInput.conversationContext,
+          diagnosisContext: input.draftInput.diagnosisContext,
+          fixContext: input.draftInput.fixContext,
+        });
+        if (repairedValidation.blockingMessages.length === 0) {
+          const checks: DraftCustomerResponseCheck[] = [
+            { id: "repair-attempted", label: "Repair attempted", status: "pass", message: "OpenAI repair satisfied the draft contract." },
+            ...repairedValidation.checks,
+          ];
+          return {
+            providerAttempted,
+            source: repaired.source,
+            response: repairedResponse,
+            checks,
+            assist: { ...repaired.assist, checks },
+            telemetry: {
+              ...(repaired.telemetry ?? candidate.telemetry ?? { model: DEFAULT_OPENAI_MODEL, latencyMs: 0 }),
+              repairAttempted: true,
+              repairSucceeded: true,
+              failedObligationIds,
+            },
+            candidateChecks: repairedValidation.candidateChecks,
+          };
+        }
+      } catch {
+        // The original validation result and sanitized repair telemetry drive fallback.
+      }
+      return fallbackDraft({
+        providerAttempted,
+        draftInput: input.draftInput,
+        reason: "OpenAI draft repair did not satisfy response guardrails.",
+        fallback: {
+          category: "guardrail-rejected",
+          message: "OpenAI output did not pass response guardrails; deterministic output was used.",
+        },
+        candidateChecks: validation.candidateChecks,
+        rejectedCandidateChecks: validation.checks.filter((check) => check.status === "warn"),
+        telemetry: sanitizeDraftTelemetry({
+          ...(candidate.telemetry ?? { model: DEFAULT_OPENAI_MODEL, latencyMs: 0 }),
+          ...repairTelemetry,
+        }),
+      });
+    }
     return fallbackDraft({
       providerAttempted,
       draftInput: input.draftInput,
@@ -647,6 +760,7 @@ function validateCustomerResponseDraft(input: {
   checks: DraftCustomerResponseCheck[];
   blockingMessages: string[];
   contractBlockingMessages: string[];
+  failedObligationIds: string[];
   candidateChecks: AiGuardrailCheck[];
 } {
   const response = input.response.trim();
@@ -799,6 +913,7 @@ function validateCustomerResponseDraft(input: {
       ...contract.blockingMessages,
     ],
     contractBlockingMessages: contract.blockingMessages,
+    failedObligationIds: contract.failedObligationIds,
     candidateChecks: quality.checks,
   };
 }
@@ -1092,6 +1207,17 @@ function buildDraftInstructions(
   });
 }
 
+function buildRepairInstructions(
+  style: DraftCustomerResponseStyleInput,
+  signOff: string,
+): string {
+  return [
+    buildDraftInstructions(style, signOff),
+    "This is the single permitted repair attempt. Rewrite candidateDraft to satisfy the listed failed customer-safe obligations.",
+    "Use deterministicDraft as the completeness anchor. Return a complete replacement draft, not commentary about the repair.",
+  ].join(" ");
+}
+
 function buildDraftInput(input: CustomerResponseDraftInput): string {
   return JSON.stringify(
     {
@@ -1106,6 +1232,12 @@ function buildDraftInput(input: CustomerResponseDraftInput): string {
       accountFacts: extractAccountFacts(input.ticket),
       requestedResponseStyle: input.responseStyle,
       deterministicDraft: input.deterministicDraft,
+      obligations: buildDraftObligations(input).map((obligation) => ({
+        id: obligation.id,
+        requirement: obligation.customerText,
+        aliases: obligation.aliases,
+        hard: obligation.hard,
+      })),
       conversationContext: input.conversationContext,
       expectedOutcome: {
         category: input.outcome.category,
@@ -1144,6 +1276,16 @@ function buildDraftInput(input: CustomerResponseDraftInput): string {
     null,
     2,
   );
+}
+
+function buildRepairInput(input: CustomerResponseRepairInput): string {
+  return JSON.stringify({
+    draftRequest: JSON.parse(buildDraftInput(input.draftInput)),
+    deterministicDraft: input.draftInput.deterministicDraft,
+    candidateDraft: input.candidateResponse,
+    failedObligationIds: input.failedObligationIds,
+    failedMessages: input.failedMessages,
+  }, null, 2);
 }
 
 function extractResponseText(response: unknown): string {

@@ -76,7 +76,7 @@ export const responseQualityContracts: Readonly<Record<string, ResponseQualityCo
   "partial-evidence": contract({
     scenarioId: "partial-evidence",
     requiredConcepts: [
-      ["webhook signature", "signature failures"],
+      ["webhook signature", "signature failures", "signature validation mismatch"],
       ["active signing secret", "current signing secret"],
     ],
     forbiddenConcepts: [],
@@ -143,7 +143,7 @@ export const responseQualityContracts: Readonly<Record<string, ResponseQualityCo
   "customer-confirmation": contract({
     scenarioId: "customer-confirmation",
     requiredConcepts: [
-      ["resolved it", "working now"],
+      ["resolved it", "working now", "working again"],
       ["ready to close", "mark this for review"],
     ],
     forbiddenConcepts: [],
@@ -156,7 +156,7 @@ export const responseQualityContracts: Readonly<Record<string, ResponseQualityCo
   "stale-reply": contract({
     scenarioId: "stale-reply",
     requiredConcepts: [
-      ["webhook signature", "signature failures"],
+      ["webhook signature", "signature failures", "signature validation mismatch"],
       ["active signing secret", "current signing secret"],
     ],
     forbiddenConcepts: [],

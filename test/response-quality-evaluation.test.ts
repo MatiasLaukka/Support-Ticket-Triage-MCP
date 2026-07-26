@@ -45,6 +45,39 @@ describe("response quality evaluation", () => {
     expect(score.hardPass).toBe(true);
   });
 
+  it("accepts signature validation mismatch as the webhook-signature concept", () => {
+    const score = evaluateResponseQuality({
+      draft: "The signature validation mismatch indicates a problem with the endpoint's active signing secret. Please share the signing secret rotation time and whether raw body handling changed.",
+      contract: responseQualityContracts["partial-evidence"]!,
+      deterministicChecks: [],
+    });
+
+    expect(score.requiredConceptRecall).toBe(1);
+    expect(score.hardPass).toBe(true);
+  });
+
+  it("accepts working again as the resolved customer-confirmation concept", () => {
+    const score = evaluateResponseQuality({
+      draft: "Glad to hear it is working again. We will leave the ticket ready to close from our side.",
+      contract: responseQualityContracts["customer-confirmation"]!,
+      deterministicChecks: [],
+    });
+
+    expect(score.requiredConceptRecall).toBe(1);
+    expect(score.hardPass).toBe(true);
+  });
+
+  it("does not accept generic review as active-incident escalation", () => {
+    const score = evaluateResponseQuality({
+      draft: "The webhook delivery platform delay is under review. Please share the delivery ID, event creation time, delivery attempt time, endpoint response code, and retry history.",
+      contract: responseQualityContracts["active-known-event"]!,
+      deterministicChecks: [],
+    });
+
+    expect(score.hardPass).toBe(false);
+    expect(score.failures).toContain("missing escalation: incident review");
+  });
+
   it("recognizes relevant evidence in a normal question", () => {
     const score = evaluateResponseQuality({
       draft: "Could you share the request ID?",

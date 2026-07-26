@@ -5,6 +5,17 @@ import type {
 
 export type ResponseQualityConcept = string | readonly string[];
 
+const ordinaryConceptAliases: readonly (readonly string[])[] = [
+  [
+    "webhook signature",
+    "signature validation",
+    "signature validation mismatch",
+    "signature failure",
+    "signature failures",
+  ],
+  ["resolved it", "working again", "working now"],
+];
+
 export interface ResponseQualityContract {
   scenarioId: string;
   requiredConcepts: readonly ResponseQualityConcept[];
@@ -146,7 +157,13 @@ function matchesTone(draft: string, tone: DraftCustomerResponseStyle): boolean {
 
 function matchesConcept(draft: string, concept: ResponseQualityConcept): boolean {
   const phrases = typeof concept === "string" ? [concept] : concept;
-  return phrases.some((phrase) => phrasePattern(normalize(phrase)).test(draft));
+  return phrases
+    .flatMap((phrase) => aliasesForOrdinaryConcept(normalize(phrase)))
+    .some((phrase) => phrasePattern(phrase).test(draft));
+}
+
+function aliasesForOrdinaryConcept(phrase: string): readonly string[] {
+  return ordinaryConceptAliases.find((aliases) => aliases.includes(phrase)) ?? [phrase];
 }
 
 function matchesForbiddenClaim(

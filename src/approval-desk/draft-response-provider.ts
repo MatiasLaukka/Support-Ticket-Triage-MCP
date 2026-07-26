@@ -1035,6 +1035,7 @@ function buildDraftInput(input: CustomerResponseDraftInput): string {
       },
       accountFacts: extractAccountFacts(input.ticket),
       requestedResponseStyle: input.responseStyle,
+      deterministicDraft: input.deterministicDraft,
       conversationContext: input.conversationContext,
       expectedOutcome: {
         category: input.outcome.category,

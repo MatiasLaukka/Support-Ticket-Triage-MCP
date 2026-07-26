@@ -111,9 +111,16 @@ describe("OpenAiCustomerResponseDraftProvider", () => {
       },
     });
     expect(requests[0]!.init.body).toContain(article.body);
+    expect(requests[0]!.init.body).toContain("Fallback draft.");
     expect(requests[0]!.init.body).toContain("Marketing Coordinator");
     expect(JSON.parse(requests[0]!.init.body).instructions).toContain(
       "recommend the best support tone",
+    );
+    expect(JSON.parse(requests[0]!.init.body).instructions).toContain(
+      "preserve the supported facts and evidence requests from the deterministic draft",
+    );
+    expect(JSON.parse(requests[0]!.init.body).instructions).toContain(
+      "Customer service drafting skill",
     );
   });
 

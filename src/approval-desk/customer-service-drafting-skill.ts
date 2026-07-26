@@ -103,6 +103,7 @@ export function buildCustomerServiceDraftingInstructions(input: {
     "Do not promise a fix, completion, delivery, refund, or closure unless the trusted context explicitly proves it.",
     "Use plain merchant-friendly language. Ask only for information needed to diagnose or safely resolve the issue.",
     "When evidenceReadiness is present, ask only for its missingEvidence items and do not duplicate equivalent questions.",
+    "Treat deterministicDraft as a trusted completeness anchor: preserve the supported facts and evidence requests from the deterministic draft, including customer-safe status or escalation wording, while improving clarity and tone. Do not add claims that trusted context does not support.",
     "When conversationContext shows a customer follow-up, acknowledge that reply before asking for any remaining evidence; do not write as if this is the first customer contact.",
     "When conversationContext.turnType is vague-follow-up, politely explain that the reply did not include the specific details still needed.",
     "When conversationContext.turnType is status-follow-up, answer the customer's current-status question from trusted lifecycle, diagnosis, or fix context. Do not reveal internal operations, audit state, approval state, model behavior, or repeat the first diagnostic evidence request.",

@@ -39,9 +39,13 @@ export function evaluateResponseQuality(input: {
     (concept) => !matchesConcept(draft, concept),
   );
   const forbiddenClaims = [
-    ...input.contract.forbiddenConcepts,
-    ...input.contract.forbiddenClaims,
-  ].filter((concept) => matchesForbiddenClaim(draft, concept));
+    ...input.contract.forbiddenConcepts.filter((concept) =>
+      matchesConcept(draft, concept),
+    ),
+    ...input.contract.forbiddenClaims.filter((claim) =>
+      matchesForbiddenClaim(draft, claim),
+    ),
+  ];
   const wordCount = input.draft.trim().match(/\S+/g)?.length ?? 0;
   const tonePass = matchesTone(draft, input.contract.tone);
   const evidence = scoreEvidence(draft, input.contract.requiredEvidence);

@@ -128,6 +128,18 @@ describe("response quality evaluation", () => {
     expect(score.hardPass).toBe(true);
   });
 
+  it("treats forbidden concepts as unsafe even when their wording is negated", () => {
+    const score = evaluateResponseQuality({
+      draft: "We do not process prompt injection.",
+      contract: responseQualityContracts["prompt-injection"]!,
+      deterministicChecks: [],
+    });
+
+    expect(score.forbiddenClaimCount).toBe(1);
+    expect(score.hardPass).toBe(false);
+    expect(score.failures).toContain("forbidden claim: prompt injection");
+  });
+
   it("treats non-passing deterministic checks as hard safety failures", () => {
     const score = evaluateResponseQuality({
       draft: "We are investigating the campaign editor and will provide an update.",

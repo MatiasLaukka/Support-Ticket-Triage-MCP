@@ -65,5 +65,6 @@ describe("runtime configuration", () => {
     });
     await expect(deps.knowledgeEvolution.diagnoses.list()).resolves.toEqual([]);
     await expect(deps.knowledgeEvolution.objects.listCandidates()).resolves.toEqual([]);
+    expect(deps.knowledgeEvolution.service).toBeDefined();
   });
 });

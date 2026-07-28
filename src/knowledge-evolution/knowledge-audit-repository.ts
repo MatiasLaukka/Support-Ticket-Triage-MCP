@@ -7,7 +7,7 @@ const Text = z.string().trim().min(1).max(1_000);
 export const KnowledgeAuditEventSchema = z.object({
   id: z.string().trim().min(1).max(120).regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/), objectId: Text.optional(), candidateId: Text.optional(), action: Text,
   actor: Text, timestamp: z.string().datetime(), supportIds: z.array(Text).max(100), scores: z.record(z.string(), z.number()).optional(), provenanceSummary: Text.optional(),
-  reviewedFields: z.array(Text).max(100), result: Text, rejectionReason: Text.optional(),
+  reviewedFields: z.array(Text).max(100), result: Text, rejectionReason: Text.optional(), notes: Text.optional(),
 }).strict().refine((value) => value.objectId !== undefined || value.candidateId !== undefined, "An object or candidate ID is required.");
 export type KnowledgeAuditEvent = z.infer<typeof KnowledgeAuditEventSchema>;
 export interface KnowledgeAuditFilters { objectId?: string; candidateId?: string; action?: string; actor?: string; }

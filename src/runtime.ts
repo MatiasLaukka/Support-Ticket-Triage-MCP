@@ -8,6 +8,7 @@ import { TriageService } from "./triage-service.js";
 import { DiagnosisRepository } from "./knowledge-evolution/diagnosis-repository.js";
 import { KnowledgeObjectRepository } from "./knowledge-evolution/knowledge-object-repository.js";
 import { KnowledgeAuditRepository } from "./knowledge-evolution/knowledge-audit-repository.js";
+import { KnowledgeEvolutionService } from "./knowledge-evolution/service.js";
 
 const DEFAULT_MINUTES_SAVED = 8;
 const STARTUP_PATH_MESSAGES = {
@@ -45,7 +46,7 @@ export interface RuntimeDependencies {
   knowledge: KnowledgeRepository;
   recommendations: RecommendationRepository;
   audits: AuditRepository;
-  knowledgeEvolution: { diagnoses: DiagnosisRepository; objects: KnowledgeObjectRepository; audits: KnowledgeAuditRepository };
+  knowledgeEvolution: { diagnoses: DiagnosisRepository; objects: KnowledgeObjectRepository; audits: KnowledgeAuditRepository; service: KnowledgeEvolutionService };
   service: TriageService;
   now: () => Date;
   minutesPerAcceptedRecommendation: number;
@@ -109,7 +110,22 @@ export async function createRuntimeDependencies(
   const knowledge = new KnowledgeRepository(knowledgeRoot);
   const recommendations = new RecommendationRepository(recommendationsRoot);
   const audits = new AuditRepository(auditFile);
-  const knowledgeEvolution = { diagnoses: new DiagnosisRepository(knowledgeEvolutionPaths.diagnosesRoot), objects: new KnowledgeObjectRepository(knowledgeEvolutionPaths.candidatesRoot, knowledgeEvolutionPaths.approvedRoot), audits: new KnowledgeAuditRepository(knowledgeEvolutionPaths.auditFile) };
+  const diagnoses = new DiagnosisRepository(knowledgeEvolutionPaths.diagnosesRoot);
+  const objects = new KnowledgeObjectRepository(knowledgeEvolutionPaths.candidatesRoot, knowledgeEvolutionPaths.approvedRoot);
+  const knowledgeAudits = new KnowledgeAuditRepository(knowledgeEvolutionPaths.auditFile);
+  const knowledgeEvolution = {
+    diagnoses,
+    objects,
+    audits: knowledgeAudits,
+    service: new KnowledgeEvolutionService({
+      tickets,
+      knowledge,
+      diagnoses,
+      objects,
+      audits: knowledgeAudits,
+      now,
+    }),
+  };
   const service = new TriageService({
     tickets,
     recommendations,

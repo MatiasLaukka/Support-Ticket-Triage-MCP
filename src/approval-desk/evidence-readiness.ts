@@ -262,7 +262,7 @@ const EVIDENCE_CATALOG: Readonly<Record<string, Omit<EvidenceRequirement, "sourc
     id: "raw-body-change-status",
     label: "Raw body handling changes",
     customerQuestion: "whether raw body handling changed recently",
-    aliases: ["raw body", "body parser"],
+    aliases: ["raw body", "raw request-body handling", "body parser"],
   },
   "recipient-region": {
     id: "recipient-region",

@@ -76,6 +76,11 @@ describe("analyzeEvidenceReadiness", () => {
       "signing-secret-rotation-time",
       "raw-body-change-status",
     ]);
+    expect(
+      readiness.requiredEvidence.find(
+        (requirement) => requirement.id === "raw-body-change-status",
+      )?.aliases,
+    ).toContain("raw request-body handling");
     expect(readiness.nextInvestigationSteps).toContain(
       "Confirm the endpoint validates with the current signing secret.",
     );

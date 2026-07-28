@@ -57,5 +57,13 @@ describe("runtime configuration", () => {
       revision: 0,
     });
     expect(deps.minutesPerAcceptedRecommendation).toBe(8);
+    expect(deps.paths.knowledgeEvolution).toEqual({
+      diagnosesRoot: resolve(dataRoot, "knowledge-evolution", "diagnoses"),
+      candidatesRoot: resolve(dataRoot, "knowledge-evolution", "candidates"),
+      approvedRoot: resolve(dataRoot, "knowledge-evolution", "approved"),
+      auditFile: resolve(dataRoot, "knowledge-evolution", "audit", "events.jsonl"),
+    });
+    await expect(deps.knowledgeEvolution.diagnoses.list()).resolves.toEqual([]);
+    await expect(deps.knowledgeEvolution.objects.listCandidates()).resolves.toEqual([]);
   });
 });

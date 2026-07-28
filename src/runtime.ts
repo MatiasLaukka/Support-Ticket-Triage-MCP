@@ -5,6 +5,9 @@ import { KnowledgeRepository } from "./knowledge-repository.js";
 import { RecommendationRepository } from "./recommendation-repository.js";
 import { TicketRepository } from "./ticket-repository.js";
 import { TriageService } from "./triage-service.js";
+import { DiagnosisRepository } from "./knowledge-evolution/diagnosis-repository.js";
+import { KnowledgeObjectRepository } from "./knowledge-evolution/knowledge-object-repository.js";
+import { KnowledgeAuditRepository } from "./knowledge-evolution/knowledge-audit-repository.js";
 
 const DEFAULT_MINUTES_SAVED = 8;
 const STARTUP_PATH_MESSAGES = {
@@ -34,6 +37,7 @@ export interface RuntimePaths {
   knowledgeRoot: string;
   recommendationsRoot: string;
   auditFile: string;
+  knowledgeEvolution: { diagnosesRoot: string; candidatesRoot: string; approvedRoot: string; auditFile: string };
 }
 
 export interface RuntimeDependencies {
@@ -41,6 +45,7 @@ export interface RuntimeDependencies {
   knowledge: KnowledgeRepository;
   recommendations: RecommendationRepository;
   audits: AuditRepository;
+  knowledgeEvolution: { diagnoses: DiagnosisRepository; objects: KnowledgeObjectRepository; audits: KnowledgeAuditRepository };
   service: TriageService;
   now: () => Date;
   minutesPerAcceptedRecommendation: number;
@@ -95,6 +100,7 @@ export async function createRuntimeDependencies(
   );
   const recommendationsRoot = resolve(dataRoot, "recommendations");
   const auditFile = resolve(dataRoot, "audit", "events.jsonl");
+  const knowledgeEvolutionPaths = { diagnosesRoot: resolve(dataRoot, "knowledge-evolution", "diagnoses"), candidatesRoot: resolve(dataRoot, "knowledge-evolution", "candidates"), approvedRoot: resolve(dataRoot, "knowledge-evolution", "approved"), auditFile: resolve(dataRoot, "knowledge-evolution", "audit", "events.jsonl") };
   const minutesPerAcceptedRecommendation = minutesSaved(env);
   const now = options.now ?? (() => new Date());
 
@@ -103,6 +109,7 @@ export async function createRuntimeDependencies(
   const knowledge = new KnowledgeRepository(knowledgeRoot);
   const recommendations = new RecommendationRepository(recommendationsRoot);
   const audits = new AuditRepository(auditFile);
+  const knowledgeEvolution = { diagnoses: new DiagnosisRepository(knowledgeEvolutionPaths.diagnosesRoot), objects: new KnowledgeObjectRepository(knowledgeEvolutionPaths.candidatesRoot, knowledgeEvolutionPaths.approvedRoot), audits: new KnowledgeAuditRepository(knowledgeEvolutionPaths.auditFile) };
   const service = new TriageService({
     tickets,
     recommendations,
@@ -115,6 +122,7 @@ export async function createRuntimeDependencies(
     knowledge,
     recommendations,
     audits,
+    knowledgeEvolution,
     service,
     now,
     minutesPerAcceptedRecommendation,
@@ -124,6 +132,7 @@ export async function createRuntimeDependencies(
       knowledgeRoot,
       recommendationsRoot,
       auditFile,
+      knowledgeEvolution: knowledgeEvolutionPaths,
     },
   };
 }

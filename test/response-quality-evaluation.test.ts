@@ -145,6 +145,17 @@ describe("response quality evaluation", () => {
     expect(score.unnecessaryQuestionCount).toBe(0);
   });
 
+  it("recognizes next-step confirmation wording as stale-reply evidence", () => {
+    const score = evaluateResponseQuality({
+      draft: "The signature failures are consistent with a post-rotation mismatch. Our next step is to confirm the endpoint is validating with the current signing secret and compare delivery deliv_8899 with the rotation time. Please retry one delivery after confirming that configuration.",
+      contract: responseQualityContracts["stale-reply"]!,
+      deterministicChecks: [],
+    });
+
+    expect(score.hardPass).toBe(true);
+    expect(score.requiredEvidenceRecall).toBe(1);
+  });
+
   it("accepts slash-separated incident and platform review wording", () => {
     const score = evaluateResponseQuality({
       draft: "We are investigating the platform delay under incident/platform review. Please share the store URL, profile email, event ID, request ID, and API response status.",

@@ -117,9 +117,8 @@ function scoreEvidence(draft: string, requiredEvidence: readonly ResponseQuality
     (sentence) => {
       const explicitRequest =
         sentence.includes("?") ||
-        /\b(?:please|could you|can you)(?:\s+please)?\s+(?:share|send|provide|confirm|verify)\b/.test(
-          sentence,
-        );
+        /\b(?:please|could you|can you)(?:\s+please)?\s+(?:share|send|provide|confirm|verify)\b/.test(sentence) ||
+        /\bnext step is to (?:confirm|verify)\b/.test(sentence);
       const governedNeed =
         /\b(?:we\s+(?:still\s+)?need|to\s+move\s+this\s+forward,?\s+we\s+(?:still\s+)?need)\b/.test(
           sentence,

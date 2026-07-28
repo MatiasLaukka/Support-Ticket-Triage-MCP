@@ -402,13 +402,30 @@ async function getLifecycleReplay({ options }: RouteContext): Promise<unknown> {
   const liveReportPath = options.lifecycleReplayReportPath ??
     resolve("reports/ai-comparison/live-latest.json");
   let liveReport: LifecycleReplayReport | undefined;
+  let sourceReportPath = liveReportPath;
   try {
     liveReport = JSON.parse(await readFile(liveReportPath, "utf8")) as LifecycleReplayReport;
   } catch (error) {
     if (isMissingFile(error)) {
-      return createUnavailableLifecycleReplayViewModel("live-report-missing");
+      const controlledPath = options.lifecycleReplayControlledReportPath ??
+        resolve("reports/ai-comparison/controlled-latest.json");
+      try {
+        liveReport = JSON.parse(
+          await readFile(controlledPath, "utf8"),
+        ) as LifecycleReplayReport;
+        sourceReportPath = controlledPath;
+      } catch (controlledError) {
+        if (isMissingFile(controlledError)) {
+          return createUnavailableLifecycleReplayViewModel(
+            "live-report-missing",
+            liveReportPath,
+          );
+        }
+        return createUnavailableLifecycleReplayViewModel("invalid-report", controlledPath);
+      }
+    } else {
+      return createUnavailableLifecycleReplayViewModel("invalid-report", liveReportPath);
     }
-    return createUnavailableLifecycleReplayViewModel("invalid-report");
   }
 
   let controlledReport: LifecycleReplayReport | undefined;
@@ -430,6 +447,8 @@ async function getLifecycleReplay({ options }: RouteContext): Promise<unknown> {
     liveReport,
     controlledReport,
     scenarios,
+    liveReportPath: sourceReportPath,
+    controlledReportPath,
   });
 }
 

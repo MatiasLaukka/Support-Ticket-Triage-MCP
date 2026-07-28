@@ -79,11 +79,12 @@ export interface LifecycleReplayLane {
 
 export function createUnavailableLifecycleReplayViewModel(
   reason: "live-report-missing" | "invalid-report",
+  liveReportPath = LIVE_REPORT_PATH,
 ): LifecycleReplayViewModel {
   return {
     available: false,
     unavailableReason: reason,
-    generatedFrom: { liveReport: LIVE_REPORT_PATH },
+    generatedFrom: { liveReport: liveReportPath },
     tickets: [],
   };
 }
@@ -109,9 +110,14 @@ export function buildLifecycleReplayViewModel(input: {
   liveReport: LifecycleReplayReport | undefined;
   controlledReport?: LifecycleReplayReport;
   scenarios: readonly DiagnosticEvaluationScenario[];
+  liveReportPath?: string;
+  controlledReportPath?: string;
 }): LifecycleReplayViewModel {
   if (input.liveReport === undefined) {
-    return createUnavailableLifecycleReplayViewModel("live-report-missing");
+    return createUnavailableLifecycleReplayViewModel(
+      "live-report-missing",
+      input.liveReportPath,
+    );
   }
 
   const scenariosById = new Map(input.scenarios.map((scenario) => [scenario.id, scenario]));
@@ -161,10 +167,10 @@ export function buildLifecycleReplayViewModel(input: {
   return {
     available: true,
     generatedFrom: {
-      liveReport: LIVE_REPORT_PATH,
+      liveReport: input.liveReportPath ?? LIVE_REPORT_PATH,
       controlledReport: input.controlledReport === undefined
         ? undefined
-        : CONTROLLED_REPORT_PATH,
+        : input.controlledReportPath ?? CONTROLLED_REPORT_PATH,
     },
     tickets: [...tickets.values()].map((ticket) => ({
       ...ticket,

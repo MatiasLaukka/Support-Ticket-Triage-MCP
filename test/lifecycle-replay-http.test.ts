@@ -113,9 +113,34 @@ describe("lifecycle replay HTTP surface", () => {
     expect(await fixture.deps.audits.list()).toEqual(beforeAudits);
   });
 
+  it("uses the controlled report when no live report is available", async () => {
+    const scenarios = await loadDiagnosticEvaluationScenarios();
+    const scenario = scenarios[0]!;
+    const fixture = await startFixture({
+      lifecycleReplayScenarios: scenarios,
+      controlledReport: {
+        mode: "controlled",
+        lanes: [{
+          lane: "deterministic-deterministic",
+          scenarioCount: 1,
+          passedScenarioCount: 1,
+          scenarios: [{ scenarioId: scenario.id, overallResult: "pass" }],
+        }],
+      },
+    });
+    const replay = await fixture.json("/api/lifecycle-replay");
+    expect(replay.body).toMatchObject({
+      available: true,
+      generatedFrom: { liveReport: expect.stringContaining("controlled") },
+    });
+  });
+
   it("returns stable unavailable states when the live report is absent or invalid", async () => {
     const scenarios = await loadDiagnosticEvaluationScenarios();
-    const missing = await startFixture({ lifecycleReplayScenarios: scenarios });
+    const missing = await startFixture({
+      lifecycleReplayScenarios: scenarios,
+      controlledReportPath: join(tmpdir(), "missing-controlled-report.json"),
+    });
     expect((await missing.json("/api/lifecycle-replay")).body).toMatchObject({
       available: false,
       unavailableReason: "live-report-missing",
@@ -136,6 +161,8 @@ async function startFixture(options: {
   lifecycleReplayScenarios: Awaited<ReturnType<typeof loadDiagnosticEvaluationScenarios>>;
   report?: object;
   reportText?: string;
+  controlledReport?: object;
+  controlledReportPath?: string;
   draftProvider?: CustomerResponseDraftProvider;
   classificationReasoningProvider?: ClassificationReasoningProvider;
 }) {
@@ -144,6 +171,10 @@ async function startFixture(options: {
   const reportPath = join(root, "live-latest.json");
   if (options.report !== undefined || options.reportText !== undefined) {
     await writeFile(reportPath, options.reportText ?? JSON.stringify(options.report), "utf8");
+  }
+  const controlledReportPath = options.controlledReportPath ?? join(root, "controlled-latest.json");
+  if (options.controlledReport !== undefined) {
+    await writeFile(controlledReportPath, JSON.stringify(options.controlledReport), "utf8");
   }
   const deps = await createRuntimeDependencies({
     cwd: resolve(),
@@ -155,6 +186,7 @@ async function startFixture(options: {
   });
   const server = createApprovalDeskHttpServer(deps, {
     lifecycleReplayReportPath: reportPath,
+    lifecycleReplayControlledReportPath: controlledReportPath,
     lifecycleReplayScenarios: options.lifecycleReplayScenarios,
     draftProvider: options.draftProvider,
     classificationReasoningProvider: options.classificationReasoningProvider,

@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
+import { readFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { resolve } from "node:path";
 import { z } from "zod";
 import {
   ApprovedFieldSchema,
@@ -37,6 +39,14 @@ import {
 import { evaluateTicketWithAi } from "./ai-evaluation.js";
 import { buildAutomationEvidenceReport } from "./evidence-report.js";
 import { approvalDeskHtml } from "./ui.js";
+import { lifecycleReplayHtml } from "./lifecycle-replay-ui.js";
+import {
+  buildLifecycleReplayViewModel,
+  createUnavailableLifecycleReplayViewModel,
+  type LifecycleReplayReport,
+} from "./lifecycle-replay.js";
+import { loadDiagnosticEvaluationScenarios } from "./diagnostic-evaluation-scenarios.js";
+import type { DiagnosticEvaluationScenario } from "./diagnostic-evaluation.js";
 import {
   buildConversationHistory,
   buildConversationTimeline,
@@ -182,6 +192,9 @@ export interface ApprovalDeskHttpOptions {
   expectedOutcomesPath?: string;
   draftProvider?: CustomerResponseDraftProvider;
   classificationReasoningProvider?: ClassificationReasoningProvider;
+  lifecycleReplayReportPath?: string;
+  lifecycleReplayControlledReportPath?: string;
+  lifecycleReplayScenarios?: readonly DiagnosticEvaluationScenario[];
 }
 
 export function createApprovalDeskHttpServer(
@@ -203,6 +216,10 @@ async function routeRequest(
     const url = new URL(request.url ?? "/", "http://approval-desk.local");
     if (request.method === "GET" && url.pathname === "/") {
       text(response, 200, approvalDeskHtml);
+      return;
+    }
+    if (request.method === "GET" && url.pathname === "/lifecycle-replay") {
+      text(response, 200, lifecycleReplayHtml);
       return;
     }
 
@@ -340,6 +357,10 @@ function matchRoute(
     return { status: 200, handle: getEvidence };
   }
 
+  if (method === "GET" && pathname === "/api/lifecycle-replay") {
+    return { status: 200, handle: getLifecycleReplay };
+  }
+
   return undefined;
 }
 
@@ -375,6 +396,50 @@ async function listTickets({ deps, url }: RouteContext): Promise<unknown> {
       ).summary,
     })),
   };
+}
+
+async function getLifecycleReplay({ options }: RouteContext): Promise<unknown> {
+  const liveReportPath = options.lifecycleReplayReportPath ??
+    resolve("reports/ai-comparison/live-latest.json");
+  let liveReport: LifecycleReplayReport | undefined;
+  try {
+    liveReport = JSON.parse(await readFile(liveReportPath, "utf8")) as LifecycleReplayReport;
+  } catch (error) {
+    if (isMissingFile(error)) {
+      return createUnavailableLifecycleReplayViewModel("live-report-missing");
+    }
+    return createUnavailableLifecycleReplayViewModel("invalid-report");
+  }
+
+  let controlledReport: LifecycleReplayReport | undefined;
+  const controlledReportPath = options.lifecycleReplayControlledReportPath ??
+    resolve("reports/ai-comparison/controlled-latest.json");
+  try {
+    controlledReport = JSON.parse(
+      await readFile(controlledReportPath, "utf8"),
+    ) as LifecycleReplayReport;
+  } catch (error) {
+    if (!isMissingFile(error)) {
+      controlledReport = undefined;
+    }
+  }
+
+  const scenarios = options.lifecycleReplayScenarios ??
+    await loadDiagnosticEvaluationScenarios();
+  return buildLifecycleReplayViewModel({
+    liveReport,
+    controlledReport,
+    scenarios,
+  });
+}
+
+function isMissingFile(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    (error as { code?: unknown }).code === "ENOENT"
+  );
 }
 
 async function getTicketDetail(

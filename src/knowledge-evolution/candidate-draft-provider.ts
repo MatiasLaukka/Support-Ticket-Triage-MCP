@@ -7,6 +7,7 @@ import {
 } from "./candidate-draft-contract.js";
 import {
   CandidateDraftGuardrailError,
+  sanitizeCandidateDraftAllowlists,
   sanitizeDiscoveryForCandidateDraft,
   validateCandidateDraft,
   type SanitizedKnowledgeDiscoveryCandidate,
@@ -59,8 +60,10 @@ export async function draftKnowledgeCandidate(
     return { used: false, status: "disabled", fallbackReason: "not-configured", diagnostics: ["Candidate drafting is disabled."] };
   }
   let discovery: SanitizedKnowledgeDiscoveryCandidate[];
+  let allowlists: { allowedEvidenceIds: string[]; allowedKnowledgeArticleIds: string[] };
   try {
     discovery = sanitizeDiscoveryForCandidateDraft(input.discovery);
+    allowlists = sanitizeCandidateDraftAllowlists(input);
   } catch (error) {
     return fallback(error);
   }
@@ -70,13 +73,13 @@ export async function draftKnowledgeCandidate(
   try {
     const execution = await provider.draft({
       discovery,
-      allowedEvidenceIds: [...input.allowedEvidenceIds],
-      allowedKnowledgeArticleIds: [...input.allowedKnowledgeArticleIds],
+      allowedEvidenceIds: allowlists.allowedEvidenceIds,
+      allowedKnowledgeArticleIds: allowlists.allowedKnowledgeArticleIds,
     });
     const candidate = validateCandidateDraft(parseCandidateDraftContract(execution.outputText), {
       discovery,
-      allowedEvidenceIds: input.allowedEvidenceIds,
-      allowedKnowledgeArticleIds: input.allowedKnowledgeArticleIds,
+      allowedEvidenceIds: allowlists.allowedEvidenceIds,
+      allowedKnowledgeArticleIds: allowlists.allowedKnowledgeArticleIds,
     });
     const provenance = sanitizeProvenance(execution.provenance);
     return {

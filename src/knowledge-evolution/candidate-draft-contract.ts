@@ -7,7 +7,7 @@ const SafeTextSchema = z.string().trim().min(1).max(500).refine(
   "Candidate text must not contain prompts, hidden reasoning, credentials, paths, or raw provider data.",
 );
 const WorkflowStepSchema = SafeTextSchema.max(280).refine(
-  (value) => !/(?:^\s*(?:rm|del|curl|wget|powershell|bash|sh|cmd|node|python|npm|git)\b|[;&|]{1,2}|\$\([^)]*\)|\b(?:chmod|invoke-expression|remove-item)\b)/i.test(value),
+  (value) => !/(?:\b(?:rm|del(?:ete)?|curl|wget|powershell|bash|sh|cmd|node|python|npm|git|chmod|invoke-expression|remove-item)\b|[;&|]{1,2}|\$\([^)]*\))/i.test(value),
   "Candidate workflow steps must be declarative.",
 );
 const Unique = <T extends z.ZodType>(schema: T) => z.array(schema).min(1).max(8).refine(
@@ -56,6 +56,9 @@ export class InvalidCandidateDraftContractError extends Error {
 }
 
 export function parseCandidateDraftContract(outputText: string): CandidateDraftPayload {
+  if (typeof outputText !== "string" || outputText.length > 20_000) {
+    throw new InvalidCandidateDraftContractError();
+  }
   let parsed: unknown;
   try {
     parsed = JSON.parse(outputText);

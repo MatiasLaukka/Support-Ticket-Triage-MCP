@@ -72,14 +72,24 @@ export function createControlledKnowledgeCandidateDraftProvider(): CandidateDraf
   return {
     enabled: true,
     async draft(input) {
-      const support = input.discovery[0]!.support.find((record) => record.source === "completed-diagnosis")!;
+      const candidate = input.discovery.find((item) =>
+        item.support.some((record) => record.source === "completed-diagnosis" && record.diagnosisId !== undefined),
+      );
+      const support = candidate?.support.find(
+        (record) => record.source === "completed-diagnosis" && record.diagnosisId !== undefined,
+      );
+      if (candidate === undefined || support === undefined || support.diagnosisId === undefined) {
+        throw new Error("Controlled knowledge draft requires completed diagnosis support.");
+      }
       return {
         outputText: JSON.stringify({
           kind: "known-cause",
           name: "Recurring completed diagnosis pattern",
           summary: "Completed diagnoses indicate a recurring support pattern suitable for operator review.",
           triggerPatterns: ["The same completed diagnosis pattern appears in multiple support records."],
-          evidencePolicy: { mode: "required", evidenceIds: [input.allowedEvidenceIds[0]] },
+          evidencePolicy: input.allowedEvidenceIds.length === 0
+            ? { mode: "none-required" }
+            : { mode: "required", evidenceIds: [input.allowedEvidenceIds[0]!] },
           knowledgeArticleIds: input.allowedKnowledgeArticleIds.slice(0, 1),
           timeConstraints: ["Apply only when the cited evidence is present."],
           diagnosticSteps: ["Compare the completed diagnosis evidence with the affected support record."],
@@ -87,11 +97,11 @@ export function createControlledKnowledgeCandidateDraftProvider(): CandidateDraf
           verificationSteps: ["Confirm the cited evidence no longer indicates the recurring condition."],
           customerSafeExplanation: "We identified a recurring configuration pattern and are reviewing the appropriate correction.",
           operatorRationale: "Advisory draft derived from deterministic completed-diagnosis support.",
-          confidence: input.discovery[0]!.score,
+          confidence: candidate.score,
           rationale: "The deterministic discovery result contains completed diagnosis support.",
           supportingDiagnosisIds: [support.diagnosisId],
           supportingTicketIds: [support.ticketId],
-          contradictions: input.discovery[0]!.contradictions,
+          contradictions: candidate.contradictions,
         }),
         provenance: {
           provider: "openai",

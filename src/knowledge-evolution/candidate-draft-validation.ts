@@ -23,6 +23,11 @@ export interface CandidateDraftValidationContext {
   discovery: readonly SanitizedKnowledgeDiscoveryCandidate[];
 }
 
+export interface SanitizedCandidateDraftAllowlists {
+  allowedEvidenceIds: string[];
+  allowedKnowledgeArticleIds: string[];
+}
+
 export class CandidateDraftGuardrailError extends Error {
   readonly name = "CandidateDraftGuardrailError";
 
@@ -40,6 +45,16 @@ export function sanitizeDiscoveryForCandidateDraft(
     return [];
   }
   return candidates;
+}
+
+export function sanitizeCandidateDraftAllowlists(input: {
+  allowedEvidenceIds: readonly string[];
+  allowedKnowledgeArticleIds: readonly string[];
+}): SanitizedCandidateDraftAllowlists {
+  return {
+    allowedEvidenceIds: [...safeAllowlist(input.allowedEvidenceIds)],
+    allowedKnowledgeArticleIds: [...safeAllowlist(input.allowedKnowledgeArticleIds)],
+  };
 }
 
 export function validateCandidateDraft(
@@ -92,7 +107,7 @@ function sanitizeCandidate(candidate: KnowledgeDiscoveryCandidate): SanitizedKno
 }
 
 function safeAllowlist(values: readonly string[]): Set<string> {
-  if (!Array.isArray(values) || values.length > 80 || values.some((value) => !safeIdentifier(value))) throw new CandidateDraftGuardrailError();
+  if (!Array.isArray(values) || values.length > 80 || values.some((value) => !safeIdentifier(value) || UNSAFE_TEXT.test(value))) throw new CandidateDraftGuardrailError();
   return new Set(values);
 }
 

@@ -29,6 +29,31 @@ describe("knowledge candidate drafting", () => {
     });
   });
 
+  it.each([
+    ["secret-bearing evidence", { allowedEvidenceIds: ["sk-live-secret"] }],
+    ["oversized article", { allowedKnowledgeArticleIds: Array.from({ length: 81 }, (_, index) => `article-${index}`) }],
+  ])("rejects a %s allowlist before provider invocation", async (_name, overrides) => {
+    let invoked = false;
+    const result = await draftKnowledgeCandidate({
+      ...baseInput(),
+      ...overrides,
+    }, {
+      enabled: true,
+      draft: async () => {
+        invoked = true;
+        return { outputText: JSON.stringify(draft()) };
+      },
+    });
+
+    expect(invoked).toBe(false);
+    expect(result).toMatchObject({
+      used: false,
+      status: "fallback",
+      fallbackReason: "guardrail-rejected",
+    });
+    expect(JSON.stringify(result)).not.toContain("sk-live-secret");
+  });
+
   it("returns a validated deterministic controlled draft with sanitized provenance", async () => {
     const result = await draftKnowledgeCandidate(
       baseInput(),
@@ -88,6 +113,16 @@ describe("knowledge candidate drafting", () => {
     expect(result).toMatchObject({ used: false, fallbackReason: "guardrail-rejected" });
   });
 
+  it.each([
+    ["diagnostic", { diagnosticSteps: ["First, curl the internal status endpoint."] }],
+    ["fix", { fixSteps: ["Use Python to delete records from the stale queue."] }],
+    ["verification", { verificationSteps: ["Then invoke-expression to validate the result."] }],
+  ])("rejects executable command tokens embedded in a %s step", async (_name, override) => {
+    const result = await draftKnowledgeCandidate(baseInput(), providerWith({ ...draft(), ...override }));
+
+    expect(result).toMatchObject({ used: false, fallbackReason: "guardrail-rejected" });
+  });
+
   it("rejects prompt-injection support text before invoking a provider", async () => {
     const provider: CandidateDraftProvider = {
       enabled: true,
@@ -135,6 +170,44 @@ describe("knowledge candidate drafting", () => {
     expect(JSON.stringify(result)).not.toContain("hiddenReasoning");
     expect(JSON.stringify(result)).not.toContain("sk-live-secret");
     expect(JSON.stringify(result)).not.toContain("chain of thought");
+  });
+
+  it("bounds raw provider output before parsing it", async () => {
+    const rawOutput = "x".repeat(20_001);
+    const result = await draftKnowledgeCandidate(baseInput(), providerWith(rawOutput));
+
+    expect(result).toMatchObject({ used: false, fallbackReason: "invalid-schema" });
+    expect(JSON.stringify(result)).not.toContain(rawOutput);
+  });
+
+  it("uses completed-diagnosis support after an open-ticket-only candidate", async () => {
+    const first = discovery().candidates[0]!;
+    const openOnly = {
+      ...first,
+      id: "open-ticket-pattern",
+      support: [{ source: "open-ticket" as const, ticketId: "TKT-1002", score: 0.8, reasons: ["ticket-similarity: 0.800"] }],
+    };
+    const result = await draftKnowledgeCandidate({
+      ...baseInput(),
+      discovery: { candidates: [openOnly, first], suppressed: [] },
+    }, createControlledKnowledgeCandidateDraftProvider());
+
+    expect(result).toMatchObject({
+      used: true,
+      candidate: { supportingDiagnosisIds: ["diagnosis-001"], supportingTicketIds: ["TKT-1001"] },
+    });
+  });
+
+  it("uses a none-required policy when the controlled fixture has no allowed evidence", async () => {
+    const result = await draftKnowledgeCandidate({
+      ...baseInput(),
+      allowedEvidenceIds: [],
+    }, createControlledKnowledgeCandidateDraftProvider());
+
+    expect(result).toMatchObject({
+      used: true,
+      candidate: { evidencePolicy: { mode: "none-required" } },
+    });
   });
 });
 

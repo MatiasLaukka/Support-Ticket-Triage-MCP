@@ -91,9 +91,11 @@ describe("knowledge evolution repositories", () => {
     await expect(repository.listApproved()).resolves.toMatchObject([{ ...approved, version: 1 }]);
     await expect(repository.promote(candidate.id, approved)).rejects.toMatchObject({ code: "REPOSITORY_ERROR" });
     await expect(repository.promote("other-candidate", approved)).rejects.toMatchObject({ code: "REPOSITORY_ERROR" });
-    const staleCandidate: KnowledgeCandidate = { ...candidate, id: "stale-known-cause" };
-    await repository.saveCandidate(staleCandidate);
-    await expect(repository.promote(staleCandidate.id, approved)).rejects.toMatchObject({ code: "REPOSITORY_ERROR" });
+    const staleCandidateFileId = "stale-known-cause";
+    const staleCandidate: KnowledgeCandidate = { ...candidate, id: "different-internal-candidate-id" };
+    await writeFile(join(storage, "candidates", `${staleCandidateFileId}.json`), JSON.stringify(staleCandidate));
+    const staleApproved: KnowledgeObject = { ...approved, id: staleCandidateFileId };
+    await expect(repository.promote(staleCandidateFileId, staleApproved)).rejects.toMatchObject({ code: "REPOSITORY_ERROR" });
   });
 
   it("serializes concurrent audit appends and filters without requiring a ticket ID", async () => {

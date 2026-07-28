@@ -96,10 +96,9 @@ export async function writeNewJson<T extends { id: string }>(root: string, recor
     await close(handle); handle = undefined;
     await link(temporary, file);
     published = true;
-    await rm(temporary, { force: true });
-    published = false;
+    await rm(temporary, { force: true }).catch(() => undefined);
   } catch (error) {
-    if (published) await rm(file, { force: true }).catch(() => undefined);
+    if (published) return;
     if (typeof error === "object" && error !== null && "code" in error && error.code === "EEXIST") throw repositoryError("Repository record already exists.");
     if (error instanceof DomainError) throw error;
     throw repositoryError("Repository record could not be persisted.");

@@ -476,6 +476,10 @@ const KNOWLEDGE_EVIDENCE: Readonly<Record<string, readonly string[]>> = {
 export function analyzeEvidenceReadiness(input: {
   ticket: Ticket;
   outcome: ExpectedOutcome;
+  candidate?: {
+    status: "candidate";
+    evidencePolicy: "none-required" | "required";
+  };
 }): EvidenceReadiness {
   const knownCauseDefinition = detectKnownCause(input);
   const knownCause = knownCauseDefinition?.id ?? null;
@@ -642,7 +646,7 @@ function chooseSupportState(input: {
   outcome: ExpectedOutcome;
 }): SupportState {
   if (input.missingEvidence.length > 0 && !input.bypassMissingEvidence) {
-    return input.knownCause !== null ? "known-cause" : "needs-information";
+    return "needs-information";
   }
   if (input.knownCause !== null) {
     return "known-cause";
@@ -670,6 +674,12 @@ function buildNextInvestigationSteps(input: {
     if (knownCause !== undefined) {
       return [...knownCause.investigationSteps];
     }
+    if (input.outcome.knowledgeArticleIds.includes("flow-trigger-troubleshooting")) {
+      return [
+        "Collect the missing evidence before recommending a configuration change.",
+        "Compare the customer example against the flow setup and profile timeline.",
+      ];
+    }
     return [
       "Collect the missing evidence before recommending a configuration change.",
       "Compare the customer example against the relevant platform setup and activity timeline.",
@@ -695,12 +705,6 @@ function buildNextInvestigationSteps(input: {
     return [
       "Correlate affected region, event timing, ingestion delay, and profile timeline updates.",
       "Confirm whether platform processing delay explains the customer impact.",
-    ];
-  }
-  if (input.outcome.knowledgeArticleIds.includes("flow-trigger-troubleshooting")) {
-    return [
-      "Collect the missing evidence before recommending a configuration change.",
-      "Compare the customer example against the flow setup and profile timeline.",
     ];
   }
   return [

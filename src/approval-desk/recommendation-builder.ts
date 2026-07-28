@@ -1047,14 +1047,7 @@ function analyzeCustomerReplyLifecycle(input: {
   });
   if (ticketReplies.length === 0) {
     return {
-      evidenceReadiness: withLifecycleSupportState(
-        evidenceBeforeReplies,
-        evidenceBeforeReplies.supportState === "waiting-on-platform-fix"
-          ? evidenceBeforeReplies.supportState
-          : requiresMoreCustomerEvidence(evidenceBeforeReplies)
-          ? "needs-information"
-          : evidenceBeforeReplies.supportState,
-      ),
+      evidenceReadiness: evidenceBeforeReplies,
       replyStage: "first-contact",
       recognizedEvidenceProgress: false,
     };

@@ -201,6 +201,40 @@ describe("diagnosisContextForTicket", () => {
     });
   });
 
+  it("does not confirm a required-evidence known cause while evidence is missing", () => {
+    const gatedRecommendation = TriageRecommendationSchema.parse({
+      ...recommendation,
+      supportState: "known-cause",
+      knownCause: "webhook-secret-rotation",
+      category: "integration",
+      team: "integrations",
+      knowledgeArticleIds: ["webhook-signature-validation"],
+      requiredEvidence: [
+        {
+          id: "delivery-id",
+          label: "Delivery ID",
+          customerQuestion: "delivery ID",
+          aliases: ["delivery id", "webhook delivery"],
+          source: "known-cause",
+        },
+      ],
+      missingEvidence: [
+        {
+          id: "delivery-id",
+          label: "Delivery ID",
+          customerQuestion: "delivery ID",
+          aliases: ["delivery id", "webhook delivery"],
+          source: "known-cause",
+        },
+      ],
+    });
+
+    expect(diagnosisContextForTicket(ticket, gatedRecommendation)).toMatchObject({
+      confidence: "likely",
+      customerSafeSummary: expect.not.stringContaining("post-rotation issue"),
+    });
+  });
+
   it("escalates after two persisted non-discriminating diagnostic cycles", () => {
     const first = diagnosisAudit("2026-06-10T09:02:00.000Z", ambiguousState);
     const firstReply = customerReply(

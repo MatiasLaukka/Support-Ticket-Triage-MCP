@@ -503,6 +503,8 @@ export function analyzeEvidenceReadiness(input: {
   return {
     supportState: chooseSupportState({
       knownCause,
+      bypassMissingEvidence:
+        knownCauseDefinition?.evidencePolicy === "none-required",
       knownEventStatus: knownEvent?.status ?? null,
       missingEvidence,
       outcome: input.outcome,
@@ -634,24 +636,25 @@ function evidenceRequirement(id: string, source: EvidenceSource): EvidenceRequir
 
 function chooseSupportState(input: {
   knownCause: string | null;
+  bypassMissingEvidence: boolean;
   knownEventStatus: KnownEventStatus | null;
   missingEvidence: readonly EvidenceRequirement[];
   outcome: ExpectedOutcome;
 }): SupportState {
-  if (input.knownEventStatus === "active") {
-    return "waiting-on-platform-fix";
-  }
-  if (input.knownEventStatus === "investigating") {
-    return "diagnosing";
+  if (input.missingEvidence.length > 0 && !input.bypassMissingEvidence) {
+    return input.knownCause !== null ? "known-cause" : "needs-information";
   }
   if (input.knownCause !== null) {
     return "known-cause";
   }
-  if (input.outcome.requiredEscalations.includes("outage")) {
+  if (
+    input.knownEventStatus === "active" ||
+    input.outcome.requiredEscalations.includes("outage")
+  ) {
     return "waiting-on-platform-fix";
   }
-  if (input.missingEvidence.length > 0) {
-    return "needs-information";
+  if (input.knownEventStatus === "investigating") {
+    return "diagnosing";
   }
   return "diagnosing";
 }
@@ -662,6 +665,16 @@ function buildNextInvestigationSteps(input: {
   missingEvidence: readonly EvidenceRequirement[];
   outcome: ExpectedOutcome;
 }): string[] {
+  if (input.missingEvidence.length > 0) {
+    const knownCause = getKnownCause(input.knownCause);
+    if (knownCause !== undefined) {
+      return [...knownCause.investigationSteps];
+    }
+    return [
+      "Collect the missing evidence before recommending a configuration change.",
+      "Compare the customer example against the relevant platform setup and activity timeline.",
+    ];
+  }
   if (input.knownEventStatus === "active") {
     return [
       "Continue platform-impact review and share the next customer update after mitigation status changes.",
@@ -688,12 +701,6 @@ function buildNextInvestigationSteps(input: {
     return [
       "Collect the missing evidence before recommending a configuration change.",
       "Compare the customer example against the flow setup and profile timeline.",
-    ];
-  }
-  if (input.missingEvidence.length > 0) {
-    return [
-      "Collect the missing evidence before recommending a configuration change.",
-      "Compare the customer example against the relevant platform setup and activity timeline.",
     ];
   }
   return [

@@ -23,6 +23,23 @@ export function diagnosisContextForTicket(
     return applyPersistedDiagnosticState(playbookDiagnosis, ticket.id, audits);
   }
 
+  if ((recommendation.missingEvidence?.length ?? 0) > 0) {
+    return {
+      status: "completed",
+      causeType: recommendation.category === "security" ? "security" : "configuration",
+      customerSafeSummary:
+        "We need the requested evidence before confirming whether the reported issue matches a known cause or platform event.",
+      evidenceUsed: providedEvidenceLabels(recommendation, "provided customer evidence"),
+      confidence: "likely",
+      owner: recommendation.category === "integration" ? "integration-partner" : "support",
+      recommendedNextAction:
+        "Collect the requested evidence before confirming a root cause or advancing platform-fix work.",
+      doNotSay: [
+        "Do not present a known cause or investigating event as a confirmed root cause while required evidence is missing.",
+      ],
+    };
+  }
+
   const knownEvent = getKnownEvent(recommendation.knownEventId);
   if (knownEvent?.status === "active") {
     return {

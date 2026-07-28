@@ -774,6 +774,31 @@ the exact phrases `platform processing delay` and `source event creation time`
 seen in the live drafts; a new network run is not required to validate those
 local contract changes.
 
+### Lifecycle Replay Viewer
+
+The read-only Lifecycle Replay page makes evaluation output inspectable in the
+same customer context as the Approval Desk. Run an evaluation first, then
+start the local browser server:
+
+```powershell
+npm run evaluate:ai-comparison -- --live   # optional; controlled output also works
+npm run demo:approval-desk
+```
+
+Open `/lifecycle-replay` on the printed local URL. The page groups snapshots by
+ticket, shows customer replies and previous support responses, and lets you
+compare deterministic and GPT-labelled lanes. Operator view includes
+classification agreement, quality breakdown, failure reasons, and sanitized
+provider provenance. Customer view shows only the draft that a customer would
+see and the explicit approval pause.
+
+Replay reads `reports/ai-comparison/live-latest.json` (and the controlled report
+when present); it makes no OpenAI calls, sends no responses, and never mutates
+ticket or audit state. Snapshots are labeled evaluation states rather than an
+invented chronological journey, so the viewer does not imply that unrelated
+scenario runs happened in a particular order. See
+[the replay viewer guide](docs/lifecycle-replay.md) for a portfolio walkthrough.
+
 ## Extension To Zendesk Or Jira
 
 No live connector is included. A future adapter can preserve the current

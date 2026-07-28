@@ -61,7 +61,7 @@ describe("knowledge evolution discovery", () => {
     ]));
   });
 
-  it("surfaces conflicting completed evidence and suppresses the alert", () => {
+  it("treats additional evidence as corroboration rather than a contradiction", () => {
     const result = discoverCandidates({
       diagnoses: [
         completed("diagnosis-001", "TKT-1001"),
@@ -71,8 +71,21 @@ describe("knowledge evolution discovery", () => {
       approved: [],
     });
 
+    expect(result.candidates[0]).toMatchObject({ meetsAlertThreshold: true, contradictions: [] });
+  });
+
+  it("suppresses an alert when diagnoses contain explicitly ruled-out evidence", () => {
+    const result = discoverCandidates({
+      diagnoses: [
+        completed("diagnosis-001", "TKT-1001"),
+        completed("diagnosis-002", "TKT-1002", { evidenceIds: ["request-id", "not-request-id"] }),
+      ],
+      tickets: [],
+      approved: [],
+    });
+
     expect(result.candidates[0]).toMatchObject({ meetsAlertThreshold: false });
-    expect(result.candidates[0]?.contradictions).toEqual(["conflicting-evidence: certificate-id"]);
+    expect(result.candidates[0]?.contradictions).toEqual(["conflicting-evidence: request-id"]);
   });
 
   it("orders equal-scoring candidates deterministically", () => {
@@ -100,10 +113,54 @@ describe("knowledge evolution discovery", () => {
     expect(result.candidates).toEqual([]);
     expect(result.suppressed).toEqual([{ candidateId: "diagnosis-001", approvedObjectId: approved.id }]);
   });
+
+  it("suppresses a singleton diagnosis that matches approved structured knowledge", () => {
+    const approved = knowledgeObject();
+    const result = discoverCandidates({
+      diagnoses: [completed("diagnosis-001", "TKT-1001")],
+      tickets: [ticket("TKT-1001", "Webhook signature failures after rotation", ["event-eu-7", "knowledge-webhook-signature", "time-after-rotation"])],
+      approved: [approved],
+    });
+
+    expect(result.candidates).toEqual([]);
+    expect(result.suppressed).toEqual([{ candidateId: "diagnosis-001", approvedObjectId: approved.id }]);
+  });
+
+  it("scores identifiers, knowledge, time, and ticket language after diagnosis terms", () => {
+    const result = discoverCandidates({
+      diagnoses: [
+        completed("diagnosis-001", "TKT-1001", { problem: "Webhook callback error after rotation.", symptoms: ["Signature validation fails."] }),
+        completed("diagnosis-002", "TKT-1002", { problem: "Callback signature rejected after key change.", symptoms: ["Webhook validation error."] }),
+      ],
+      tickets: [
+        ticket("TKT-1001", "Webhook callback error after rotation", ["event-eu-7", "knowledge-webhook-signature", "time-after-rotation"]),
+        ticket("TKT-1002", "Callback signature rejected after key change", ["event-eu-7", "knowledge-webhook-signature", "time-after-rotation"]),
+      ],
+      approved: [],
+    });
+
+    expect(result.candidates[0]?.reasons).toEqual(expect.arrayContaining([
+      "shared-event: event-eu-7",
+      "shared-knowledge: knowledge-webhook-signature",
+      "shared-time-constraint: time-after-rotation",
+      expect.stringMatching(/^ticket-language-similarity: /),
+    ]));
+  });
+
+  it("bounds all diagnosis and ticket support records to the deterministic top five", () => {
+    const diagnoses = [1, 2, 3, 4, 5, 6].map((number) => completed(`diagnosis-00${number}`, `TKT-100${number}` as Ticket["id"]));
+    const result = discoverCandidates({ diagnoses, tickets: [], approved: [] });
+
+    expect(result.candidates[0]?.supportCount).toBe(6);
+    expect(result.candidates[0]?.support).toHaveLength(5);
+    expect(result.candidates[0]?.support.map((record) => record.diagnosisId)).toEqual([
+      "diagnosis-001", "diagnosis-002", "diagnosis-003", "diagnosis-004", "diagnosis-005",
+    ]);
+  });
 });
 
-function ticket(id: Ticket["id"], text: string): Ticket {
-  return TicketSchema.parse({ id, createdAt: "2026-07-29T09:00:00.000Z", updatedAt: "2026-07-29T09:00:00.000Z", customer: { name: "Example", plan: "starter", region: "eu", vip: false }, subject: text, description: text, status: "triage", tags: ["webhook", "signing-key"], sla: { responseDueAt: "2026-07-29T12:00:00.000Z", breached: false }, revision: 0 });
+function ticket(id: Ticket["id"], text: string, tags = ["webhook", "signing-key"]): Ticket {
+  return TicketSchema.parse({ id, createdAt: "2026-07-29T09:00:00.000Z", updatedAt: "2026-07-29T09:00:00.000Z", customer: { name: "Example", plan: "starter", region: "eu", vip: false }, subject: text, description: text, status: "triage", tags, sla: { responseDueAt: "2026-07-29T12:00:00.000Z", breached: false }, revision: 0 });
 }
 
 function knowledgeObject(): KnowledgeObject {

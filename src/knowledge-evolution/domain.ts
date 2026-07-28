@@ -36,7 +36,7 @@ export const KnowledgeObjectStatusSchema = z.enum([
 
 export const EvidencePolicySchema = z.discriminatedUnion("mode", [
   z.object({ mode: z.literal("none-required") }).strict(),
-  z.object({ mode: z.literal("required"), evidenceIds: UniqueIdentifiersSchema }).strict(),
+  z.object({ mode: z.literal("required"), evidenceIds: UniqueIdentifiersSchema.min(1) }).strict(),
 ]);
 
 export const CompletedDiagnosisSchema = z.object({

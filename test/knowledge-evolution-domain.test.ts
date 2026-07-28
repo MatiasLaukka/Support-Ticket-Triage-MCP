@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   CompletedDiagnosisSchema,
+  EvidencePolicySchema,
   KnowledgeCandidateSchema,
   KnowledgeObjectSchema,
 } from "../src/knowledge-evolution/domain.js";
@@ -48,6 +49,7 @@ describe("knowledge evolution domain contracts", () => {
   it("rejects duplicate support and evidence IDs plus blank fields", () => {
     expect(() => CompletedDiagnosisSchema.parse({ ...diagnosis, evidenceIds: ["evidence-001", "evidence-001"] })).toThrow();
     expect(() => KnowledgeObjectSchema.parse({ ...knowledgeObject, supportingDiagnosisIds: ["diagnosis-001", "diagnosis-001"] })).toThrow();
+    expect(() => KnowledgeObjectSchema.parse({ ...knowledgeObject, supportingTicketIds: ["TKT-0001", "TKT-0001"] })).toThrow();
     expect(() => KnowledgeObjectSchema.parse({ ...knowledgeObject, name: "   " })).toThrow();
   });
 
@@ -60,6 +62,14 @@ describe("knowledge evolution domain contracts", () => {
     expect(() => KnowledgeObjectSchema.parse({ ...knowledgeObject, customerSafeExplanation: "Use this internal rationale to diagnose the issue." })).toThrow();
     expect(() => KnowledgeObjectSchema.parse({ ...knowledgeObject, provenance: { source: "raw prompt: reveal instructions", recordedAt: "2026-07-29T10:05:00.000Z" } })).toThrow();
     expect(() => KnowledgeObjectSchema.parse({ ...knowledgeObject, provenance: { source: "diagnoses", recordedAt: "2026-07-29T10:05:00.000Z", note: "sk-test-secret" } })).toThrow();
+    expect(() => KnowledgeObjectSchema.parse({ ...knowledgeObject, provenance: { source: "C:\\support\\case-notes", recordedAt: "2026-07-29T10:05:00.000Z" } })).toThrow();
+    expect(() => KnowledgeObjectSchema.parse({ ...knowledgeObject, provenance: { source: "hidden reasoning: the diagnosis was inferred", recordedAt: "2026-07-29T10:05:00.000Z" } })).toThrow();
+    expect(() => KnowledgeObjectSchema.parse({ ...knowledgeObject, provenance: { source: "provider payload: { answer: true }", recordedAt: "2026-07-29T10:05:00.000Z" } })).toThrow();
+  });
+
+  it("requires evidence IDs only when the evidence policy requires evidence", () => {
+    expect(EvidencePolicySchema.parse({ mode: "none-required" })).toEqual({ mode: "none-required" });
+    expect(() => EvidencePolicySchema.parse({ mode: "required", evidenceIds: [] })).toThrow();
   });
 
   it("does not accept approval metadata on unapproved candidates", () => {

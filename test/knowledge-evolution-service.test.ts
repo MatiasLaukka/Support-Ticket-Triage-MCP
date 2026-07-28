@@ -103,6 +103,19 @@ describe("knowledge evolution service", () => {
     await expect(fixture.audits.list({ action: "rejected" })).resolves.toHaveLength(1);
   });
 
+  it("atomically records only one concurrent rejection", async () => {
+    const fixture = createFixture({ synchronizeReviewHistory: true });
+    const service = fixture.service();
+    const input = { candidateId: "known-cause-diagnosis-001", actorId: "support-lead", reason: "Needs more corroboration.", expectedVersion: 1 };
+    await service.discover({ includeGpt: false, actorId: "support-lead" });
+
+    const results = await Promise.allSettled([service.reject(input), service.reject(input)]);
+
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    expect(results.filter((result) => result.status === "rejected")).toHaveLength(1);
+    await expect(fixture.audits.list({ action: "rejected" })).resolves.toHaveLength(1);
+  });
+
   it("rejects a candidate whose supporting diagnosis ticket is not among its supporting tickets", async () => {
     const fixture = createFixture();
     const service = fixture.service();
@@ -133,7 +146,7 @@ describe("knowledge evolution service", () => {
   });
 });
 
-function createFixture(options: { failApprovedAuditOnce?: boolean } = {}) {
+function createFixture(options: { failApprovedAuditOnce?: boolean; synchronizeReviewHistory?: boolean } = {}) {
   const diagnosis: CompletedDiagnosis = {
     id: "diagnosis-001", ticketId: "TKT-1001", problem: "API requests fail after rotating a credential.",
     symptoms: ["Requests return 401 after rotation."], evidenceIds: ["evidence-001"], ownerTeam: "api-platform",
@@ -154,6 +167,9 @@ function createFixture(options: { failApprovedAuditOnce?: boolean } = {}) {
     async removeApproved(candidateId: string) { const index = approved.findIndex((item) => item.id === candidateId); if (index < 0) throw repositoryError("Approved object was not found."); approved.splice(index, 1); },
   };
   let remainingAuditFailures = options.failApprovedAuditOnce ? 1 : 0;
+  let reviewReaders = 0;
+  let releaseReviewReaders: () => void = () => undefined;
+  const reviewReadersReady = new Promise<void>((resolve) => { releaseReviewReaders = resolve; });
   const audits = {
     async append(event: KnowledgeAuditEvent) {
       if (event.action === "approved" && remainingAuditFailures > 0) {
@@ -163,7 +179,18 @@ function createFixture(options: { failApprovedAuditOnce?: boolean } = {}) {
       events.push(event);
     },
     async list(filters: { action?: string; candidateId?: string } = {}) {
-      return events.filter((event) => (filters.action === undefined || event.action === filters.action) && (filters.candidateId === undefined || event.candidateId === filters.candidateId));
+      const matches = events.filter((event) => (filters.action === undefined || event.action === filters.action) && (filters.candidateId === undefined || event.candidateId === filters.candidateId));
+      if (options.synchronizeReviewHistory && filters.candidateId !== undefined && filters.action === "rejected") {
+        reviewReaders += 1;
+        if (reviewReaders === 2) releaseReviewReaders();
+        await reviewReadersReady;
+      }
+      return matches;
+    },
+    async appendIfNoPriorAction(event: KnowledgeAuditEvent) {
+      if (events.some((existing) => existing.candidateId === event.candidateId && existing.action === event.action)) return false;
+      await this.append(event);
+      return true;
     },
   };
   return {

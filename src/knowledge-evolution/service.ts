@@ -25,7 +25,7 @@ export interface KnowledgeEvolutionServiceDependencies {
   knowledge: Pick<KnowledgeRepository, "list">;
   diagnoses: Pick<DiagnosisRepository, "list">;
   objects: Pick<KnowledgeObjectRepository, "listCandidates" | "getCandidate" | "saveCandidate" | "listApproved" | "promote" | "removeApproved">;
-  audits: Pick<KnowledgeAuditRepository, "append" | "list">;
+  audits: Pick<KnowledgeAuditRepository, "append" | "appendIfNoPriorAction">;
   draftProvider?: CandidateDraftProvider;
   now?: () => Date;
   nextAuditId?: () => string;
@@ -147,8 +147,7 @@ export class KnowledgeEvolutionService {
     const candidate = await this.dependencies.objects.getCandidate(input.candidateId);
     assertCurrentVersion(candidate, input.expectedVersion);
     const reason = nonBlank(input.reason, "A rejection reason is required.");
-    await this.assertNoPriorAction(candidate.id, "rejected");
-    await this.appendAudit({
+    await this.appendTerminalAudit({
       candidateId: candidate.id,
       action: "rejected",
       actor: input.actorId,
@@ -166,8 +165,7 @@ export class KnowledgeEvolutionService {
     assertActor(input.actorId);
     const candidate = await this.dependencies.objects.getCandidate(input.candidateId);
     assertCurrentVersion(candidate, input.expectedVersion);
-    await this.assertNoPriorAction(candidate.id, "deferred");
-    await this.appendAudit({
+    await this.appendTerminalAudit({
       candidateId: candidate.id,
       action: "deferred",
       actor: input.actorId,
@@ -184,9 +182,9 @@ export class KnowledgeEvolutionService {
     await this.dependencies.audits.append({ ...event, id: this.nextAuditId(), timestamp: this.now().toISOString() });
   }
 
-  private async assertNoPriorAction(candidateId: string, action: "rejected" | "deferred"): Promise<void> {
-    const history = await this.dependencies.audits.list({ candidateId, action });
-    if (history.length > 0) throw new DomainError("Knowledge candidate has already received this review action.", "STALE_APPROVAL");
+  private async appendTerminalAudit(event: Omit<KnowledgeAuditEvent, "id" | "timestamp">): Promise<void> {
+    const appended = await this.dependencies.audits.appendIfNoPriorAction({ ...event, id: this.nextAuditId(), timestamp: this.now().toISOString() });
+    if (!appended) throw new DomainError("Knowledge candidate has already received this review action.", "STALE_APPROVAL");
   }
 }
 

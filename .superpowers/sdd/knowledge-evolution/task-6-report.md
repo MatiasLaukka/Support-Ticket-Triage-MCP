@@ -43,3 +43,10 @@
 - Approval reference validation now requires every supporting diagnosis's `ticketId` to be among the candidate's supporting ticket IDs.
 - RED evidence: the three new service tests failed before implementation because an audit failure orphaned approval, duplicate rejection succeeded, and mismatched diagnosis/ticket support passed validation.
 - GREEN evidence: `npm test -- --run test/knowledge-evolution-service.test.ts test/knowledge-evolution-repositories.test.ts test/runtime.test.ts` passed build, typecheck, and 20 tests across 3 files.
+
+## Review fix round 2
+
+- Added `KnowledgeAuditRepository.appendIfNoPriorAction`, which reads the candidate/action history and appends the event within the repository's existing file serialization boundary.
+- Terminal rejection and deferment now use that atomic compare-and-append operation instead of a separate read followed by append.
+- RED evidence: two concurrent rejects both fulfilled because they observed the same pre-append audit history.
+- GREEN evidence: the focused build/typecheck suite passed 22 tests across 3 files; the concurrent service test records one rejection audit and rejects the competing call.

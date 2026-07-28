@@ -120,6 +120,19 @@ describe("knowledge evolution repositories", () => {
     await expect(repository.list({ objectId: candidate.id, action: "approved" })).resolves.toEqual([events[1]]);
   });
 
+  it("atomically compares and appends a terminal action once", async () => {
+    const repository = new KnowledgeAuditRepository(join(await root(), "audit", "events.jsonl"));
+    const event = { id: "audit-rejected-1", candidateId: candidate.id, action: "rejected", actor: "support-lead", timestamp: "2026-07-29T10:00:00.000Z", supportIds: ["diagnosis-001"], reviewedFields: [], result: "rejected", rejectionReason: "Needs more corroboration." };
+
+    const results = await Promise.all([
+      repository.appendIfNoPriorAction(event),
+      repository.appendIfNoPriorAction({ ...event, id: "audit-rejected-2" }),
+    ]);
+
+    expect(results.sort()).toEqual([false, true]);
+    await expect(repository.list({ candidateId: candidate.id, action: "rejected" })).resolves.toEqual([event]);
+  });
+
   it("rolls an audit file back when syncing an appended event fails", async () => {
     const auditFile = join(await root(), "audit", "events.jsonl");
     const event = { id: "audit-existing", objectId: candidate.id, action: "candidate-created", actor: "support-lead", timestamp: "2026-07-29T10:00:00.000Z", supportIds: ["diagnosis-001"], reviewedFields: ["summary"], result: "candidate-created" };

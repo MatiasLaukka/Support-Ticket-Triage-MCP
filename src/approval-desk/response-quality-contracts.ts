@@ -17,7 +17,7 @@ export const responseQualityContracts: Readonly<Record<string, ResponseQualityCo
       "request id",
       ["api response status", "validation error"],
     ],
-    requiredEscalation: ["incident review", "incident response", "incident and platform review"],
+    requiredEscalation: ["incident review", "incident response", "incident and platform review", "incident/platform review"],
     forbiddenClaims: ["fixed", "resolved"],
     tone: "balanced",
     maxWords: 120,

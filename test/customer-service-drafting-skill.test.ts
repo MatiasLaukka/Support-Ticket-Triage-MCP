@@ -84,4 +84,14 @@ describe("customer service drafting skill", () => {
     expect(instructions).toContain("include every item in evidenceReadiness.missingEvidence");
     expect(instructions).toContain("exactly once");
   });
+
+  it("preserves exact hard-obligation wording when it carries important context", () => {
+    const instructions = buildCustomerServiceDraftingInstructions({
+      responseStyle: "auto",
+      signOff: "Kind regards\nSupport Team\nNorthstar Marketing Support",
+    });
+
+    expect(instructions).toContain("Preserve exact hard-obligation wording");
+    expect(instructions).toContain("SMS campaign");
+  });
 });

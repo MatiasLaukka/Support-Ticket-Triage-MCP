@@ -123,6 +123,38 @@ describe("response quality evaluation", () => {
     expect(score.unnecessaryQuestionCount).toBe(0);
   });
 
+  it("counts could-you-confirm bullet lists as relevant evidence", () => {
+    const score = evaluateResponseQuality({
+      draft: "Could you confirm:\n- The signing secret rotation time\n- Whether raw request-body handling changed recently",
+      contract: responseQualityContracts["partial-evidence"]!,
+      deterministicChecks: [],
+    });
+
+    expect(score.requiredEvidenceRecall).toBe(1);
+    expect(score.unnecessaryQuestionCount).toBe(0);
+  });
+
+  it("does not count a stale-reply acknowledgement as an unnecessary question", () => {
+    const score = evaluateResponseQuality({
+      draft: "Thanks, that gives us what we need to check the rotation timing and delivery behavior. The signature failures match the documented post-rotation case where the sender and receiving endpoint are not using the same active signing secret. Please confirm that the receiving endpoint is configured with the current signing secret—without sharing the secret—and retry one delivery.",
+      contract: responseQualityContracts["stale-reply"]!,
+      deterministicChecks: [],
+    });
+
+    expect(score.hardPass).toBe(true);
+    expect(score.unnecessaryQuestionCount).toBe(0);
+  });
+
+  it("accepts slash-separated incident and platform review wording", () => {
+    const score = evaluateResponseQuality({
+      draft: "We are investigating the platform delay under incident/platform review. Please share the store URL, profile email, event ID, request ID, and API response status.",
+      contract: incidentContract,
+      deterministicChecks: [],
+    });
+
+    expect(score.hardPass).toBe(true);
+  });
+
   it("treats current signing-secret confirmation as valid stale-reply evidence", () => {
     const score = evaluateResponseQuality({
       draft: responseExemplars["stale-reply"]!,

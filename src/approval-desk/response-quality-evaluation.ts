@@ -114,12 +114,22 @@ export function evaluateResponseQuality(input: {
 
 function scoreEvidence(draft: string, requiredEvidence: readonly ResponseQualityConcept[]) {
   const requests = (draft.match(/[^?.!]+[?.!]?/g) ?? []).filter(
-    (sentence) =>
-      sentence.includes("?") ||
-      /\bplease\s+(?:share|send|provide|confirm)\b/.test(sentence) ||
-      /\b(?:we\s+(?:still\s+)?need|to\s+move\s+this\s+forward,?\s+we\s+(?:still\s+)?need)\b/.test(
-        sentence,
-      ),
+    (sentence) => {
+      const explicitRequest =
+        sentence.includes("?") ||
+        /\b(?:please|could you|can you)(?:\s+please)?\s+(?:share|send|provide|confirm|verify)\b/.test(
+          sentence,
+        );
+      const governedNeed =
+        /\b(?:we\s+(?:still\s+)?need|to\s+move\s+this\s+forward,?\s+we\s+(?:still\s+)?need)\b/.test(
+          sentence,
+        ) &&
+        !/\bwhat\s+we\s+(?:still\s+)?need\b/.test(sentence) &&
+        !/\bwe\s+(?:still\s+)?need\s+to\s+(?:check|investigate|compare|review|confirm|verify|determine)\b/.test(
+          sentence,
+        );
+      return explicitRequest || governedNeed;
+    },
   );
   const relevantRequests = requests.filter((request) =>
     requiredEvidence.some((evidence) => matchesConcept(request, evidence)),

@@ -34,3 +34,12 @@
 
 - The optional audit `notes` field is a small shared-contract expansion required to retain the requested review notes. It is backward compatible with the Task 3 audit records.
 - No MCP, HTTP, UI, or harness surface was added; Task 7 adapters must call `knowledgeEvolution.service`.
+
+## Review fix round
+
+- Approval now compensates if its mandatory audit append fails: the service removes the just-promoted approved object, leaves the candidate intact, and permits a later retry.
+- Added repository support for that narrowly scoped rollback and a repository test proving the candidate remains after removal.
+- Audit history now has a governance purpose: duplicate rejection and deferment actions for the same candidate are rejected instead of appending repeated terminal-review events.
+- Approval reference validation now requires every supporting diagnosis's `ticketId` to be among the candidate's supporting ticket IDs.
+- RED evidence: the three new service tests failed before implementation because an audit failure orphaned approval, duplicate rejection succeeded, and mismatched diagnosis/ticket support passed validation.
+- GREEN evidence: `npm test -- --run test/knowledge-evolution-service.test.ts test/knowledge-evolution-repositories.test.ts test/runtime.test.ts` passed build, typecheck, and 20 tests across 3 files.

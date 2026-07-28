@@ -98,6 +98,18 @@ describe("knowledge evolution repositories", () => {
     await expect(repository.promote(staleCandidateFileId, staleApproved)).rejects.toMatchObject({ code: "REPOSITORY_ERROR" });
   });
 
+  it("removes only the approved object created by a recoverable promotion", async () => {
+    const storage = await root();
+    const repository = new KnowledgeObjectRepository(join(storage, "candidates"), join(storage, "approved"));
+    await repository.saveCandidate(candidate);
+    await repository.promote(candidate.id, approved);
+
+    await repository.removeApproved(candidate.id);
+
+    await expect(repository.listApproved()).resolves.toEqual([]);
+    await expect(repository.listCandidates()).resolves.toEqual([candidate]);
+  });
+
   it("serializes concurrent audit appends and filters without requiring a ticket ID", async () => {
     const repository = new KnowledgeAuditRepository(join(await root(), "audit", "events.jsonl"));
     const events = ["candidate-created", "approved"].map((action, index) => ({

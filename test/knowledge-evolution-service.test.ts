@@ -79,6 +79,40 @@ describe("knowledge evolution service", () => {
     await expect(service.approve(input)).rejects.toMatchObject({ code: "REPOSITORY_ERROR" });
   });
 
+  it("removes a promoted object when its mandatory approval audit cannot be appended, allowing a retry", async () => {
+    const fixture = createFixture({ failApprovedAuditOnce: true });
+    const service = fixture.service();
+    const input = { candidateId: "known-cause-diagnosis-001", actorId: "support-lead", expectedVersion: 1 };
+    await service.discover({ includeGpt: false, actorId: "support-lead" });
+
+    await expect(service.approve(input)).rejects.toThrow("simulated approval audit failure");
+    await expect(fixture.objects.listApproved()).resolves.toEqual([]);
+
+    await expect(service.approve(input)).resolves.toMatchObject({ status: "approved", version: 1 });
+    await expect(fixture.audits.list({ action: "approved" })).resolves.toHaveLength(1);
+  });
+
+  it("uses review history to reject a duplicate rejection action", async () => {
+    const fixture = createFixture();
+    const service = fixture.service();
+    const input = { candidateId: "known-cause-diagnosis-001", actorId: "support-lead", reason: "Needs more corroboration.", expectedVersion: 1 };
+    await service.discover({ includeGpt: false, actorId: "support-lead" });
+
+    await service.reject(input);
+    await expect(service.reject(input)).rejects.toMatchObject({ code: "STALE_APPROVAL" });
+    await expect(fixture.audits.list({ action: "rejected" })).resolves.toHaveLength(1);
+  });
+
+  it("rejects a candidate whose supporting diagnosis ticket is not among its supporting tickets", async () => {
+    const fixture = createFixture();
+    const service = fixture.service();
+    await service.discover({ includeGpt: false, actorId: "support-lead" });
+    fixture.candidates[0] = { ...fixture.candidates[0]!, supportingTicketIds: ["TKT-1002"] };
+
+    await expect(service.approve({ candidateId: "known-cause-diagnosis-001", actorId: "support-lead", expectedVersion: 1 }))
+      .rejects.toMatchObject({ code: "INVALID_APPROVAL_FIELDS" });
+  });
+
   it("records rejection and deferment without changing candidate lifecycle or recommendations", async () => {
     const fixture = createFixture();
     const service = fixture.service();
@@ -99,7 +133,7 @@ describe("knowledge evolution service", () => {
   });
 });
 
-function createFixture() {
+function createFixture(options: { failApprovedAuditOnce?: boolean } = {}) {
   const diagnosis: CompletedDiagnosis = {
     id: "diagnosis-001", ticketId: "TKT-1001", problem: "API requests fail after rotating a credential.",
     symptoms: ["Requests return 401 after rotation."], evidenceIds: ["evidence-001"], ownerTeam: "api-platform",
@@ -107,6 +141,7 @@ function createFixture() {
     verificationSteps: ["Confirm a new request succeeds with the refreshed credential."], completedAt: "2026-07-29T10:00:00.000Z",
   };
   const ticket = { ...ticketRecord(), lifecycle: "unchanged" };
+  const otherTicket = { ...ticketRecord(), id: "TKT-1002", subject: "Billing export question", description: "A customer needs help locating a billing export.", tags: ["billing"], lifecycle: "unchanged" };
   const candidates: KnowledgeCandidate[] = [];
   const approved: KnowledgeObject[] = [];
   const events: KnowledgeAuditEvent[] = [];
@@ -116,17 +151,28 @@ function createFixture() {
     async saveCandidate(candidate: KnowledgeCandidate) { if (candidates.some((item) => item.id === candidate.id)) throw repositoryError("Duplicate candidate."); candidates.push(candidate); },
     async listApproved() { return approved; },
     async promote(candidateId: string, object: KnowledgeObject) { if (candidateId !== object.id || approved.some((item) => item.id === object.id)) throw repositoryError("Duplicate promotion."); approved.push(object); return object; },
+    async removeApproved(candidateId: string) { const index = approved.findIndex((item) => item.id === candidateId); if (index < 0) throw repositoryError("Approved object was not found."); approved.splice(index, 1); },
   };
+  let remainingAuditFailures = options.failApprovedAuditOnce ? 1 : 0;
   const audits = {
-    async append(event: KnowledgeAuditEvent) { events.push(event); },
-    async list(filters: { action?: string } = {}) { return events.filter((event) => filters.action === undefined || event.action === filters.action); },
+    async append(event: KnowledgeAuditEvent) {
+      if (event.action === "approved" && remainingAuditFailures > 0) {
+        remainingAuditFailures -= 1;
+        throw new Error("simulated approval audit failure");
+      }
+      events.push(event);
+    },
+    async list(filters: { action?: string; candidateId?: string } = {}) {
+      return events.filter((event) => (filters.action === undefined || event.action === filters.action) && (filters.candidateId === undefined || event.candidateId === filters.candidateId));
+    },
   };
   return {
     ticket,
+    candidates,
     objects,
     audits,
     service: (draftProvider?: CandidateDraftProvider) => new KnowledgeEvolutionService({
-      tickets: { async snapshot() { return [ticket] as unknown as Ticket[]; }, async get() { return ticket as unknown as Ticket; } },
+      tickets: { async snapshot() { return [ticket, otherTicket] as unknown as Ticket[]; }, async get() { return ticket as unknown as Ticket; } },
       knowledge: { async list() { return [{ id: "credential-rotation", title: "Credential rotation", tags: ["api"], body: "Rotate credentials safely." }]; } },
       diagnoses: { async list() { return [diagnosis]; } },
       objects,

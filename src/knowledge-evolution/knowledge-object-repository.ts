@@ -1,3 +1,4 @@
+import { rm } from "node:fs/promises";
 import { resolve } from "node:path";
 import { DomainError } from "../errors.js";
 import { KnowledgeCandidateSchema, KnowledgeObjectSchema, type KnowledgeCandidate, type KnowledgeObject } from "./domain.js";
@@ -24,6 +25,16 @@ export class KnowledgeObjectRepository {
       try { await writeNewJson(this.approvedRoot, approved, KnowledgeObjectSchema); }
       catch (error) { if (error instanceof DomainError && error.code === "REPOSITORY_ERROR") throw repositoryError("Knowledge candidate has already been promoted."); throw error; }
       return KnowledgeObjectSchema.parse(approved);
+    });
+  }
+  async removeApproved(candidateId: string): Promise<void> {
+    if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(candidateId)) throw repositoryError("Repository path is not allowed.");
+    return serialize(resolve(this.candidatesRoot, ".."), async () => {
+      const file = resolve(this.approvedRoot, `${candidateId}.json`);
+      const approved = await readJson(file, KnowledgeObjectSchema);
+      if (approved.id !== candidateId) throw repositoryError("Knowledge object does not match the promoted candidate.");
+      try { await rm(file); }
+      catch (error) { if (isMissing(error)) throw repositoryError("Approved knowledge object was not found."); throw repositoryError("Approved knowledge object could not be removed."); }
     });
   }
   async listApproved(): Promise<KnowledgeObject[]> { return serialize(this.approvedRoot, () => listJson(this.approvedRoot, KnowledgeObjectSchema, order)); }

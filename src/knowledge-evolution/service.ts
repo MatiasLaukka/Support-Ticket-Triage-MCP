@@ -24,7 +24,7 @@ export interface KnowledgeEvolutionServiceDependencies {
   tickets: Pick<TicketRepository, "snapshot" | "get">;
   knowledge: Pick<KnowledgeRepository, "list">;
   diagnoses: Pick<DiagnosisRepository, "list">;
-  objects: Pick<KnowledgeObjectRepository, "listCandidates" | "getCandidate" | "saveCandidate" | "listApproved" | "promote">;
+  objects: Pick<KnowledgeObjectRepository, "listCandidates" | "getCandidate" | "saveCandidate" | "listApproved" | "promote" | "removeApproved">;
   audits: Pick<KnowledgeAuditRepository, "append" | "list">;
   draftProvider?: CandidateDraftProvider;
   now?: () => Date;
@@ -106,7 +106,6 @@ export class KnowledgeEvolutionService {
       this.dependencies.diagnoses.list(),
       this.dependencies.tickets.snapshot(),
     ]);
-    await this.dependencies.audits.list({ candidateId: input.candidateId });
     if (approved.some((object) => object.id === candidate.id)) {
       throw new DomainError("Knowledge candidate has already been promoted.", "REPOSITORY_ERROR");
     }
@@ -118,20 +117,29 @@ export class KnowledgeEvolutionService {
       version: 1,
       approval: { approvedBy: input.actorId.trim(), approvedAt: this.now().toISOString() },
     };
-    const promoted = await this.dependencies.objects.promote(candidate.id, object);
-    await this.appendAudit({
-      objectId: promoted.id,
-      candidateId: candidate.id,
-      action: "approved",
-      actor: input.actorId,
-      supportIds: supportIds(candidate),
-      scores: candidate.deterministicScores,
-      provenanceSummary: candidate.provenance.source,
-      reviewedFields: input.edits === undefined ? [] : Object.keys(input.edits).sort(),
-      result: "approved",
-      notes: reviewed.operatorRationale,
-    });
-    return promoted;
+    let promoted: KnowledgeObject | undefined;
+    try {
+      promoted = await this.dependencies.objects.promote(candidate.id, object);
+      await this.appendAudit({
+        objectId: promoted.id,
+        candidateId: candidate.id,
+        action: "approved",
+        actor: input.actorId,
+        supportIds: supportIds(candidate),
+        scores: candidate.deterministicScores,
+        provenanceSummary: candidate.provenance.source,
+        reviewedFields: input.edits === undefined ? [] : Object.keys(input.edits).sort(),
+        result: "approved",
+        notes: reviewed.operatorRationale,
+      });
+      return promoted;
+    } catch (error) {
+      if (promoted !== undefined) {
+        try { await this.dependencies.objects.removeApproved(candidate.id); }
+        catch { throw new DomainError("Approved knowledge object could not be rolled back after audit failure.", "REPOSITORY_ERROR"); }
+      }
+      throw error;
+    }
   }
 
   async reject(input: { candidateId: string; actorId: string; reason: string; expectedVersion: number }): Promise<void> {
@@ -139,7 +147,7 @@ export class KnowledgeEvolutionService {
     const candidate = await this.dependencies.objects.getCandidate(input.candidateId);
     assertCurrentVersion(candidate, input.expectedVersion);
     const reason = nonBlank(input.reason, "A rejection reason is required.");
-    await this.dependencies.audits.list({ candidateId: input.candidateId });
+    await this.assertNoPriorAction(candidate.id, "rejected");
     await this.appendAudit({
       candidateId: candidate.id,
       action: "rejected",
@@ -158,7 +166,7 @@ export class KnowledgeEvolutionService {
     assertActor(input.actorId);
     const candidate = await this.dependencies.objects.getCandidate(input.candidateId);
     assertCurrentVersion(candidate, input.expectedVersion);
-    await this.dependencies.audits.list({ candidateId: input.candidateId });
+    await this.assertNoPriorAction(candidate.id, "deferred");
     await this.appendAudit({
       candidateId: candidate.id,
       action: "deferred",
@@ -174,6 +182,11 @@ export class KnowledgeEvolutionService {
 
   private async appendAudit(event: Omit<KnowledgeAuditEvent, "id" | "timestamp">): Promise<void> {
     await this.dependencies.audits.append({ ...event, id: this.nextAuditId(), timestamp: this.now().toISOString() });
+  }
+
+  private async assertNoPriorAction(candidateId: string, action: "rejected" | "deferred"): Promise<void> {
+    const history = await this.dependencies.audits.list({ candidateId, action });
+    if (history.length > 0) throw new DomainError("Knowledge candidate has already received this review action.", "STALE_APPROVAL");
   }
 }
 
@@ -258,6 +271,9 @@ function applyEdits(candidate: KnowledgeCandidate, edits: CandidateEdits | undef
 function assertReferences(candidate: KnowledgeCandidate, diagnoses: readonly CompletedDiagnosis[], tickets: readonly Ticket[]): void {
   const diagnosisById = new Map(diagnoses.map((diagnosis) => [diagnosis.id, diagnosis]));
   if (candidate.supportingDiagnosisIds.some((id) => !diagnosisById.has(id)) || candidate.supportingTicketIds.some((id) => !tickets.some((ticket) => ticket.id === id))) {
+    throw new DomainError("Knowledge candidate references are invalid.", "INVALID_APPROVAL_FIELDS");
+  }
+  if (candidate.supportingDiagnosisIds.some((id) => !candidate.supportingTicketIds.includes(diagnosisById.get(id)!.ticketId))) {
     throw new DomainError("Knowledge candidate references are invalid.", "INVALID_APPROVAL_FIELDS");
   }
   const allowedEvidence = new Set(candidate.supportingDiagnosisIds.flatMap((id) => diagnosisById.get(id)?.evidenceIds ?? []));

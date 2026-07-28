@@ -4,6 +4,7 @@ import {
   ensureDraftSignOff,
   type CustomerResponseDraftProvider,
 } from "./draft-response-provider.js";
+import type { CandidateDraftProvider } from "../knowledge-evolution/candidate-draft-provider.js";
 
 export const CONTROLLED_EVALUATION_MODEL = "controlled-local-simulation";
 
@@ -61,6 +62,43 @@ export function createControlledDraftProvider(): CustomerResponseDraftProvider {
           message: "Evaluation-only local simulation; no network model call was made.",
         }]),
         telemetry: { model: CONTROLLED_EVALUATION_MODEL, latencyMs: 0 },
+      };
+    },
+  };
+}
+
+/** A deterministic offline fixture for the advisory knowledge-draft contract. */
+export function createControlledKnowledgeCandidateDraftProvider(): CandidateDraftProvider {
+  return {
+    enabled: true,
+    async draft(input) {
+      const support = input.discovery[0]!.support.find((record) => record.source === "completed-diagnosis")!;
+      return {
+        outputText: JSON.stringify({
+          kind: "known-cause",
+          name: "Recurring completed diagnosis pattern",
+          summary: "Completed diagnoses indicate a recurring support pattern suitable for operator review.",
+          triggerPatterns: ["The same completed diagnosis pattern appears in multiple support records."],
+          evidencePolicy: { mode: "required", evidenceIds: [input.allowedEvidenceIds[0]] },
+          knowledgeArticleIds: input.allowedKnowledgeArticleIds.slice(0, 1),
+          timeConstraints: ["Apply only when the cited evidence is present."],
+          diagnosticSteps: ["Compare the completed diagnosis evidence with the affected support record."],
+          fixSteps: ["Apply the documented corrective action after operator approval."],
+          verificationSteps: ["Confirm the cited evidence no longer indicates the recurring condition."],
+          customerSafeExplanation: "We identified a recurring configuration pattern and are reviewing the appropriate correction.",
+          operatorRationale: "Advisory draft derived from deterministic completed-diagnosis support.",
+          confidence: input.discovery[0]!.score,
+          rationale: "The deterministic discovery result contains completed diagnosis support.",
+          supportingDiagnosisIds: [support.diagnosisId],
+          supportingTicketIds: [support.ticketId],
+          contradictions: input.discovery[0]!.contradictions,
+        }),
+        provenance: {
+          provider: "openai",
+          model: CONTROLLED_EVALUATION_MODEL,
+          promptVersion: "knowledge-candidate-v1",
+          rationale: "Controlled local simulation produced an advisory draft.",
+        },
       };
     },
   };

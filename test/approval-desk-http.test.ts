@@ -9,6 +9,9 @@ import { evaluateTicketWithAi } from "../src/approval-desk/ai-evaluation.js";
 import type { ClassificationReasoningProvider } from "../src/approval-desk/classification-reasoning-provider.js";
 import type { CustomerResponseDraftProvider } from "../src/approval-desk/draft-response-provider.js";
 import { createRuntimeDependencies } from "../src/runtime.js";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { createTriageServer } from "../src/server.js";
 
 const now = new Date("2026-06-10T09:00:00.000Z");
 const temporaryRoots: string[] = [];
@@ -72,6 +75,94 @@ afterEach(async () => {
 });
 
 describe("createApprovalDeskHttpServer", () => {
+  it("keeps MCP and HTTP knowledge discovery and review results equivalent", async () => {
+    const { deps, json } = await startFixture();
+    await seedKnowledgeCandidateSupport(deps);
+
+    const server = createTriageServer(deps);
+    const client = new Client({ name: "knowledge-parity", version: "1.0.0" });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    await server.connect(serverTransport);
+    await client.connect(clientTransport);
+
+    try {
+      const mcp = await client.callTool({
+        name: "discover_knowledge_candidates",
+        arguments: { actor: "reviewer", includeGpt: false },
+      });
+      const http = await json("/api/knowledge-candidates?actor=reviewer&includeGpt=false");
+
+      expect(http.status).toBe(200);
+      expect(mcp.structuredContent).toMatchObject({
+        candidates: [
+          expect.objectContaining({
+            id: "known-cause-diagnosis-a",
+            validationStatus: "valid",
+          }),
+        ],
+      });
+      expect(http.body.candidates).toEqual(
+        (mcp.structuredContent as { candidates: unknown[] }).candidates,
+      );
+
+      const candidate = http.body.candidates[0];
+      const rejected = await json(`/api/knowledge-candidates/${candidate.id}/reject`, {
+        method: "POST",
+        body: JSON.stringify({
+          actor: "reviewer",
+          expectedVersion: candidate.version,
+          reason: "Need a second reviewer.",
+        }),
+      });
+      expect(rejected.status).toBe(200);
+      expect(rejected.body).toEqual({ candidateId: candidate.id, rejected: true });
+      await expect(deps.knowledgeEvolution.objects.listApproved()).resolves.toEqual([]);
+
+      const approved = await json(`/api/knowledge-candidates/${candidate.id}/approve`, {
+        method: "POST",
+        body: JSON.stringify({
+          actor: "reviewer",
+          expectedVersion: candidate.version,
+        }),
+      });
+      expect(approved.status, JSON.stringify(approved.body)).toBe(200);
+      expect(approved.body).toMatchObject({
+        object: {
+          id: candidate.id,
+          status: "approved",
+          version: 1,
+        },
+      });
+    } finally {
+      await Promise.allSettled([client.close(), server.close()]);
+    }
+  });
+
+  it("rejects malformed and stale knowledge review actions", async () => {
+    const { deps, json } = await startFixture();
+    await seedKnowledgeCandidateSupport(deps);
+    const discovery = await json("/api/knowledge-candidates?actor=reviewer&includeGpt=false");
+    const candidate = discovery.body.candidates[0];
+
+    const malformed = await json(`/api/knowledge-candidates/${candidate.id}/approve`, {
+      method: "POST",
+      body: JSON.stringify({ actor: "", expectedVersion: candidate.version }),
+    });
+    expect(malformed.status).toBe(400);
+    expect(malformed.body.error.code).toBe("INVALID_REQUEST");
+
+    const stale = await json(`/api/knowledge-candidates/${candidate.id}/reject`, {
+      method: "POST",
+      body: JSON.stringify({
+        actor: "reviewer",
+        expectedVersion: candidate.version + 1,
+        reason: "Needs more corroboration.",
+      }),
+    });
+    expect(stale.status).toBe(409);
+    expect(stale.body.error.code).toBe("STALE_APPROVAL");
+  });
+
   it("serves the temporary Approval Desk UI", async () => {
     const { baseUrl } = await startFixture();
 
@@ -2667,6 +2758,35 @@ async function startFixture(
       };
     },
   };
+}
+
+async function seedKnowledgeCandidateSupport(
+  deps: Awaited<ReturnType<typeof createRuntimeDependencies>>,
+): Promise<void> {
+  await Promise.all([
+    deps.knowledgeEvolution.diagnoses.save({
+      id: "diagnosis-a",
+      ticketId: "TKT-1001",
+      problem: "The API request is rejected after rotating a credential.",
+      symptoms: ["Requests return a credential validation failure after rotation."],
+      evidenceIds: ["credential-rotation-evidence"],
+      ownerTeam: "api-platform",
+      fixSteps: ["Refresh the deployed credential configuration."],
+      verificationSteps: ["Confirm a new request succeeds."],
+      completedAt: "2026-06-10T08:00:00.000Z",
+    }),
+    deps.knowledgeEvolution.diagnoses.save({
+      id: "diagnosis-b",
+      ticketId: "TKT-1002",
+      problem: "The API request is rejected after rotating a credential.",
+      symptoms: ["Requests return a credential validation failure after rotation."],
+      evidenceIds: ["credential-rotation-evidence"],
+      ownerTeam: "api-platform",
+      fixSteps: ["Refresh the deployed credential configuration."],
+      verificationSteps: ["Confirm a new request succeeds."],
+      completedAt: "2026-06-10T08:01:00.000Z",
+    }),
+  ]);
 }
 
 async function ticketRevision(

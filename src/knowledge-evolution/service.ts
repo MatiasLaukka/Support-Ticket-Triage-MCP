@@ -111,8 +111,16 @@ export class KnowledgeEvolutionService {
     }
     const reviewed = applyEdits(candidate, input.edits);
     assertReferences(reviewed, diagnoses, tickets);
+    const {
+      deterministicScores: _deterministicScores,
+      deterministicReasons: _deterministicReasons,
+      contradictions: _contradictions,
+      validationStatus: _validationStatus,
+      gptProvenance: _gptProvenance,
+      ...approvedFields
+    } = reviewed;
     const object: KnowledgeObject = {
-      ...reviewed,
+      ...approvedFields,
       status: "approved",
       version: 1,
       approval: { approvedBy: input.actorId.trim(), approvedAt: this.now().toISOString() },

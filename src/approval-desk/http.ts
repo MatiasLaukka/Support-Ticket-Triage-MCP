@@ -64,6 +64,19 @@ import {
   fixBlockers,
   latestDiagnosisAudit,
 } from "./workflow-guidance.js";
+import {
+  KnowledgeCandidateApprovalOutputSchema,
+  KnowledgeCandidateDefermentOutputSchema,
+  KnowledgeCandidateEditsSchema,
+  KnowledgeCandidateIdSchema,
+  KnowledgeCandidateRejectionOutputSchema,
+  KnowledgeCandidateReviewOutputSchema,
+  KnowledgeDiscoveryReviewOutputSchema,
+  KnowledgeReviewActorSchema,
+  knowledgeApprovalReview,
+  knowledgeCandidateReview,
+  knowledgeDiscoveryReview,
+} from "../knowledge-evolution/review-surface.js";
 
 const JSON_BODY_LIMIT_BYTES = 65_536;
 const UNEXPECTED_ERROR_TEXT = "Unexpected local approval desk error.";
@@ -187,6 +200,25 @@ const WorkflowActionBodySchema = z
     actor: z.string().trim().min(1),
   })
   .strict();
+const KnowledgeDiscoveryQuerySchema = z.object({
+  ticketId: TicketIdSchema.optional(),
+  includeGpt: z.enum(["true", "false"]).optional().transform((value) => value === "true"),
+  actor: KnowledgeReviewActorSchema,
+}).strict();
+const KnowledgeApprovalBodySchema = z.object({
+  actor: KnowledgeReviewActorSchema,
+  expectedVersion: z.number().int().positive(),
+  edits: KnowledgeCandidateEditsSchema.optional(),
+}).strict();
+const KnowledgeRejectionBodySchema = z.object({
+  actor: KnowledgeReviewActorSchema,
+  expectedVersion: z.number().int().positive(),
+  reason: z.string().trim().min(1).max(1_000),
+}).strict();
+const KnowledgeDefermentBodySchema = z.object({
+  actor: KnowledgeReviewActorSchema,
+  expectedVersion: z.number().int().positive(),
+}).strict();
 
 export interface ApprovalDeskHttpOptions {
   expectedOutcomesPath?: string;
@@ -357,6 +389,30 @@ function matchRoute(
     return { status: 200, handle: getEvidence };
   }
 
+  if (method === "GET" && pathname === "/api/knowledge-candidates") {
+    return { status: 200, handle: discoverKnowledgeCandidates };
+  }
+
+  const knowledgeCandidate = /^\/api\/knowledge-candidates\/([^/]+)$/.exec(pathname);
+  if (method === "GET" && knowledgeCandidate !== null) {
+    return { status: 200, handle: (context) => getKnowledgeCandidate(context, knowledgeCandidate[1]!) };
+  }
+
+  const knowledgeApproval = /^\/api\/knowledge-candidates\/([^/]+)\/approve$/.exec(pathname);
+  if (method === "POST" && knowledgeApproval !== null) {
+    return { status: 200, handle: (context) => approveKnowledgeCandidate(context, knowledgeApproval[1]!) };
+  }
+
+  const knowledgeRejection = /^\/api\/knowledge-candidates\/([^/]+)\/reject$/.exec(pathname);
+  if (method === "POST" && knowledgeRejection !== null) {
+    return { status: 200, handle: (context) => rejectKnowledgeCandidate(context, knowledgeRejection[1]!) };
+  }
+
+  const knowledgeDeferment = /^\/api\/knowledge-candidates\/([^/]+)\/defer$/.exec(pathname);
+  if (method === "POST" && knowledgeDeferment !== null) {
+    return { status: 200, handle: (context) => deferKnowledgeCandidate(context, knowledgeDeferment[1]!) };
+  }
+
   if (method === "GET" && pathname === "/api/lifecycle-replay") {
     return { status: 200, handle: getLifecycleReplay };
   }
@@ -369,6 +425,86 @@ interface RouteContext {
   options: ApprovalDeskHttpOptions;
   request: IncomingMessage;
   url: URL;
+}
+
+async function discoverKnowledgeCandidates(
+  { deps, url }: RouteContext,
+): Promise<unknown> {
+  const input = KnowledgeDiscoveryQuerySchema.parse({
+    ticketId: optionalParam(url.searchParams, "ticketId"),
+    includeGpt: optionalParam(url.searchParams, "includeGpt"),
+    actor: optionalParam(url.searchParams, "actor"),
+  });
+  const result = await deps.knowledgeEvolution.service.discover({
+    ...(input.ticketId === undefined ? {} : { ticketId: input.ticketId }),
+    includeGpt: input.includeGpt,
+    actorId: input.actor,
+  });
+  const candidates = await Promise.all(
+    result.candidates.map((candidate) =>
+      deps.knowledgeEvolution.service.getCandidate(`known-cause-${candidate.id}`),
+    ),
+  );
+  return KnowledgeDiscoveryReviewOutputSchema.parse(
+    knowledgeDiscoveryReview(result, candidates),
+  );
+}
+
+async function getKnowledgeCandidate(
+  { deps }: RouteContext,
+  id: string,
+): Promise<unknown> {
+  const candidateId = KnowledgeCandidateIdSchema.parse(id);
+  return KnowledgeCandidateReviewOutputSchema.parse({
+    candidate: knowledgeCandidateReview(
+      await deps.knowledgeEvolution.service.getCandidate(candidateId),
+    ),
+  });
+}
+
+async function approveKnowledgeCandidate(
+  { deps, request }: RouteContext,
+  id: string,
+): Promise<unknown> {
+  const candidateId = KnowledgeCandidateIdSchema.parse(id);
+  const input = KnowledgeApprovalBodySchema.parse(await readJsonBody(request));
+  return KnowledgeCandidateApprovalOutputSchema.parse(
+    knowledgeApprovalReview(await deps.knowledgeEvolution.service.approve({
+      candidateId,
+      actorId: input.actor,
+      expectedVersion: input.expectedVersion,
+      ...(input.edits === undefined ? {} : { edits: input.edits }),
+    })),
+  );
+}
+
+async function rejectKnowledgeCandidate(
+  { deps, request }: RouteContext,
+  id: string,
+): Promise<unknown> {
+  const candidateId = KnowledgeCandidateIdSchema.parse(id);
+  const input = KnowledgeRejectionBodySchema.parse(await readJsonBody(request));
+  await deps.knowledgeEvolution.service.reject({
+    candidateId,
+    actorId: input.actor,
+    expectedVersion: input.expectedVersion,
+    reason: input.reason,
+  });
+  return KnowledgeCandidateRejectionOutputSchema.parse({ candidateId, rejected: true });
+}
+
+async function deferKnowledgeCandidate(
+  { deps, request }: RouteContext,
+  id: string,
+): Promise<unknown> {
+  const candidateId = KnowledgeCandidateIdSchema.parse(id);
+  const input = KnowledgeDefermentBodySchema.parse(await readJsonBody(request));
+  await deps.knowledgeEvolution.service.defer({
+    candidateId,
+    actorId: input.actor,
+    expectedVersion: input.expectedVersion,
+  });
+  return KnowledgeCandidateDefermentOutputSchema.parse({ candidateId, deferred: true });
 }
 
 async function listTickets({ deps, url }: RouteContext): Promise<unknown> {

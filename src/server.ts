@@ -71,6 +71,20 @@ import type {
   TriageService,
 } from "./triage-service.js";
 import { customerReplyWatermarkFromAudits } from "./triage-service.js";
+import type { KnowledgeEvolutionService } from "./knowledge-evolution/service.js";
+import {
+  KnowledgeCandidateApprovalOutputSchema,
+  KnowledgeCandidateDefermentOutputSchema,
+  KnowledgeCandidateEditsSchema,
+  KnowledgeCandidateIdSchema,
+  KnowledgeCandidateRejectionOutputSchema,
+  KnowledgeCandidateReviewOutputSchema,
+  KnowledgeDiscoveryReviewOutputSchema,
+  KnowledgeReviewActorSchema,
+  knowledgeApprovalReview,
+  knowledgeCandidateReview,
+  knowledgeDiscoveryReview,
+} from "./knowledge-evolution/review-surface.js";
 
 const PAGE_SIZE = 50;
 const MAX_OFFSET = 10_000;
@@ -212,6 +226,24 @@ const WorkflowActionInputSchema = z
     actor: NonBlankStringSchema.default("approval-desk"),
   })
   .strict();
+const DiscoverKnowledgeCandidatesInputSchema = z.object({
+  ticketId: TicketIdSchema.optional(),
+  includeGpt: z.boolean().default(false),
+  actor: KnowledgeReviewActorSchema,
+}).strict();
+const GetKnowledgeCandidateInputSchema = z.object({ candidateId: KnowledgeCandidateIdSchema }).strict();
+const ApproveKnowledgeCandidateInputSchema = z.object({
+  candidateId: KnowledgeCandidateIdSchema,
+  actor: KnowledgeReviewActorSchema,
+  expectedVersion: z.number().int().positive(),
+  edits: KnowledgeCandidateEditsSchema.optional(),
+}).strict();
+const RejectKnowledgeCandidateInputSchema = z.object({
+  candidateId: KnowledgeCandidateIdSchema,
+  actor: KnowledgeReviewActorSchema,
+  expectedVersion: z.number().int().positive(),
+  reason: z.string().trim().min(1).max(1_000),
+}).strict();
 
 const TicketFilterInputSchema = z
   .object({
@@ -361,6 +393,7 @@ export interface TriageServerDependencies {
   classificationReasoningProvider?: ClassificationReasoningProvider;
   draftProvider?: CustomerResponseDraftProvider;
   env?: NodeJS.ProcessEnv;
+  knowledgeEvolution?: { service: KnowledgeEvolutionService };
 }
 
 export function createTriageServer(
@@ -408,6 +441,58 @@ export function createTriageServer(
     },
     async ({ id }) =>
       toolResult(async () => ({ ticket: await deps.tickets.get(id) })),
+  );
+
+  server.registerTool(
+    "discover_knowledge_candidates",
+    {
+      description: "Discover deterministic, evidence-backed knowledge candidates without changing customer responses.",
+      inputSchema: DiscoverKnowledgeCandidatesInputSchema,
+      outputSchema: KnowledgeDiscoveryReviewOutputSchema,
+      annotations: ReadOnlyAnnotations,
+    },
+    async (input) => toolResult(() => discoverKnowledgeCandidates(deps, input)),
+  );
+
+  server.registerTool(
+    "get_knowledge_candidate",
+    {
+      description: "Read one governed knowledge candidate and its sanitized evidence bundle.",
+      inputSchema: GetKnowledgeCandidateInputSchema,
+      outputSchema: KnowledgeCandidateReviewOutputSchema,
+      annotations: ReadOnlyAnnotations,
+    },
+    async ({ candidateId }) => toolResult(async () => ({ candidate: knowledgeCandidateReview(await knowledgeService(deps).getCandidate(candidateId)) })),
+  );
+
+  server.registerTool(
+    "approve_knowledge_candidate",
+    {
+      description: "Explicitly approve a reviewed knowledge candidate for future evaluations; historical recommendations are unchanged.",
+      inputSchema: ApproveKnowledgeCandidateInputSchema,
+      outputSchema: KnowledgeCandidateApprovalOutputSchema,
+      annotations: FinalizingAnnotations,
+    },
+    async (input) => toolResult(async () => knowledgeApprovalReview(await knowledgeService(deps).approve({
+      candidateId: input.candidateId,
+      actorId: input.actor,
+      expectedVersion: input.expectedVersion,
+      ...(input.edits === undefined ? {} : { edits: input.edits }),
+    }))),
+  );
+
+  server.registerTool(
+    "reject_knowledge_candidate",
+    {
+      description: "Explicitly reject a knowledge candidate and retain the review reason without changing customer responses.",
+      inputSchema: RejectKnowledgeCandidateInputSchema,
+      outputSchema: KnowledgeCandidateRejectionOutputSchema,
+      annotations: FinalizingAnnotations,
+    },
+    async (input) => toolResult(async () => {
+      await knowledgeService(deps).reject({ candidateId: input.candidateId, actorId: input.actor, expectedVersion: input.expectedVersion, reason: input.reason });
+      return KnowledgeCandidateRejectionOutputSchema.parse({ candidateId: input.candidateId, rejected: true });
+    }),
   );
 
   server.registerTool(
@@ -644,6 +729,29 @@ export function createTriageServer(
   registerPrompts(server);
   registerResources(server, deps);
   return server;
+}
+
+async function discoverKnowledgeCandidates(
+  deps: TriageServerDependencies,
+  input: z.infer<typeof DiscoverKnowledgeCandidatesInputSchema>,
+): Promise<z.infer<typeof KnowledgeDiscoveryReviewOutputSchema>> {
+  const service = knowledgeService(deps);
+  const result = await service.discover({
+    ...(input.ticketId === undefined ? {} : { ticketId: input.ticketId }),
+    includeGpt: input.includeGpt,
+    actorId: input.actor,
+  });
+  const candidates = await Promise.all(
+    result.candidates.map((candidate) => service.getCandidate(`known-cause-${candidate.id}`)),
+  );
+  return knowledgeDiscoveryReview(result, candidates);
+}
+
+function knowledgeService(deps: TriageServerDependencies): KnowledgeEvolutionService {
+  if (deps.knowledgeEvolution === undefined) {
+    throw new DomainError("Knowledge evolution service is not configured.", "REPOSITORY_ERROR");
+  }
+  return deps.knowledgeEvolution.service;
 }
 
 async function getTicketWorkflow(

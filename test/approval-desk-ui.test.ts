@@ -60,6 +60,33 @@ describe("approvalDeskHtml", () => {
     expect(approvalDeskHtml).not.toMatch(/fetch\(\s*['"`]https?:\/\//);
   });
 
+  it("shows an evidence-backed knowledge review gate without changing the response workflow", async () => {
+    const app = await startApprovalDeskApp({
+      knowledgeCandidate: {
+        id: "known-cause-diagnosis-a",
+        name: "Recurring credential rotation cause",
+        evidencePolicy: { mode: "required", evidenceIds: ["credential-rotation-evidence"] },
+        deterministic: { score: 0.805, supportCount: 2, reasons: ["shared-evidence: credential-rotation-evidence"], meetsAlertThreshold: true },
+        gptAdvisory: { status: "used", rationale: "Validated advisory draft." },
+        support: [{ source: "completed-diagnosis", diagnosisId: "diagnosis-a", ticketId: "TKT-1001", reasons: ["evidence: credential-rotation-evidence"] }],
+        contradictions: ["conflicting-event: webhook vs api"],
+        validationStatus: "valid",
+        validationWarnings: [],
+        customerSafeExplanation: "We are reviewing a recurring configuration issue.",
+        version: 1,
+      },
+    });
+
+    await app.selectFirstTicket();
+
+    expect(app.el("actionBarHint").textContent).toContain("Potential knowledge pattern");
+    expect(app.el("recommendationPanel").innerHTML).toContain("Approve for future evaluations");
+    expect(app.el("recommendationPanel").innerHTML).toContain("GPT advisory");
+    expect(app.el("recommendationPanel").innerHTML).toContain("Support diagnoses/open tickets");
+    expect(app.el("recommendationPanel").innerHTML).toContain("Contradictions");
+    expect(app.el("recommendationPanel").innerHTML).toContain("historical recommendations");
+  });
+
   it("has demo reply samples for every evidence requirement", () => {
     const evidenceSource = readFileSync(
       "src/approval-desk/evidence-readiness.ts",
@@ -2313,6 +2340,7 @@ async function startApprovalDeskApp(options: {
     recommendationHistory?: FixtureRecommendation[];
     recommendationSummary?: Record<string, unknown>;
   };
+  knowledgeCandidate?: Record<string, unknown>;
 } = {}) {
   const elements = createElements();
   const requests: Array<{ path: string; init?: RequestInit }> = [];
@@ -2350,6 +2378,12 @@ async function startApprovalDeskApp(options: {
         );
       }
       return jsonResponse(fixtureEvidence);
+    }
+    if (path.startsWith(`/api/knowledge-candidates?ticketId=${selectedFixtureTicket.id}&actor=approval-desk&includeGpt=false`)) {
+      return jsonResponse({
+        candidates: options.knowledgeCandidate === undefined ? [] : [options.knowledgeCandidate],
+        suppressed: [],
+      });
     }
     if (path === `/api/tickets/${selectedFixtureTicket.id}`) {
       const recommendationHistory = createdRecommendation === undefined

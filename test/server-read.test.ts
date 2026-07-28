@@ -284,8 +284,10 @@ describe("createTriageServer read protocol", () => {
       ({ annotations }) => annotations?.readOnlyHint === true,
     );
     expect(readTools.map(({ name }) => name).sort()).toEqual([
+      "discover_knowledge_candidates",
       "find_similar_tickets",
       "get_audit_events",
+      "get_knowledge_candidate",
       "get_queue_metrics",
       "get_ticket",
       "get_ticket_workflow",

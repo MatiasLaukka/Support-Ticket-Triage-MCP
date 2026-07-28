@@ -19,7 +19,8 @@ export class KnowledgeObjectRepository {
   async promote(candidateId: string, approved: KnowledgeObject): Promise<KnowledgeObject> {
     if (candidateId !== approved.id || approved.version !== 1 || approved.status !== "approved") throw repositoryError("Knowledge object does not match the candidate being promoted.");
     return serialize(resolve(this.candidatesRoot, ".."), async () => {
-      await this.getCandidate(candidateId);
+      const candidate = await this.getCandidate(candidateId);
+      if (candidate.id !== candidateId) throw repositoryError("Knowledge object does not match the candidate being promoted.");
       try { await writeNewJson(this.approvedRoot, approved, KnowledgeObjectSchema); }
       catch (error) { if (error instanceof DomainError && error.code === "REPOSITORY_ERROR") throw repositoryError("Knowledge candidate has already been promoted."); throw error; }
       return KnowledgeObjectSchema.parse(approved);

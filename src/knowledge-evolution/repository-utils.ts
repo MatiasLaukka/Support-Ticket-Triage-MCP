@@ -1,11 +1,11 @@
-import { lstat, mkdir, open, readdir, rename, rm, type FileHandle } from "node:fs/promises";
+import { link, lstat, mkdir, open, readdir, rm, type FileHandle } from "node:fs/promises";
 import { dirname, parse, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { DomainError } from "../errors.js";
 
 const operations = new Map<string, Promise<void>>();
-const MAX_RECORD_BYTES = 1_000_000;
+export const MAX_RECORD_BYTES = 1_000_000;
 
 export function repositoryError(message: string): DomainError {
   return new DomainError(message, "REPOSITORY_ERROR");
@@ -80,25 +80,26 @@ export async function readJson<T>(file: string, schema: z.ZodType<T>): Promise<T
 export async function writeNewJson<T extends { id: string }>(root: string, record: T, schema: z.ZodType<T>): Promise<void> {
   const parsed = schema.safeParse(record);
   if (!parsed.success || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(record.id)) throw repositoryError("Repository data is invalid.");
+  const serialized = `${JSON.stringify(parsed.data, null, 2)}\n`;
+  if (Buffer.byteLength(serialized, "utf8") > MAX_RECORD_BYTES) throw repositoryError("Repository data is invalid.");
   await initializeDirectory(root);
   const file = resolve(root, `${record.id}.json`);
   const temporary = resolve(root, `.${record.id}.${randomUUID()}.tmp`);
   let handle: FileHandle | undefined;
+  let published = false;
   try {
     await assertNoLinkedPath(file);
-    try {
-      await lstat(file);
-      throw repositoryError("Repository record already exists.");
-    } catch (error) {
-      if (error instanceof DomainError || !isMissing(error)) throw error;
-    }
     handle = await open(temporary, "wx");
     await safeOpened(handle);
-    await handle.writeFile(`${JSON.stringify(parsed.data, null, 2)}\n`, "utf8");
+    await handle.writeFile(serialized, "utf8");
     await handle.sync();
     await close(handle); handle = undefined;
-    await rename(temporary, file);
+    await link(temporary, file);
+    published = true;
+    await rm(temporary, { force: true });
+    published = false;
   } catch (error) {
+    if (published) await rm(file, { force: true }).catch(() => undefined);
     if (typeof error === "object" && error !== null && "code" in error && error.code === "EEXIST") throw repositoryError("Repository record already exists.");
     if (error instanceof DomainError) throw error;
     throw repositoryError("Repository record could not be persisted.");

@@ -12,10 +12,13 @@ export const KnowledgeAuditEventSchema = z.object({
 export type KnowledgeAuditEvent = z.infer<typeof KnowledgeAuditEventSchema>;
 export interface KnowledgeAuditFilters { objectId?: string; candidateId?: string; action?: string; actor?: string; }
 async function close(handle: FileHandle | undefined): Promise<void> { try { await handle?.close(); } catch { /* cleanup */ } }
+const defaultFileSystem = { open };
+type AuditFileSystem = typeof defaultFileSystem;
 
 export class KnowledgeAuditRepository {
   private readonly file: string;
-  constructor(file: string) { this.file = resolve(file); }
+  private readonly fileSystem: AuditFileSystem;
+  constructor(file: string, fileSystem: Partial<AuditFileSystem> = {}) { this.file = resolve(file); this.fileSystem = { ...defaultFileSystem, ...fileSystem }; }
   async append(event: KnowledgeAuditEvent): Promise<void> {
     const parsed = KnowledgeAuditEventSchema.safeParse(event);
     if (!parsed.success) throw repositoryError("Repository data is invalid.");
@@ -23,8 +26,17 @@ export class KnowledgeAuditRepository {
       await initializeDirectory(dirname(this.file));
       try { await assertSafeFile(this.file); } catch (error) { if (!isMissing(error)) throw error; }
       let handle: FileHandle | undefined;
-      try { handle = await open(this.file, "a+"); const stats = await handle.stat(); if (!stats.isFile() || stats.nlink !== 1) throw repositoryError("Repository contains an unsupported linked path."); await handle.writeFile(`${JSON.stringify(parsed.data)}\n`, "utf8"); await handle.sync(); }
-      catch (error) { if (error instanceof Error && "code" in error && error.code === "EEXIST") throw repositoryError("Audit event could not be persisted."); if (error instanceof Error && error.name === "DomainError") throw error; throw repositoryError("Audit event could not be persisted."); }
+      let originalSize = 0;
+      let appendStarted = false;
+      try { handle = await this.fileSystem.open(this.file, "a+"); const stats = await handle.stat(); if (!stats.isFile() || stats.nlink !== 1) throw repositoryError("Repository contains an unsupported linked path."); originalSize = stats.size; appendStarted = true; await handle.writeFile(`${JSON.stringify(parsed.data)}\n`, "utf8"); await handle.sync(); }
+      catch (error) {
+        if (appendStarted) {
+          await close(handle); handle = undefined;
+          let rollback: FileHandle | undefined;
+          try { rollback = await this.fileSystem.open(this.file, "r+"); await rollback.truncate(originalSize); await rollback.sync(); } catch { /* preserve append error */ } finally { await close(rollback); }
+        }
+        if (error instanceof Error && "code" in error && error.code === "EEXIST") throw repositoryError("Audit event could not be persisted."); if (error instanceof Error && error.name === "DomainError") throw error; throw repositoryError("Audit event could not be persisted.");
+      }
       finally { await close(handle); }
     });
   }

@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, open as openFile, rm, symlink, writeFile, type FileHandle } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -49,6 +49,13 @@ describe("knowledge evolution repositories", () => {
     await expect(repository.list()).resolves.toMatchObject([diagnosis, { id: "diagnosis-002" }]);
   });
 
+  it("rejects records whose serialized form exceeds the safe read limit", async () => {
+    const repository = new DiagnosisRepository(join(await root(), "diagnoses"));
+    const oversized = { ...diagnosis, symptoms: Array.from({ length: 1_100 }, (_, index) => `${index}-${"x".repeat(995)}`) };
+    await expect(repository.save(oversized)).rejects.toMatchObject({ code: "REPOSITORY_ERROR" });
+    await expect(repository.list()).resolves.toEqual([]);
+  });
+
   it("rejects malformed diagnosis data and linked repository paths", async () => {
     const storage = await root();
     const repository = new DiagnosisRepository(join(storage, "diagnoses"));
@@ -84,6 +91,9 @@ describe("knowledge evolution repositories", () => {
     await expect(repository.listApproved()).resolves.toMatchObject([{ ...approved, version: 1 }]);
     await expect(repository.promote(candidate.id, approved)).rejects.toMatchObject({ code: "REPOSITORY_ERROR" });
     await expect(repository.promote("other-candidate", approved)).rejects.toMatchObject({ code: "REPOSITORY_ERROR" });
+    const staleCandidate: KnowledgeCandidate = { ...candidate, id: "stale-known-cause" };
+    await repository.saveCandidate(staleCandidate);
+    await expect(repository.promote(staleCandidate.id, approved)).rejects.toMatchObject({ code: "REPOSITORY_ERROR" });
   });
 
   it("serializes concurrent audit appends and filters without requiring a ticket ID", async () => {
@@ -94,5 +104,27 @@ describe("knowledge evolution repositories", () => {
     }));
     await Promise.all(events.map((event) => repository.append(event)));
     await expect(repository.list({ objectId: candidate.id, action: "approved" })).resolves.toEqual([events[1]]);
+  });
+
+  it("rolls an audit file back when syncing an appended event fails", async () => {
+    const auditFile = join(await root(), "audit", "events.jsonl");
+    const event = { id: "audit-existing", objectId: candidate.id, action: "candidate-created", actor: "support-lead", timestamp: "2026-07-29T10:00:00.000Z", supportIds: ["diagnosis-001"], reviewedFields: ["summary"], result: "candidate-created" };
+    await new KnowledgeAuditRepository(auditFile).append(event);
+    const failingFileSystem = {
+      open: (async (path: string, flags: string) => {
+        const handle = await openFile(path, flags);
+        if (flags !== "a+") return handle;
+        return new Proxy(handle, {
+          get(target, property) {
+            if (property === "sync") return async () => { throw new Error("simulated sync failure"); };
+            const value = Reflect.get(target, property, target);
+            return typeof value === "function" ? value.bind(target) : value;
+          },
+        }) as FileHandle;
+      }) as typeof openFile,
+    };
+    const failingRepository = new KnowledgeAuditRepository(auditFile, failingFileSystem);
+    await expect(failingRepository.append({ ...event, id: "audit-failed", action: "approved", result: "approved" })).rejects.toMatchObject({ code: "REPOSITORY_ERROR" });
+    await expect(new KnowledgeAuditRepository(auditFile).list()).resolves.toEqual([event]);
   });
 });

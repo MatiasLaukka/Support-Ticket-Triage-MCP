@@ -241,6 +241,8 @@ The stdio entry point is `dist/src/index.js`. Its defaults are:
 | `TRIAGE_SEED_FILE` | `data/seed/tickets.json` |
 | `TRIAGE_KNOWLEDGE_ROOT` | `data/knowledge` |
 | `TRIAGE_MINUTES_SAVED` | `8` |
+| `TRIAGE_KNOWLEDGE_APPROVERS` | `support-lead,reviewer,approval-desk` |
+| `TRIAGE_KNOWLEDGE_CANDIDATE_PROVIDER` | unset (deterministic discovery only); use `controlled` for the local advisory demo |
 
 All relative paths are resolved from the process working directory.
 
@@ -779,9 +781,13 @@ local contract changes.
 Completed diagnoses can deterministically surface a reusable knowledge
 candidate. GPT may optionally draft a strictly validated advisory version, but
 it cannot route tickets, promote knowledge, or change a customer response.
-An operator reviews the evidence, customer-safe explanation, and declarative
-workflow, then explicitly promotes the candidate. The promotion audit records
-the supporting diagnoses, deterministic provenance, reviewer, and version.
+An authorized operator reviews and may edit the evidence policy,
+customer-safe explanation, owner, triggers, time constraints, and declarative
+workflows before explicitly promoting the candidate. The promotion audit
+records the supporting diagnoses, deterministic provenance, reviewer, and
+version. Approval Desk candidate discovery is a `POST` action because it may
+persist a new candidate and its creation or rediscovery audit; plain reads use
+the candidate detail endpoint.
 
 Only approved objects affect later evaluations; candidates (including rejected
 candidates) have no routing effect, and promotion never rewrites earlier

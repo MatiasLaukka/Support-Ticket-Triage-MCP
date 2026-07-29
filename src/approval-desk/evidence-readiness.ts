@@ -559,11 +559,44 @@ function findApprovedKnownCause(
   const text = normalizedTicketText(ticket);
   const matched = approvedObjects
     .filter((object) => object.status === "approved" && object.kind === "known-cause")
-    .sort((left, right) => left.id.localeCompare(right.id))
-    .find((object) => object.triggerPatterns.every((pattern) =>
-      text.includes(normalizeTrigger(pattern)),
-    ));
+    .filter((object) => matchesApprovedKnownCause(object, ticket, text))
+    .sort((left, right) => approvedMatchSpecificity(right) - approvedMatchSpecificity(left) ||
+      left.id.localeCompare(right.id))[0];
   return matched === undefined ? undefined : approvedKnownCauseFromObject(matched);
+}
+
+function matchesApprovedKnownCause(
+  object: KnowledgeObject,
+  ticket: Ticket,
+  text: string,
+): boolean {
+  return object.triggerPatterns.every((pattern) => {
+    const normalized = normalizeTrigger(pattern);
+    return hasMeaningfulTokens(normalized) && text.includes(normalized);
+  }) && timeConstraintsMatch(object.timeConstraints, ticket.createdAt);
+}
+
+function hasMeaningfulTokens(value: string): boolean {
+  return value.split(" ").some((token) => token.length >= 2);
+}
+
+function approvedMatchSpecificity(object: KnowledgeObject): number {
+  return object.triggerPatterns.reduce(
+    (total, pattern) => total + normalizeTrigger(pattern).split(" ").filter(Boolean).length,
+    0,
+  );
+}
+
+function timeConstraintsMatch(constraints: readonly string[], createdAt: string): boolean {
+  const timestamp = new Date(createdAt).getTime();
+  return constraints.every((constraint) => {
+    const timestamps = constraint.match(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z/g) ?? [];
+    if (timestamps.length < 2) return true;
+    const startsAt = new Date(timestamps[0]!).getTime();
+    const endsAt = new Date(timestamps[1]!).getTime();
+    return Number.isFinite(timestamp) && Number.isFinite(startsAt) &&
+      Number.isFinite(endsAt) && timestamp >= startsAt && timestamp <= endsAt;
+  });
 }
 
 function approvedKnownCauseFromObject(object: KnowledgeObject): ApprovedKnownCause {

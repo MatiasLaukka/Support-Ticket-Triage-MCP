@@ -92,6 +92,49 @@ describe("knowledge evolution service", () => {
     await expect(fixture.audits.list({ action: "approved" })).resolves.toHaveLength(1);
   });
 
+  it("removes a newly persisted candidate when its creation audit fails, allowing discovery to retry", async () => {
+    const fixture = createFixture({ failCandidateCreatedAuditOnce: true });
+    const service = fixture.service();
+
+    await expect(service.discover({ includeGpt: false, actorId: "support-lead" }))
+      .rejects.toThrow("simulated candidate-created audit failure");
+    expect(fixture.candidates).toEqual([]);
+
+    await expect(service.discover({ includeGpt: false, actorId: "support-lead" }))
+      .resolves.toMatchObject({ candidates: [{ id: "diagnosis-001" }] });
+    await expect(fixture.audits.list({ action: "candidate-created" })).resolves.toHaveLength(1);
+  });
+
+  it("audits a repeated deterministic candidate ID instead of silently skipping it", async () => {
+    const fixture = createFixture();
+    const service = fixture.service();
+    await service.discover({ includeGpt: false, actorId: "support-lead" });
+
+    await service.discover({ includeGpt: false, actorId: "support-lead" });
+
+    await expect(fixture.audits.list({ action: "candidate-rediscovered" })).resolves.toHaveLength(1);
+  });
+
+  it("keeps the matching global diagnosis component in ticket-scoped discovery and excludes unrelated components", async () => {
+    const fixture = createFixture({ ticketScopedComponents: true });
+    const service = fixture.service();
+
+    const result = await service.discover({
+      ticketId: "TKT-1002",
+      includeGpt: false,
+      actorId: "support-lead",
+    });
+
+    expect(result.candidates.map(({ id }) => id)).toEqual(["diagnosis-001"]);
+    await expect(service.getCandidate("known-cause-diagnosis-001")).resolves.toMatchObject({
+      supportingDiagnosisIds: ["diagnosis-001"],
+      supportingTicketIds: expect.arrayContaining(["TKT-1001", "TKT-1002"]),
+    });
+    await expect(service.getCandidate("known-cause-diagnosis-002")).rejects.toMatchObject({
+      code: "REPOSITORY_ERROR",
+    });
+  });
+
   it("uses review history to reject a duplicate rejection action", async () => {
     const fixture = createFixture();
     const service = fixture.service();
@@ -101,6 +144,23 @@ describe("knowledge evolution service", () => {
     await service.reject(input);
     await expect(service.reject(input)).rejects.toMatchObject({ code: "STALE_APPROVAL" });
     await expect(fixture.audits.list({ action: "rejected" })).resolves.toHaveLength(1);
+  });
+
+  it("requires an authorized valid candidate that has not received a terminal review", async () => {
+    const fixture = createFixture();
+    const service = fixture.service();
+    await service.discover({ includeGpt: false, actorId: "support-lead" });
+    const input = { candidateId: "known-cause-diagnosis-001", actorId: "support-lead", expectedVersion: 1 };
+
+    await expect(service.approve({ ...input, actorId: "unapproved-actor" })).rejects.toMatchObject({ code: "INVALID_APPROVAL_FIELDS" });
+    await service.reject({ ...input, reason: "Requires a different workflow." });
+    await expect(service.approve(input)).rejects.toMatchObject({ code: "STALE_APPROVAL" });
+
+    const invalid = createFixture();
+    const invalidService = invalid.service();
+    await invalidService.discover({ includeGpt: false, actorId: "support-lead" });
+    invalid.candidates[0] = { ...invalid.candidates[0]!, validationStatus: "invalid" };
+    await expect(invalidService.approve(input)).rejects.toMatchObject({ code: "INVALID_APPROVAL_FIELDS" });
   });
 
   it("atomically records only one concurrent rejection", async () => {
@@ -146,7 +206,12 @@ describe("knowledge evolution service", () => {
   });
 });
 
-function createFixture(options: { failApprovedAuditOnce?: boolean; synchronizeReviewHistory?: boolean } = {}) {
+function createFixture(options: {
+  failApprovedAuditOnce?: boolean;
+  failCandidateCreatedAuditOnce?: boolean;
+  synchronizeReviewHistory?: boolean;
+  ticketScopedComponents?: boolean;
+} = {}) {
   const diagnosis: CompletedDiagnosis = {
     id: "diagnosis-001", ticketId: "TKT-1001", problem: "API requests fail after rotating a credential.",
     symptoms: ["Requests return 401 after rotation."], evidenceIds: ["evidence-001"], ownerTeam: "api-platform",
@@ -154,7 +219,39 @@ function createFixture(options: { failApprovedAuditOnce?: boolean; synchronizeRe
     verificationSteps: ["Confirm a new request succeeds with the refreshed credential."], completedAt: "2026-07-29T10:00:00.000Z",
   };
   const ticket = { ...ticketRecord(), lifecycle: "unchanged" };
-  const otherTicket = { ...ticketRecord(), id: "TKT-1002", subject: "Billing export question", description: "A customer needs help locating a billing export.", tags: ["billing"], lifecycle: "unchanged" };
+  const otherTicket = {
+    ...ticketRecord(),
+    id: "TKT-1002",
+    subject: options.ticketScopedComponents ? "API credential rotation fails" : "Billing export question",
+    description: options.ticketScopedComponents
+      ? "Requests return 401 after a credential rotation."
+      : "A customer needs help locating a billing export.",
+    tags: options.ticketScopedComponents ? ["credential-rotation"] : ["billing"],
+    lifecycle: "unchanged",
+  };
+  const unrelatedTicket = {
+    ...ticketRecord(),
+    id: "TKT-1003",
+    subject: "Billing invoice export is unavailable",
+    description: "The billing invoice export link is missing.",
+    tags: ["billing"],
+    lifecycle: "unchanged",
+  };
+  const diagnoses = [
+    diagnosis,
+    ...(options.ticketScopedComponents
+      ? [{
+        ...diagnosis,
+        id: "diagnosis-002",
+        ticketId: "TKT-1003",
+        problem: "The billing invoice export link is missing.",
+        symptoms: ["Billing invoice export is unavailable."],
+        evidenceIds: ["billing-export-evidence"],
+        ownerTeam: "billing" as const,
+      }]
+      : []),
+  ];
+  const tickets = [ticket, otherTicket, ...(options.ticketScopedComponents ? [unrelatedTicket] : [])];
   const candidates: KnowledgeCandidate[] = [];
   const approved: KnowledgeObject[] = [];
   const events: KnowledgeAuditEvent[] = [];
@@ -162,16 +259,22 @@ function createFixture(options: { failApprovedAuditOnce?: boolean; synchronizeRe
     async listCandidates() { return candidates; },
     async getCandidate(id: string) { const candidate = candidates.find((item) => item.id === id); if (!candidate) throw repositoryError("Knowledge candidate was not found."); return candidate; },
     async saveCandidate(candidate: KnowledgeCandidate) { if (candidates.some((item) => item.id === candidate.id)) throw repositoryError("Duplicate candidate."); candidates.push(candidate); },
+    async removeCandidate(candidateId: string) { const index = candidates.findIndex((item) => item.id === candidateId); if (index < 0) throw repositoryError("Candidate was not found."); candidates.splice(index, 1); },
     async listApproved() { return approved; },
     async promote(candidateId: string, object: KnowledgeObject) { if (candidateId !== object.id || approved.some((item) => item.id === object.id)) throw repositoryError("Duplicate promotion."); approved.push(object); return object; },
     async removeApproved(candidateId: string) { const index = approved.findIndex((item) => item.id === candidateId); if (index < 0) throw repositoryError("Approved object was not found."); approved.splice(index, 1); },
   };
   let remainingAuditFailures = options.failApprovedAuditOnce ? 1 : 0;
+  let remainingCandidateAuditFailures = options.failCandidateCreatedAuditOnce ? 1 : 0;
   let reviewReaders = 0;
   let releaseReviewReaders: () => void = () => undefined;
   const reviewReadersReady = new Promise<void>((resolve) => { releaseReviewReaders = resolve; });
   const audits = {
     async append(event: KnowledgeAuditEvent) {
+      if (event.action === "candidate-created" && remainingCandidateAuditFailures > 0) {
+        remainingCandidateAuditFailures -= 1;
+        throw new Error("simulated candidate-created audit failure");
+      }
       if (event.action === "approved" && remainingAuditFailures > 0) {
         remainingAuditFailures -= 1;
         throw new Error("simulated approval audit failure");
@@ -199,12 +302,20 @@ function createFixture(options: { failApprovedAuditOnce?: boolean; synchronizeRe
     objects,
     audits,
     service: (draftProvider?: CandidateDraftProvider) => new KnowledgeEvolutionService({
-      tickets: { async snapshot() { return [ticket, otherTicket] as unknown as Ticket[]; }, async get() { return ticket as unknown as Ticket; } },
+      tickets: {
+        async snapshot() { return tickets as unknown as Ticket[]; },
+        async get(id: string) {
+          const found = tickets.find((item) => item.id === id);
+          if (found === undefined) throw repositoryError("Ticket was not found.");
+          return found as unknown as Ticket;
+        },
+      },
       knowledge: { async list() { return [{ id: "credential-rotation", title: "Credential rotation", tags: ["api"], body: "Rotate credentials safely." }]; } },
-      diagnoses: { async list() { return [diagnosis]; } },
+      diagnoses: { async list() { return diagnoses; } },
       objects,
       audits,
       draftProvider,
+      promotionAuthorizer: (actorId) => actorId === "support-lead",
       now: () => new Date("2026-07-29T12:00:00.000Z"),
       nextAuditId: (() => { let value = 0; return () => `audit-${++value}`; })(),
     }),

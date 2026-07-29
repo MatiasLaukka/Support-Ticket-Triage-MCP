@@ -47,6 +47,7 @@ import {
   DiagnosticStateSnapshotSchema,
   type DiagnosticStateSnapshot,
 } from "./approval-desk/diagnostic-state.js";
+import type { CompletedDiagnosis } from "./knowledge-evolution/domain.js";
 
 const NonBlankStringSchema = z.string().trim().min(1);
 const recommendationOperations = new Map<string, Promise<void>>();
@@ -402,6 +403,7 @@ export interface TriageServiceDependencies {
   tickets: TicketStore;
   recommendations: RecommendationStore;
   audit: AuditStore;
+  diagnoses?: { save(record: CompletedDiagnosis): Promise<void> };
   now?: () => Date;
   uuid?: () => string;
 }
@@ -746,6 +748,9 @@ export class TriageService {
       result: "success",
     });
     await this.dependencies.audit.append(auditEvent);
+    if (!escalated && this.dependencies.diagnoses !== undefined) {
+      await this.dependencies.diagnoses.save(completedDiagnosisFrom(auditEvent, diagnosis));
+    }
     return auditEvent;
   }
 
@@ -1166,6 +1171,32 @@ export class TriageService {
     }
     return auditEvent;
   }
+}
+
+function completedDiagnosisFrom(
+  event: AuditEvent,
+  input: z.infer<typeof RecordDiagnosisInputSchema>,
+): CompletedDiagnosis {
+  const evidenceIds = input.diagnosis.evidenceUsed.map(
+    (_evidence, index) => `evidence-${event.id}-${index + 1}`,
+  );
+  return {
+    id: `diagnosis-${event.id}`,
+    ticketId: input.ticketId,
+    problem: input.diagnosis.customerSafeSummary,
+    symptoms: [input.diagnosis.causeType, ...input.diagnosis.evidenceUsed],
+    evidenceIds,
+    ownerTeam: completedDiagnosisOwner(input.diagnosis.owner),
+    fixSteps: ["Apply the completed diagnosis next action through the governed support workflow."],
+    verificationSteps: ["Confirm the customer-safe outcome after the governed next action."],
+    completedAt: input.diagnosedAt,
+  };
+}
+
+function completedDiagnosisOwner(owner: DiagnosisContext["owner"]): Team {
+  if (owner === "engineering") return "api-platform";
+  if (owner === "integration-partner") return "integrations";
+  return "support";
 }
 
 async function serializeRecommendation<T>(

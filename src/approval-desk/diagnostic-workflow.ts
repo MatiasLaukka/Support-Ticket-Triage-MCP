@@ -14,6 +14,37 @@ export function diagnosisContextForTicket(
   recommendation: TriageRecommendation,
   audits: readonly AuditEvent[] = [],
 ): DiagnosisContext {
+  const playbookDiagnosis = diagnoseFromPlaybook({
+    ticket,
+    recommendation,
+    customerReplyText: customerReplyTextFromAudits(ticket.id, audits),
+  });
+  if (playbookDiagnosis !== undefined) {
+    const diagnosis = applyPersistedDiagnosticState(playbookDiagnosis, ticket.id, audits);
+    if ((recommendation.missingEvidence?.length ?? 0) === 0) return diagnosis;
+    return {
+      ...diagnosis,
+      confidence: "likely",
+      doNotSay: [
+        ...diagnosis.doNotSay,
+        "Do not confirm the playbook diagnosis while required evidence is missing.",
+      ],
+      ...(diagnosis.diagnosticState?.state === "confirmed"
+        ? {
+            diagnosticState: {
+              ...diagnosis.diagnosticState,
+              state: "working-diagnosis" as const,
+              hypotheses: diagnosis.diagnosticState.hypotheses.map((hypothesis) => ({
+                ...hypothesis,
+                status: hypothesis.status === "confirmed" ? "leading" as const : hypothesis.status,
+              })),
+              evidenceToRequest: (recommendation.missingEvidence ?? []).map(({ label }) => label),
+            },
+          }
+        : {}),
+    };
+  }
+
   if ((recommendation.missingEvidence?.length ?? 0) > 0) {
     return {
       status: "completed",
@@ -29,15 +60,6 @@ export function diagnosisContextForTicket(
         "Do not present a known cause or investigating event as a confirmed root cause while required evidence is missing.",
       ],
     };
-  }
-
-  const playbookDiagnosis = diagnoseFromPlaybook({
-    ticket,
-    recommendation,
-    customerReplyText: customerReplyTextFromAudits(ticket.id, audits),
-  });
-  if (playbookDiagnosis !== undefined) {
-    return applyPersistedDiagnosticState(playbookDiagnosis, ticket.id, audits);
   }
 
   const knownEvent = getKnownEvent(recommendation.knownEventId);

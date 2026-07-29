@@ -1,6 +1,6 @@
 # Knowledge Evolution Design
 
-**Status:** Draft for review  
+**Status:** Implemented and final-reviewed
 **Date:** 2026-07-29
 
 ## 1. Purpose
@@ -221,4 +221,3 @@ The implementation should proceed slice-by-slice with tests written before behav
 - Actor identity shape for UI, MCP, and Skill approvals.
 - Whether the first review panel is embedded in the existing Approval Desk route or introduced as a dedicated route.
 - The minimum number of completed diagnoses required for each alert severity.
-

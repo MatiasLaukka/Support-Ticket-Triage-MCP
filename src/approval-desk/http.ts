@@ -200,9 +200,9 @@ const WorkflowActionBodySchema = z
     actor: z.string().trim().min(1),
   })
   .strict();
-const KnowledgeDiscoveryQuerySchema = z.object({
+const KnowledgeDiscoveryBodySchema = z.object({
   ticketId: TicketIdSchema.optional(),
-  includeGpt: z.enum(["true", "false"]).optional().transform((value) => value === "true"),
+  includeGpt: z.boolean().default(false),
   actor: KnowledgeReviewActorSchema,
 }).strict();
 const KnowledgeApprovalBodySchema = z.object({
@@ -389,7 +389,7 @@ function matchRoute(
     return { status: 200, handle: getEvidence };
   }
 
-  if (method === "GET" && pathname === "/api/knowledge-candidates") {
+  if (method === "POST" && pathname === "/api/knowledge-candidates") {
     return { status: 200, handle: discoverKnowledgeCandidates };
   }
 
@@ -428,13 +428,9 @@ interface RouteContext {
 }
 
 async function discoverKnowledgeCandidates(
-  { deps, url }: RouteContext,
+  { deps, request }: RouteContext,
 ): Promise<unknown> {
-  const input = KnowledgeDiscoveryQuerySchema.parse({
-    ticketId: optionalParam(url.searchParams, "ticketId"),
-    includeGpt: optionalParam(url.searchParams, "includeGpt"),
-    actor: optionalParam(url.searchParams, "actor"),
-  });
+  const input = KnowledgeDiscoveryBodySchema.parse(await readJsonBody(request));
   const result = await deps.knowledgeEvolution.service.discover({
     ...(input.ticketId === undefined ? {} : { ticketId: input.ticketId }),
     includeGpt: input.includeGpt,

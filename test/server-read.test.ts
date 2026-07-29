@@ -284,7 +284,6 @@ describe("createTriageServer read protocol", () => {
       ({ annotations }) => annotations?.readOnlyHint === true,
     );
     expect(readTools.map(({ name }) => name).sort()).toEqual([
-      "discover_knowledge_candidates",
       "find_similar_tickets",
       "get_audit_events",
       "get_knowledge_candidate",
@@ -304,6 +303,9 @@ describe("createTriageServer read protocol", () => {
       expect(tool.inputSchema.type).toBe("object");
       expect(tool.outputSchema?.type).toBe("object");
     }
+
+    expect(discovery.tools.find(({ name }) => name === "discover_knowledge_candidates")?.annotations)
+      .toMatchObject({ readOnlyHint: false, destructiveHint: false, idempotentHint: false });
 
     const listTickets = discovery.tools.find(
       ({ name }) => name === "list_tickets",

@@ -24,9 +24,10 @@ export interface KnowledgeEvolutionServiceDependencies {
   tickets: Pick<TicketRepository, "snapshot" | "get">;
   knowledge: Pick<KnowledgeRepository, "list">;
   diagnoses: Pick<DiagnosisRepository, "list">;
-  objects: Pick<KnowledgeObjectRepository, "listCandidates" | "getCandidate" | "saveCandidate" | "listApproved" | "promote" | "removeApproved">;
-  audits: Pick<KnowledgeAuditRepository, "append" | "appendIfNoPriorAction">;
+  objects: Pick<KnowledgeObjectRepository, "listCandidates" | "getCandidate" | "saveCandidate" | "removeCandidate" | "listApproved" | "promote" | "removeApproved">;
+  audits: Pick<KnowledgeAuditRepository, "append" | "appendIfNoPriorAction" | "list">;
   draftProvider?: CandidateDraftProvider;
+  promotionAuthorizer: (actorId: string) => boolean;
   now?: () => Date;
   nextAuditId?: () => string;
 }
@@ -36,6 +37,8 @@ export interface KnowledgeDiscoveryServiceResult extends KnowledgeDiscoveryResul
     requested: boolean;
     status: "not-used" | "used";
     candidateId?: string;
+    fallbackReason?: string;
+    diagnostics?: string[];
   };
 }
 
@@ -61,19 +64,23 @@ export class KnowledgeEvolutionService {
       ? undefined
       : await this.dependencies.tickets.get(input.ticketId);
     const discovery = discoverCandidates({ ticket: selectedTicket, tickets, diagnoses, approved });
+    const relevantDiagnosisIds = new Set(discovery.candidates.flatMap(({ support }) =>
+      support.flatMap(({ source, diagnosisId }) =>
+        source === "completed-diagnosis" && diagnosisId !== undefined ? [diagnosisId] : [])));
+    const relevantDiagnoses = diagnoses.filter(({ id }) => relevantDiagnosisIds.has(id));
     const gptAdvisory: KnowledgeDiscoveryServiceResult["gptAdvisory"] = {
       requested: input.includeGpt,
       status: "not-used",
     };
     const existingIds = new Set(existing.map((candidate) => candidate.id));
     const candidates = discovery.candidates
-      .map((candidate) => deterministicCandidate(candidate.id, candidate.score, candidate.reasons, candidate.contradictions, candidate.supportCount, candidate.support, candidate.meetsAlertThreshold, diagnoses, this.now().toISOString()))
+      .map((candidate) => deterministicCandidate(candidate.id, candidate.score, candidate.reasons, candidate.contradictions, candidate.supportCount, candidate.support, candidate.meetsAlertThreshold, relevantDiagnoses, this.now().toISOString()))
       .filter((candidate): candidate is KnowledgeCandidate => candidate !== undefined);
 
     if (input.includeGpt && this.dependencies.draftProvider !== undefined) {
       const draft = await draftKnowledgeCandidate({
         discovery,
-        allowedEvidenceIds: unique(diagnoses.flatMap((diagnosis) => diagnosis.evidenceIds)),
+        allowedEvidenceIds: unique(relevantDiagnoses.flatMap((diagnosis) => diagnosis.evidenceIds)),
         allowedKnowledgeArticleIds: articles.map((article) => article.id),
         actorId: input.actorId,
       }, this.dependencies.draftProvider);
@@ -81,7 +88,7 @@ export class KnowledgeEvolutionService {
         const sourceId = discovery.candidates[0]?.id;
         if (sourceId !== undefined) {
           const source = discovery.candidates[0];
-          const candidate = candidateFromDraft(sourceId, draft.candidate, draft.provenance, source, diagnoses, this.now().toISOString());
+          const candidate = candidateFromDraft(sourceId, draft.candidate, draft.provenance, source, relevantDiagnoses, this.now().toISOString());
           if (candidate !== undefined) {
             candidates.push(candidate);
             gptAdvisory.status = "used";
@@ -89,23 +96,55 @@ export class KnowledgeEvolutionService {
           }
         }
       }
+      if (!draft.used) {
+        gptAdvisory.fallbackReason = draft.fallbackReason;
+        gptAdvisory.diagnostics = draft.diagnostics;
+      }
+    } else if (input.includeGpt) {
+      gptAdvisory.fallbackReason = "not-configured";
+      gptAdvisory.diagnostics = ["Candidate drafting is not configured; deterministic candidates remain available."];
     }
 
     for (const candidate of candidates) {
-      if (existingIds.has(candidate.id)) continue;
-      await this.dependencies.objects.saveCandidate(candidate);
-      existingIds.add(candidate.id);
-      await this.appendAudit({
-        candidateId: candidate.id,
-        action: "candidate-created",
-        actor: input.actorId,
-        supportIds: supportIds(candidate),
-        scores: candidate.deterministicScores,
-        provenanceSummary: candidate.provenance.source,
-        reviewedFields: [],
-        result: "candidate-created",
-        notes: candidate.operatorRationale,
-      });
+      if (existingIds.has(candidate.id)) {
+        await this.dependencies.audits.appendIfNoPriorAction({
+          id: this.nextAuditId(),
+          timestamp: this.now().toISOString(),
+          candidateId: candidate.id,
+          action: "candidate-rediscovered",
+          actor: input.actorId,
+          supportIds: supportIds(candidate),
+          scores: candidate.deterministicScores,
+          provenanceSummary: candidate.provenance.source,
+          reviewedFields: [],
+          result: "candidate-rediscovered",
+          notes: "Discovery found an existing candidate ID; the persisted review version was retained.",
+        });
+        continue;
+      }
+      let saved = false;
+      try {
+        await this.dependencies.objects.saveCandidate(candidate);
+        saved = true;
+        await this.appendAudit({
+          candidateId: candidate.id,
+          action: "candidate-created",
+          actor: input.actorId,
+          supportIds: supportIds(candidate),
+          scores: candidate.deterministicScores,
+          provenanceSummary: candidate.provenance.source,
+          reviewedFields: [],
+          result: "candidate-created",
+          notes: candidate.operatorRationale,
+        });
+        existingIds.add(candidate.id);
+      } catch (error) {
+        if (saved) {
+          try { await this.dependencies.objects.removeCandidate(candidate.id); }
+          catch { throw new DomainError("Knowledge candidate could not be rolled back after audit failure.", "REPOSITORY_ERROR"); }
+        }
+        throw error;
+      }
     }
     return { ...discovery, gptAdvisory };
   }
@@ -120,13 +159,18 @@ export class KnowledgeEvolutionService {
 
   async approve(input: { candidateId: string; actorId: string; edits?: CandidateEdits; expectedVersion: number }): Promise<KnowledgeObject> {
     assertActor(input.actorId);
+    if (!this.dependencies.promotionAuthorizer(input.actorId.trim())) {
+      throw new DomainError("Actor is not authorized to approve knowledge candidates.", "INVALID_APPROVAL_FIELDS");
+    }
     const candidate = await this.dependencies.objects.getCandidate(input.candidateId);
     assertCurrentVersion(candidate, input.expectedVersion);
-    const [approved, diagnoses, tickets] = await Promise.all([
+    const [approved, diagnoses, tickets, reviewEvents] = await Promise.all([
       this.dependencies.objects.listApproved(),
       this.dependencies.diagnoses.list(),
       this.dependencies.tickets.snapshot(),
+      this.dependencies.audits.list({ candidateId: candidate.id }),
     ]);
+    assertPromotable(candidate, reviewEvents);
     if (approved.some((object) => object.id === candidate.id)) {
       throw new DomainError("Knowledge candidate has already been promoted.", "REPOSITORY_ERROR");
     }
@@ -281,7 +325,7 @@ function candidateFromDraft(
     status: "candidate" as const,
     provenance: { source: "gpt-advisory", recordedAt, ...(provenance?.rationale === undefined ? {} : { reference: provenance.rationale }) },
     deterministicScores: { confidence: discovery?.score ?? confidence, support: discovery?.supportCount ?? draft.supportingDiagnosisIds.length },
-    deterministicReasons: discovery?.reasons ?? [rationale],
+    deterministicReasons: discovery?.reasons.length ? discovery.reasons : [rationale],
     discovery: discovery === undefined ? undefined : discoverySummary(discovery),
     gptProvenance: provenance === undefined ? undefined : { provider: "openai" as const, model: provenance.model ?? "unspecified", generatedAt: recordedAt, summary: provenance.rationale ?? "Validated advisory candidate draft.", confidence },
     validationStatus: "valid" as const,
@@ -329,6 +373,18 @@ function assertReferences(candidate: KnowledgeCandidate, diagnoses: readonly Com
   const allowedEvidence = new Set(candidate.supportingDiagnosisIds.flatMap((id) => diagnosisById.get(id)?.evidenceIds ?? []));
   if (candidate.evidencePolicy.mode === "required" && candidate.evidencePolicy.evidenceIds.some((id) => !allowedEvidence.has(id))) {
     throw new DomainError("Knowledge candidate references are invalid.", "INVALID_APPROVAL_FIELDS");
+  }
+}
+
+function assertPromotable(
+  candidate: KnowledgeCandidate,
+  events: readonly KnowledgeAuditEvent[],
+): void {
+  if (candidate.validationStatus !== "valid" || candidate.contradictions.length > 0) {
+    throw new DomainError("Knowledge candidate is not valid for promotion.", "INVALID_APPROVAL_FIELDS");
+  }
+  if (events.some((event) => event.action === "rejected" || event.action === "deferred")) {
+    throw new DomainError("Knowledge candidate has reached a terminal review state.", "STALE_APPROVAL");
   }
 }
 

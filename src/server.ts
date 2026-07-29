@@ -449,7 +449,7 @@ export function createTriageServer(
       description: "Discover deterministic, evidence-backed knowledge candidates without changing customer responses.",
       inputSchema: DiscoverKnowledgeCandidatesInputSchema,
       outputSchema: KnowledgeDiscoveryReviewOutputSchema,
-      annotations: ReadOnlyAnnotations,
+      annotations: SubmissionAnnotations,
     },
     async (input) => toolResult(() => discoverKnowledgeCandidates(deps, input)),
   );

@@ -19,6 +19,8 @@ export function discoverCandidates(input: { ticket?: Ticket; diagnoses: Complete
   const byTicketId = new Map(tickets.map((ticket) => [ticket.id, ticket]));
   const discovered = diagnosisComponents(input.diagnoses, byTicketId)
     .map((diagnoses) => candidateFor(diagnoses, tickets, byTicketId))
+    .filter(({ candidate }) => input.ticket === undefined ||
+      candidate.support.some(({ ticketId }) => ticketId === input.ticket!.id))
     .sort((left, right) => orderCandidates(left.candidate, right.candidate))
     .slice(0, MAX_CANDIDATES);
   const candidates: KnowledgeDiscoveryCandidate[] = [];

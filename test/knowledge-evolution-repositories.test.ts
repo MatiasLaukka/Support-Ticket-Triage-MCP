@@ -110,6 +110,17 @@ describe("knowledge evolution repositories", () => {
     await expect(repository.listCandidates()).resolves.toEqual([candidate]);
   });
 
+  it("removes only the candidate whose creation audit could not be persisted", async () => {
+    const storage = await root();
+    const repository = new KnowledgeObjectRepository(join(storage, "candidates"), join(storage, "approved"));
+    await repository.saveCandidate(candidate);
+
+    await repository.removeCandidate(candidate.id);
+
+    await expect(repository.listCandidates()).resolves.toEqual([]);
+    await expect(repository.listApproved()).resolves.toEqual([]);
+  });
+
   it("serializes concurrent audit appends and filters without requiring a ticket ID", async () => {
     const repository = new KnowledgeAuditRepository(join(await root(), "audit", "events.jsonl"));
     const events = ["candidate-created", "approved"].map((action, index) => ({

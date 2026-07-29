@@ -65,15 +65,31 @@ describe("approvalDeskHtml", () => {
       knowledgeCandidate: {
         id: "known-cause-diagnosis-a",
         name: "Recurring credential rotation cause",
+        summary: "A deployed service can retain a rotated credential.",
+        triggerPatterns: ["Requests return 401 after credential rotation."],
         evidencePolicy: { mode: "required", evidenceIds: ["credential-rotation-evidence"] },
+        timeConstraints: ["Apply after a credential rotation."],
+        diagnosticSteps: ["Compare the deployed credential with the active credential."],
+        fixSteps: ["Refresh the deployed credential configuration."],
+        verificationSteps: ["Confirm a new request succeeds."],
         deterministic: { score: 0.805, supportCount: 2, reasons: ["shared-evidence: credential-rotation-evidence"], meetsAlertThreshold: true },
         gptAdvisory: { status: "used", confidence: 0.91, rationale: "Validated advisory draft." },
         support: [{ source: "completed-diagnosis", diagnosisId: "diagnosis-a", ticketId: "TKT-1001", reasons: ["evidence: credential-rotation-evidence"] }],
+        supportingDiagnosisIds: ["diagnosis-a"],
+        supportingTicketIds: ["TKT-1001"],
         contradictions: ["conflicting-event: webhook vs api"],
         validationStatus: "valid",
         validationWarnings: [],
         customerSafeExplanation: "We are reviewing a recurring configuration issue.",
+        operatorRationale: "Completed diagnoses support operator review.",
+        owner: "api-platform",
         version: 1,
+      },
+      knowledgeGptAdvisory: {
+        requested: true,
+        status: "not-used",
+        fallbackReason: "provider-error",
+        diagnostics: ["Candidate provider was unavailable."],
       },
     });
 
@@ -85,7 +101,75 @@ describe("approvalDeskHtml", () => {
     expect(app.el("recommendationPanel").innerHTML).toContain("advisory confidence: 0.91");
     expect(app.el("recommendationPanel").innerHTML).toContain("Support diagnoses/open tickets");
     expect(app.el("recommendationPanel").innerHTML).toContain("Contradictions");
+    expect(app.el("recommendationPanel").innerHTML).toContain("Trigger patterns");
+    expect(app.el("recommendationPanel").innerHTML).toContain("Diagnostic workflow");
+    expect(app.el("recommendationPanel").innerHTML).toContain("Fix workflow");
+    expect(app.el("recommendationPanel").innerHTML).toContain("Verification workflow");
+    expect(app.el("recommendationPanel").innerHTML).toContain("provider-error");
+    expect(app.el("recommendationPanel").innerHTML).toContain("Candidate provider was unavailable");
     expect(app.el("recommendationPanel").innerHTML).toContain("historical recommendations");
+  });
+
+  it("submits operator edits for every proposed workflow field through the knowledge approval route", async () => {
+    const app = await startApprovalDeskApp({
+      knowledgeCandidate: {
+        id: "known-cause-diagnosis-a",
+        name: "Original name",
+        summary: "Original summary",
+        triggerPatterns: ["Original trigger pattern"],
+        evidencePolicy: { mode: "none-required" },
+        timeConstraints: ["Original time constraint"],
+        diagnosticSteps: ["Original diagnostic step"],
+        fixSteps: ["Original fix step"],
+        verificationSteps: ["Original verification step"],
+        deterministic: { score: 0.805, supportCount: 2, reasons: ["support"], meetsAlertThreshold: true },
+        gptAdvisory: { status: "not-used" },
+        support: [], supportingDiagnosisIds: ["diagnosis-a"], supportingTicketIds: ["TKT-1001"],
+        contradictions: [], validationStatus: "valid", validationWarnings: [],
+        customerSafeExplanation: "Original customer explanation.",
+        operatorRationale: "Original operator rationale.",
+        owner: "api-platform",
+        version: 1,
+      },
+    });
+    await app.selectFirstTicket();
+    app.el("knowledgeName").value = "Edited name";
+    app.el("knowledgeSummary").value = "Edited summary";
+    app.el("knowledgeTriggerPatterns").value = "First trigger\nSecond trigger";
+    app.el("knowledgeEvidenceMode").value = "required";
+    app.el("knowledgeEvidenceIds").value = "evidence-one\nevidence-two";
+    app.el("knowledgeTimeConstraints").value = "2026-07-01T00:00:00.000Z/2026-08-01T00:00:00.000Z";
+    app.el("knowledgeDiagnosticSteps").value = "Inspect the current state.";
+    app.el("knowledgeFixSteps").value = "Apply the reviewed correction.";
+    app.el("knowledgeVerificationSteps").value = "Confirm the next request succeeds.";
+    app.el("knowledgeCustomerSafeExplanation").value = "We identified a recurring configuration issue.";
+    app.el("knowledgeOperatorRationale").value = "The completed diagnoses support this correction.";
+    app.el("knowledgeOwner").value = "integrations";
+
+    app.el("recommendationPanel").dispatch("click", {
+      target: { dataset: { action: "approve-knowledge" } },
+    });
+    await settle(10);
+
+    const request = app.requests.find(({ path }) => path.endsWith("/approve"));
+    expect(request?.init?.method).toBe("POST");
+    expect(JSON.parse(String(request?.init?.body))).toMatchObject({
+      actor: "approval-desk",
+      expectedVersion: 1,
+      edits: {
+        name: "Edited name",
+        summary: "Edited summary",
+        triggerPatterns: ["First trigger", "Second trigger"],
+        evidencePolicy: { mode: "required", evidenceIds: ["evidence-one", "evidence-two"] },
+        timeConstraints: ["2026-07-01T00:00:00.000Z/2026-08-01T00:00:00.000Z"],
+        diagnosticSteps: ["Inspect the current state."],
+        fixSteps: ["Apply the reviewed correction."],
+        verificationSteps: ["Confirm the next request succeeds."],
+        customerSafeExplanation: "We identified a recurring configuration issue.",
+        operatorRationale: "The completed diagnoses support this correction.",
+        owner: "integrations",
+      },
+    });
   });
 
   it("clears a prior ticket knowledge candidate while the next ticket discovery is pending", async () => {
@@ -2389,6 +2473,7 @@ async function startApprovalDeskApp(options: {
     recommendationSummary?: Record<string, unknown>;
   };
   knowledgeCandidate?: Record<string, unknown>;
+  knowledgeGptAdvisory?: Record<string, unknown>;
   knowledgeCandidatesByTicket?: Record<string, Record<string, unknown>>;
   knowledgeDiscoveryDelayTicks?: Record<string, number>;
   ticketDetailDelayTicks?: Record<string, number>;
@@ -2430,14 +2515,21 @@ async function startApprovalDeskApp(options: {
       }
       return jsonResponse(fixtureEvidence);
     }
-    if (path.startsWith("/api/knowledge-candidates?")) {
-      const ticketId = new URL(`http://approval-desk.local${path}`).searchParams.get("ticketId")!;
+    if (path === "/api/knowledge-candidates") {
+      const requestBody = JSON.parse(String(init?.body)) as { ticketId: string };
+      const ticketId = requestBody.ticketId;
       await settle(options.knowledgeDiscoveryDelayTicks?.[ticketId] ?? 0);
       const candidate = options.knowledgeCandidatesByTicket?.[ticketId] ??
         (ticketId === selectedFixtureTicket.id ? options.knowledgeCandidate : undefined);
       return jsonResponse({
         candidates: candidate === undefined ? [] : [candidate],
+        gptAdvisory: options.knowledgeGptAdvisory ?? { requested: false, status: "not-used" },
         suppressed: [],
+      });
+    }
+    if (/^\/api\/knowledge-candidates\/[^/]+\/approve$/.test(path)) {
+      return jsonResponse({
+        object: { id: "known-cause-diagnosis-a", status: "approved", version: 1 },
       });
     }
     const ticketDetail = /^\/api\/tickets\/([^/]+)$/.exec(path);
@@ -2741,6 +2833,19 @@ function createElements(): Record<string, FakeElement> {
       "ticketList",
       "ticketDetailsPanel",
       "ticketPanel",
+      "knowledgeName",
+      "knowledgeSummary",
+      "knowledgeTriggerPatterns",
+      "knowledgeEvidenceMode",
+      "knowledgeEvidenceIds",
+      "knowledgeTimeConstraints",
+      "knowledgeDiagnosticSteps",
+      "knowledgeFixSteps",
+      "knowledgeVerificationSteps",
+      "knowledgeCustomerSafeExplanation",
+      "knowledgeOperatorRationale",
+      "knowledgeOwner",
+      "knowledgeRejectReason",
     ].map((id) => [id, new FakeElement()]),
   );
   elements.actor.value = "approval-desk";

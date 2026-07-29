@@ -45,7 +45,7 @@ export async function loadDiagnosticEvaluationScenarios(): Promise<
   return [
     {
       id: "ordinary-outage-triage", family: "evidence", ticket: ticket("TKT-1001"), outcome: outcomes.get("TKT-1001"),
-      expected: { category: "incident", knownCause: null, knownEventId: null, supportState: "waiting-on-platform-fix", mustStopAtApproval: true },
+      expected: { category: "incident", knownCause: null, knownEventId: null, supportState: "needs-information", mustStopAtApproval: true },
     },
     {
       id: "known-cause-sms", family: "known-cause", ticket: ticket("TKT-1017"), outcome: outcomes.get("TKT-1017"),
@@ -53,7 +53,7 @@ export async function loadDiagnosticEvaluationScenarios(): Promise<
     },
     {
       id: "active-known-event", family: "known-event", ticket: ticket("TKT-1028"), outcome: webhookOutcome,
-      expected: { category: "integration", knownCause: "webhook-delivery-latency", knownEventId: "EVT-2026-06-10-WEBHOOK-LATENCY", supportState: "waiting-on-platform-fix", diagnosisOutcome: "likely", mustStopAtApproval: true },
+      expected: { category: "integration", knownCause: "webhook-delivery-latency", knownEventId: "EVT-2026-06-10-WEBHOOK-LATENCY", supportState: "needs-information", diagnosisOutcome: "likely", mustStopAtApproval: true },
     },
     {
       id: "out-of-window-known-cause", family: "known-event",

@@ -9,12 +9,15 @@ import { DiagnosisRepository } from "./knowledge-evolution/diagnosis-repository.
 import { KnowledgeObjectRepository } from "./knowledge-evolution/knowledge-object-repository.js";
 import { KnowledgeAuditRepository } from "./knowledge-evolution/knowledge-audit-repository.js";
 import { KnowledgeEvolutionService } from "./knowledge-evolution/service.js";
+import type { CandidateDraftProvider } from "./knowledge-evolution/candidate-draft-provider.js";
+import { createControlledKnowledgeCandidateDraftProvider } from "./approval-desk/controlled-evaluation-providers.js";
 
 const DEFAULT_MINUTES_SAVED = 8;
 const STARTUP_PATH_MESSAGES = {
   TRIAGE_DATA_ROOT: "TRIAGE_DATA_ROOT must not be blank.",
   TRIAGE_SEED_FILE: "TRIAGE_SEED_FILE must not be blank.",
   TRIAGE_KNOWLEDGE_ROOT: "TRIAGE_KNOWLEDGE_ROOT must not be blank.",
+  TRIAGE_KNOWLEDGE_APPROVERS: "TRIAGE_KNOWLEDGE_APPROVERS must contain at least one actor.",
 } as const;
 
 export class StartupConfigError extends Error {
@@ -30,6 +33,7 @@ export interface RuntimeOptions {
   env?: RuntimeEnvironment;
   cwd?: string;
   now?: () => Date;
+  knowledgeCandidateDraftProvider?: CandidateDraftProvider;
 }
 
 export interface RuntimePaths {
@@ -81,6 +85,19 @@ export function minutesSaved(env: RuntimeEnvironment): number {
   return parsed;
 }
 
+export function knowledgeApprovers(env: RuntimeEnvironment): ReadonlySet<string> {
+  const configured = env.TRIAGE_KNOWLEDGE_APPROVERS;
+  if (configured !== undefined && configured.trim() === "") {
+    throw new StartupConfigError(STARTUP_PATH_MESSAGES.TRIAGE_KNOWLEDGE_APPROVERS);
+  }
+  const actors = (configured ?? "support-lead,reviewer,approval-desk")
+    .split(",")
+    .map((actor) => actor.trim())
+    .filter((actor) => actor.length > 0);
+  if (actors.length === 0) throw new StartupConfigError(STARTUP_PATH_MESSAGES.TRIAGE_KNOWLEDGE_APPROVERS);
+  return new Set(actors);
+}
+
 export async function createRuntimeDependencies(
   options: RuntimeOptions = {},
 ): Promise<RuntimeDependencies> {
@@ -103,7 +120,12 @@ export async function createRuntimeDependencies(
   const auditFile = resolve(dataRoot, "audit", "events.jsonl");
   const knowledgeEvolutionPaths = { diagnosesRoot: resolve(dataRoot, "knowledge-evolution", "diagnoses"), candidatesRoot: resolve(dataRoot, "knowledge-evolution", "candidates"), approvedRoot: resolve(dataRoot, "knowledge-evolution", "approved"), auditFile: resolve(dataRoot, "knowledge-evolution", "audit", "events.jsonl") };
   const minutesPerAcceptedRecommendation = minutesSaved(env);
+  const approvers = knowledgeApprovers(env);
   const now = options.now ?? (() => new Date());
+  const knowledgeCandidateDraftProvider = options.knowledgeCandidateDraftProvider ??
+    (env.TRIAGE_KNOWLEDGE_CANDIDATE_PROVIDER === "controlled"
+      ? createControlledKnowledgeCandidateDraftProvider()
+      : undefined);
 
   const tickets = new TicketRepository(dataRoot, seedFile);
   await tickets.initialize();
@@ -123,6 +145,10 @@ export async function createRuntimeDependencies(
       diagnoses,
       objects,
       audits: knowledgeAudits,
+      promotionAuthorizer: (actorId) => approvers.has(actorId),
+      ...(knowledgeCandidateDraftProvider === undefined
+        ? {}
+        : { draftProvider: knowledgeCandidateDraftProvider }),
       now,
     }),
   };
@@ -130,6 +156,7 @@ export async function createRuntimeDependencies(
     tickets,
     recommendations,
     audit: audits,
+    diagnoses,
     now,
   });
 

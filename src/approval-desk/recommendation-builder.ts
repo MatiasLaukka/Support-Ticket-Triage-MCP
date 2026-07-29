@@ -530,7 +530,10 @@ function buildDraftCustomerResponse(input: {
     return buildDiagnosisCompletedResponse(ticket, input.diagnosisContext);
   }
 
-  if (evidenceReadiness.supportState === "waiting-on-platform-fix") {
+  if (
+    evidenceReadiness.supportState === "waiting-on-platform-fix" ||
+    evidenceReadiness.knownEventId !== null
+  ) {
     return buildPlatformFixResponse(ticket, evidenceReadiness, input.replyStage);
   }
 

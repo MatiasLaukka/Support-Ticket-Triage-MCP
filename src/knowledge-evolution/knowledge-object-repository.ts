@@ -17,6 +17,16 @@ export class KnowledgeObjectRepository {
     catch (error) { if (isMissing(error)) throw repositoryError("Knowledge candidate was not found."); throw error; }
   }
   async saveCandidate(candidate: KnowledgeCandidate): Promise<void> { return serialize(this.candidatesRoot, () => writeNewJson(this.candidatesRoot, candidate, KnowledgeCandidateSchema)); }
+  async removeCandidate(candidateId: string): Promise<void> {
+    if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(candidateId)) throw repositoryError("Repository path is not allowed.");
+    return serialize(resolve(this.candidatesRoot, ".."), async () => {
+      const file = resolve(this.candidatesRoot, `${candidateId}.json`);
+      const candidate = await readJson(file, KnowledgeCandidateSchema);
+      if (candidate.id !== candidateId) throw repositoryError("Knowledge candidate does not match the persisted record.");
+      try { await rm(file); }
+      catch (error) { if (isMissing(error)) throw repositoryError("Knowledge candidate was not found."); throw repositoryError("Knowledge candidate could not be removed."); }
+    });
+  }
   async promote(candidateId: string, approved: KnowledgeObject): Promise<KnowledgeObject> {
     if (candidateId !== approved.id || approved.version !== 1 || approved.status !== "approved") throw repositoryError("Knowledge object does not match the candidate being promoted.");
     return serialize(resolve(this.candidatesRoot, ".."), async () => {

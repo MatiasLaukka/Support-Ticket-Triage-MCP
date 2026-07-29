@@ -6,6 +6,7 @@ import type {
   KnowledgeObject,
 } from "../src/knowledge-evolution/domain.js";
 import { KnowledgeEvolutionService } from "../src/knowledge-evolution/service.js";
+import type { KnowledgeAuditEvent } from "../src/knowledge-evolution/knowledge-audit-repository.js";
 import { buildApprovalDeskRecommendationInput } from "../src/approval-desk/recommendation-builder.js";
 import { runDiagnosticEvaluation } from "../src/approval-desk/diagnostic-evaluation.js";
 import {
@@ -133,6 +134,33 @@ describe("knowledge evolution harness", () => {
     });
   });
 
+  it("rejects empty approved triggers and expired approved time windows", () => {
+    const unrelatedBillingTicket = TicketSchema.parse({
+      ...ticket("TKT-2199", "Where can I download my billing invoice?"),
+      subject: "Billing invoice export",
+      tags: ["billing"],
+    });
+    const punctuationOnly = {
+      ...approvedKnownCause("known-cause-punctuation-only", "!!!"),
+      timeConstraints: ["Apply only when the trigger matches."],
+    };
+    const expired = {
+      ...approvedKnownCause("known-cause-expired-billing", "billing invoice export"),
+      timeConstraints: ["2026-06-01T00:00:00.000Z/2026-06-02T00:00:00.000Z"],
+    };
+    const billingOutcome: ExpectedOutcome = {
+      ticketId: unrelatedBillingTicket.id,
+      category: "billing",
+      acceptablePriorities: ["P3"],
+      team: "support",
+      requiredEscalations: [],
+      knowledgeArticleIds: ["billing-and-invoices"],
+    };
+
+    expect(evaluate(unrelatedBillingTicket, billingOutcome, [punctuationOnly]).knownCause).toBeNull();
+    expect(evaluate(unrelatedBillingTicket, billingOutcome, [expired]).knownCause).toBeNull();
+  });
+
   it("keeps malformed GPT drafts, rejected candidates, and candidate-only state out of routing", async () => {
     const fixture = createFixture({ malformedDraft: true });
     await fixture.service.discover({ actorId: "support-lead", includeGpt: true });
@@ -202,6 +230,11 @@ function createFixture(options: { malformedDraft?: boolean } = {}) {
       return candidate;
     },
     async saveCandidate(candidate: KnowledgeCandidate) { candidates.push(candidate); },
+    async removeCandidate(candidateId: string) {
+      const index = candidates.findIndex((item) => item.id === candidateId);
+      if (index < 0) throw repositoryError("Knowledge candidate was not found.");
+      candidates.splice(index, 1);
+    },
     async listApproved() { return approved; },
     async promote(candidateId: string, object: KnowledgeObject) {
       if (candidateId !== object.id) throw repositoryError("Knowledge object does not match the candidate.");
@@ -214,7 +247,7 @@ function createFixture(options: { malformedDraft?: boolean } = {}) {
       approved.splice(index, 1);
     },
   };
-  const events: Array<{ action: string; candidateId?: string }> = [];
+  const events: KnowledgeAuditEvent[] = [];
   const service = new KnowledgeEvolutionService({
     tickets: {
       async snapshot() { return tickets; },
@@ -229,6 +262,11 @@ function createFixture(options: { malformedDraft?: boolean } = {}) {
     objects,
     audits: {
       async append(event) { events.push(event); },
+      async list(filters: { candidateId?: string } = {}) {
+        return events.filter((event) =>
+          filters.candidateId === undefined || event.candidateId === filters.candidateId,
+        );
+      },
       async appendIfNoPriorAction(event) {
         if (events.some((item) => item.action === event.action && item.candidateId === event.candidateId)) return false;
         events.push(event);
@@ -238,6 +276,7 @@ function createFixture(options: { malformedDraft?: boolean } = {}) {
     ...(options.malformedDraft
       ? { draftProvider: { enabled: true, async draft() { return { outputText: "not-json" }; } } }
       : {}),
+    promotionAuthorizer: (actorId) => actorId === "support-lead",
     now: () => new Date("2026-07-29T12:00:00.000Z"),
     nextAuditId: (() => { let index = 0; return () => `audit-${++index}`; })(),
   });

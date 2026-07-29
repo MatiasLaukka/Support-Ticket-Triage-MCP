@@ -7,6 +7,7 @@ import {
   environmentPath,
   minutesSaved,
 } from "../src/runtime.js";
+import { createControlledKnowledgeCandidateDraftProvider } from "../src/approval-desk/controlled-evaluation-providers.js";
 
 const temporaryRoots: string[] = [];
 
@@ -66,5 +67,64 @@ describe("runtime configuration", () => {
     await expect(deps.knowledgeEvolution.diagnoses.list()).resolves.toEqual([]);
     await expect(deps.knowledgeEvolution.objects.listCandidates()).resolves.toEqual([]);
     expect(deps.knowledgeEvolution.service).toBeDefined();
+  });
+
+  it("persists a completed diagnosis recorded through the production service", async () => {
+    const dataRoot = await mkdtemp(join(tmpdir(), "triage-runtime-diagnosis-"));
+    temporaryRoots.push(dataRoot);
+    const deps = await createRuntimeDependencies({
+      env: { TRIAGE_DATA_ROOT: dataRoot, TRIAGE_SEED_FILE: resolve("data", "seed", "tickets.json"), TRIAGE_KNOWLEDGE_ROOT: resolve("data", "knowledge") },
+    });
+
+    await deps.service.recordDiagnosis({
+      ticketId: "TKT-1005",
+      actor: "support-lead",
+      diagnosedAt: "2026-07-29T12:00:00.000Z",
+      diagnosis: {
+        status: "completed", causeType: "configuration", customerSafeSummary: "A configuration mismatch caused the request failure.",
+        evidenceUsed: ["request trace"], confidence: "confirmed", owner: "engineering",
+        recommendedNextAction: "Apply the approved configuration update.", doNotSay: [],
+      },
+      knowledgeArticleIds: [],
+    });
+
+    await expect(deps.knowledgeEvolution.diagnoses.list()).resolves.toMatchObject([
+      { ticketId: "TKT-1005", ownerTeam: "api-platform", evidenceIds: [expect.stringMatching(/^evidence-/)] },
+    ]);
+  });
+
+  it("injects an optional candidate draft provider through the runtime boundary", async () => {
+    const dataRoot = await mkdtemp(join(tmpdir(), "triage-runtime-candidate-provider-"));
+    temporaryRoots.push(dataRoot);
+    const deps = await createRuntimeDependencies({
+      env: {
+        TRIAGE_DATA_ROOT: dataRoot,
+        TRIAGE_SEED_FILE: resolve("data", "seed", "tickets.json"),
+        TRIAGE_KNOWLEDGE_ROOT: resolve("data", "knowledge"),
+      },
+      knowledgeCandidateDraftProvider: createControlledKnowledgeCandidateDraftProvider(),
+    });
+    await deps.knowledgeEvolution.diagnoses.save({
+      id: "diagnosis-runtime-provider",
+      ticketId: "TKT-1001",
+      problem: "The event-processing delay recurs for accepted checkout events.",
+      symptoms: ["Accepted checkout events are missing from profile timelines."],
+      evidenceIds: ["runtime-provider-evidence"],
+      ownerTeam: "api-platform",
+      fixSteps: ["Apply the governed event-processing mitigation."],
+      verificationSteps: ["Confirm a new accepted event reaches the profile timeline."],
+      completedAt: "2026-07-29T12:00:00.000Z",
+    });
+
+    await expect(deps.knowledgeEvolution.service.discover({
+      includeGpt: true,
+      actorId: "support-lead",
+    })).resolves.toMatchObject({
+      gptAdvisory: {
+        requested: true,
+        status: "used",
+        candidateId: "known-cause-gpt-diagnosis-runtime-provider",
+      },
+    });
   });
 });

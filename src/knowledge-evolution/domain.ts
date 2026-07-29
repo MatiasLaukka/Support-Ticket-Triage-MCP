@@ -21,6 +21,10 @@ const WorkflowStepSchema = PersistedTextSchema.refine(
   (value) => !/(?:^\s*(?:rm|del|curl|wget|powershell|bash|sh|cmd|node|python|npm|git)\b|```|[;&|]{1,2}|\$\([^)]*\)|\b(?:chmod|invoke-expression|remove-item)\b)/i.test(value),
   "Workflow steps must be declarative and not executable-looking.",
 );
+const TriggerPatternSchema = PersistedTextSchema.refine(
+  (value) => value.split(/[^A-Za-z0-9]+/).some((token) => token.length >= 2),
+  "Trigger patterns must contain meaningful tokens.",
+);
 const CustomerSafeTextSchema = PersistedTextSchema.refine(
   (value) => !/\b(?:internal|operator|rationale|diagnos(?:is|tic)|evidence|ticket id)\b/i.test(value),
   "Customer-safe text must not contain operator rationale.",
@@ -91,7 +95,10 @@ const KnowledgeObjectFieldsSchema = z.object({
   kind: KnowledgeObjectKindSchema,
   name: PersistedTextSchema.max(160),
   summary: PersistedTextSchema,
-  triggerPatterns: UniqueTextSchema,
+  triggerPatterns: z.array(TriggerPatternSchema).min(1).refine(
+    (values) => new Set(values).size === values.length,
+    { message: "Values must be unique." },
+  ),
   evidencePolicy: EvidencePolicySchema,
   timeConstraints: UniqueTextSchema,
   diagnosticSteps: z.array(WorkflowStepSchema).min(1),

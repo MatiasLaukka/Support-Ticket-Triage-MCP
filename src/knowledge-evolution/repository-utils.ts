@@ -33,7 +33,8 @@ export async function assertNoLinkedPath(path: string): Promise<void> {
     try {
       if ((await lstat(current)).isSymbolicLink()) throw repositoryError("Repository contains an unsupported linked path.");
     } catch (error) {
-      if (error instanceof DomainError || isMissing(error)) continue;
+      if (error instanceof DomainError) throw error;
+      if (isMissing(error)) continue;
       throw repositoryError("Repository path could not be inspected.");
     }
   }

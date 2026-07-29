@@ -97,8 +97,13 @@ describe("createApprovalDeskHttpServer", () => {
         name: "discover_knowledge_candidates",
         arguments: { actor: "reviewer", includeGpt: true },
       });
-      const http = await json("/api/knowledge-candidates?actor=reviewer&includeGpt=true");
+      const readOnlyDiscovery = await json("/api/knowledge-candidates?actor=reviewer&includeGpt=true");
+      const http = await json("/api/knowledge-candidates", {
+        method: "POST",
+        body: JSON.stringify({ actor: "reviewer", includeGpt: true }),
+      });
 
+      expect(readOnlyDiscovery.status).toBe(404);
       expect(http.status).toBe(200);
       expect(mcp.structuredContent).toMatchObject({
         candidates: expect.arrayContaining([
@@ -181,14 +186,8 @@ describe("createApprovalDeskHttpServer", () => {
           expectedVersion: candidate.version,
         }),
       });
-      expect(approved.status, JSON.stringify(approved.body)).toBe(200);
-      expect(approved.body).toMatchObject({
-        object: {
-          id: candidate.id,
-          status: "approved",
-          version: 1,
-        },
-      });
+      expect(approved.status, JSON.stringify(approved.body)).toBe(409);
+      expect(approved.body.error.code).toBe("STALE_APPROVAL");
       const mcpApproved = await client.callTool({
         name: "approve_knowledge_candidate",
         arguments: {
@@ -197,9 +196,8 @@ describe("createApprovalDeskHttpServer", () => {
           expectedVersion: gptCandidate.version,
         },
       });
-      expect(mcpApproved.structuredContent).toMatchObject({
-        object: { id: gptCandidate.id, status: "approved", version: 1 },
-      });
+      expect(mcpApproved.isError).toBe(true);
+      expect(mcpText(mcpApproved as any)).toContain("terminal review state");
     } finally {
       await Promise.allSettled([client.close(), server.close()]);
     }
@@ -208,7 +206,10 @@ describe("createApprovalDeskHttpServer", () => {
   it("rejects malformed and stale knowledge review actions", async () => {
     const { deps, json } = await startFixture();
     await seedKnowledgeCandidateSupport(deps);
-    const discovery = await json("/api/knowledge-candidates?actor=reviewer&includeGpt=false");
+    const discovery = await json("/api/knowledge-candidates", {
+      method: "POST",
+      body: JSON.stringify({ actor: "reviewer", includeGpt: false }),
+    });
     const candidate = discovery.body.candidates[0];
 
     const malformed = await json(`/api/knowledge-candidates/${candidate.id}/approve`, {
@@ -2912,6 +2913,7 @@ function installGptKnowledgeDraftProvider(
     objects: deps.knowledgeEvolution.objects,
     audits: deps.knowledgeEvolution.audits,
     draftProvider: provider,
+    promotionAuthorizer: (actorId) => ["reviewer", "approval-desk", "support-lead"].includes(actorId),
     now: deps.now,
   });
 }
@@ -2923,7 +2925,10 @@ type KnowledgeAction =
 async function runHttpKnowledgeAction(action: KnowledgeAction): Promise<unknown> {
   const { deps, json } = await startFixture();
   await seedKnowledgeCandidateSupport(deps);
-  await json("/api/knowledge-candidates?actor=reviewer&includeGpt=false");
+  await json("/api/knowledge-candidates", {
+    method: "POST",
+    body: JSON.stringify({ actor: "reviewer", includeGpt: false }),
+  });
   const candidateId = "known-cause-diagnosis-a";
   const { kind, ...body } = action;
   const response = await json(`/api/knowledge-candidates/${candidateId}/${action.kind}`, {

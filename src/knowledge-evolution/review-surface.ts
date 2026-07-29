@@ -43,6 +43,7 @@ export const KnowledgeCandidateReviewSchema = z.object({
   fixSteps: z.array(z.string().trim().min(1).max(1_000)),
   verificationSteps: z.array(z.string().trim().min(1).max(1_000)),
   customerSafeExplanation: z.string().trim().min(1).max(1_000),
+  operatorRationale: z.string().trim().min(1).max(1_000),
   owner: KnowledgeCandidateSchema.shape.owner,
   version: z.number().int().positive(),
   deterministic: z.object({
@@ -72,6 +73,8 @@ export const KnowledgeDiscoveryReviewOutputSchema = z.object({
     requested: z.boolean(),
     status: z.enum(["not-used", "used"]),
     candidateId: KnowledgeCandidateIdSchema.optional(),
+    fallbackReason: z.string().trim().min(1).max(120).optional(),
+    diagnostics: z.array(z.string().trim().min(1).max(1_000)).max(10).optional(),
   }).strict(),
   suppressed: z.array(z.object({
     candidateId: KnowledgeCandidateIdSchema,
@@ -113,6 +116,7 @@ export function knowledgeCandidateReview(
     fixSteps: candidate.fixSteps,
     verificationSteps: candidate.verificationSteps,
     customerSafeExplanation: candidate.customerSafeExplanation,
+    operatorRationale: candidate.operatorRationale,
     owner: candidate.owner,
     version: candidate.version,
     deterministic: {

@@ -114,6 +114,10 @@ export class KnowledgeEvolutionService {
     return this.dependencies.objects.getCandidate(candidateId);
   }
 
+  async listApproved(): Promise<KnowledgeObject[]> {
+    return this.dependencies.objects.listApproved();
+  }
+
   async approve(input: { candidateId: string; actorId: string; edits?: CandidateEdits; expectedVersion: number }): Promise<KnowledgeObject> {
     assertActor(input.actorId);
     const candidate = await this.dependencies.objects.getCandidate(input.candidateId);

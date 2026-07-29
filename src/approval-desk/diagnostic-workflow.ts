@@ -103,6 +103,20 @@ export function diagnosisContextForTicket(
         ],
       };
     }
+    return {
+      status: "completed",
+      causeType: recommendation.category === "integration" ? "integration" : "configuration",
+      customerSafeSummary:
+        "The ticket matches an approved documented support path and the next safe correction is ready to review.",
+      evidenceUsed: providedEvidenceLabels(recommendation, "approved known-cause match"),
+      confidence: "confirmed",
+      owner: recommendation.team === "integrations" ? "integration-partner" : "support",
+      recommendedNextAction:
+        "Use the approved customer-safe guidance and confirm the requested result.",
+      doNotSay: [
+        "Do not expose internal candidate rationale or detection details to the customer.",
+      ],
+    };
   }
 
   if (recommendation.supportState === "waiting-on-platform-fix") {

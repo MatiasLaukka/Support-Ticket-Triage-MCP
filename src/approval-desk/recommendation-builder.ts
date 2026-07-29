@@ -17,6 +17,7 @@ import {
   type Team,
   type Ticket,
 } from "../domain.js";
+import type { KnowledgeObject } from "../knowledge-evolution/domain.js";
 import type { SubmitRecommendationInput } from "../triage-service.js";
 import {
   buildDeterministicGptAssist,
@@ -105,6 +106,7 @@ export function buildApprovalDeskRecommendationInput(input: {
   advisoryClassificationSignals?: readonly ClassificationSignal[];
   diagnosisContext?: DiagnosisContext;
   fixContext?: FixContext;
+  approvedObjects?: readonly KnowledgeObject[];
 }): Omit<SubmitRecommendationInput, "submittedAt"> {
   const { ticket, outcome, actor } = input;
   const conversationContextForClassification = buildConversationContextForTicket({
@@ -145,6 +147,7 @@ export function buildApprovalDeskRecommendationInput(input: {
     outcome: resolvedOutcome,
     customerReplies: input.customerReplies ?? [],
     previousSupportResponse: input.previousSupportResponse,
+    approvedObjects: input.approvedObjects,
   });
   const evidenceReadiness = lifecycle.evidenceReadiness;
   const conversationContext = buildConversationContext({
@@ -266,6 +269,7 @@ export async function buildApprovalDeskRecommendationInputWithDrafting(input: {
   advisoryClassificationSignals?: readonly ClassificationSignal[];
   diagnosisContext?: DiagnosisContext;
   fixContext?: FixContext;
+  approvedObjects?: readonly KnowledgeObject[];
   aiPreference?: AiPreference;
   classificationTrace?: AiExecutionTrace["classification"];
   safety?: PromptInjectionAssessment;
@@ -284,6 +288,7 @@ export async function buildApprovalDeskRecommendationInputWithDrafting(input: {
     outcome: providerOutcome,
     customerReplies: input.customerReplies ?? [],
     previousSupportResponse: input.previousSupportResponse,
+    approvedObjects: input.approvedObjects,
   });
   const diagnosticEscalated =
     input.diagnosisContext?.diagnosticState?.state === "escalated";
@@ -685,6 +690,17 @@ function buildKnownCauseResponse(
   evidenceReadiness: EvidenceReadiness,
   replyStage: CustomerReplyStage,
 ): string {
+  if (evidenceReadiness.approvedKnownCause !== undefined) {
+    return buildStructuredDiagnosticResponse({
+      ticket,
+      evidenceReadiness,
+      replyStage,
+      problemSummary: evidenceReadiness.approvedKnownCause.customerSafeExplanation,
+      nextStep: evidenceReadiness.approvedKnownCause.evidencePolicy === "required"
+        ? "Please share the remaining details so we can confirm this documented support path safely."
+        : "We will guide you through the next safe correction and let you know what to confirm.",
+    });
+  }
   const knownCause = getKnownCause(evidenceReadiness.knownCause);
   if (knownCause !== undefined) {
     return buildStructuredDiagnosticResponse({
@@ -1029,6 +1045,7 @@ function analyzeCustomerReplyLifecycle(input: {
   outcome: ExpectedOutcome;
   customerReplies: readonly CustomerReply[];
   previousSupportResponse?: PreviousSupportResponse;
+  approvedObjects?: readonly KnowledgeObject[];
 }): {
   evidenceReadiness: EvidenceReadiness;
   replyStage: CustomerReplyStage;
@@ -1044,6 +1061,7 @@ function analyzeCustomerReplyLifecycle(input: {
   const evidenceBeforeReplies = analyzeEvidenceReadiness({
     ticket: input.ticket,
     outcome: input.outcome,
+    approvedObjects: input.approvedObjects,
   });
   if (ticketReplies.length === 0) {
     return {
@@ -1063,6 +1081,7 @@ function analyzeCustomerReplyLifecycle(input: {
   const evidenceReadiness = analyzeEvidenceReadiness({
     ticket: ticketWithReplies,
     outcome: input.outcome,
+    approvedObjects: input.approvedObjects,
   });
   const latestReply = ticketReplies[ticketReplies.length - 1]?.body ?? "";
 
@@ -1787,6 +1806,9 @@ function formatCustomerSafeStatus(
     return "Current status: we have the details needed for review and are working through the likely cause.";
   }
   if (evidenceReadiness.supportState === "known-cause") {
+    if (evidenceReadiness.approvedKnownCause !== undefined) {
+      return `Current status: ${evidenceReadiness.approvedKnownCause.customerSafeExplanation}`;
+    }
     const knownCause = getKnownCause(evidenceReadiness.knownCause);
     return knownCause === undefined
       ? "Current status: the ticket matches a documented support path, and we are preparing the safest next step."
@@ -1831,6 +1853,11 @@ function formatCustomerSafeStatusNextStep(
       : `We still need: ${formatEvidenceLabels(evidenceReadiness.missingEvidence)}.`;
   }
   if (evidenceReadiness.supportState === "known-cause") {
+    if (evidenceReadiness.approvedKnownCause !== undefined) {
+      return evidenceReadiness.approvedKnownCause.evidencePolicy === "required"
+        ? "We will confirm the remaining details before we recommend a correction."
+        : "We will guide you through the next safe correction and let you know what to confirm.";
+    }
     const knownCause = getKnownCause(evidenceReadiness.knownCause);
     return knownCause?.nextStep ??
       "We will use the documented path to prepare the safest next action.";

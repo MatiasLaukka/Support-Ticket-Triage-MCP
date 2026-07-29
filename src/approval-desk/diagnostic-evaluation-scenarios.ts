@@ -7,6 +7,7 @@ import {
   type ExpectedOutcome,
   type Ticket,
 } from "../domain.js";
+import type { KnowledgeObject } from "../knowledge-evolution/domain.js";
 import { loadExpectedOutcomes } from "./recommendation-builder.js";
 import type { DiagnosticEvaluationScenario } from "./diagnostic-evaluation.js";
 
@@ -94,6 +95,46 @@ export async function loadDiagnosticEvaluationScenarios(): Promise<
       expected: { category: "integration", knownEventId: null, mustStopAtApproval: true },
     },
   ];
+}
+
+export function approvedKnowledgeEvolutionScenarios(): DiagnosticEvaluationScenario[] {
+  const approvedObject: KnowledgeObject = {
+    id: "known-cause-webhook-signing-key",
+    kind: "known-cause",
+    name: "Webhook signing-key refresh",
+    summary: "Webhook deliveries can fail after a signing-key rotation.",
+    triggerPatterns: ["Webhook deliveries fail after a signing-key rotation."],
+    evidencePolicy: { mode: "none-required" },
+    timeConstraints: ["Apply only when the deterministic trigger matches."],
+    diagnosticSteps: ["Review the approved support path."],
+    fixSteps: ["Guide the customer through the safe correction."],
+    verificationSteps: ["Confirm a newly delivered webhook is accepted."],
+    customerSafeExplanation: "We identified a recurring integration issue and are reviewing the safe correction.",
+    operatorRationale: "Approved from corroborated completed diagnoses.",
+    owner: "integrations",
+    version: 1,
+    status: "approved",
+    supportingDiagnosisIds: ["diagnosis-a"],
+    supportingTicketIds: ["TKT-2101"],
+    provenance: { source: "completed-diagnoses", recordedAt: "2026-07-29T12:00:00.000Z" },
+    approval: { approvedBy: "support-lead", approvedAt: "2026-07-29T12:01:00.000Z" },
+  };
+  const ticket = TicketSchema.parse({
+    id: "TKT-2103", createdAt: "2026-07-29T12:02:00.000Z", updatedAt: "2026-07-29T12:02:00.000Z",
+    customer: { name: "Example", plan: "starter", region: "eu", vip: false },
+    subject: "Webhook deliveries fail after a signing-key rotation.",
+    description: "Webhook deliveries fail after a signing-key rotation.",
+    status: "triage", tags: ["webhook"], sla: { responseDueAt: "2026-07-29T16:00:00.000Z", breached: false }, revision: 0,
+  });
+  return [{
+    id: "approved-known-cause-reuse", family: "known-cause", ticket,
+    outcome: {
+      ticketId: ticket.id, category: "integration", acceptablePriorities: ["P2"], team: "integrations",
+      requiredEscalations: [], knowledgeArticleIds: ["webhook-signature-validation"],
+    },
+    approvedObjects: [approvedObject],
+    expected: { category: "integration", knownCause: approvedObject.id, knownEventId: null, supportState: "known-cause", diagnosisOutcome: "confirmed" },
+  }];
 }
 
 async function loadTickets(): Promise<ReadonlyMap<string, Ticket>> {

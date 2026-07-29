@@ -1020,9 +1020,11 @@ async function createRecommendation(
 ): Promise<unknown> {
   const ticketId = TicketIdSchema.parse(id);
   const body = SubmitBodySchema.parse(await readJsonBody(request));
-  const [ticket, audits] = await Promise.all([
+  const [ticket, audits, allKnowledgeArticles, approvedObjects] = await Promise.all([
     deps.tickets.get(ticketId),
     deps.audits.list(ticketId),
+    deps.knowledge.list(),
+    deps.knowledgeEvolution.service.listApproved(),
   ]);
   const persistedCustomerReplies = customerRepliesFromAudits(ticketId, audits);
   const previousSupportResponse = latestSupportResponseFromAudits(
@@ -1044,7 +1046,8 @@ async function createRecommendation(
     ticket,
     outcome,
     actor: body.actor,
-    allKnowledgeArticles: await deps.knowledge.list(),
+    allKnowledgeArticles,
+    approvedObjects,
     customerReplies,
     previousSupportResponse,
     diagnosisContext,

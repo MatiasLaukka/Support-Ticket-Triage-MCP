@@ -775,9 +775,13 @@ async function evaluateTicket(
   deps: TriageServerDependencies,
   input: z.infer<typeof EvaluateTicketInputSchema>,
 ): Promise<z.infer<typeof EvaluateTicketOutputSchema>> {
-  const [ticket, audits] = await Promise.all([
+  const [ticket, audits, allKnowledgeArticles, approvedObjects] = await Promise.all([
     deps.tickets.get(input.ticketId),
     deps.audits.list(input.ticketId),
+    deps.knowledge.list(),
+    deps.knowledgeEvolution === undefined
+      ? Promise.resolve([])
+      : deps.knowledgeEvolution.service.listApproved(),
   ]);
   const customerReplies = customerRepliesFromAudits(ticket.id, audits);
   const previousSupportResponse = latestSupportResponseFromAudits(
@@ -787,7 +791,8 @@ async function evaluateTicket(
   const recommendationInput = await evaluateTicketWithAi({
     ticket,
     actor: input.actor,
-    allKnowledgeArticles: await deps.knowledge.list(),
+    allKnowledgeArticles,
+    approvedObjects,
     customerReplies,
     previousSupportResponse,
     diagnosisContext: latestDiagnosisContext(audits),

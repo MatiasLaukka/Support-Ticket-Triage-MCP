@@ -7,6 +7,7 @@ import {
   type Ticket,
   type TriageRecommendation,
 } from "../domain.js";
+import type { KnowledgeObject } from "../knowledge-evolution/domain.js";
 import { assessPromptInjection } from "./prompt-injection-safety.js";
 import { classifyTicket } from "./classifier.js";
 import { diagnosisContextForTicket } from "./diagnostic-workflow.js";
@@ -58,6 +59,7 @@ export interface DiagnosticEvaluationScenario {
   previousSupportResponse?: DiagnosticEvaluationPreviousResponse;
   audits?: readonly AuditEvent[];
   evaluationAt?: string;
+  approvedObjects?: readonly KnowledgeObject[];
   expected: DiagnosticEvaluationExpected;
 }
 
@@ -237,6 +239,7 @@ function evaluateScenario(
     actor: "diagnostic-evaluation",
     customerReplies: scenario.customerReplies,
     previousSupportResponse: scenario.previousSupportResponse,
+    approvedObjects: scenario.approvedObjects,
   });
   const { actor: _actor, ...recommendationInput } = proposal;
   const recommendation = TriageRecommendationSchema.parse({
@@ -342,6 +345,7 @@ function buildDraftForSafetyCheck(scenario: DiagnosticEvaluationScenario): strin
     actor: "diagnostic-evaluation",
     customerReplies: scenario.customerReplies,
     previousSupportResponse: scenario.previousSupportResponse,
+    approvedObjects: scenario.approvedObjects,
   }).draftCustomerResponse;
 }
 

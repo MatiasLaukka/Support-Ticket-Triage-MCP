@@ -4,6 +4,7 @@ import type {
   SupportState,
   Ticket,
 } from "../domain.js";
+import type { KnowledgeObject } from "../knowledge-evolution/domain.js";
 import { extractAccountFacts, type AccountFacts } from "./account-facts.js";
 import { detectKnownCause, getKnownCause } from "./known-cause-catalog.js";
 import {
@@ -16,12 +17,19 @@ type EvidenceSource = EvidenceRequirement["source"];
 export interface EvidenceReadiness {
   supportState: SupportState;
   knownCause?: string | null;
+  approvedKnownCause?: ApprovedKnownCause;
   knownEventId?: string | null;
   knownEventMatchReasons?: string[];
   requiredEvidence: EvidenceRequirement[];
   providedEvidence: EvidenceRequirement[];
   missingEvidence: EvidenceRequirement[];
   nextInvestigationSteps: string[];
+}
+
+export interface ApprovedKnownCause {
+  id: string;
+  evidencePolicy: "none-required" | "required";
+  customerSafeExplanation: string;
 }
 
 const EVIDENCE_CATALOG: Readonly<Record<string, Omit<EvidenceRequirement, "source">>> = {
@@ -476,20 +484,29 @@ const KNOWLEDGE_EVIDENCE: Readonly<Record<string, readonly string[]>> = {
 export function analyzeEvidenceReadiness(input: {
   ticket: Ticket;
   outcome: ExpectedOutcome;
+  approvedObjects?: readonly KnowledgeObject[];
   candidate?: {
     status: "candidate";
     evidencePolicy: "none-required" | "required";
   };
 }): EvidenceReadiness {
-  const knownCauseDefinition = detectKnownCause(input);
-  const knownCause = knownCauseDefinition?.id ?? null;
+  const approvedKnownCause = findApprovedKnownCause(input.ticket, input.approvedObjects);
+  const knownCauseDefinition = approvedKnownCause === undefined
+    ? detectKnownCause(input)
+    : undefined;
+  const knownCause = approvedKnownCause?.id ?? knownCauseDefinition?.id ?? null;
   const knownEvent = detectKnownEvent({
     ticket: input.ticket,
     knownCause,
   });
+  const approvedCauseCanApply = approvedKnownCause !== undefined &&
+    knownEvent?.status !== "active" &&
+    !input.outcome.requiredEscalations.includes("outage");
   const accountFacts = extractAccountFacts(input.ticket);
   const requiredEvidence =
-    knownCauseDefinition !== undefined
+    approvedKnownCause !== undefined && approvedCauseCanApply
+      ? evidenceForApprovedKnownCause(input.approvedObjects!, approvedKnownCause.id)
+      : knownCauseDefinition !== undefined
       ? evidenceForKnownCause(knownCauseDefinition.requiredEvidenceIds)
       : evidenceForIssuePattern(input) ??
         evidenceForKnowledge(
@@ -508,12 +525,15 @@ export function analyzeEvidenceReadiness(input: {
     supportState: chooseSupportState({
       knownCause,
       bypassMissingEvidence:
+        (approvedCauseCanApply &&
+          approvedKnownCause?.evidencePolicy === "none-required") ||
         knownCauseDefinition?.evidencePolicy === "none-required",
       knownEventStatus: knownEvent?.status ?? null,
       missingEvidence,
       outcome: input.outcome,
     }),
     knownCause,
+    ...(approvedKnownCause === undefined ? {} : { approvedKnownCause }),
     knownEventId: knownEvent?.eventId ?? null,
     knownEventMatchReasons: knownEvent?.matchReasons ?? [],
     requiredEvidence,
@@ -521,11 +541,52 @@ export function analyzeEvidenceReadiness(input: {
     missingEvidence,
     nextInvestigationSteps: buildNextInvestigationSteps({
       knownCause,
+      approvedKnownCause,
       knownEventStatus: knownEvent?.status ?? null,
       missingEvidence,
       outcome: input.outcome,
     }),
   };
+}
+
+function findApprovedKnownCause(
+  ticket: Ticket,
+  approvedObjects: readonly KnowledgeObject[] | undefined,
+): ApprovedKnownCause | undefined {
+  if (approvedObjects === undefined) return undefined;
+  const text = normalizedTicketText(ticket);
+  const matched = approvedObjects
+    .filter((object) => object.status === "approved" && object.kind === "known-cause")
+    .sort((left, right) => left.id.localeCompare(right.id))
+    .find((object) => object.triggerPatterns.every((pattern) =>
+      text.includes(normalizeTrigger(pattern)),
+    ));
+  return matched === undefined ? undefined : approvedKnownCauseFromObject(matched);
+}
+
+function approvedKnownCauseFromObject(object: KnowledgeObject): ApprovedKnownCause {
+  return {
+    id: object.id,
+    evidencePolicy: object.evidencePolicy.mode,
+    customerSafeExplanation: object.customerSafeExplanation,
+  };
+}
+
+function evidenceForApprovedKnownCause(
+  approvedObjects: readonly KnowledgeObject[],
+  id: string,
+): EvidenceRequirement[] {
+  const object = approvedObjects.find((candidate) => candidate.id === id);
+  if (object?.evidencePolicy.mode !== "required") return [];
+  return evidenceForIds(object.evidencePolicy.evidenceIds, "known-cause");
+}
+
+function normalizedTicketText(ticket: Ticket): string {
+  return normalizeTrigger(ticketText(ticket));
+}
+
+function normalizeTrigger(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 }
 
 function evidenceForIssuePattern(input: {
@@ -665,11 +726,15 @@ function chooseSupportState(input: {
 
 function buildNextInvestigationSteps(input: {
   knownCause: string | null;
+  approvedKnownCause?: ApprovedKnownCause;
   knownEventStatus: KnownEventStatus | null;
   missingEvidence: readonly EvidenceRequirement[];
   outcome: ExpectedOutcome;
 }): string[] {
   if (input.missingEvidence.length > 0) {
+    if (input.approvedKnownCause !== undefined) {
+      return ["Collect the approved evidence before confirming the documented support path."];
+    }
     const knownCause = getKnownCause(input.knownCause);
     if (knownCause !== undefined) {
       return [...knownCause.investigationSteps];
@@ -700,6 +765,9 @@ function buildNextInvestigationSteps(input: {
   const knownCause = getKnownCause(input.knownCause);
   if (knownCause !== undefined) {
     return [...knownCause.investigationSteps];
+  }
+  if (input.approvedKnownCause !== undefined) {
+    return ["Use the approved customer-safe guidance for the documented support path."];
   }
   if (input.outcome.requiredEscalations.includes("outage")) {
     return [

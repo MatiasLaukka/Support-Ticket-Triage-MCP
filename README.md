@@ -774,6 +774,31 @@ the exact phrases `platform processing delay` and `source event creation time`
 seen in the live drafts; a new network run is not required to validate those
 local contract changes.
 
+### Governed Knowledge Evolution
+
+Completed diagnoses can deterministically surface a reusable knowledge
+candidate. GPT may optionally draft a strictly validated advisory version, but
+it cannot route tickets, promote knowledge, or change a customer response.
+An operator reviews the evidence, customer-safe explanation, and declarative
+workflow, then explicitly promotes the candidate. The promotion audit records
+the supporting diagnoses, deterministic provenance, reviewer, and version.
+
+Only approved objects affect later evaluations; candidates (including rejected
+candidates) have no routing effect, and promotion never rewrites earlier
+recommendations or audits. Approval Desk and MCP use the same knowledge
+service, while lifecycle replay and AI comparison project the same approved
+object context through the shared evidence and diagnostic workflow.
+
+Evidence policy remains the gate. For example, an approved
+`none-required` known cause whose deterministic trigger matches may use its
+confirmed known-cause path without collecting extra customer evidence. An
+approved `required` cause still requests every listed evidence item before it
+can advance. Ordinary tickets and active outages remain evidence-gated.
+Customer drafts use only the approved customer-safe explanation and safe next
+step; candidate rationale, GPT advisory details, and internal detection stay
+in the operator review and audit surfaces. If a candidate is rejected, its
+reason remains audit provenance and future routing stays unchanged.
+
 ### Lifecycle Replay Viewer
 
 The read-only Lifecycle Replay page makes evaluation output inspectable in the

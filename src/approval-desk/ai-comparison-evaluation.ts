@@ -141,6 +141,7 @@ export async function runAiComparisonEvaluation(input: {
       ticket: scenario.ticket,
       actor: "ai-comparison-evaluation",
       allKnowledgeArticles: input.allKnowledgeArticles,
+      approvedObjects: scenario.approvedObjects,
       customerReplies: conversation.customerReplies,
       previousSupportResponse: conversation.previousSupportResponse,
       diagnosisContext: workflowContext.diagnosisContext,
@@ -449,6 +450,7 @@ function scenarioWorkflowContext(input: {
       actor: "ai-comparison-evaluation",
       customerReplies: input.conversation.customerReplies,
       previousSupportResponse: input.conversation.previousSupportResponse,
+      approvedObjects: input.scenario.approvedObjects,
     });
     const materialized = materializeRecommendation(
       preliminary,

@@ -441,9 +441,10 @@ async function discoverKnowledgeCandidates(
     actorId: input.actor,
   });
   const candidates = await Promise.all(
-    result.candidates.map((candidate) =>
-      deps.knowledgeEvolution.service.getCandidate(`known-cause-${candidate.id}`),
-    ),
+    [
+      ...result.candidates.map((candidate) => `known-cause-${candidate.id}`),
+      ...(result.gptAdvisory.candidateId === undefined ? [] : [result.gptAdvisory.candidateId]),
+    ].map((candidateId) => deps.knowledgeEvolution.service.getCandidate(candidateId)),
   );
   return KnowledgeDiscoveryReviewOutputSchema.parse(
     knowledgeDiscoveryReview(result, candidates),

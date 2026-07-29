@@ -1119,7 +1119,8 @@ export const approvalDeskHtml = `<!doctype html>
         conversationTimeline: [],
         recommendationHistory: [],
         consumedCustomerReplyTimestamp: null,
-        knowledgeCandidate: null
+        knowledgeCandidate: null,
+        knowledgeRequestId: 0
       };
 
       const els = {
@@ -1701,6 +1702,7 @@ export const approvalDeskHtml = `<!doctype html>
           '</div>' +
           '<p><strong>Deterministic reasons</strong> ' + escapeHtml(formatList(candidate.deterministic?.reasons)) + '</p>' +
           '<p><strong>GPT advisory</strong> ' + escapeHtml(candidate.gptAdvisory?.status ?? 'not-used') +
+            (candidate.gptAdvisory?.confidence === undefined ? '' : ' (advisory confidence: ' + escapeHtml(String(candidate.gptAdvisory.confidence)) + ')') +
             (candidate.gptAdvisory?.rationale ? ': ' + escapeHtml(candidate.gptAdvisory.rationale) : '') + '</p>' +
           '<p><strong>Support diagnoses/open tickets</strong> ' + escapeHtml(support.map(function (item) { return item.source + ': ' + (item.diagnosisId ?? item.ticketId); }).join(', ') || 'none') + '</p>' +
           '<p><strong>Contradictions</strong> ' + escapeHtml(formatList(candidate.contradictions)) + '</p>' +
@@ -2105,8 +2107,9 @@ export const approvalDeskHtml = `<!doctype html>
         state.conversationTimeline = Array.isArray(data.conversationTimeline) ? data.conversationTimeline : [];
         state.recommendationHistory = Array.isArray(data.recommendationHistory) ? data.recommendationHistory : [];
         state.recommendation = data.latestRecommendation ?? null;
-        void loadKnowledgeCandidate(id).then(function () {
-          if (state.selectedTicket?.id === id) {
+        const knowledgeRequestId = ++state.knowledgeRequestId;
+        void loadKnowledgeCandidate(id, knowledgeRequestId).then(function () {
+          if (state.selectedTicket?.id === id && state.knowledgeRequestId === knowledgeRequestId) {
             renderRecommendation(true);
             renderRecommendationStageControls();
           }
@@ -2123,15 +2126,16 @@ export const approvalDeskHtml = `<!doctype html>
         setResult(data);
       }
 
-      async function loadKnowledgeCandidate(ticketId) {
+      async function loadKnowledgeCandidate(ticketId, knowledgeRequestId) {
         try {
           const actor = els.actor.value.trim() || 'approval-desk';
           const data = await requestJson('/api/knowledge-candidates?ticketId=' + encodeURIComponent(ticketId) + '&actor=' + encodeURIComponent(actor) + '&includeGpt=false', undefined, { writeErrorToResult: false });
+          if (state.selectedTicket?.id !== ticketId || state.knowledgeRequestId !== knowledgeRequestId) return;
           state.knowledgeCandidate = Array.isArray(data.candidates)
             ? data.candidates.find(function (candidate) { return candidate.deterministic?.meetsAlertThreshold === true; }) ?? null
             : null;
         } catch (_) {
-          state.knowledgeCandidate = null;
+          if (state.selectedTicket?.id === ticketId && state.knowledgeRequestId === knowledgeRequestId) state.knowledgeCandidate = null;
         }
       }
 

@@ -56,6 +56,7 @@ export const KnowledgeCandidateReviewSchema = z.object({
     provider: z.literal("openai").optional(),
     model: z.string().trim().min(1).max(120).optional(),
     rationale: z.string().trim().min(1).max(240).optional(),
+    confidence: z.number().min(0).max(1).optional(),
   }).strict(),
   support: z.array(CandidateSupportSchema),
   supportingDiagnosisIds: z.array(KnowledgeCandidateIdSchema),
@@ -67,6 +68,11 @@ export const KnowledgeCandidateReviewSchema = z.object({
 
 export const KnowledgeDiscoveryReviewOutputSchema = z.object({
   candidates: z.array(KnowledgeCandidateReviewSchema),
+  gptAdvisory: z.object({
+    requested: z.boolean(),
+    status: z.enum(["not-used", "used"]),
+    candidateId: KnowledgeCandidateIdSchema.optional(),
+  }).strict(),
   suppressed: z.array(z.object({
     candidateId: KnowledgeCandidateIdSchema,
     approvedObjectId: KnowledgeCandidateIdSchema,
@@ -89,7 +95,8 @@ export function knowledgeCandidateReview(
   candidate: KnowledgeCandidate,
   discovery?: KnowledgeDiscoveryCandidate,
 ): z.infer<typeof KnowledgeCandidateReviewSchema> {
-  const support = discovery?.support ?? candidate.supportingDiagnosisIds.map((diagnosisId) => ({
+  const summary = discovery ?? candidate.discovery;
+  const support = summary?.support ?? candidate.supportingDiagnosisIds.map((diagnosisId) => ({
     source: "completed-diagnosis" as const,
     diagnosisId,
     ticketId: candidate.supportingTicketIds[0]!,
@@ -109,10 +116,10 @@ export function knowledgeCandidateReview(
     owner: candidate.owner,
     version: candidate.version,
     deterministic: {
-      score: discovery?.score ?? candidate.deterministicScores.confidence,
-      supportCount: discovery?.supportCount ?? candidate.deterministicScores.support,
-      reasons: discovery?.reasons ?? candidate.deterministicReasons,
-      meetsAlertThreshold: discovery?.meetsAlertThreshold ?? false,
+      score: summary?.score ?? candidate.deterministicScores.confidence,
+      supportCount: summary?.supportCount ?? candidate.deterministicScores.support,
+      reasons: summary?.reasons ?? candidate.deterministicReasons,
+      meetsAlertThreshold: summary?.meetsAlertThreshold ?? false,
     },
     gptAdvisory: candidate.gptProvenance === undefined
       ? { status: "not-used" }
@@ -121,11 +128,12 @@ export function knowledgeCandidateReview(
         provider: candidate.gptProvenance.provider,
         model: candidate.gptProvenance.model,
         rationale: candidate.gptProvenance.summary,
+        confidence: candidate.gptProvenance.confidence,
       },
     support,
     supportingDiagnosisIds: candidate.supportingDiagnosisIds,
     supportingTicketIds: candidate.supportingTicketIds,
-    contradictions: discovery?.contradictions ?? candidate.contradictions,
+    contradictions: summary?.contradictions ?? candidate.contradictions,
     validationStatus: candidate.validationStatus,
     validationWarnings: candidate.validationStatus === "valid"
       ? []
@@ -134,15 +142,24 @@ export function knowledgeCandidateReview(
 }
 
 export function knowledgeDiscoveryReview(
-  result: KnowledgeDiscoveryResult,
+  result: KnowledgeDiscoveryResult & { gptAdvisory?: z.infer<typeof KnowledgeDiscoveryReviewOutputSchema>["gptAdvisory"] },
   candidates: readonly KnowledgeCandidate[],
 ): z.infer<typeof KnowledgeDiscoveryReviewOutputSchema> {
   const byId = new Map(candidates.map((candidate) => [candidate.id, candidate]));
   return KnowledgeDiscoveryReviewOutputSchema.parse({
-    candidates: result.candidates.flatMap((candidate) => {
+    candidates: [
+      ...result.candidates.flatMap((candidate) => {
       const stored = byId.get(`known-cause-${candidate.id}`);
       return stored === undefined ? [] : [knowledgeCandidateReview(stored, candidate)];
-    }),
+      }),
+      ...(result.gptAdvisory?.candidateId === undefined
+        ? []
+        : (() => {
+          const stored = byId.get(result.gptAdvisory.candidateId!);
+          return stored === undefined ? [] : [knowledgeCandidateReview(stored)];
+        })()),
+    ],
+    gptAdvisory: result.gptAdvisory ?? { requested: false, status: "not-used" },
     suppressed: result.suppressed,
   });
 }

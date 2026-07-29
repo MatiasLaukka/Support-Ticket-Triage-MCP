@@ -67,7 +67,7 @@ describe("approvalDeskHtml", () => {
         name: "Recurring credential rotation cause",
         evidencePolicy: { mode: "required", evidenceIds: ["credential-rotation-evidence"] },
         deterministic: { score: 0.805, supportCount: 2, reasons: ["shared-evidence: credential-rotation-evidence"], meetsAlertThreshold: true },
-        gptAdvisory: { status: "used", rationale: "Validated advisory draft." },
+        gptAdvisory: { status: "used", confidence: 0.91, rationale: "Validated advisory draft." },
         support: [{ source: "completed-diagnosis", diagnosisId: "diagnosis-a", ticketId: "TKT-1001", reasons: ["evidence: credential-rotation-evidence"] }],
         contradictions: ["conflicting-event: webhook vs api"],
         validationStatus: "valid",
@@ -82,6 +82,7 @@ describe("approvalDeskHtml", () => {
     expect(app.el("actionBarHint").textContent).toContain("Potential knowledge pattern");
     expect(app.el("recommendationPanel").innerHTML).toContain("Approve for future evaluations");
     expect(app.el("recommendationPanel").innerHTML).toContain("GPT advisory");
+    expect(app.el("recommendationPanel").innerHTML).toContain("advisory confidence: 0.91");
     expect(app.el("recommendationPanel").innerHTML).toContain("Support diagnoses/open tickets");
     expect(app.el("recommendationPanel").innerHTML).toContain("Contradictions");
     expect(app.el("recommendationPanel").innerHTML).toContain("historical recommendations");

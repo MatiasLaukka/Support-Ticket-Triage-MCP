@@ -40,3 +40,22 @@
 
 - The existing generated `reports/ai-comparison/controlled-latest.json` and `.md` remain modified but were preserved and excluded from this task's commit.
 - The Task 6 discovery result records deterministic candidates directly. A validated GPT candidate remains discoverable through the detail surface once its ID is known; no raw provider payload or internal reasoning is exposed.
+
+## Review fix round
+
+- Discovery now returns the sanitized GPT advisory outcome and persisted GPT candidate alongside deterministic candidates through both MCP and HTTP. The review payload includes the advisory status, candidate ID, model-safe rationale, and advisory confidence.
+- Candidate persistence now retains a sanitized discovery summary: deterministic score/reasons, exact diagnosis-to-ticket support records and scores, contradictions, and alert-threshold status. Detail reads therefore preserve the original evidence bundle and threshold rather than fabricating per-diagnosis ticket links or defaulting the threshold to false.
+- The Approval Desk labels GPT confidence as advisory and protects non-blocking discovery refreshes with a selected-ticket/request identity check, preventing a slower prior-ticket response from replacing the current panel.
+- Adapter parity now exercises discovery, rejection, approval, and GPT candidate output through both MCP and HTTP against the same real service/repository fixture. The test also verifies the HTTP malformed and stale request responses.
+- During the red/green cycle, the added persisted discovery summary revealed one strict-persistence regression: approved objects must not contain candidate-only discovery metadata. Approval now excludes that metadata before writing the approved object.
+
+### Review-fix test evidence
+
+1. RED: the expanded GPT parity test failed because discovery returned only `known-cause-diagnosis-a`, omitting the persisted `known-cause-gpt-diagnosis-a` and advisory result.
+2. RED: after metadata persistence, the real approval path rejected the deterministic candidate because candidate-only `discovery` data was written into the strict approved-object schema.
+3. GREEN: `npm test -- --run test/approval-desk-http.test.ts test/approval-desk-ui.test.ts` passed build, typecheck, and 121 tests.
+4. GREEN: the required adapter suite passed build, typecheck, and 172 tests across four files.
+
+### Review-fix commit
+
+- Pending follow-up commit.

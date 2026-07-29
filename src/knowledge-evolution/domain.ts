@@ -62,6 +62,23 @@ const GptProvenanceSchema = z.object({
   model: z.string().max(120).regex(/^[A-Za-z0-9]+(?:[._:-][A-Za-z0-9]+)*$/),
   generatedAt: IsoTimestampSchema,
   summary: PersistedTextSchema.max(240),
+  confidence: z.number().min(0).max(1).optional(),
+}).strict();
+
+const DiscoverySupportSchema = z.object({
+  source: z.enum(["completed-diagnosis", "open-ticket"]),
+  diagnosisId: IdentifierSchema.optional(),
+  ticketId: TicketIdSchema,
+  score: z.number().min(0).max(1),
+  reasons: z.array(PersistedTextSchema),
+}).strict();
+const DiscoverySummarySchema = z.object({
+  score: z.number().min(0).max(1),
+  reasons: z.array(PersistedTextSchema),
+  support: z.array(DiscoverySupportSchema),
+  supportCount: z.number().int().nonnegative(),
+  contradictions: z.array(PersistedTextSchema),
+  meetsAlertThreshold: z.boolean(),
 }).strict();
 
 const ApprovalSchema = z.object({
@@ -112,6 +129,7 @@ export const KnowledgeCandidateSchema = KnowledgeObjectFieldsSchema.extend({
   }).strict(),
   deterministicReasons: UniqueTextSchema,
   gptProvenance: GptProvenanceSchema.optional(),
+  discovery: DiscoverySummarySchema.optional(),
   contradictions: z.array(PersistedTextSchema),
   validationStatus: z.enum(["pending", "valid", "invalid"]),
 }).strict();

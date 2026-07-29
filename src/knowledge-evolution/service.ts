@@ -31,6 +31,14 @@ export interface KnowledgeEvolutionServiceDependencies {
   nextAuditId?: () => string;
 }
 
+export interface KnowledgeDiscoveryServiceResult extends KnowledgeDiscoveryResult {
+  gptAdvisory: {
+    requested: boolean;
+    status: "not-used" | "used";
+    candidateId?: string;
+  };
+}
+
 export class KnowledgeEvolutionService {
   private readonly now: () => Date;
   private readonly nextAuditId: () => string;
@@ -40,7 +48,7 @@ export class KnowledgeEvolutionService {
     this.nextAuditId = dependencies.nextAuditId ?? randomUUID;
   }
 
-  async discover(input: { ticketId?: TicketId; includeGpt: boolean; actorId: string }): Promise<KnowledgeDiscoveryResult> {
+  async discover(input: { ticketId?: TicketId; includeGpt: boolean; actorId: string }): Promise<KnowledgeDiscoveryServiceResult> {
     assertActor(input.actorId);
     const [tickets, diagnoses, approved, articles, existing] = await Promise.all([
       this.dependencies.tickets.snapshot(),
@@ -53,9 +61,13 @@ export class KnowledgeEvolutionService {
       ? undefined
       : await this.dependencies.tickets.get(input.ticketId);
     const discovery = discoverCandidates({ ticket: selectedTicket, tickets, diagnoses, approved });
+    const gptAdvisory: KnowledgeDiscoveryServiceResult["gptAdvisory"] = {
+      requested: input.includeGpt,
+      status: "not-used",
+    };
     const existingIds = new Set(existing.map((candidate) => candidate.id));
     const candidates = discovery.candidates
-      .map((candidate) => deterministicCandidate(candidate.id, candidate.score, candidate.reasons, candidate.contradictions, candidate.supportCount, candidate.support, diagnoses, this.now().toISOString()))
+      .map((candidate) => deterministicCandidate(candidate.id, candidate.score, candidate.reasons, candidate.contradictions, candidate.supportCount, candidate.support, candidate.meetsAlertThreshold, diagnoses, this.now().toISOString()))
       .filter((candidate): candidate is KnowledgeCandidate => candidate !== undefined);
 
     if (input.includeGpt && this.dependencies.draftProvider !== undefined) {
@@ -68,8 +80,13 @@ export class KnowledgeEvolutionService {
       if (draft.used && draft.candidate !== undefined) {
         const sourceId = discovery.candidates[0]?.id;
         if (sourceId !== undefined) {
-          const candidate = candidateFromDraft(sourceId, draft.candidate, draft.provenance, diagnoses, this.now().toISOString());
-          if (candidate !== undefined) candidates.push(candidate);
+          const source = discovery.candidates[0];
+          const candidate = candidateFromDraft(sourceId, draft.candidate, draft.provenance, source, diagnoses, this.now().toISOString());
+          if (candidate !== undefined) {
+            candidates.push(candidate);
+            gptAdvisory.status = "used";
+            gptAdvisory.candidateId = candidate.id;
+          }
         }
       }
     }
@@ -90,7 +107,7 @@ export class KnowledgeEvolutionService {
         notes: candidate.operatorRationale,
       });
     }
-    return discovery;
+    return { ...discovery, gptAdvisory };
   }
 
   async getCandidate(candidateId: string): Promise<KnowledgeCandidate> {
@@ -117,6 +134,7 @@ export class KnowledgeEvolutionService {
       contradictions: _contradictions,
       validationStatus: _validationStatus,
       gptProvenance: _gptProvenance,
+      discovery: _discovery,
       ...approvedFields
     } = reviewed;
     const object: KnowledgeObject = {
@@ -202,7 +220,8 @@ function deterministicCandidate(
   reasons: readonly string[],
   contradictions: readonly string[],
   support: number,
-  records: ReadonlyArray<{ source: "completed-diagnosis" | "open-ticket"; diagnosisId?: string; ticketId: string }>,
+  records: ReadonlyArray<{ source: "completed-diagnosis" | "open-ticket"; diagnosisId?: string; ticketId: string; score: number; reasons: readonly string[] }>,
+  meetsAlertThreshold: boolean,
   diagnoses: readonly CompletedDiagnosis[],
   recordedAt: string,
 ): KnowledgeCandidate | undefined {
@@ -231,6 +250,7 @@ function deterministicCandidate(
     provenance: { source: "completed-diagnoses", recordedAt },
     deterministicScores: { confidence, support },
     deterministicReasons: reasons.length > 0 ? [...reasons] : ["Completed diagnosis support is available."],
+    discovery: discoverySummary({ score: confidence, reasons, support: records, supportCount: support, contradictions, meetsAlertThreshold }),
     contradictions: [...contradictions],
     validationStatus: "valid" as const,
   };
@@ -242,6 +262,7 @@ function candidateFromDraft(
   sourceId: string,
   draft: CandidateDraftPayload,
   provenance: Awaited<ReturnType<typeof draftKnowledgeCandidate>>["provenance"],
+  discovery: KnowledgeDiscoveryResult["candidates"][number] | undefined,
   diagnoses: readonly CompletedDiagnosis[],
   recordedAt: string,
 ): KnowledgeCandidate | undefined {
@@ -255,13 +276,32 @@ function candidateFromDraft(
     version: 1,
     status: "candidate" as const,
     provenance: { source: "gpt-advisory", recordedAt, ...(provenance?.rationale === undefined ? {} : { reference: provenance.rationale }) },
-    deterministicScores: { confidence, support: draft.supportingDiagnosisIds.length },
-    deterministicReasons: [rationale],
-    gptProvenance: provenance === undefined ? undefined : { provider: "openai" as const, model: provenance.model ?? "unspecified", generatedAt: recordedAt, summary: provenance.rationale ?? "Validated advisory candidate draft." },
+    deterministicScores: { confidence: discovery?.score ?? confidence, support: discovery?.supportCount ?? draft.supportingDiagnosisIds.length },
+    deterministicReasons: discovery?.reasons ?? [rationale],
+    discovery: discovery === undefined ? undefined : discoverySummary(discovery),
+    gptProvenance: provenance === undefined ? undefined : { provider: "openai" as const, model: provenance.model ?? "unspecified", generatedAt: recordedAt, summary: provenance.rationale ?? "Validated advisory candidate draft.", confidence },
     validationStatus: "valid" as const,
   };
   const parsed = KnowledgeCandidateSchema.safeParse(value);
   return parsed.success ? parsed.data : undefined;
+}
+
+function discoverySummary(discovery: {
+  score: number;
+  reasons: readonly string[];
+  support: ReadonlyArray<{ source: "completed-diagnosis" | "open-ticket"; diagnosisId?: string; ticketId: string; score: number; reasons: readonly string[] }>;
+  supportCount: number;
+  contradictions: readonly string[];
+  meetsAlertThreshold: boolean;
+}) {
+  return {
+    score: discovery.score,
+    reasons: [...discovery.reasons],
+    support: discovery.support.map((support) => ({ ...support, reasons: [...support.reasons] })),
+    supportCount: discovery.supportCount,
+    contradictions: [...discovery.contradictions],
+    meetsAlertThreshold: discovery.meetsAlertThreshold,
+  };
 }
 
 function applyEdits(candidate: KnowledgeCandidate, edits: CandidateEdits | undefined): KnowledgeCandidate {

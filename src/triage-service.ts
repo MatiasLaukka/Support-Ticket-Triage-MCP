@@ -747,10 +747,10 @@ export class TriageService {
       knowledgeArticleIds: diagnosis.knowledgeArticleIds,
       result: "success",
     });
-    await this.dependencies.audit.append(auditEvent);
     if (!escalated && this.dependencies.diagnoses !== undefined) {
       await this.dependencies.diagnoses.save(completedDiagnosisFrom(auditEvent, diagnosis));
     }
+    await this.dependencies.audit.append(auditEvent);
     return auditEvent;
   }
 

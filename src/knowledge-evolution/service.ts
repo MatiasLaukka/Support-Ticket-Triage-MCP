@@ -17,6 +17,7 @@ const editableFields = [
   "diagnosticSteps", "fixSteps", "verificationSteps", "customerSafeExplanation",
   "operatorRationale", "owner",
 ] as const;
+const candidateOperations = new Map<string, Promise<void>>();
 
 export type CandidateEdits = Partial<Pick<KnowledgeCandidate, (typeof editableFields)[number]>>;
 
@@ -162,93 +163,101 @@ export class KnowledgeEvolutionService {
     if (!this.dependencies.promotionAuthorizer(input.actorId.trim())) {
       throw new DomainError("Actor is not authorized to approve knowledge candidates.", "INVALID_APPROVAL_FIELDS");
     }
-    const candidate = await this.dependencies.objects.getCandidate(input.candidateId);
-    assertCurrentVersion(candidate, input.expectedVersion);
-    const [approved, diagnoses, tickets, reviewEvents] = await Promise.all([
-      this.dependencies.objects.listApproved(),
-      this.dependencies.diagnoses.list(),
-      this.dependencies.tickets.snapshot(),
-      this.dependencies.audits.list({ candidateId: candidate.id }),
-    ]);
-    assertPromotable(candidate, reviewEvents);
-    if (approved.some((object) => object.id === candidate.id)) {
-      throw new DomainError("Knowledge candidate has already been promoted.", "REPOSITORY_ERROR");
-    }
-    const reviewed = applyEdits(candidate, input.edits);
-    assertReferences(reviewed, diagnoses, tickets);
-    const {
-      deterministicScores: _deterministicScores,
-      deterministicReasons: _deterministicReasons,
-      contradictions: _contradictions,
-      validationStatus: _validationStatus,
-      gptProvenance: _gptProvenance,
-      discovery: _discovery,
-      ...approvedFields
-    } = reviewed;
-    const object: KnowledgeObject = {
-      ...approvedFields,
-      status: "approved",
-      version: 1,
-      approval: { approvedBy: input.actorId.trim(), approvedAt: this.now().toISOString() },
-    };
-    let promoted: KnowledgeObject | undefined;
-    try {
-      promoted = await this.dependencies.objects.promote(candidate.id, object);
-      await this.appendAudit({
-        objectId: promoted.id,
-        candidateId: candidate.id,
-        action: "approved",
-        actor: input.actorId,
-        supportIds: supportIds(candidate),
-        scores: candidate.deterministicScores,
-        provenanceSummary: candidate.provenance.source,
-        reviewedFields: input.edits === undefined ? [] : Object.keys(input.edits).sort(),
-        result: "approved",
-        notes: reviewed.operatorRationale,
-      });
-      return promoted;
-    } catch (error) {
-      if (promoted !== undefined) {
-        try { await this.dependencies.objects.removeApproved(candidate.id); }
-        catch { throw new DomainError("Approved knowledge object could not be rolled back after audit failure.", "REPOSITORY_ERROR"); }
+    return serializeCandidate(input.candidateId, async () => {
+      const candidate = await this.dependencies.objects.getCandidate(input.candidateId);
+      assertCurrentVersion(candidate, input.expectedVersion);
+      const [approved, diagnoses, tickets, reviewEvents] = await Promise.all([
+        this.dependencies.objects.listApproved(),
+        this.dependencies.diagnoses.list(),
+        this.dependencies.tickets.snapshot(),
+        this.dependencies.audits.list({ candidateId: candidate.id }),
+      ]);
+      assertPromotable(candidate, reviewEvents);
+      if (approved.some((object) => object.id === candidate.id)) {
+        throw new DomainError("Knowledge candidate has already been promoted.", "REPOSITORY_ERROR");
       }
-      throw error;
-    }
+      const reviewed = applyEdits(candidate, input.edits);
+      assertReferences(reviewed, diagnoses, tickets);
+      const {
+        deterministicScores: _deterministicScores,
+        deterministicReasons: _deterministicReasons,
+        contradictions: _contradictions,
+        validationStatus: _validationStatus,
+        gptProvenance: _gptProvenance,
+        discovery: _discovery,
+        ...approvedFields
+      } = reviewed;
+      const object: KnowledgeObject = {
+        ...approvedFields,
+        status: "approved",
+        version: 1,
+        approval: { approvedBy: input.actorId.trim(), approvedAt: this.now().toISOString() },
+      };
+      let promoted: KnowledgeObject | undefined;
+      try {
+        promoted = await this.dependencies.objects.promote(candidate.id, object);
+        await this.appendAudit({
+          objectId: promoted.id,
+          candidateId: candidate.id,
+          action: "approved",
+          actor: input.actorId,
+          supportIds: supportIds(candidate),
+          scores: candidate.deterministicScores,
+          provenanceSummary: candidate.provenance.source,
+          reviewedFields: input.edits === undefined ? [] : Object.keys(input.edits).sort(),
+          result: "approved",
+          notes: reviewed.operatorRationale,
+        });
+        return promoted;
+      } catch (error) {
+        if (promoted !== undefined) {
+          try { await this.dependencies.objects.removeApproved(candidate.id); }
+          catch { throw new DomainError("Approved knowledge object could not be rolled back after audit failure.", "REPOSITORY_ERROR"); }
+        }
+        throw error;
+      }
+    });
   }
 
   async reject(input: { candidateId: string; actorId: string; reason: string; expectedVersion: number }): Promise<void> {
     assertActor(input.actorId);
-    const candidate = await this.dependencies.objects.getCandidate(input.candidateId);
-    assertCurrentVersion(candidate, input.expectedVersion);
     const reason = nonBlank(input.reason, "A rejection reason is required.");
-    await this.appendTerminalAudit({
-      candidateId: candidate.id,
-      action: "rejected",
-      actor: input.actorId,
-      supportIds: supportIds(candidate),
-      scores: candidate.deterministicScores,
-      provenanceSummary: candidate.provenance.source,
-      reviewedFields: [],
-      result: "rejected",
-      rejectionReason: reason,
-      notes: reason,
+    await serializeCandidate(input.candidateId, async () => {
+      const candidate = await this.dependencies.objects.getCandidate(input.candidateId);
+      assertCurrentVersion(candidate, input.expectedVersion);
+      assertNoTerminalReview(await this.dependencies.audits.list({ candidateId: candidate.id }));
+      await this.appendTerminalAudit({
+        candidateId: candidate.id,
+        action: "rejected",
+        actor: input.actorId,
+        supportIds: supportIds(candidate),
+        scores: candidate.deterministicScores,
+        provenanceSummary: candidate.provenance.source,
+        reviewedFields: [],
+        result: "rejected",
+        rejectionReason: reason,
+        notes: reason,
+      });
     });
   }
 
   async defer(input: { candidateId: string; actorId: string; expectedVersion: number }): Promise<void> {
     assertActor(input.actorId);
-    const candidate = await this.dependencies.objects.getCandidate(input.candidateId);
-    assertCurrentVersion(candidate, input.expectedVersion);
-    await this.appendTerminalAudit({
-      candidateId: candidate.id,
-      action: "deferred",
-      actor: input.actorId,
-      supportIds: supportIds(candidate),
-      scores: candidate.deterministicScores,
-      provenanceSummary: candidate.provenance.source,
-      reviewedFields: [],
-      result: "deferred",
-      notes: "Review deferred without changing the candidate.",
+    await serializeCandidate(input.candidateId, async () => {
+      const candidate = await this.dependencies.objects.getCandidate(input.candidateId);
+      assertCurrentVersion(candidate, input.expectedVersion);
+      assertNoTerminalReview(await this.dependencies.audits.list({ candidateId: candidate.id }));
+      await this.appendTerminalAudit({
+        candidateId: candidate.id,
+        action: "deferred",
+        actor: input.actorId,
+        supportIds: supportIds(candidate),
+        scores: candidate.deterministicScores,
+        provenanceSummary: candidate.provenance.source,
+        reviewedFields: [],
+        result: "deferred",
+        notes: "Review deferred without changing the candidate.",
+      });
     });
   }
 
@@ -388,6 +397,12 @@ function assertPromotable(
   }
 }
 
+function assertNoTerminalReview(events: readonly KnowledgeAuditEvent[]): void {
+  if (events.some((event) => event.action === "approved" || event.action === "rejected" || event.action === "deferred")) {
+    throw new DomainError("Knowledge candidate has reached a terminal review state.", "STALE_APPROVAL");
+  }
+}
+
 function assertActor(actor: string): void { nonBlank(actor, "An actor is required."); }
 
 function nonBlank(value: string, message: string): string {
@@ -401,3 +416,16 @@ function assertCurrentVersion(candidate: KnowledgeCandidate, expectedVersion: nu
 
 function supportIds(candidate: KnowledgeCandidate): string[] { return unique([...candidate.supportingDiagnosisIds, ...candidate.supportingTicketIds]); }
 function unique(values: readonly string[]): string[] { return [...new Set(values)].sort((left, right) => left.localeCompare(right)); }
+
+async function serializeCandidate<T>(candidateId: string, operation: () => Promise<T>): Promise<T> {
+  const previous = candidateOperations.get(candidateId) ?? Promise.resolve();
+  let release = (): void => undefined;
+  const current = new Promise<void>((resolve) => { release = resolve; });
+  candidateOperations.set(candidateId, current);
+  await previous;
+  try { return await operation(); }
+  finally {
+    release();
+    if (candidateOperations.get(candidateId) === current) candidateOperations.delete(candidateId);
+  }
+}

@@ -176,6 +176,38 @@ describe("knowledge evolution service", () => {
     await expect(fixture.audits.list({ action: "rejected" })).resolves.toHaveLength(1);
   });
 
+  it("serializes competing approval and rejection so only one terminal outcome persists", async () => {
+    const promotionStarted = deferred();
+    const releasePromotion = deferred();
+    const fixture = createFixture({
+      beforePromote: async () => {
+        promotionStarted.resolve();
+        await releasePromotion.promise;
+      },
+    });
+    const approvalService = fixture.service();
+    const rejectionService = fixture.service();
+    const input = { candidateId: "known-cause-diagnosis-001", actorId: "support-lead", expectedVersion: 1 };
+    await approvalService.discover({ includeGpt: false, actorId: "support-lead" });
+
+    const approval = approvalService.approve(input);
+    await promotionStarted.promise;
+    const rejection = rejectionService.reject({ ...input, reason: "A competing reviewer rejected this candidate." });
+    const rejectionState = await Promise.race([
+      rejection.then(() => "completed", () => "completed"),
+      new Promise<string>((resolve) => setTimeout(() => resolve("waiting"), 25)),
+    ]);
+    releasePromotion.resolve();
+
+    expect(rejectionState).toBe("waiting");
+    await expect(approval).resolves.toMatchObject({ status: "approved" });
+    await expect(rejection).rejects.toMatchObject({ code: "STALE_APPROVAL" });
+    const terminalActions = (await fixture.audits.list({ candidateId: input.candidateId }))
+      .filter((event) => ["approved", "rejected", "deferred"].includes(event.action))
+      .map((event) => event.action);
+    expect(terminalActions).toEqual(["approved"]);
+  });
+
   it("rejects a candidate whose supporting diagnosis ticket is not among its supporting tickets", async () => {
     const fixture = createFixture();
     const service = fixture.service();
@@ -186,7 +218,7 @@ describe("knowledge evolution service", () => {
       .rejects.toMatchObject({ code: "INVALID_APPROVAL_FIELDS" });
   });
 
-  it("records rejection and deferment without changing candidate lifecycle or recommendations", async () => {
+  it("records one terminal rejection without changing candidate lifecycle or recommendations", async () => {
     const fixture = createFixture();
     const service = fixture.service();
     await service.discover({ includeGpt: false, actorId: "support-lead" });
@@ -194,13 +226,12 @@ describe("knowledge evolution service", () => {
     const lifecycleBefore = fixture.ticket.lifecycle;
 
     await service.reject({ candidateId, actorId: "support-lead", reason: "Needs more corroboration.", expectedVersion: 1 });
-    await service.defer({ candidateId, actorId: "support-lead", expectedVersion: 1 });
+    await expect(service.defer({ candidateId, actorId: "support-lead", expectedVersion: 1 })).rejects.toMatchObject({ code: "STALE_APPROVAL" });
 
     await expect(service.getCandidate(candidateId)).resolves.toMatchObject({ status: "candidate" });
     await expect(fixture.audits.list()).resolves.toMatchObject([
       { action: "candidate-created" },
       { action: "rejected", rejectionReason: "Needs more corroboration." },
-      { action: "deferred" },
     ]);
     expect(fixture.ticket.lifecycle).toBe(lifecycleBefore);
   });
@@ -211,6 +242,7 @@ function createFixture(options: {
   failCandidateCreatedAuditOnce?: boolean;
   synchronizeReviewHistory?: boolean;
   ticketScopedComponents?: boolean;
+  beforePromote?: () => Promise<void>;
 } = {}) {
   const diagnosis: CompletedDiagnosis = {
     id: "diagnosis-001", ticketId: "TKT-1001", problem: "API requests fail after rotating a credential.",
@@ -261,7 +293,7 @@ function createFixture(options: {
     async saveCandidate(candidate: KnowledgeCandidate) { if (candidates.some((item) => item.id === candidate.id)) throw repositoryError("Duplicate candidate."); candidates.push(candidate); },
     async removeCandidate(candidateId: string) { const index = candidates.findIndex((item) => item.id === candidateId); if (index < 0) throw repositoryError("Candidate was not found."); candidates.splice(index, 1); },
     async listApproved() { return approved; },
-    async promote(candidateId: string, object: KnowledgeObject) { if (candidateId !== object.id || approved.some((item) => item.id === object.id)) throw repositoryError("Duplicate promotion."); approved.push(object); return object; },
+    async promote(candidateId: string, object: KnowledgeObject) { if (candidateId !== object.id || approved.some((item) => item.id === object.id)) throw repositoryError("Duplicate promotion."); await options.beforePromote?.(); approved.push(object); return object; },
     async removeApproved(candidateId: string) { const index = approved.findIndex((item) => item.id === candidateId); if (index < 0) throw repositoryError("Approved object was not found."); approved.splice(index, 1); },
   };
   let remainingAuditFailures = options.failApprovedAuditOnce ? 1 : 0;
@@ -342,4 +374,10 @@ function gptDraft() {
 
 function repositoryError(message: string) {
   return Object.assign(new Error(message), { code: "REPOSITORY_ERROR" });
+}
+
+function deferred() {
+  let resolve = (): void => undefined;
+  const promise = new Promise<void>((resolvePromise) => { resolve = resolvePromise; });
+  return { promise, resolve };
 }

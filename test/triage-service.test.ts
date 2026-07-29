@@ -1009,6 +1009,39 @@ describe("TriageService", () => {
     );
   });
 
+  it("does not persist a diagnosis audit when its first-class record fails to save and allows a retry", async () => {
+    const tickets = new MemoryTicketStore(makeTicket());
+    const recommendations = new MemoryRecommendationStore();
+    const audit = new MemoryAuditStore();
+    const records: Array<{ id: string }> = [];
+    let failSave = true;
+    const service = new TriageService({
+      tickets,
+      recommendations,
+      audit,
+      diagnoses: {
+        async save(record) {
+          if (failSave) {
+            failSave = false;
+            throw new DomainError("Completed diagnosis could not be persisted.", "REPOSITORY_ERROR");
+          }
+          records.push(record);
+        },
+      },
+      now: () => fixedNow,
+      uuid: () => auditId,
+    });
+    const input = makeRecordDiagnosisInput();
+
+    await expect(service.recordDiagnosis(input)).rejects.toMatchObject({ code: "REPOSITORY_ERROR" });
+    expect(records).toEqual([]);
+    expect(audit.events.filter((event) => event.action === "diagnosis-completed")).toEqual([]);
+
+    await expect(service.recordDiagnosis(input)).resolves.toMatchObject({ action: "diagnosis-completed" });
+    expect(records).toHaveLength(1);
+    expect(audit.events.filter((event) => event.action === "diagnosis-completed")).toHaveLength(1);
+  });
+
   it("approves with real repositories and persists the ticket and audit event", async () => {
     const harness = await makeRealRepositoryHarness();
     await harness.service.submit(makeSubmitInput({ priority: "P1" }));
@@ -1683,5 +1716,24 @@ function makeRejectInput(
     feedback: "Routing needs more investigation.",
     rejectedAt: "2026-06-10T09:05:00.000Z",
     ...overrides,
+  };
+}
+
+function makeRecordDiagnosisInput() {
+  return {
+    ticketId: "TKT-1001" as const,
+    actor: "casey",
+    diagnosedAt: "2026-06-10T09:05:00.000Z",
+    diagnosis: {
+      status: "completed" as const,
+      causeType: "configuration" as const,
+      customerSafeSummary: "A governed configuration change caused the API failure.",
+      evidenceUsed: ["request trace"],
+      confidence: "confirmed" as const,
+      owner: "engineering" as const,
+      recommendedNextAction: "Apply the governed configuration update.",
+      doNotSay: [],
+    },
+    knowledgeArticleIds: [],
   };
 }

@@ -8,7 +8,10 @@ import type {
 import { KnowledgeEvolutionService } from "../src/knowledge-evolution/service.js";
 import { buildApprovalDeskRecommendationInput } from "../src/approval-desk/recommendation-builder.js";
 import { runDiagnosticEvaluation } from "../src/approval-desk/diagnostic-evaluation.js";
-import { approvedKnowledgeEvolutionScenarios } from "../src/approval-desk/diagnostic-evaluation-scenarios.js";
+import {
+  approvedKnowledgeEvolutionScenarios,
+  loadDiagnosticEvaluationScenarios,
+} from "../src/approval-desk/diagnostic-evaluation-scenarios.js";
 
 const outcome: ExpectedOutcome = {
   ticketId: "TKT-2103",
@@ -50,7 +53,7 @@ describe("knowledge evolution harness", () => {
       ticket("TKT-2104", "Webhook deliveries fail after a signing-key rotation and are delayed for all stores."),
       { ...outcome, ticketId: "TKT-2104", requiredEscalations: ["outage"] },
       [approved],
-    )).toMatchObject({ supportState: "needs-information", knownCause: approved.id });
+    )).toMatchObject({ supportState: "needs-information", knownCause: "webhook-delivery-latency" });
     expect(recommendationBeforePromotion).toEqual(evaluate(ticket("TKT-2103"), outcome));
   });
 
@@ -78,8 +81,27 @@ describe("knowledge evolution harness", () => {
     });
     expect(outage).toMatchObject({
       supportState: "needs-information",
-      knownCause: approved.id,
+      knownCause: "webhook-delivery-latency",
     });
+  });
+
+  it("retains an active known event when an approved none-required trigger also matches", async () => {
+    const activeEvent = (await loadDiagnosticEvaluationScenarios()).find(
+      (scenario) => scenario.id === "active-known-event",
+    )!;
+    const approved = approvedKnownCause(
+      "known-cause-approved-webhook-delay",
+      activeEvent.ticket.description,
+    );
+
+    const recommendation = evaluate(activeEvent.ticket, activeEvent.outcome!, [approved]);
+
+    expect(recommendation).toMatchObject({
+      knownCause: "webhook-delivery-latency",
+      knownEventId: "EVT-2026-06-10-WEBHOOK-LATENCY",
+      supportState: "needs-information",
+    });
+    expect(recommendation.supportState).not.toBe("known-cause");
   });
 
   it("keeps malformed GPT drafts, rejected candidates, and candidate-only state out of routing", async () => {
@@ -220,6 +242,30 @@ function ticket(id: string, description = "Webhook deliveries fail after a signi
     sla: { responseDueAt: "2026-07-29T12:00:00.000Z", breached: false },
     revision: 0,
   });
+}
+
+function approvedKnownCause(id: string, triggerPattern: string): KnowledgeObject {
+  return {
+    id,
+    kind: "known-cause",
+    name: "Approved webhook delivery guidance",
+    summary: "A recurring webhook delivery condition.",
+    triggerPatterns: [triggerPattern],
+    evidencePolicy: { mode: "none-required" },
+    timeConstraints: ["Apply only when the trigger matches."],
+    diagnosticSteps: ["Review the approved support path."],
+    fixSteps: ["Use the documented correction."],
+    verificationSteps: ["Confirm the next delivery."],
+    customerSafeExplanation: "We identified a recurring delivery condition and are reviewing the safe correction.",
+    operatorRationale: "Operator-only approved rationale.",
+    owner: "integrations",
+    version: 1,
+    status: "approved",
+    supportingDiagnosisIds: ["diagnosis-a"],
+    supportingTicketIds: ["TKT-2101"],
+    provenance: { source: "completed-diagnoses", recordedAt: "2026-07-29T12:00:00.000Z" },
+    approval: { approvedBy: "support-lead", approvedAt: "2026-07-29T12:01:00.000Z" },
+  };
 }
 
 function repositoryError(message: string) {

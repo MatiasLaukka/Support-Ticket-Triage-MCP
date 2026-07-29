@@ -490,24 +490,27 @@ export function analyzeEvidenceReadiness(input: {
     evidencePolicy: "none-required" | "required";
   };
 }): EvidenceReadiness {
-  const approvedKnownCause = findApprovedKnownCause(input.ticket, input.approvedObjects);
-  const knownCauseDefinition = approvedKnownCause === undefined
-    ? detectKnownCause(input)
-    : undefined;
-  const knownCause = approvedKnownCause?.id ?? knownCauseDefinition?.id ?? null;
+  const legacyKnownCauseDefinition = detectKnownCause(input);
+  const legacyKnownCause = legacyKnownCauseDefinition?.id ?? null;
   const knownEvent = detectKnownEvent({
     ticket: input.ticket,
-    knownCause,
+    knownCause: legacyKnownCause,
   });
+  const approvedKnownCause = findApprovedKnownCause(input.ticket, input.approvedObjects);
   const approvedCauseCanApply = approvedKnownCause !== undefined &&
     knownEvent?.status !== "active" &&
     !input.outcome.requiredEscalations.includes("outage");
+  const knownCause = knownEvent === undefined
+    ? approvedCauseCanApply
+      ? approvedKnownCause.id
+      : legacyKnownCause
+    : legacyKnownCause;
   const accountFacts = extractAccountFacts(input.ticket);
   const requiredEvidence =
-    approvedKnownCause !== undefined && approvedCauseCanApply
+    approvedCauseCanApply
       ? evidenceForApprovedKnownCause(input.approvedObjects!, approvedKnownCause.id)
-      : knownCauseDefinition !== undefined
-      ? evidenceForKnownCause(knownCauseDefinition.requiredEvidenceIds)
+      : legacyKnownCauseDefinition !== undefined
+      ? evidenceForKnownCause(legacyKnownCauseDefinition.requiredEvidenceIds)
       : evidenceForIssuePattern(input) ??
         evidenceForKnowledge(
           relevantKnowledgeArticleIds(input.ticket, input.outcome),
@@ -527,13 +530,14 @@ export function analyzeEvidenceReadiness(input: {
       bypassMissingEvidence:
         (approvedCauseCanApply &&
           approvedKnownCause?.evidencePolicy === "none-required") ||
-        knownCauseDefinition?.evidencePolicy === "none-required",
+        (knownEvent?.status !== "active" &&
+          legacyKnownCauseDefinition?.evidencePolicy === "none-required"),
       knownEventStatus: knownEvent?.status ?? null,
       missingEvidence,
       outcome: input.outcome,
     }),
     knownCause,
-    ...(approvedKnownCause === undefined ? {} : { approvedKnownCause }),
+    ...(approvedCauseCanApply ? { approvedKnownCause } : {}),
     knownEventId: knownEvent?.eventId ?? null,
     knownEventMatchReasons: knownEvent?.matchReasons ?? [],
     requiredEvidence,
@@ -541,7 +545,7 @@ export function analyzeEvidenceReadiness(input: {
     missingEvidence,
     nextInvestigationSteps: buildNextInvestigationSteps({
       knownCause,
-      approvedKnownCause,
+      approvedKnownCause: approvedCauseCanApply ? approvedKnownCause : undefined,
       knownEventStatus: knownEvent?.status ?? null,
       missingEvidence,
       outcome: input.outcome,

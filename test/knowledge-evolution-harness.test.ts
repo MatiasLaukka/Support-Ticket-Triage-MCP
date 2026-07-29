@@ -104,6 +104,35 @@ describe("knowledge evolution harness", () => {
     expect(recommendation.supportState).not.toBe("known-cause");
   });
 
+  it("uses approved reuse with a permitted resolved known event", () => {
+    const resolvedTicket = TicketSchema.parse({
+      ...ticket("TKT-1030", "A subscriber replied STOP, but the profile still appears eligible for the next SMS campaign."),
+      createdAt: "2026-06-10T06:15:00.000Z",
+      updatedAt: "2026-06-10T06:30:00.000Z",
+      subject: "SMS opt-out not reflected on profile",
+    });
+    const approved = approvedKnownCause(
+      "known-cause-approved-sms-consent",
+      resolvedTicket.description,
+    );
+
+    const recommendation = evaluate(resolvedTicket, {
+      ticketId: resolvedTicket.id,
+      category: "other",
+      acceptablePriorities: ["P2"],
+      team: "support",
+      requiredEscalations: [],
+      knowledgeArticleIds: ["sms-compliance", "profile-sync-issues"],
+    }, [approved]);
+
+    expect(recommendation).toMatchObject({
+      knownCause: approved.id,
+      knownEventId: "EVT-2026-06-10-SMS-CONSENT-SYNC",
+      supportState: "known-cause",
+      missingEvidence: [],
+    });
+  });
+
   it("keeps malformed GPT drafts, rejected candidates, and candidate-only state out of routing", async () => {
     const fixture = createFixture({ malformedDraft: true });
     await fixture.service.discover({ actorId: "support-lead", includeGpt: true });

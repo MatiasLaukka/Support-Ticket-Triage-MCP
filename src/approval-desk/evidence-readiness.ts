@@ -500,10 +500,8 @@ export function analyzeEvidenceReadiness(input: {
   const approvedCauseCanApply = approvedKnownCause !== undefined &&
     knownEvent?.status !== "active" &&
     !input.outcome.requiredEscalations.includes("outage");
-  const knownCause = knownEvent === undefined
-    ? approvedCauseCanApply
-      ? approvedKnownCause.id
-      : legacyKnownCause
+  const knownCause = approvedCauseCanApply
+    ? approvedKnownCause.id
     : legacyKnownCause;
   const accountFacts = extractAccountFacts(input.ticket);
   const requiredEvidence =

@@ -3,8 +3,104 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { TicketSchema, type Ticket } from "../src/domain.js";
 import { analyzeEvidenceReadiness } from "../src/approval-desk/evidence-readiness.js";
+import { getKnownCause } from "../src/approval-desk/known-cause-catalog.js";
 
 describe("analyzeEvidenceReadiness", () => {
+  it.each([
+    {
+      name: "ordinary ticket with missing evidence",
+      ticketId: "TKT-1005",
+      outcome: {
+        category: "integration",
+        team: "integrations",
+        knowledgeArticleIds: ["flow-trigger-troubleshooting"],
+      },
+      supportState: "needs-information",
+    },
+    {
+      name: "known active event with missing evidence",
+      ticketId: "TKT-1028",
+      outcome: {
+        category: "integration",
+        team: "integrations",
+        knowledgeArticleIds: ["webhook-signature-validation"],
+      },
+      supportState: "needs-information",
+    },
+    {
+      name: "ordinary ticket with complete evidence",
+      ticketId: "TKT-1010",
+      outcome: {
+        category: "performance",
+        team: "product",
+        knowledgeArticleIds: [],
+      },
+      supportState: "diagnosing",
+    },
+    {
+      name: "approved none-required known cause",
+      ticketId: "TKT-1017",
+      outcome: {
+        category: "other",
+        team: "support",
+        knowledgeArticleIds: ["sms-compliance"],
+      },
+      supportState: "known-cause",
+    },
+    {
+      name: "approved required-evidence known cause with missing evidence",
+      ticketId: "TKT-1008",
+      outcome: {
+        category: "integration",
+        team: "integrations",
+        knowledgeArticleIds: ["webhook-signature-validation"],
+      },
+      supportState: "needs-information",
+    },
+    {
+      name: "unapproved candidate has no lifecycle effect",
+      ticketId: "TKT-1005",
+      outcome: {
+        category: "integration",
+        team: "integrations",
+        knowledgeArticleIds: ["flow-trigger-troubleshooting"],
+      },
+      candidate: { status: "candidate", evidencePolicy: "none-required" },
+      supportState: "needs-information",
+    },
+  ] as const)("applies evidence policy for $name", async ({ ticketId, outcome, candidate, supportState }) => {
+    const readiness = analyzeEvidenceReadiness({
+      ticket: await loadSeedTicket(ticketId),
+      outcome: {
+        ticketId,
+        acceptablePriorities: ["P2", "P3"],
+        requiredEscalations: [],
+        ...outcome,
+        knowledgeArticleIds: [...outcome.knowledgeArticleIds],
+      },
+      ...(candidate === undefined ? {} : { candidate }),
+    });
+
+    expect(readiness.supportState).toBe(supportState);
+  });
+
+  it("never waits on a platform fix while required evidence is missing", async () => {
+    const readiness = analyzeEvidenceReadiness({
+      ticket: await loadSeedTicket("TKT-1028"),
+      outcome: {
+        ticketId: "TKT-1028",
+        category: "integration",
+        acceptablePriorities: ["P2", "P3"],
+        team: "integrations",
+        requiredEscalations: ["outage"],
+        knowledgeArticleIds: ["webhook-signature-validation"],
+      },
+    });
+
+    expect(readiness.missingEvidence).not.toEqual([]);
+    expect(readiness.supportState).not.toBe("waiting-on-platform-fix");
+  });
+
   it("dedupes overlapping evidence requirements from multiple knowledge articles", async () => {
     const ticket = await loadSeedTicket("TKT-1005");
     const readiness = analyzeEvidenceReadiness({
@@ -52,6 +148,7 @@ describe("analyzeEvidenceReadiness", () => {
     expect(readiness.supportState).toBe("known-cause");
     expect(readiness.knownCause).toBe("sms-quiet-hours");
     expect(readiness.missingEvidence).toEqual([]);
+    expect(getKnownCause(readiness.knownCause)?.evidencePolicy).toBe("none-required");
   });
 
   it("detects webhook secret rotation known causes and asks only for confirming evidence", async () => {
@@ -68,7 +165,7 @@ describe("analyzeEvidenceReadiness", () => {
       },
     });
 
-    expect(readiness.supportState).toBe("known-cause");
+    expect(readiness.supportState).toBe("needs-information");
     expect(readiness.knownCause).toBe("webhook-secret-rotation");
     expect(readiness.requiredEvidence.map((requirement) => requirement.id)).toEqual([
       "endpoint-url",
@@ -86,7 +183,7 @@ describe("analyzeEvidenceReadiness", () => {
     );
   });
 
-  it("records the matching known event for an in-window webhook latency ticket", async () => {
+  it("records the matching known event while keeping incomplete evidence gated", async () => {
     const ticket = await loadSeedTicket("TKT-1028");
     const readiness = analyzeEvidenceReadiness({
       ticket,
@@ -102,10 +199,11 @@ describe("analyzeEvidenceReadiness", () => {
 
     expect(readiness.knownCause).toBe("webhook-delivery-latency");
     expect(readiness.knownEventId).toBe("EVT-2026-06-10-WEBHOOK-LATENCY");
-    expect(readiness.supportState).toBe("waiting-on-platform-fix");
+    expect(readiness.missingEvidence).not.toEqual([]);
+    expect(readiness.supportState).toBe("needs-information");
   });
 
-  it("does not treat an investigating event as a confirmed platform fix state", async () => {
+  it("keeps an investigating event evidence-gated until the required evidence arrives", async () => {
     const seed = await loadSeedTicket("TKT-1028");
     const ticket = TicketSchema.parse({
       ...seed,
@@ -128,7 +226,8 @@ describe("analyzeEvidenceReadiness", () => {
     expect(readiness.knownEventId).toBe(
       "EVT-2026-06-10-WEBHOOK-LATENCY-INVESTIGATION",
     );
-    expect(readiness.supportState).toBe("diagnosing");
+    expect(readiness.missingEvidence).not.toEqual([]);
+    expect(readiness.supportState).toBe("needs-information");
   });
 
   it("recognizes provided platform, email, event, and URL evidence", async () => {

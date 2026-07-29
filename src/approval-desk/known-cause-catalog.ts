@@ -4,6 +4,7 @@ export interface KnownCauseDefinition {
   id: string;
   label: string;
   knowledgeArticleIds: readonly string[];
+  evidencePolicy: "none-required" | "required";
   requiredEvidenceIds: readonly string[];
   matches: (text: string) => boolean;
   problemSummary: string;
@@ -16,6 +17,7 @@ export const KNOWN_CAUSES: readonly KnownCauseDefinition[] = [
     id: "sms-quiet-hours",
     label: "SMS quiet-hour protection",
     knowledgeArticleIds: ["sms-compliance"],
+    evidencePolicy: "none-required",
     requiredEvidenceIds: [],
     matches: matchesSmsQuietHours,
     problemSummary:
@@ -30,6 +32,7 @@ export const KNOWN_CAUSES: readonly KnownCauseDefinition[] = [
     id: "webhook-secret-rotation",
     label: "Webhook secret rotation mismatch",
     knowledgeArticleIds: ["webhook-signature-validation"],
+    evidencePolicy: "required",
     requiredEvidenceIds: [
       "endpoint-url",
       "delivery-id",
@@ -50,6 +53,7 @@ export const KNOWN_CAUSES: readonly KnownCauseDefinition[] = [
     id: "track-api-local-time-timestamp",
     label: "Track API local-time timestamp",
     knowledgeArticleIds: ["event-tracking-debugging"],
+    evidencePolicy: "required",
     requiredEvidenceIds: [
       "event-id",
       "api-response-status",
@@ -69,6 +73,7 @@ export const KNOWN_CAUSES: readonly KnownCauseDefinition[] = [
     id: "shopify-custom-field-mapping",
     label: "Shopify custom field mapping",
     knowledgeArticleIds: ["shopify-integration-sync"],
+    evidencePolicy: "required",
     requiredEvidenceIds: [
       "store-url",
       "object-id",
@@ -90,6 +95,7 @@ export const KNOWN_CAUSES: readonly KnownCauseDefinition[] = [
     id: "sms-stop-sync-delay",
     label: "SMS STOP sync delay",
     knowledgeArticleIds: ["sms-compliance", "profile-sync-issues"],
+    evidencePolicy: "required",
     requiredEvidenceIds: [
       "masked-recipient",
       "opt-out-timestamp",
@@ -110,6 +116,7 @@ export const KNOWN_CAUSES: readonly KnownCauseDefinition[] = [
     id: "webhook-delivery-latency",
     label: "Webhook delivery latency",
     knowledgeArticleIds: ["webhook-signature-validation"],
+    evidencePolicy: "required",
     requiredEvidenceIds: [
       "delivery-id",
       "event-created-time",

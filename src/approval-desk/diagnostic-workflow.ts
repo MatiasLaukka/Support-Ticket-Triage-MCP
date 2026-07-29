@@ -20,7 +20,46 @@ export function diagnosisContextForTicket(
     customerReplyText: customerReplyTextFromAudits(ticket.id, audits),
   });
   if (playbookDiagnosis !== undefined) {
-    return applyPersistedDiagnosticState(playbookDiagnosis, ticket.id, audits);
+    const diagnosis = applyPersistedDiagnosticState(playbookDiagnosis, ticket.id, audits);
+    if ((recommendation.missingEvidence?.length ?? 0) === 0) return diagnosis;
+    return {
+      ...diagnosis,
+      confidence: "likely",
+      doNotSay: [
+        ...diagnosis.doNotSay,
+        "Do not confirm the playbook diagnosis while required evidence is missing.",
+      ],
+      ...(diagnosis.diagnosticState?.state === "confirmed"
+        ? {
+            diagnosticState: {
+              ...diagnosis.diagnosticState,
+              state: "working-diagnosis" as const,
+              hypotheses: diagnosis.diagnosticState.hypotheses.map((hypothesis) => ({
+                ...hypothesis,
+                status: hypothesis.status === "confirmed" ? "leading" as const : hypothesis.status,
+              })),
+              evidenceToRequest: (recommendation.missingEvidence ?? []).map(({ label }) => label),
+            },
+          }
+        : {}),
+    };
+  }
+
+  if ((recommendation.missingEvidence?.length ?? 0) > 0) {
+    return {
+      status: "completed",
+      causeType: recommendation.category === "security" ? "security" : "configuration",
+      customerSafeSummary:
+        "We need the requested evidence before confirming whether the reported issue matches a known cause or platform event.",
+      evidenceUsed: providedEvidenceLabels(recommendation, "provided customer evidence"),
+      confidence: "likely",
+      owner: recommendation.category === "integration" ? "integration-partner" : "support",
+      recommendedNextAction:
+        "Collect the requested evidence before confirming a root cause or advancing platform-fix work.",
+      doNotSay: [
+        "Do not present a known cause or investigating event as a confirmed root cause while required evidence is missing.",
+      ],
+    };
   }
 
   const knownEvent = getKnownEvent(recommendation.knownEventId);
@@ -86,6 +125,20 @@ export function diagnosisContextForTicket(
         ],
       };
     }
+    return {
+      status: "completed",
+      causeType: recommendation.category === "integration" ? "integration" : "configuration",
+      customerSafeSummary:
+        "The ticket matches an approved documented support path and the next safe correction is ready to review.",
+      evidenceUsed: providedEvidenceLabels(recommendation, "approved known-cause match"),
+      confidence: "confirmed",
+      owner: recommendation.team === "integrations" ? "integration-partner" : "support",
+      recommendedNextAction:
+        "Use the approved customer-safe guidance and confirm the requested result.",
+      doNotSay: [
+        "Do not expose internal candidate rationale or detection details to the customer.",
+      ],
+    };
   }
 
   if (recommendation.supportState === "waiting-on-platform-fix") {

@@ -8,11 +8,20 @@ import { AuditEventSchema } from "../src/domain.js";
 import { evaluateTicketWithAi } from "../src/approval-desk/ai-evaluation.js";
 import type { ClassificationReasoningProvider } from "../src/approval-desk/classification-reasoning-provider.js";
 import type { CustomerResponseDraftProvider } from "../src/approval-desk/draft-response-provider.js";
+import type { CandidateDraftProvider } from "../src/knowledge-evolution/candidate-draft-provider.js";
+import { KnowledgeEvolutionService } from "../src/knowledge-evolution/service.js";
 import { createRuntimeDependencies } from "../src/runtime.js";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { createTriageServer } from "../src/server.js";
 
 const now = new Date("2026-06-10T09:00:00.000Z");
 const temporaryRoots: string[] = [];
 const servers: Array<ReturnType<typeof createApprovalDeskHttpServer>> = [];
+
+function mcpText(result: { content: Array<{ type: string; text?: string }> }): string {
+  return result.content.find((item) => item.type === "text")?.text ?? "";
+}
 
 const parityDraftProvider: CustomerResponseDraftProvider = {
   async draft() {
@@ -72,6 +81,171 @@ afterEach(async () => {
 });
 
 describe("createApprovalDeskHttpServer", () => {
+  it("keeps MCP and HTTP knowledge discovery and review results equivalent", async () => {
+    const { deps, json } = await startFixture();
+    await seedKnowledgeCandidateSupport(deps);
+    installGptKnowledgeDraftProvider(deps);
+
+    const server = createTriageServer(deps);
+    const client = new Client({ name: "knowledge-parity", version: "1.0.0" });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    await server.connect(serverTransport);
+    await client.connect(clientTransport);
+
+    try {
+      const mcp = await client.callTool({
+        name: "discover_knowledge_candidates",
+        arguments: { actor: "reviewer", includeGpt: true },
+      });
+      const readOnlyDiscovery = await json("/api/knowledge-candidates?actor=reviewer&includeGpt=true");
+      const http = await json("/api/knowledge-candidates", {
+        method: "POST",
+        body: JSON.stringify({ actor: "reviewer", includeGpt: true }),
+      });
+
+      expect(readOnlyDiscovery.status).toBe(404);
+      expect(http.status).toBe(200);
+      expect(mcp.structuredContent).toMatchObject({
+        candidates: expect.arrayContaining([
+          expect.objectContaining({
+            id: "known-cause-diagnosis-a",
+            validationStatus: "valid",
+          }),
+        ]),
+      });
+      expect(http.body.candidates).toEqual(
+        (mcp.structuredContent as { candidates: unknown[] }).candidates,
+      );
+      expect(http.body.gptAdvisory).toEqual({ requested: true, status: "used", candidateId: "known-cause-gpt-diagnosis-a" });
+
+      const candidate = http.body.candidates.find((item: { id: string }) => item.id === "known-cause-diagnosis-a");
+      const gptCandidate = http.body.candidates.find((item: { id: string }) => item.id === "known-cause-gpt-diagnosis-a");
+      expect(candidate).toBeDefined();
+      expect(gptCandidate).toBeDefined();
+      expect(gptCandidate).toMatchObject({
+        gptAdvisory: {
+          status: "used",
+          confidence: 0.91,
+          rationale: "Completed diagnosis support identifies a repeatable credential rotation issue.",
+        },
+        deterministic: { meetsAlertThreshold: true },
+      });
+      expect(gptCandidate.support).toEqual(expect.arrayContaining([
+        expect.objectContaining({ diagnosisId: "diagnosis-a", ticketId: "TKT-1001", score: expect.any(Number) }),
+        expect.objectContaining({ diagnosisId: "diagnosis-b", ticketId: "TKT-1002", score: expect.any(Number) }),
+      ]));
+      const malformedMcpApproval = await client.callTool({
+        name: "approve_knowledge_candidate",
+        arguments: { candidateId: gptCandidate.id, actor: "", expectedVersion: gptCandidate.version },
+      });
+      const malformedHttpApproval = await json(`/api/knowledge-candidates/${gptCandidate.id}/approve`, {
+        method: "POST",
+        body: JSON.stringify({ candidateId: gptCandidate.id, actor: "", expectedVersion: gptCandidate.version }),
+      });
+      expect(malformedMcpApproval.isError).toBe(true);
+      expect(mcpText(malformedMcpApproval as any)).toContain("Input validation error");
+      expect(malformedHttpApproval.body.error.code).toBe("INVALID_REQUEST");
+
+      const staleMcpRejection = await client.callTool({
+        name: "reject_knowledge_candidate",
+        arguments: { candidateId: gptCandidate.id, actor: "reviewer", expectedVersion: gptCandidate.version + 1, reason: "Need a second reviewer." },
+      });
+      const staleHttpRejection = await json(`/api/knowledge-candidates/${gptCandidate.id}/reject`, {
+        method: "POST",
+        body: JSON.stringify({ actor: "reviewer", expectedVersion: gptCandidate.version + 1, reason: "Need a second reviewer." }),
+      });
+      expect(staleMcpRejection.isError).toBe(true);
+      expect(mcpText(staleMcpRejection as any)).toBe("STALE_APPROVAL: Knowledge candidate version is stale.");
+      expect(staleHttpRejection.body.error.code).toBe("STALE_APPROVAL");
+      const rejected = await json(`/api/knowledge-candidates/${candidate.id}/reject`, {
+        method: "POST",
+        body: JSON.stringify({
+          actor: "reviewer",
+          expectedVersion: candidate.version,
+          reason: "Need a second reviewer.",
+        }),
+      });
+      expect(rejected.status).toBe(200);
+      expect(rejected.body).toEqual({ candidateId: candidate.id, rejected: true });
+      const mcpRejected = await client.callTool({
+        name: "reject_knowledge_candidate",
+        arguments: {
+          candidateId: gptCandidate.id,
+          actor: "reviewer",
+          expectedVersion: gptCandidate.version,
+          reason: "Need a second reviewer.",
+        },
+      });
+      expect(mcpRejected.structuredContent).toEqual({ candidateId: gptCandidate.id, rejected: true });
+      await expect(deps.knowledgeEvolution.objects.listApproved()).resolves.toEqual([]);
+
+      const approved = await json(`/api/knowledge-candidates/${candidate.id}/approve`, {
+        method: "POST",
+        body: JSON.stringify({
+          actor: "reviewer",
+          expectedVersion: candidate.version,
+        }),
+      });
+      expect(approved.status, JSON.stringify(approved.body)).toBe(409);
+      expect(approved.body.error.code).toBe("STALE_APPROVAL");
+      const mcpApproved = await client.callTool({
+        name: "approve_knowledge_candidate",
+        arguments: {
+          candidateId: gptCandidate.id,
+          actor: "reviewer",
+          expectedVersion: gptCandidate.version,
+        },
+      });
+      expect(mcpApproved.isError).toBe(true);
+      expect(mcpText(mcpApproved as any)).toContain("terminal review state");
+    } finally {
+      await Promise.allSettled([client.close(), server.close()]);
+    }
+  });
+
+  it("rejects malformed and stale knowledge review actions", async () => {
+    const { deps, json } = await startFixture();
+    await seedKnowledgeCandidateSupport(deps);
+    const discovery = await json("/api/knowledge-candidates", {
+      method: "POST",
+      body: JSON.stringify({ actor: "reviewer", includeGpt: false }),
+    });
+    const candidate = discovery.body.candidates[0];
+
+    const malformed = await json(`/api/knowledge-candidates/${candidate.id}/approve`, {
+      method: "POST",
+      body: JSON.stringify({ actor: "", expectedVersion: candidate.version }),
+    });
+    expect(malformed.status).toBe(400);
+    expect(malformed.body.error.code).toBe("INVALID_REQUEST");
+
+    const stale = await json(`/api/knowledge-candidates/${candidate.id}/reject`, {
+      method: "POST",
+      body: JSON.stringify({
+        actor: "reviewer",
+        expectedVersion: candidate.version + 1,
+        reason: "Needs more corroboration.",
+      }),
+    });
+    expect(stale.status).toBe(409);
+    expect(stale.body.error.code).toBe("STALE_APPROVAL");
+  });
+
+  it("returns equivalent independent MCP and HTTP outcomes for governed knowledge actions", async () => {
+    const actions = [
+      { kind: "approve" as const, actor: "reviewer", expectedVersion: 1, edits: { summary: "A deployed service can retain a credential after rotation." } },
+      { kind: "reject" as const, actor: "reviewer", expectedVersion: 1, reason: "Need a second reviewer." },
+      { kind: "approve" as const, actor: "", expectedVersion: 1 },
+      { kind: "reject" as const, actor: "reviewer", expectedVersion: 2, reason: "Need a second reviewer." },
+    ];
+
+    for (const action of actions) {
+      await expect(runHttpKnowledgeAction(action)).resolves.toEqual(
+        await runMcpKnowledgeAction(action),
+      );
+    }
+  });
+
   it("serves the temporary Approval Desk UI", async () => {
     const { baseUrl } = await startFixture();
 
@@ -2667,6 +2841,139 @@ async function startFixture(
       };
     },
   };
+}
+
+async function seedKnowledgeCandidateSupport(
+  deps: Awaited<ReturnType<typeof createRuntimeDependencies>>,
+): Promise<void> {
+  await Promise.all([
+    deps.knowledgeEvolution.diagnoses.save({
+      id: "diagnosis-a",
+      ticketId: "TKT-1001",
+      problem: "The API request is rejected after rotating a credential.",
+      symptoms: ["Requests return a credential validation failure after rotation."],
+      evidenceIds: ["credential-rotation-evidence"],
+      ownerTeam: "api-platform",
+      fixSteps: ["Refresh the deployed credential configuration."],
+      verificationSteps: ["Confirm a new request succeeds."],
+      completedAt: "2026-06-10T08:00:00.000Z",
+    }),
+    deps.knowledgeEvolution.diagnoses.save({
+      id: "diagnosis-b",
+      ticketId: "TKT-1002",
+      problem: "The API request is rejected after rotating a credential.",
+      symptoms: ["Requests return a credential validation failure after rotation."],
+      evidenceIds: ["credential-rotation-evidence"],
+      ownerTeam: "api-platform",
+      fixSteps: ["Refresh the deployed credential configuration."],
+      verificationSteps: ["Confirm a new request succeeds."],
+      completedAt: "2026-06-10T08:01:00.000Z",
+    }),
+  ]);
+}
+
+function installGptKnowledgeDraftProvider(
+  deps: Awaited<ReturnType<typeof createRuntimeDependencies>>,
+): void {
+  const provider: CandidateDraftProvider = {
+    enabled: true,
+    async draft() {
+      return {
+        outputText: JSON.stringify({
+          kind: "known-cause",
+          name: "Recurring credential rotation issue",
+          summary: "A deployed service can retain an earlier credential after rotation.",
+          triggerPatterns: ["Requests return a credential validation failure after rotation."],
+          evidencePolicy: { mode: "required", evidenceIds: ["credential-rotation-evidence"] },
+          knowledgeArticleIds: [],
+          timeConstraints: ["Apply after a credential rotation."],
+          diagnosticSteps: ["Compare the deployed credential with the active credential."],
+          fixSteps: ["Refresh the deployed credential configuration."],
+          verificationSteps: ["Confirm a new request succeeds."],
+          customerSafeExplanation: "We found a configuration mismatch and are reviewing the correction.",
+          operatorRationale: "Completed diagnosis support identifies a repeatable credential rotation issue.",
+          confidence: 0.91,
+          rationale: "Completed diagnosis support identifies a repeatable credential rotation issue.",
+          supportingDiagnosisIds: ["diagnosis-a", "diagnosis-b"],
+          supportingTicketIds: ["TKT-1001", "TKT-1002"],
+          contradictions: [],
+        }),
+        provenance: {
+          provider: "openai",
+          model: "controlled-local-simulation",
+          rationale: "Completed diagnosis support identifies a repeatable credential rotation issue.",
+        },
+      };
+    },
+  };
+  deps.knowledgeEvolution.service = new KnowledgeEvolutionService({
+    tickets: deps.tickets,
+    knowledge: deps.knowledge,
+    diagnoses: deps.knowledgeEvolution.diagnoses,
+    objects: deps.knowledgeEvolution.objects,
+    audits: deps.knowledgeEvolution.audits,
+    draftProvider: provider,
+    promotionAuthorizer: (actorId) => ["reviewer", "approval-desk", "support-lead"].includes(actorId),
+    now: deps.now,
+  });
+}
+
+type KnowledgeAction =
+  | { kind: "approve"; actor: string; expectedVersion: number; edits?: { summary: string } }
+  | { kind: "reject"; actor: string; expectedVersion: number; reason?: string };
+
+async function runHttpKnowledgeAction(action: KnowledgeAction): Promise<unknown> {
+  const { deps, json } = await startFixture();
+  await seedKnowledgeCandidateSupport(deps);
+  await json("/api/knowledge-candidates", {
+    method: "POST",
+    body: JSON.stringify({ actor: "reviewer", includeGpt: false }),
+  });
+  const candidateId = "known-cause-diagnosis-a";
+  const { kind, ...body } = action;
+  const response = await json(`/api/knowledge-candidates/${candidateId}/${action.kind}`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+  return normalizeHttpKnowledgeOutcome(response.status, response.body);
+}
+
+async function runMcpKnowledgeAction(action: KnowledgeAction): Promise<unknown> {
+  const { deps } = await startFixture();
+  await seedKnowledgeCandidateSupport(deps);
+  const server = createTriageServer(deps);
+  const client = new Client({ name: "knowledge-action-parity", version: "1.0.0" });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  await server.connect(serverTransport);
+  await client.connect(clientTransport);
+  try {
+    await client.callTool({
+      name: "discover_knowledge_candidates",
+      arguments: { actor: "reviewer", includeGpt: false },
+    });
+    const { kind, ...input } = action;
+    const result = await client.callTool({
+      name: `${action.kind}_knowledge_candidate`,
+      arguments: { candidateId: "known-cause-diagnosis-a", ...input },
+    });
+    if (result.isError === true) {
+      const text = mcpText(result as any);
+      return { ok: false, code: text.startsWith("STALE_APPROVAL:") ? "STALE_APPROVAL" : "INVALID_REQUEST" };
+    }
+    const value = result.structuredContent as any;
+    return action.kind === "approve"
+      ? { ok: true, object: { id: value.object.id, status: value.object.status, version: value.object.version } }
+      : { ok: true, candidateId: value.candidateId, rejected: value.rejected };
+  } finally {
+    await Promise.allSettled([client.close(), server.close()]);
+  }
+}
+
+function normalizeHttpKnowledgeOutcome(status: number, body: any): unknown {
+  if (status !== 200) return { ok: false, code: body.error.code };
+  return body.object === undefined
+    ? { ok: true, candidateId: body.candidateId, rejected: body.rejected }
+    : { ok: true, object: { id: body.object.id, status: body.object.status, version: body.object.version } };
 }
 
 async function ticketRevision(

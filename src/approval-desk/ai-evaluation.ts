@@ -10,6 +10,7 @@ import {
   type KnowledgeArticle,
   type Ticket,
 } from "../domain.js";
+import type { KnowledgeObject } from "../knowledge-evolution/domain.js";
 import type {
   DiagnosisContext,
   FixContext,
@@ -50,6 +51,7 @@ export async function evaluateTicketWithAi(input: {
   outcome?: ExpectedOutcome;
   actor: string;
   allKnowledgeArticles: readonly KnowledgeArticle[];
+  approvedObjects?: readonly KnowledgeObject[];
   customerReplies: readonly CustomerReply[];
   previousSupportResponse?: PreviousSupportResponse;
   diagnosisContext?: DiagnosisContext;
@@ -89,6 +91,7 @@ export async function evaluateTicketWithAi(input: {
     advisoryClassificationSignals: classificationExecution.acceptedSignals,
     diagnosisContext: input.diagnosisContext,
     fixContext: input.fixContext,
+    approvedObjects: input.approvedObjects,
   });
   const selectedKnowledge = input.allKnowledgeArticles.filter((article) =>
     base.knowledgeArticleIds.includes(article.id),
@@ -104,6 +107,7 @@ export async function evaluateTicketWithAi(input: {
     advisoryClassificationSignals: classificationExecution.acceptedSignals,
     diagnosisContext: input.diagnosisContext,
     fixContext: input.fixContext,
+    approvedObjects: input.approvedObjects,
     draftProvider: draftingPreference === "deterministic" || safety.detected
       ? undefined
       : input.draftProvider,

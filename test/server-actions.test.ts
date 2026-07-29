@@ -601,6 +601,33 @@ afterEach(async () => {
 });
 
 describe("createTriageServer action protocol", () => {
+  it("discovers strict, explicit knowledge review actions", async () => {
+    const client = await connect(await createFixture());
+    const discovery = await client.listTools();
+    const actions = discovery.tools.filter(({ name }) =>
+      name === "approve_knowledge_candidate" || name === "reject_knowledge_candidate",
+    );
+
+    expect(actions.map(({ name }) => name).sort()).toEqual([
+      "approve_knowledge_candidate",
+      "reject_knowledge_candidate",
+    ]);
+    for (const action of actions) {
+      expect(action.annotations).toMatchObject({
+        readOnlyHint: false,
+        destructiveHint: true,
+      });
+      expect(action.inputSchema.required).toEqual(
+        expect.arrayContaining(["candidateId", "actor", "expectedVersion"]),
+      );
+      expect(action.inputSchema.additionalProperties).toBe(false);
+    }
+    expect(
+      actions.find(({ name }) => name === "reject_knowledge_candidate")
+        ?.inputSchema.required,
+    ).toContain("reason");
+  });
+
   it("discovers strict action schemas and exact workflow annotations", async () => {
     const client = await connect(await createFixture());
     const discovery = await client.listTools();

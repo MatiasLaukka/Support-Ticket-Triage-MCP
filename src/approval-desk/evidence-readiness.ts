@@ -4,6 +4,7 @@ import type {
   SupportState,
   Ticket,
 } from "../domain.js";
+import type { KnowledgeObject } from "../knowledge-evolution/domain.js";
 import { extractAccountFacts, type AccountFacts } from "./account-facts.js";
 import { detectKnownCause, getKnownCause } from "./known-cause-catalog.js";
 import {
@@ -16,12 +17,19 @@ type EvidenceSource = EvidenceRequirement["source"];
 export interface EvidenceReadiness {
   supportState: SupportState;
   knownCause?: string | null;
+  approvedKnownCause?: ApprovedKnownCause;
   knownEventId?: string | null;
   knownEventMatchReasons?: string[];
   requiredEvidence: EvidenceRequirement[];
   providedEvidence: EvidenceRequirement[];
   missingEvidence: EvidenceRequirement[];
   nextInvestigationSteps: string[];
+}
+
+export interface ApprovedKnownCause {
+  id: string;
+  evidencePolicy: "none-required" | "required";
+  customerSafeExplanation: string;
 }
 
 const EVIDENCE_CATALOG: Readonly<Record<string, Omit<EvidenceRequirement, "source">>> = {
@@ -476,17 +484,31 @@ const KNOWLEDGE_EVIDENCE: Readonly<Record<string, readonly string[]>> = {
 export function analyzeEvidenceReadiness(input: {
   ticket: Ticket;
   outcome: ExpectedOutcome;
+  approvedObjects?: readonly KnowledgeObject[];
+  candidate?: {
+    status: "candidate";
+    evidencePolicy: "none-required" | "required";
+  };
 }): EvidenceReadiness {
-  const knownCauseDefinition = detectKnownCause(input);
-  const knownCause = knownCauseDefinition?.id ?? null;
+  const legacyKnownCauseDefinition = detectKnownCause(input);
+  const legacyKnownCause = legacyKnownCauseDefinition?.id ?? null;
   const knownEvent = detectKnownEvent({
     ticket: input.ticket,
-    knownCause,
+    knownCause: legacyKnownCause,
   });
+  const approvedKnownCause = findApprovedKnownCause(input.ticket, input.approvedObjects);
+  const approvedCauseCanApply = approvedKnownCause !== undefined &&
+    knownEvent?.status !== "active" &&
+    !input.outcome.requiredEscalations.includes("outage");
+  const knownCause = approvedCauseCanApply
+    ? approvedKnownCause.id
+    : legacyKnownCause;
   const accountFacts = extractAccountFacts(input.ticket);
   const requiredEvidence =
-    knownCauseDefinition !== undefined
-      ? evidenceForKnownCause(knownCauseDefinition.requiredEvidenceIds)
+    approvedCauseCanApply
+      ? evidenceForApprovedKnownCause(input.approvedObjects!, approvedKnownCause.id)
+      : legacyKnownCauseDefinition !== undefined
+      ? evidenceForKnownCause(legacyKnownCauseDefinition.requiredEvidenceIds)
       : evidenceForIssuePattern(input) ??
         evidenceForKnowledge(
           relevantKnowledgeArticleIds(input.ticket, input.outcome),
@@ -503,11 +525,17 @@ export function analyzeEvidenceReadiness(input: {
   return {
     supportState: chooseSupportState({
       knownCause,
+      bypassMissingEvidence:
+        (approvedCauseCanApply &&
+          approvedKnownCause?.evidencePolicy === "none-required") ||
+        (knownEvent?.status !== "active" &&
+          legacyKnownCauseDefinition?.evidencePolicy === "none-required"),
       knownEventStatus: knownEvent?.status ?? null,
       missingEvidence,
       outcome: input.outcome,
     }),
     knownCause,
+    ...(approvedCauseCanApply ? { approvedKnownCause } : {}),
     knownEventId: knownEvent?.eventId ?? null,
     knownEventMatchReasons: knownEvent?.matchReasons ?? [],
     requiredEvidence,
@@ -515,11 +543,85 @@ export function analyzeEvidenceReadiness(input: {
     missingEvidence,
     nextInvestigationSteps: buildNextInvestigationSteps({
       knownCause,
+      approvedKnownCause: approvedCauseCanApply ? approvedKnownCause : undefined,
       knownEventStatus: knownEvent?.status ?? null,
       missingEvidence,
       outcome: input.outcome,
     }),
   };
+}
+
+function findApprovedKnownCause(
+  ticket: Ticket,
+  approvedObjects: readonly KnowledgeObject[] | undefined,
+): ApprovedKnownCause | undefined {
+  if (approvedObjects === undefined) return undefined;
+  const text = normalizedTicketText(ticket);
+  const matched = approvedObjects
+    .filter((object) => object.status === "approved" && object.kind === "known-cause")
+    .filter((object) => matchesApprovedKnownCause(object, ticket, text))
+    .sort((left, right) => approvedMatchSpecificity(right) - approvedMatchSpecificity(left) ||
+      left.id.localeCompare(right.id))[0];
+  return matched === undefined ? undefined : approvedKnownCauseFromObject(matched);
+}
+
+function matchesApprovedKnownCause(
+  object: KnowledgeObject,
+  ticket: Ticket,
+  text: string,
+): boolean {
+  return object.triggerPatterns.every((pattern) => {
+    const normalized = normalizeTrigger(pattern);
+    return hasMeaningfulTokens(normalized) && text.includes(normalized);
+  }) && timeConstraintsMatch(object.timeConstraints, ticket.createdAt);
+}
+
+function hasMeaningfulTokens(value: string): boolean {
+  return value.split(" ").some((token) => token.length >= 2);
+}
+
+function approvedMatchSpecificity(object: KnowledgeObject): number {
+  return object.triggerPatterns.reduce(
+    (total, pattern) => total + normalizeTrigger(pattern).split(" ").filter(Boolean).length,
+    0,
+  );
+}
+
+function timeConstraintsMatch(constraints: readonly string[], createdAt: string): boolean {
+  const timestamp = new Date(createdAt).getTime();
+  return constraints.every((constraint) => {
+    const timestamps = constraint.match(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z/g) ?? [];
+    if (timestamps.length < 2) return true;
+    const startsAt = new Date(timestamps[0]!).getTime();
+    const endsAt = new Date(timestamps[1]!).getTime();
+    return Number.isFinite(timestamp) && Number.isFinite(startsAt) &&
+      Number.isFinite(endsAt) && timestamp >= startsAt && timestamp <= endsAt;
+  });
+}
+
+function approvedKnownCauseFromObject(object: KnowledgeObject): ApprovedKnownCause {
+  return {
+    id: object.id,
+    evidencePolicy: object.evidencePolicy.mode,
+    customerSafeExplanation: object.customerSafeExplanation,
+  };
+}
+
+function evidenceForApprovedKnownCause(
+  approvedObjects: readonly KnowledgeObject[],
+  id: string,
+): EvidenceRequirement[] {
+  const object = approvedObjects.find((candidate) => candidate.id === id);
+  if (object?.evidencePolicy.mode !== "required") return [];
+  return evidenceForIds(object.evidencePolicy.evidenceIds, "known-cause");
+}
+
+function normalizedTicketText(ticket: Ticket): string {
+  return normalizeTrigger(ticketText(ticket));
+}
+
+function normalizeTrigger(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 }
 
 function evidenceForIssuePattern(input: {
@@ -634,34 +736,55 @@ function evidenceRequirement(id: string, source: EvidenceSource): EvidenceRequir
 
 function chooseSupportState(input: {
   knownCause: string | null;
+  bypassMissingEvidence: boolean;
   knownEventStatus: KnownEventStatus | null;
   missingEvidence: readonly EvidenceRequirement[];
   outcome: ExpectedOutcome;
 }): SupportState {
-  if (input.knownEventStatus === "active") {
-    return "waiting-on-platform-fix";
-  }
-  if (input.knownEventStatus === "investigating") {
-    return "diagnosing";
+  if (input.missingEvidence.length > 0 && !input.bypassMissingEvidence) {
+    return "needs-information";
   }
   if (input.knownCause !== null) {
     return "known-cause";
   }
-  if (input.outcome.requiredEscalations.includes("outage")) {
+  if (
+    input.knownEventStatus === "active" ||
+    input.outcome.requiredEscalations.includes("outage")
+  ) {
     return "waiting-on-platform-fix";
   }
-  if (input.missingEvidence.length > 0) {
-    return "needs-information";
+  if (input.knownEventStatus === "investigating") {
+    return "diagnosing";
   }
   return "diagnosing";
 }
 
 function buildNextInvestigationSteps(input: {
   knownCause: string | null;
+  approvedKnownCause?: ApprovedKnownCause;
   knownEventStatus: KnownEventStatus | null;
   missingEvidence: readonly EvidenceRequirement[];
   outcome: ExpectedOutcome;
 }): string[] {
+  if (input.missingEvidence.length > 0) {
+    if (input.approvedKnownCause !== undefined) {
+      return ["Collect the approved evidence before confirming the documented support path."];
+    }
+    const knownCause = getKnownCause(input.knownCause);
+    if (knownCause !== undefined) {
+      return [...knownCause.investigationSteps];
+    }
+    if (input.outcome.knowledgeArticleIds.includes("flow-trigger-troubleshooting")) {
+      return [
+        "Collect the missing evidence before recommending a configuration change.",
+        "Compare the customer example against the flow setup and profile timeline.",
+      ];
+    }
+    return [
+      "Collect the missing evidence before recommending a configuration change.",
+      "Compare the customer example against the relevant platform setup and activity timeline.",
+    ];
+  }
   if (input.knownEventStatus === "active") {
     return [
       "Continue platform-impact review and share the next customer update after mitigation status changes.",
@@ -678,22 +801,13 @@ function buildNextInvestigationSteps(input: {
   if (knownCause !== undefined) {
     return [...knownCause.investigationSteps];
   }
+  if (input.approvedKnownCause !== undefined) {
+    return ["Use the approved customer-safe guidance for the documented support path."];
+  }
   if (input.outcome.requiredEscalations.includes("outage")) {
     return [
       "Correlate affected region, event timing, ingestion delay, and profile timeline updates.",
       "Confirm whether platform processing delay explains the customer impact.",
-    ];
-  }
-  if (input.outcome.knowledgeArticleIds.includes("flow-trigger-troubleshooting")) {
-    return [
-      "Collect the missing evidence before recommending a configuration change.",
-      "Compare the customer example against the flow setup and profile timeline.",
-    ];
-  }
-  if (input.missingEvidence.length > 0) {
-    return [
-      "Collect the missing evidence before recommending a configuration change.",
-      "Compare the customer example against the relevant platform setup and activity timeline.",
     ];
   }
   return [

@@ -1118,7 +1118,10 @@ export const approvalDeskHtml = `<!doctype html>
         approvedFields: [],
         conversationTimeline: [],
         recommendationHistory: [],
-        consumedCustomerReplyTimestamp: null
+        consumedCustomerReplyTimestamp: null,
+        knowledgeCandidate: null,
+        knowledgeAdvisory: null,
+        knowledgeRequestId: 0
       };
 
       const els = {
@@ -1471,7 +1474,7 @@ export const approvalDeskHtml = `<!doctype html>
           els.recommendationPanel.innerHTML =
             '<section class="hero-card description"><strong>Step 1: Evaluate ticket</strong>' +
             '<p>Select a ticket, then use the action bar to evaluate classification, lifecycle state, evidence needs, and the next customer response.</p>' +
-            '</section>';
+            '</section>' + renderKnowledgeReviewPanel();
           state.stage = 'empty';
           els.editedCustomerResponse.value = '';
           clearApprovalInputs();
@@ -1503,7 +1506,7 @@ export const approvalDeskHtml = `<!doctype html>
             renderRecommendationChangeSummary(recommendation) +
             renderRecommendationReason(recommendation) +
             renderTechnicalEvidence(recommendation) +
-            renderPreviousRecommendations();
+            renderPreviousRecommendations() + renderKnowledgeReviewPanel();
         }
         if (!preserveApprovalInputs) {
           els.editedCustomerResponse.value = recommendation.draftCustomerResponse;
@@ -1651,6 +1654,9 @@ export const approvalDeskHtml = `<!doctype html>
       }
 
       function actionBarHint() {
+        if (state.knowledgeCandidate !== null) {
+          return 'Potential knowledge pattern — review it separately. Approval affects future evaluations, not historical recommendations.';
+        }
         if (state.recommendation === null) {
           return 'Classify the ticket and draft a response.';
         }
@@ -1676,6 +1682,59 @@ export const approvalDeskHtml = `<!doctype html>
           return 'Feedback is logged to the audit trail.';
         }
         return 'Review the response on the right, then mark done.';
+      }
+
+      function renderKnowledgeReviewPanel() {
+        const candidate = state.knowledgeCandidate;
+        if (candidate === null) {
+          return '';
+        }
+        const support = Array.isArray(candidate.support) ? candidate.support : [];
+        const evidence = candidate.evidencePolicy?.mode === 'required'
+          ? formatList(candidate.evidencePolicy.evidenceIds)
+          : 'No evidence required';
+        const discoveryAdvisory = state.knowledgeAdvisory;
+        const fallback = discoveryAdvisory?.fallbackReason === undefined
+          ? ''
+          : '<p class="warning"><strong>GPT fallback</strong> ' + escapeHtml(discoveryAdvisory.fallbackReason) +
+            (Array.isArray(discoveryAdvisory.diagnostics) && discoveryAdvisory.diagnostics.length > 0
+              ? ': ' + escapeHtml(discoveryAdvisory.diagnostics.join(' '))
+              : '') + '</p>';
+        const listText = function (value) { return Array.isArray(value) ? value.join('\\n') : ''; };
+        const requiredEvidence = candidate.evidencePolicy?.mode === 'required'
+          ? listText(candidate.evidencePolicy.evidenceIds)
+          : '';
+        return '<section class="hero-card description knowledge-review-panel"><strong>Potential knowledge pattern</strong>' +
+          '<p class="hint">This is a separate, explicit review gate. Approval affects future evaluations only; it does not alter historical recommendations or customer responses.</p>' +
+          '<div class="details-grid">' +
+            card('Proposed name', candidate.name) +
+            card('Evidence policy', evidence) +
+            card('Deterministic score', String(candidate.deterministic?.score ?? 'unknown')) +
+            card('Validation', candidate.validationStatus ?? 'unknown') +
+          '</div>' +
+          '<p><strong>Deterministic reasons</strong> ' + escapeHtml(formatList(candidate.deterministic?.reasons)) + '</p>' +
+          '<p><strong>GPT advisory</strong> ' + escapeHtml(candidate.gptAdvisory?.status ?? 'not-used') +
+            (candidate.gptAdvisory?.confidence === undefined ? '' : ' (advisory confidence: ' + escapeHtml(String(candidate.gptAdvisory.confidence)) + ')') +
+            (candidate.gptAdvisory?.rationale ? ': ' + escapeHtml(candidate.gptAdvisory.rationale) : '') + '</p>' +
+          fallback +
+          '<p><strong>Support diagnoses/open tickets</strong> ' + escapeHtml(support.map(function (item) { return item.source + ': ' + (item.diagnosisId ?? item.ticketId); }).join(', ') || 'none') + '</p>' +
+          '<p><strong>Contradictions</strong> ' + escapeHtml(formatList(candidate.contradictions)) + '</p>' +
+          '<p><strong>Validation warnings</strong> ' + escapeHtml(formatList(candidate.validationWarnings)) + '</p>' +
+          '<div class="details-grid"><label>Proposed name <input id="knowledgeName" value="' + escapeHtml(candidate.name ?? '') + '"></label>' +
+          '<label>Owner team <input id="knowledgeOwner" value="' + escapeHtml(candidate.owner ?? '') + '"></label></div>' +
+          '<label>Summary <textarea id="knowledgeSummary">' + escapeHtml(candidate.summary ?? '') + '</textarea></label>' +
+          '<label>Trigger patterns <textarea id="knowledgeTriggerPatterns">' + escapeHtml(listText(candidate.triggerPatterns)) + '</textarea></label>' +
+          '<div class="details-grid"><label>Evidence policy <select id="knowledgeEvidenceMode"><option value="none-required"' + (candidate.evidencePolicy?.mode === 'none-required' ? ' selected' : '') + '>None required</option><option value="required"' + (candidate.evidencePolicy?.mode === 'required' ? ' selected' : '') + '>Required</option></select></label>' +
+          '<label>Required evidence IDs <textarea id="knowledgeEvidenceIds">' + escapeHtml(requiredEvidence) + '</textarea></label></div>' +
+          '<label>Time constraints <textarea id="knowledgeTimeConstraints">' + escapeHtml(listText(candidate.timeConstraints)) + '</textarea></label>' +
+          '<label>Diagnostic workflow <textarea id="knowledgeDiagnosticSteps">' + escapeHtml(listText(candidate.diagnosticSteps)) + '</textarea></label>' +
+          '<label>Fix workflow <textarea id="knowledgeFixSteps">' + escapeHtml(listText(candidate.fixSteps)) + '</textarea></label>' +
+          '<label>Verification workflow <textarea id="knowledgeVerificationSteps">' + escapeHtml(listText(candidate.verificationSteps)) + '</textarea></label>' +
+          '<label>Customer-safe explanation <textarea id="knowledgeCustomerSafeExplanation">' + escapeHtml(candidate.customerSafeExplanation ?? '') + '</textarea></label>' +
+          '<label>Operator rationale <textarea id="knowledgeOperatorRationale">' + escapeHtml(candidate.operatorRationale ?? '') + '</textarea></label>' +
+          '<label>Rejection reason <textarea id="knowledgeRejectReason" placeholder="Explain why this candidate is not approved."></textarea></label>' +
+          '<div class="actions"><button type="button" data-action="approve-knowledge">Approve for future evaluations</button><button type="button" class="secondary" data-action="draft-knowledge-with-gpt">Refresh with optional GPT</button><button type="button" class="secondary" data-action="defer-knowledge">Defer</button><button type="button" class="danger" data-action="reject-knowledge">Reject</button></div>' +
+        '</section>';
       }
 
       function renderDecisionChips(recommendation) {
@@ -2062,8 +2121,20 @@ export const approvalDeskHtml = `<!doctype html>
 
       async function selectTicket(id) {
         const previousTicketId = state.selectedTicket?.id;
-        if (previousTicketId !== undefined && previousTicketId !== id) {
+        const switchingTickets = previousTicketId !== undefined && previousTicketId !== id;
+        if (switchingTickets) {
           state.consumedCustomerReplyTimestamp = null;
+        }
+        const knowledgeRequestId = ++state.knowledgeRequestId;
+        state.knowledgeCandidate = null;
+        state.knowledgeAdvisory = null;
+        if (switchingTickets) {
+          state.recommendation = null;
+          state.stage = 'empty';
+          renderRecommendation();
+          els.recommendationPanel.innerHTML =
+            '<section class="hero-card description"><strong>Loading ticket...</strong>' +
+            '<p>Refreshing the ticket and knowledge review state.</p></section>';
         }
         const data = await requestJson('/api/tickets/' + encodeURIComponent(id));
         state.selectedTicket = data.recommendationSummary === undefined
@@ -2072,6 +2143,12 @@ export const approvalDeskHtml = `<!doctype html>
         state.conversationTimeline = Array.isArray(data.conversationTimeline) ? data.conversationTimeline : [];
         state.recommendationHistory = Array.isArray(data.recommendationHistory) ? data.recommendationHistory : [];
         state.recommendation = data.latestRecommendation ?? null;
+        void loadKnowledgeCandidate(id, knowledgeRequestId).then(function () {
+          if (state.selectedTicket?.id === id && state.knowledgeRequestId === knowledgeRequestId) {
+            renderRecommendation(true);
+            renderRecommendationStageControls();
+          }
+        });
         state.stage = state.recommendation === null
           ? 'empty'
           : isApprovedWorkflow()
@@ -2081,6 +2158,78 @@ export const approvalDeskHtml = `<!doctype html>
         renderTicket();
         renderConversationContext();
         renderRecommendation();
+        setResult(data);
+      }
+
+      async function loadKnowledgeCandidate(ticketId, knowledgeRequestId, includeGpt) {
+        try {
+          const actor = els.actor.value.trim() || 'approval-desk';
+          const data = await requestJson('/api/knowledge-candidates', {
+            method: 'POST',
+            body: JSON.stringify({ ticketId, actor, includeGpt: includeGpt === true })
+          }, { writeErrorToResult: false });
+          if (state.selectedTicket?.id !== ticketId || state.knowledgeRequestId !== knowledgeRequestId) return;
+          state.knowledgeAdvisory = data.gptAdvisory ?? null;
+          const candidates = Array.isArray(data.candidates) ? data.candidates : [];
+          state.knowledgeCandidate = candidates.find(function (candidate) {
+            return candidate.id === data.gptAdvisory?.candidateId;
+          }) ?? candidates.find(function (candidate) {
+            return candidate.deterministic?.meetsAlertThreshold === true;
+          }) ?? null;
+        } catch (_) {
+          if (state.selectedTicket?.id === ticketId && state.knowledgeRequestId === knowledgeRequestId) {
+            state.knowledgeCandidate = null;
+            state.knowledgeAdvisory = null;
+          }
+        }
+      }
+
+      function knowledgeListValue(id) {
+        return (document.getElementById(id)?.value ?? '').split(/\\r?\\n/).map(function (value) {
+          return value.trim();
+        }).filter(Boolean);
+      }
+
+      function knowledgeEdits() {
+        const evidenceMode = document.getElementById('knowledgeEvidenceMode')?.value ?? 'none-required';
+        return {
+          name: document.getElementById('knowledgeName')?.value.trim() ?? '',
+          summary: document.getElementById('knowledgeSummary')?.value.trim() ?? '',
+          triggerPatterns: knowledgeListValue('knowledgeTriggerPatterns'),
+          evidencePolicy: evidenceMode === 'required'
+            ? { mode: 'required', evidenceIds: knowledgeListValue('knowledgeEvidenceIds') }
+            : { mode: 'none-required' },
+          timeConstraints: knowledgeListValue('knowledgeTimeConstraints'),
+          diagnosticSteps: knowledgeListValue('knowledgeDiagnosticSteps'),
+          fixSteps: knowledgeListValue('knowledgeFixSteps'),
+          verificationSteps: knowledgeListValue('knowledgeVerificationSteps'),
+          customerSafeExplanation: document.getElementById('knowledgeCustomerSafeExplanation')?.value.trim() ?? '',
+          operatorRationale: document.getElementById('knowledgeOperatorRationale')?.value.trim() ?? '',
+          owner: document.getElementById('knowledgeOwner')?.value.trim() ?? ''
+        };
+      }
+
+      async function reviewKnowledgeCandidate(action) {
+        const candidate = state.knowledgeCandidate;
+        if (candidate === null) return;
+        const actor = els.actor.value.trim();
+        if (actor === '') {
+          setResult({ error: 'An actor is required for knowledge review.' });
+          return;
+        }
+        const path = '/api/knowledge-candidates/' + encodeURIComponent(candidate.id) + '/' + action;
+        const body = { actor, expectedVersion: candidate.version };
+        if (action === 'approve') {
+          body.edits = knowledgeEdits();
+        }
+        if (action === 'reject') {
+          const reason = document.getElementById('knowledgeRejectReason')?.value.trim() ?? '';
+          if (reason === '') { setResult({ error: 'A rejection reason is required.' }); return; }
+          body.reason = reason;
+        }
+        const data = await requestJson(path, { method: 'POST', body: JSON.stringify(body) });
+        state.knowledgeCandidate = null;
+        renderRecommendation(true);
         setResult(data);
       }
 
@@ -3289,6 +3438,25 @@ export const approvalDeskHtml = `<!doctype html>
         }
         if (event.target?.dataset?.action === 'mark-sent' && state.recommendation !== null) {
           void markResponseSent().catch(function (error) { setResult({ error: error.message }); });
+        }
+        if (event.target?.dataset?.action === 'approve-knowledge') {
+          void reviewKnowledgeCandidate('approve').catch(function (error) { setResult({ error: error.message }); });
+        }
+        if (event.target?.dataset?.action === 'draft-knowledge-with-gpt' && state.selectedTicket !== null) {
+          const ticketId = state.selectedTicket.id;
+          const requestId = ++state.knowledgeRequestId;
+          void loadKnowledgeCandidate(ticketId, requestId, true).then(function () {
+            if (state.selectedTicket?.id === ticketId && state.knowledgeRequestId === requestId) {
+              renderRecommendation(true);
+              renderRecommendationStageControls();
+            }
+          }).catch(function (error) { setResult({ error: error.message }); });
+        }
+        if (event.target?.dataset?.action === 'defer-knowledge') {
+          void reviewKnowledgeCandidate('defer').catch(function (error) { setResult({ error: error.message }); });
+        }
+        if (event.target?.dataset?.action === 'reject-knowledge') {
+          void reviewKnowledgeCandidate('reject').catch(function (error) { setResult({ error: error.message }); });
         }
       });
       els.conversationContextPanel.addEventListener('click', function (event) {

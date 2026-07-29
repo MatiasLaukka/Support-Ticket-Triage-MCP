@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
+import { readFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { resolve } from "node:path";
 import { z } from "zod";
 import {
   ApprovedFieldSchema,
@@ -37,6 +39,14 @@ import {
 import { evaluateTicketWithAi } from "./ai-evaluation.js";
 import { buildAutomationEvidenceReport } from "./evidence-report.js";
 import { approvalDeskHtml } from "./ui.js";
+import { lifecycleReplayHtml } from "./lifecycle-replay-ui.js";
+import {
+  buildLifecycleReplayViewModel,
+  createUnavailableLifecycleReplayViewModel,
+  type LifecycleReplayReport,
+} from "./lifecycle-replay.js";
+import { loadDiagnosticEvaluationScenarios } from "./diagnostic-evaluation-scenarios.js";
+import type { DiagnosticEvaluationScenario } from "./diagnostic-evaluation.js";
 import {
   buildConversationHistory,
   buildConversationTimeline,
@@ -54,6 +64,19 @@ import {
   fixBlockers,
   latestDiagnosisAudit,
 } from "./workflow-guidance.js";
+import {
+  KnowledgeCandidateApprovalOutputSchema,
+  KnowledgeCandidateDefermentOutputSchema,
+  KnowledgeCandidateEditsSchema,
+  KnowledgeCandidateIdSchema,
+  KnowledgeCandidateRejectionOutputSchema,
+  KnowledgeCandidateReviewOutputSchema,
+  KnowledgeDiscoveryReviewOutputSchema,
+  KnowledgeReviewActorSchema,
+  knowledgeApprovalReview,
+  knowledgeCandidateReview,
+  knowledgeDiscoveryReview,
+} from "../knowledge-evolution/review-surface.js";
 
 const JSON_BODY_LIMIT_BYTES = 65_536;
 const UNEXPECTED_ERROR_TEXT = "Unexpected local approval desk error.";
@@ -177,11 +200,33 @@ const WorkflowActionBodySchema = z
     actor: z.string().trim().min(1),
   })
   .strict();
+const KnowledgeDiscoveryBodySchema = z.object({
+  ticketId: TicketIdSchema.optional(),
+  includeGpt: z.boolean().default(false),
+  actor: KnowledgeReviewActorSchema,
+}).strict();
+const KnowledgeApprovalBodySchema = z.object({
+  actor: KnowledgeReviewActorSchema,
+  expectedVersion: z.number().int().positive(),
+  edits: KnowledgeCandidateEditsSchema.optional(),
+}).strict();
+const KnowledgeRejectionBodySchema = z.object({
+  actor: KnowledgeReviewActorSchema,
+  expectedVersion: z.number().int().positive(),
+  reason: z.string().trim().min(1).max(1_000),
+}).strict();
+const KnowledgeDefermentBodySchema = z.object({
+  actor: KnowledgeReviewActorSchema,
+  expectedVersion: z.number().int().positive(),
+}).strict();
 
 export interface ApprovalDeskHttpOptions {
   expectedOutcomesPath?: string;
   draftProvider?: CustomerResponseDraftProvider;
   classificationReasoningProvider?: ClassificationReasoningProvider;
+  lifecycleReplayReportPath?: string;
+  lifecycleReplayControlledReportPath?: string;
+  lifecycleReplayScenarios?: readonly DiagnosticEvaluationScenario[];
 }
 
 export function createApprovalDeskHttpServer(
@@ -203,6 +248,10 @@ async function routeRequest(
     const url = new URL(request.url ?? "/", "http://approval-desk.local");
     if (request.method === "GET" && url.pathname === "/") {
       text(response, 200, approvalDeskHtml);
+      return;
+    }
+    if (request.method === "GET" && url.pathname === "/lifecycle-replay") {
+      text(response, 200, lifecycleReplayHtml);
       return;
     }
 
@@ -340,6 +389,34 @@ function matchRoute(
     return { status: 200, handle: getEvidence };
   }
 
+  if (method === "POST" && pathname === "/api/knowledge-candidates") {
+    return { status: 200, handle: discoverKnowledgeCandidates };
+  }
+
+  const knowledgeCandidate = /^\/api\/knowledge-candidates\/([^/]+)$/.exec(pathname);
+  if (method === "GET" && knowledgeCandidate !== null) {
+    return { status: 200, handle: (context) => getKnowledgeCandidate(context, knowledgeCandidate[1]!) };
+  }
+
+  const knowledgeApproval = /^\/api\/knowledge-candidates\/([^/]+)\/approve$/.exec(pathname);
+  if (method === "POST" && knowledgeApproval !== null) {
+    return { status: 200, handle: (context) => approveKnowledgeCandidate(context, knowledgeApproval[1]!) };
+  }
+
+  const knowledgeRejection = /^\/api\/knowledge-candidates\/([^/]+)\/reject$/.exec(pathname);
+  if (method === "POST" && knowledgeRejection !== null) {
+    return { status: 200, handle: (context) => rejectKnowledgeCandidate(context, knowledgeRejection[1]!) };
+  }
+
+  const knowledgeDeferment = /^\/api\/knowledge-candidates\/([^/]+)\/defer$/.exec(pathname);
+  if (method === "POST" && knowledgeDeferment !== null) {
+    return { status: 200, handle: (context) => deferKnowledgeCandidate(context, knowledgeDeferment[1]!) };
+  }
+
+  if (method === "GET" && pathname === "/api/lifecycle-replay") {
+    return { status: 200, handle: getLifecycleReplay };
+  }
+
   return undefined;
 }
 
@@ -348,6 +425,83 @@ interface RouteContext {
   options: ApprovalDeskHttpOptions;
   request: IncomingMessage;
   url: URL;
+}
+
+async function discoverKnowledgeCandidates(
+  { deps, request }: RouteContext,
+): Promise<unknown> {
+  const input = KnowledgeDiscoveryBodySchema.parse(await readJsonBody(request));
+  const result = await deps.knowledgeEvolution.service.discover({
+    ...(input.ticketId === undefined ? {} : { ticketId: input.ticketId }),
+    includeGpt: input.includeGpt,
+    actorId: input.actor,
+  });
+  const candidates = await Promise.all(
+    [
+      ...result.candidates.map((candidate) => `known-cause-${candidate.id}`),
+      ...(result.gptAdvisory.candidateId === undefined ? [] : [result.gptAdvisory.candidateId]),
+    ].map((candidateId) => deps.knowledgeEvolution.service.getCandidate(candidateId)),
+  );
+  return KnowledgeDiscoveryReviewOutputSchema.parse(
+    knowledgeDiscoveryReview(result, candidates),
+  );
+}
+
+async function getKnowledgeCandidate(
+  { deps }: RouteContext,
+  id: string,
+): Promise<unknown> {
+  const candidateId = KnowledgeCandidateIdSchema.parse(id);
+  return KnowledgeCandidateReviewOutputSchema.parse({
+    candidate: knowledgeCandidateReview(
+      await deps.knowledgeEvolution.service.getCandidate(candidateId),
+    ),
+  });
+}
+
+async function approveKnowledgeCandidate(
+  { deps, request }: RouteContext,
+  id: string,
+): Promise<unknown> {
+  const candidateId = KnowledgeCandidateIdSchema.parse(id);
+  const input = KnowledgeApprovalBodySchema.parse(await readJsonBody(request));
+  return KnowledgeCandidateApprovalOutputSchema.parse(
+    knowledgeApprovalReview(await deps.knowledgeEvolution.service.approve({
+      candidateId,
+      actorId: input.actor,
+      expectedVersion: input.expectedVersion,
+      ...(input.edits === undefined ? {} : { edits: input.edits }),
+    })),
+  );
+}
+
+async function rejectKnowledgeCandidate(
+  { deps, request }: RouteContext,
+  id: string,
+): Promise<unknown> {
+  const candidateId = KnowledgeCandidateIdSchema.parse(id);
+  const input = KnowledgeRejectionBodySchema.parse(await readJsonBody(request));
+  await deps.knowledgeEvolution.service.reject({
+    candidateId,
+    actorId: input.actor,
+    expectedVersion: input.expectedVersion,
+    reason: input.reason,
+  });
+  return KnowledgeCandidateRejectionOutputSchema.parse({ candidateId, rejected: true });
+}
+
+async function deferKnowledgeCandidate(
+  { deps, request }: RouteContext,
+  id: string,
+): Promise<unknown> {
+  const candidateId = KnowledgeCandidateIdSchema.parse(id);
+  const input = KnowledgeDefermentBodySchema.parse(await readJsonBody(request));
+  await deps.knowledgeEvolution.service.defer({
+    candidateId,
+    actorId: input.actor,
+    expectedVersion: input.expectedVersion,
+  });
+  return KnowledgeCandidateDefermentOutputSchema.parse({ candidateId, deferred: true });
 }
 
 async function listTickets({ deps, url }: RouteContext): Promise<unknown> {
@@ -375,6 +529,69 @@ async function listTickets({ deps, url }: RouteContext): Promise<unknown> {
       ).summary,
     })),
   };
+}
+
+async function getLifecycleReplay({ options }: RouteContext): Promise<unknown> {
+  const liveReportPath = options.lifecycleReplayReportPath ??
+    resolve("reports/ai-comparison/live-latest.json");
+  let liveReport: LifecycleReplayReport | undefined;
+  let sourceReportPath = liveReportPath;
+  try {
+    liveReport = JSON.parse(await readFile(liveReportPath, "utf8")) as LifecycleReplayReport;
+  } catch (error) {
+    if (isMissingFile(error)) {
+      const controlledPath = options.lifecycleReplayControlledReportPath ??
+        resolve("reports/ai-comparison/controlled-latest.json");
+      try {
+        liveReport = JSON.parse(
+          await readFile(controlledPath, "utf8"),
+        ) as LifecycleReplayReport;
+        sourceReportPath = controlledPath;
+      } catch (controlledError) {
+        if (isMissingFile(controlledError)) {
+          return createUnavailableLifecycleReplayViewModel(
+            "live-report-missing",
+            liveReportPath,
+          );
+        }
+        return createUnavailableLifecycleReplayViewModel("invalid-report", controlledPath);
+      }
+    } else {
+      return createUnavailableLifecycleReplayViewModel("invalid-report", liveReportPath);
+    }
+  }
+
+  let controlledReport: LifecycleReplayReport | undefined;
+  const controlledReportPath = options.lifecycleReplayControlledReportPath ??
+    resolve("reports/ai-comparison/controlled-latest.json");
+  try {
+    controlledReport = JSON.parse(
+      await readFile(controlledReportPath, "utf8"),
+    ) as LifecycleReplayReport;
+  } catch (error) {
+    if (!isMissingFile(error)) {
+      controlledReport = undefined;
+    }
+  }
+
+  const scenarios = options.lifecycleReplayScenarios ??
+    await loadDiagnosticEvaluationScenarios();
+  return buildLifecycleReplayViewModel({
+    liveReport,
+    controlledReport,
+    scenarios,
+    liveReportPath: sourceReportPath,
+    controlledReportPath,
+  });
+}
+
+function isMissingFile(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    (error as { code?: unknown }).code === "ENOENT"
+  );
 }
 
 async function getTicketDetail(
@@ -799,9 +1016,11 @@ async function createRecommendation(
 ): Promise<unknown> {
   const ticketId = TicketIdSchema.parse(id);
   const body = SubmitBodySchema.parse(await readJsonBody(request));
-  const [ticket, audits] = await Promise.all([
+  const [ticket, audits, allKnowledgeArticles, approvedObjects] = await Promise.all([
     deps.tickets.get(ticketId),
     deps.audits.list(ticketId),
+    deps.knowledge.list(),
+    deps.knowledgeEvolution.service.listApproved(),
   ]);
   const persistedCustomerReplies = customerRepliesFromAudits(ticketId, audits);
   const previousSupportResponse = latestSupportResponseFromAudits(
@@ -823,7 +1042,8 @@ async function createRecommendation(
     ticket,
     outcome,
     actor: body.actor,
-    allKnowledgeArticles: await deps.knowledge.list(),
+    allKnowledgeArticles,
+    approvedObjects,
     customerReplies,
     previousSupportResponse,
     diagnosisContext,

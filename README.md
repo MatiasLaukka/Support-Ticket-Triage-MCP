@@ -241,6 +241,8 @@ The stdio entry point is `dist/src/index.js`. Its defaults are:
 | `TRIAGE_SEED_FILE` | `data/seed/tickets.json` |
 | `TRIAGE_KNOWLEDGE_ROOT` | `data/knowledge` |
 | `TRIAGE_MINUTES_SAVED` | `8` |
+| `TRIAGE_KNOWLEDGE_APPROVERS` | `support-lead,reviewer,approval-desk` |
+| `TRIAGE_KNOWLEDGE_CANDIDATE_PROVIDER` | unset (deterministic discovery only); use `controlled` for the local advisory demo |
 
 All relative paths are resolved from the process working directory.
 
@@ -773,6 +775,60 @@ remain authoritative. The two evaluator aliases added after that run cover
 the exact phrases `platform processing delay` and `source event creation time`
 seen in the live drafts; a new network run is not required to validate those
 local contract changes.
+
+### Governed Knowledge Evolution
+
+Completed diagnoses can deterministically surface a reusable knowledge
+candidate. GPT may optionally draft a strictly validated advisory version, but
+it cannot route tickets, promote knowledge, or change a customer response.
+An authorized operator reviews and may edit the evidence policy,
+customer-safe explanation, owner, triggers, time constraints, and declarative
+workflows before explicitly promoting the candidate. The promotion audit
+records the supporting diagnoses, deterministic provenance, reviewer, and
+version. Approval Desk candidate discovery is a `POST` action because it may
+persist a new candidate and its creation or rediscovery audit; plain reads use
+the candidate detail endpoint.
+
+Only approved objects affect later evaluations; candidates (including rejected
+candidates) have no routing effect, and promotion never rewrites earlier
+recommendations or audits. Approval Desk and MCP use the same knowledge
+service, while lifecycle replay and AI comparison project the same approved
+object context through the shared evidence and diagnostic workflow.
+
+Evidence policy remains the gate. For example, an approved
+`none-required` known cause whose deterministic trigger matches may use its
+confirmed known-cause path without collecting extra customer evidence. An
+approved `required` cause still requests every listed evidence item before it
+can advance. Ordinary tickets and active outages remain evidence-gated.
+Customer drafts use only the approved customer-safe explanation and safe next
+step; candidate rationale, GPT advisory details, and internal detection stay
+in the operator review and audit surfaces. If a candidate is rejected, its
+reason remains audit provenance and future routing stays unchanged.
+
+### Lifecycle Replay Viewer
+
+The read-only Lifecycle Replay page makes evaluation output inspectable in the
+same customer context as the Approval Desk. Run an evaluation first, then
+start the local browser server:
+
+```powershell
+npm run evaluate:ai-comparison -- --live   # optional; controlled output also works
+npm run demo:approval-desk
+```
+
+Open `/lifecycle-replay` on the printed local URL. The page groups snapshots by
+ticket, shows customer replies and previous support responses, and lets you
+compare deterministic and GPT-labelled lanes. Operator view includes
+classification agreement, quality breakdown, failure reasons, and sanitized
+provider provenance. Customer view shows only the draft that a customer would
+see and the explicit approval pause.
+
+Replay reads `reports/ai-comparison/live-latest.json` (and the controlled report
+when present); it makes no OpenAI calls, sends no responses, and never mutates
+ticket or audit state. Snapshots are labeled evaluation states rather than an
+invented chronological journey, so the viewer does not imply that unrelated
+scenario runs happened in a particular order. See
+[the replay viewer guide](docs/lifecycle-replay.md) for a portfolio walkthrough.
 
 ## Extension To Zendesk Or Jira
 

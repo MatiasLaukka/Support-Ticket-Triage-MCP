@@ -1027,6 +1027,43 @@ describe("TriageService", () => {
           }
           records.push(record);
         },
+        async remove(id) {
+          const index = records.findIndex((record) => record.id === id);
+          if (index < 0) throw new DomainError("Completed diagnosis was not found.", "REPOSITORY_ERROR");
+          records.splice(index, 1);
+        },
+      },
+      now: () => fixedNow,
+      uuid: () => auditId,
+    });
+    const input = makeRecordDiagnosisInput();
+
+    await expect(service.recordDiagnosis(input)).rejects.toMatchObject({ code: "REPOSITORY_ERROR" });
+    expect(records).toEqual([]);
+    expect(audit.events.filter((event) => event.action === "diagnosis-completed")).toEqual([]);
+
+    await expect(service.recordDiagnosis(input)).resolves.toMatchObject({ action: "diagnosis-completed" });
+    expect(records).toHaveLength(1);
+    expect(audit.events.filter((event) => event.action === "diagnosis-completed")).toHaveLength(1);
+  });
+
+  it("rolls a saved diagnosis back when its audit fails and allows a clean retry", async () => {
+    const tickets = new MemoryTicketStore(makeTicket());
+    const recommendations = new MemoryRecommendationStore();
+    const audit = new MemoryAuditStore();
+    audit.failNext = true;
+    const records: Array<{ id: string }> = [];
+    const service = new TriageService({
+      tickets,
+      recommendations,
+      audit,
+      diagnoses: {
+        async save(record) { records.push(record); },
+        async remove(id) {
+          const index = records.findIndex((record) => record.id === id);
+          if (index < 0) throw new DomainError("Completed diagnosis was not found.", "REPOSITORY_ERROR");
+          records.splice(index, 1);
+        },
       },
       now: () => fixedNow,
       uuid: () => auditId,

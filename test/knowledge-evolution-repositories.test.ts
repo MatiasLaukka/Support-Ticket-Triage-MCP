@@ -49,6 +49,16 @@ describe("knowledge evolution repositories", () => {
     await expect(repository.list()).resolves.toMatchObject([diagnosis, { id: "diagnosis-002" }]);
   });
 
+  it("removes a persisted diagnosis so a failed audit can be retried without a duplicate", async () => {
+    const repository = new DiagnosisRepository(join(await root(), "diagnoses"));
+    await repository.save(diagnosis);
+
+    await repository.remove(diagnosis.id);
+
+    await expect(repository.list()).resolves.toEqual([]);
+    await expect(repository.save(diagnosis)).resolves.toBeUndefined();
+  });
+
   it("rejects records whose serialized form exceeds the safe read limit", async () => {
     const repository = new DiagnosisRepository(join(await root(), "diagnoses"));
     const oversized = { ...diagnosis, symptoms: Array.from({ length: 1_100 }, (_, index) => `${index}-${"x".repeat(995)}`) };

@@ -403,7 +403,7 @@ export interface TriageServiceDependencies {
   tickets: TicketStore;
   recommendations: RecommendationStore;
   audit: AuditStore;
-  diagnoses?: { save(record: CompletedDiagnosis): Promise<void> };
+  diagnoses?: { save(record: CompletedDiagnosis): Promise<void>; remove(id: CompletedDiagnosis["id"]): Promise<void> };
   now?: () => Date;
   uuid?: () => string;
 }
@@ -747,8 +747,28 @@ export class TriageService {
       knowledgeArticleIds: diagnosis.knowledgeArticleIds,
       result: "success",
     });
-    if (!escalated && this.dependencies.diagnoses !== undefined) {
-      await this.dependencies.diagnoses.save(completedDiagnosisFrom(auditEvent, diagnosis));
+    const completedDiagnosis = !escalated && this.dependencies.diagnoses !== undefined
+      ? completedDiagnosisFrom(auditEvent, diagnosis)
+      : undefined;
+    if (completedDiagnosis !== undefined) {
+      await this.dependencies.diagnoses!.save(completedDiagnosis);
+      try {
+        await this.dependencies.audit.append(auditEvent);
+      } catch (auditError) {
+        try {
+          await this.dependencies.diagnoses!.remove(completedDiagnosis.id);
+        } catch {
+          throw domainErrorWithCause(
+            "Diagnosis audit failed and completed diagnosis rollback was not safe.",
+            auditError,
+          );
+        }
+        throw domainErrorWithCause(
+          "Diagnosis audit failed; completed diagnosis was compensated.",
+          auditError,
+        );
+      }
+      return auditEvent;
     }
     await this.dependencies.audit.append(auditEvent);
     return auditEvent;

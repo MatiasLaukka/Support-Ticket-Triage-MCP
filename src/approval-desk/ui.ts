@@ -2100,6 +2100,8 @@ export const approvalDeskHtml = `<!doctype html>
         if (previousTicketId !== undefined && previousTicketId !== id) {
           state.consumedCustomerReplyTimestamp = null;
         }
+        const knowledgeRequestId = ++state.knowledgeRequestId;
+        state.knowledgeCandidate = null;
         const data = await requestJson('/api/tickets/' + encodeURIComponent(id));
         state.selectedTicket = data.recommendationSummary === undefined
           ? data.ticket
@@ -2107,7 +2109,6 @@ export const approvalDeskHtml = `<!doctype html>
         state.conversationTimeline = Array.isArray(data.conversationTimeline) ? data.conversationTimeline : [];
         state.recommendationHistory = Array.isArray(data.recommendationHistory) ? data.recommendationHistory : [];
         state.recommendation = data.latestRecommendation ?? null;
-        const knowledgeRequestId = ++state.knowledgeRequestId;
         void loadKnowledgeCandidate(id, knowledgeRequestId).then(function () {
           if (state.selectedTicket?.id === id && state.knowledgeRequestId === knowledgeRequestId) {
             renderRecommendation(true);

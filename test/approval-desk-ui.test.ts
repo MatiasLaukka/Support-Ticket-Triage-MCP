@@ -88,6 +88,30 @@ describe("approvalDeskHtml", () => {
     expect(app.el("recommendationPanel").innerHTML).toContain("historical recommendations");
   });
 
+  it("clears a prior ticket knowledge candidate while the next ticket discovery is pending", async () => {
+    const candidate = {
+      id: "known-cause-diagnosis-a", name: "Prior ticket pattern", evidencePolicy: { mode: "none-required" },
+      deterministic: { score: 0.8, supportCount: 2, reasons: ["support"], meetsAlertThreshold: true },
+      gptAdvisory: { status: "not-used" }, support: [], contradictions: [], validationStatus: "valid",
+      validationWarnings: [], customerSafeExplanation: "We are reviewing a recurring issue.", version: 1,
+    };
+    const app = await startApprovalDeskApp({
+      tickets: [fixtureTicket, { ...fixtureTicket, id: "TKT-1002", subject: "Second ticket" }],
+      knowledgeCandidatesByTicket: { "TKT-1001": candidate },
+      knowledgeDiscoveryDelayTicks: { "TKT-1002": 12 },
+    });
+
+    await app.selectTicket("TKT-1001");
+    await settle(4);
+    expect(app.el("recommendationPanel").innerHTML).toContain("Prior ticket pattern");
+    await app.selectTicket("TKT-1002");
+
+    expect(app.el("recommendationPanel").innerHTML).not.toContain("Prior ticket pattern");
+    expect(app.el("actionBarHint").textContent).not.toContain("Potential knowledge pattern");
+    await settle(20);
+    expect(app.el("recommendationPanel").innerHTML).not.toContain("Prior ticket pattern");
+  });
+
   it("has demo reply samples for every evidence requirement", () => {
     const evidenceSource = readFileSync(
       "src/approval-desk/evidence-readiness.ts",
@@ -2342,6 +2366,8 @@ async function startApprovalDeskApp(options: {
     recommendationSummary?: Record<string, unknown>;
   };
   knowledgeCandidate?: Record<string, unknown>;
+  knowledgeCandidatesByTicket?: Record<string, Record<string, unknown>>;
+  knowledgeDiscoveryDelayTicks?: Record<string, number>;
 } = {}) {
   const elements = createElements();
   const requests: Array<{ path: string; init?: RequestInit }> = [];
@@ -2380,11 +2406,29 @@ async function startApprovalDeskApp(options: {
       }
       return jsonResponse(fixtureEvidence);
     }
-    if (path.startsWith(`/api/knowledge-candidates?ticketId=${selectedFixtureTicket.id}&actor=approval-desk&includeGpt=false`)) {
+    if (path.startsWith("/api/knowledge-candidates?")) {
+      const ticketId = new URL(`http://approval-desk.local${path}`).searchParams.get("ticketId")!;
+      await settle(options.knowledgeDiscoveryDelayTicks?.[ticketId] ?? 0);
+      const candidate = options.knowledgeCandidatesByTicket?.[ticketId] ??
+        (ticketId === selectedFixtureTicket.id ? options.knowledgeCandidate : undefined);
       return jsonResponse({
-        candidates: options.knowledgeCandidate === undefined ? [] : [options.knowledgeCandidate],
+        candidates: candidate === undefined ? [] : [candidate],
         suppressed: [],
       });
+    }
+    const ticketDetail = /^\/api\/tickets\/([^/]+)$/.exec(path);
+    if (ticketDetail !== null) {
+      const ticket = tickets.find((item) => item.id === ticketDetail[1]);
+      if (ticket !== undefined && ticket.id !== selectedFixtureTicket.id) {
+        return jsonResponse({
+          ticket,
+          audits: { events: [] },
+          conversationTimeline: ticket.id === selectedFixtureTicket.id ? conversationTimeline : [],
+          recommendationHistory: ticket.id === selectedFixtureTicket.id ? (options.ticketDetail?.recommendationHistory ?? []) : [],
+          recommendationSummary: ticket.id === selectedFixtureTicket.id ? options.ticketDetail?.recommendationSummary : undefined,
+          latestRecommendation: ticket.id === selectedFixtureTicket.id ? options.ticketDetailRecommendation : undefined,
+        });
+      }
     }
     if (path === `/api/tickets/${selectedFixtureTicket.id}`) {
       const recommendationHistory = createdRecommendation === undefined
@@ -2569,6 +2613,11 @@ async function startApprovalDeskApp(options: {
     parsedResult: () => JSON.parse(elements.resultPanel.textContent),
     selectFirstTicket: async () => {
       elements.ticketList.children[0]!.dispatch("click");
+      await settle();
+    },
+    selectTicket: async (id: string) => {
+      const button = elements.ticketList.children.find((item) => item.innerHTML.includes(id));
+      button!.dispatch("click");
       await settle();
     },
     createRecommendation: async () => {

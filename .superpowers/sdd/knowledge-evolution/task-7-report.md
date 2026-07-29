@@ -59,3 +59,19 @@
 ### Review-fix commit
 
 - Pending follow-up commit.
+
+## Review fix round 2
+
+- Ticket selection now synchronously clears the active knowledge candidate and advances its request identity before loading the next ticket. A pending or late discovery response from the previous ticket cannot render or enable review actions for the new ticket.
+- Added an asynchronous two-ticket UI test that verifies the prior candidate is unavailable during the transition and remains unavailable when the older discovery completes later.
+- Expanded real SDK MCP coverage for malformed and stale knowledge approval/rejection inputs, with the equivalent HTTP requests checked against the same candidate, actor, version, and reason. The parity fixture continues to exercise MCP and HTTP success outcomes for approval and rejection.
+
+### Review-fix-round-2 test evidence
+
+1. RED: the two-ticket UI test showed `Prior ticket pattern` still rendered after switching to ticket B while B discovery was pending.
+2. GREEN: `npm test -- --run test/approval-desk-http.test.ts test/approval-desk-ui.test.ts` passed build, typecheck, and 122 tests.
+3. GREEN: the required adapter suite passed build, typecheck, and 173 tests across four files.
+
+### Review-fix-round-2 commit
+
+- Pending follow-up commit.

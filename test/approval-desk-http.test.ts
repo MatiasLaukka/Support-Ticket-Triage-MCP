@@ -19,6 +19,10 @@ const now = new Date("2026-06-10T09:00:00.000Z");
 const temporaryRoots: string[] = [];
 const servers: Array<ReturnType<typeof createApprovalDeskHttpServer>> = [];
 
+function mcpText(result: { content: Array<{ type: string; text?: string }> }): string {
+  return result.content.find((item) => item.type === "text")?.text ?? "";
+}
+
 const parityDraftProvider: CustomerResponseDraftProvider = {
   async draft() {
     return {
@@ -125,6 +129,29 @@ describe("createApprovalDeskHttpServer", () => {
         expect.objectContaining({ diagnosisId: "diagnosis-a", ticketId: "TKT-1001", score: expect.any(Number) }),
         expect.objectContaining({ diagnosisId: "diagnosis-b", ticketId: "TKT-1002", score: expect.any(Number) }),
       ]));
+      const malformedMcpApproval = await client.callTool({
+        name: "approve_knowledge_candidate",
+        arguments: { candidateId: gptCandidate.id, actor: "", expectedVersion: gptCandidate.version },
+      });
+      const malformedHttpApproval = await json(`/api/knowledge-candidates/${gptCandidate.id}/approve`, {
+        method: "POST",
+        body: JSON.stringify({ candidateId: gptCandidate.id, actor: "", expectedVersion: gptCandidate.version }),
+      });
+      expect(malformedMcpApproval.isError).toBe(true);
+      expect(mcpText(malformedMcpApproval as any)).toContain("Input validation error");
+      expect(malformedHttpApproval.body.error.code).toBe("INVALID_REQUEST");
+
+      const staleMcpRejection = await client.callTool({
+        name: "reject_knowledge_candidate",
+        arguments: { candidateId: gptCandidate.id, actor: "reviewer", expectedVersion: gptCandidate.version + 1, reason: "Need a second reviewer." },
+      });
+      const staleHttpRejection = await json(`/api/knowledge-candidates/${gptCandidate.id}/reject`, {
+        method: "POST",
+        body: JSON.stringify({ actor: "reviewer", expectedVersion: gptCandidate.version + 1, reason: "Need a second reviewer." }),
+      });
+      expect(staleMcpRejection.isError).toBe(true);
+      expect(mcpText(staleMcpRejection as any)).toBe("STALE_APPROVAL: Knowledge candidate version is stale.");
+      expect(staleHttpRejection.body.error.code).toBe("STALE_APPROVAL");
       const rejected = await json(`/api/knowledge-candidates/${candidate.id}/reject`, {
         method: "POST",
         body: JSON.stringify({

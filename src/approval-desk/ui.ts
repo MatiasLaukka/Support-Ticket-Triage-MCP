@@ -2097,11 +2097,20 @@ export const approvalDeskHtml = `<!doctype html>
 
       async function selectTicket(id) {
         const previousTicketId = state.selectedTicket?.id;
-        if (previousTicketId !== undefined && previousTicketId !== id) {
+        const switchingTickets = previousTicketId !== undefined && previousTicketId !== id;
+        if (switchingTickets) {
           state.consumedCustomerReplyTimestamp = null;
         }
         const knowledgeRequestId = ++state.knowledgeRequestId;
         state.knowledgeCandidate = null;
+        if (switchingTickets) {
+          state.recommendation = null;
+          state.stage = 'empty';
+          renderRecommendation();
+          els.recommendationPanel.innerHTML =
+            '<section class="hero-card description"><strong>Loading ticket...</strong>' +
+            '<p>Refreshing the ticket and knowledge review state.</p></section>';
+        }
         const data = await requestJson('/api/tickets/' + encodeURIComponent(id));
         state.selectedTicket = data.recommendationSummary === undefined
           ? data.ticket

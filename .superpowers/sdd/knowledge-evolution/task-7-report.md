@@ -60,6 +60,22 @@
 
 - Pending follow-up commit.
 
+## Review fix round 3
+
+- A real ticket switch now synchronously clears the knowledge candidate, resets the prior review workflow, and renders a loading panel before the new ticket-detail request begins. Candidate actions from the old ticket are therefore unavailable throughout the transition.
+- Added a delayed-ticket-detail test proving the old pattern panel and its approval/rejection/deferment controls disappear immediately, before ticket B returns.
+- Replaced cross-candidate action comparisons with independent MCP and HTTP fixtures. Each fixture discovers the same deterministic candidate and executes the same approve edit, rejection reason, malformed input, or stale version. The test normalizes transport-specific validation formatting and compares the resulting domain outcome.
+
+### Review-fix-round-3 test evidence
+
+1. RED: with ticket B's detail response delayed, ticket A's `Prior ticket pattern` and review controls remained visible during the wait.
+2. GREEN: `npm test -- --run test/approval-desk-http.test.ts test/approval-desk-ui.test.ts` passed build, typecheck, and 124 tests.
+3. GREEN: the required adapter suite passed build, typecheck, and 175 tests across four files.
+
+### Review-fix-round-3 commit
+
+- Pending follow-up commit.
+
 ## Review fix round 2
 
 - Ticket selection now synchronously clears the active knowledge candidate and advances its request identity before loading the next ticket. A pending or late discovery response from the previous ticket cannot render or enable review actions for the new ticket.

@@ -230,6 +230,21 @@ describe("createApprovalDeskHttpServer", () => {
     expect(stale.body.error.code).toBe("STALE_APPROVAL");
   });
 
+  it("returns equivalent independent MCP and HTTP outcomes for governed knowledge actions", async () => {
+    const actions = [
+      { kind: "approve" as const, actor: "reviewer", expectedVersion: 1, edits: { summary: "A deployed service can retain a credential after rotation." } },
+      { kind: "reject" as const, actor: "reviewer", expectedVersion: 1, reason: "Need a second reviewer." },
+      { kind: "approve" as const, actor: "", expectedVersion: 1 },
+      { kind: "reject" as const, actor: "reviewer", expectedVersion: 2, reason: "Need a second reviewer." },
+    ];
+
+    for (const action of actions) {
+      await expect(runHttpKnowledgeAction(action)).resolves.toEqual(
+        await runMcpKnowledgeAction(action),
+      );
+    }
+  });
+
   it("serves the temporary Approval Desk UI", async () => {
     const { baseUrl } = await startFixture();
 
@@ -2899,6 +2914,61 @@ function installGptKnowledgeDraftProvider(
     draftProvider: provider,
     now: deps.now,
   });
+}
+
+type KnowledgeAction =
+  | { kind: "approve"; actor: string; expectedVersion: number; edits?: { summary: string } }
+  | { kind: "reject"; actor: string; expectedVersion: number; reason?: string };
+
+async function runHttpKnowledgeAction(action: KnowledgeAction): Promise<unknown> {
+  const { deps, json } = await startFixture();
+  await seedKnowledgeCandidateSupport(deps);
+  await json("/api/knowledge-candidates?actor=reviewer&includeGpt=false");
+  const candidateId = "known-cause-diagnosis-a";
+  const { kind, ...body } = action;
+  const response = await json(`/api/knowledge-candidates/${candidateId}/${action.kind}`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+  return normalizeHttpKnowledgeOutcome(response.status, response.body);
+}
+
+async function runMcpKnowledgeAction(action: KnowledgeAction): Promise<unknown> {
+  const { deps } = await startFixture();
+  await seedKnowledgeCandidateSupport(deps);
+  const server = createTriageServer(deps);
+  const client = new Client({ name: "knowledge-action-parity", version: "1.0.0" });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  await server.connect(serverTransport);
+  await client.connect(clientTransport);
+  try {
+    await client.callTool({
+      name: "discover_knowledge_candidates",
+      arguments: { actor: "reviewer", includeGpt: false },
+    });
+    const { kind, ...input } = action;
+    const result = await client.callTool({
+      name: `${action.kind}_knowledge_candidate`,
+      arguments: { candidateId: "known-cause-diagnosis-a", ...input },
+    });
+    if (result.isError === true) {
+      const text = mcpText(result as any);
+      return { ok: false, code: text.startsWith("STALE_APPROVAL:") ? "STALE_APPROVAL" : "INVALID_REQUEST" };
+    }
+    const value = result.structuredContent as any;
+    return action.kind === "approve"
+      ? { ok: true, object: { id: value.object.id, status: value.object.status, version: value.object.version } }
+      : { ok: true, candidateId: value.candidateId, rejected: value.rejected };
+  } finally {
+    await Promise.allSettled([client.close(), server.close()]);
+  }
+}
+
+function normalizeHttpKnowledgeOutcome(status: number, body: any): unknown {
+  if (status !== 200) return { ok: false, code: body.error.code };
+  return body.object === undefined
+    ? { ok: true, candidateId: body.candidateId, rejected: body.rejected }
+    : { ok: true, object: { id: body.object.id, status: body.object.status, version: body.object.version } };
 }
 
 async function ticketRevision(

@@ -93,6 +93,71 @@ describe("diagnosis review contracts", () => {
     ).toMatchObject({ stale: true, staleReasons: ["newer-customer-reply"] });
   });
 
+  it("marks a diagnosis stale when a reply watermark has the same timestamp but a different ID", () => {
+    expect(
+      isDiagnosisStale({
+        diagnosisTimestamp: "2026-06-10T10:00:00.000Z",
+        diagnosisTicketRevision: 2,
+        diagnosisReplyWatermark: "2026-06-10T10:00:00.000Z",
+        currentTicketRevision: 2,
+        latestReplyAt: "2026-06-10T10:00:00.000Z",
+        diagnosisConversationWatermark: {
+          state: "reply",
+          timestamp: "2026-06-10T10:00:00.000Z",
+          id: "11111111-1111-4111-8111-111111111111",
+        },
+        latestConversationWatermark: {
+          state: "reply",
+          timestamp: "2026-06-10T10:00:00.000Z",
+          id: "55555555-5555-4555-8555-555555555555",
+        },
+      }),
+    ).toMatchObject({ stale: true, staleReasons: ["newer-customer-reply"] });
+  });
+
+  it("compares valid timestamps chronologically across offsets", () => {
+    expect(
+      isDiagnosisStale({
+        diagnosisTimestamp: "2026-06-10T10:00:00.000+02:00",
+        diagnosisTicketRevision: 2,
+        currentTicketRevision: 2,
+        latestReplyAt: "2026-06-10T08:30:00.000Z",
+      }),
+    ).toMatchObject({ stale: true, staleReasons: ["newer-customer-reply"] });
+  });
+
+  it("rejects invalid staleness timestamps and stale-reason values", () => {
+    expect(() =>
+      isDiagnosisStale({
+        diagnosisTimestamp: "not-an-instant",
+        diagnosisTicketRevision: 2,
+        currentTicketRevision: 2,
+      }),
+    ).toThrow();
+
+    expect(() =>
+      DiagnosisReviewSnapshotSchema.parse({
+        originalDiagnosis: AuditEventSchema.parse({
+          id: "22222222-2222-4222-8222-222222222222",
+          timestamp: "2026-06-10T10:00:00.000Z",
+          actor: "support-agent",
+          action: "diagnosis-completed",
+          ticketId: "TKT-1001",
+          before: {},
+          after: { diagnosis },
+          rationale: "Diagnosis completed from trusted support context.",
+          knowledgeArticleIds: [],
+          result: "success",
+        }),
+        latestReview: null,
+        stale: true,
+        staleReasons: ["not-a-stale-reason"],
+        sourceTicketRevision: 2,
+        sourceConversationWatermark: { state: "none" },
+      }),
+    ).toThrow();
+  });
+
   it("keeps a resolved historical diagnosis available for history", () => {
     const originalDiagnosis = AuditEventSchema.parse({
       id: "22222222-2222-4222-8222-222222222222",
@@ -127,6 +192,32 @@ describe("diagnosis review contracts", () => {
     expect(snapshot.originalDiagnosis).toEqual(originalDiagnosis);
   });
 
+  it("rejects an original diagnosis audit whose diagnosis payload is malformed", () => {
+    const malformed = AuditEventSchema.parse({
+      id: "22222222-2222-4222-8222-222222222222",
+      timestamp: "2026-06-10T10:00:00.000Z",
+      actor: "support-agent",
+      action: "diagnosis-completed",
+      ticketId: "TKT-1001",
+      before: {},
+      after: { diagnosis: { status: "completed" } },
+      rationale: "Diagnosis completed from trusted support context.",
+      knowledgeArticleIds: [],
+      result: "success",
+    });
+
+    expect(() =>
+      DiagnosisReviewSnapshotSchema.parse({
+        originalDiagnosis: malformed,
+        latestReview: null,
+        stale: false,
+        staleReasons: [],
+        sourceTicketRevision: 2,
+        sourceConversationWatermark: { state: "none" },
+      }),
+    ).toThrow(/diagnosis/i);
+  });
+
   it("returns the most recent review decision for the requested diagnosis", () => {
     const earlier = reviewAudit({
       decision: "reject",
@@ -153,6 +244,17 @@ describe("diagnosis review contracts", () => {
     expect(
       latestDiagnosisReview([later, earlier], "22222222-2222-4222-8222-222222222222"),
     ).toMatchObject({ decision: "revalidate" });
+  });
+
+  it("ignores review audits whose outer ticket, actor, or timestamp does not match the review", () => {
+    const mismatched = AuditEventSchema.parse({
+      ...reviewAudit({ rationale: "The diagnosis is ready for approval." }),
+      actor: "different-actor",
+    });
+
+    expect(
+      latestDiagnosisReview([mismatched], "22222222-2222-4222-8222-222222222222"),
+    ).toBeUndefined();
   });
 
   it("keeps diagnosis review audits visible in the ticket history", () => {

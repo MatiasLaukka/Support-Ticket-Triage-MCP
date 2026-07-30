@@ -160,6 +160,175 @@ describe("approvalDeskHtml", () => {
     expect(app.el("ticketList").children[0]!.innerHTML).not.toContain("SLA risk");
   });
 
+  it("keeps a rejected diagnosis review in history instead of using it as the current draft", async () => {
+    const view = fixtureDiagnosisView();
+    const rejectedDiagnosis = {
+      ...view.originalDiagnosis.after.diagnosis,
+      customerSafeSummary: "Rejected review text must not become current.",
+    };
+    const rejectedReview = {
+      decision: "reject",
+      diagnosisId: view.originalDiagnosis.id,
+      ticketId: "TKT-1001",
+      sourceTicketRevision: 0,
+      sourceConversationWatermark: { state: "none" },
+      editedDiagnosis: rejectedDiagnosis,
+      actor: "casey",
+      rationale: "The original diagnosis needs a different investigation.",
+      reviewedAt: "2026-06-10T09:05:00.000Z",
+    };
+    const app = await startApprovalDeskApp({
+      diagnoses: [{ ...view, reviews: [rejectedReview], latestReview: rejectedReview }],
+    });
+
+    await app.selectFirstTicket();
+
+    expect(app.el("diagnosisPanel").innerHTML).toContain("Checkout event processing is delayed.");
+    expect(app.el("diagnosisPanel").innerHTML).not.toContain("Rejected review text must not become current.");
+    expect(app.el("diagnosisPanel").innerHTML).toContain("reject");
+  });
+
+  it("clears an earlier diagnosis immediately while a new diagnosis view is slow and fails", async () => {
+    const app = await startApprovalDeskApp({
+      tickets: [
+        fixtureTicket,
+        { ...fixtureTicket, id: "TKT-1002", subject: "Second ticket" },
+      ],
+      diagnosesByTicket: {
+        "TKT-1001": [fixtureDiagnosisView()],
+      },
+      diagnosisDelayTicks: { "TKT-1002": 30 },
+      diagnosisFailures: ["TKT-1002"],
+    });
+
+    await app.selectFirstTicket();
+    expect(app.el("diagnosisPanel").innerHTML).toContain("Checkout event processing is delayed.");
+
+    await app.selectTicket("TKT-1002");
+
+    expect(app.el("diagnosisPanel").innerHTML).toContain("Loading diagnosis review");
+    expect(app.el("diagnosisPanel").innerHTML).not.toContain("Checkout event processing is delayed.");
+    await app.wait(40);
+    expect(app.el("diagnosisPanel").innerHTML).toContain("Diagnosis review could not be loaded");
+    expect(app.el("diagnosisPanel").innerHTML).not.toContain("Checkout event processing is delayed.");
+  });
+
+  it("does not let a delayed ticket or diagnosis load overwrite a newer ticket selection", async () => {
+    const app = await startApprovalDeskApp({
+      tickets: [
+        fixtureTicket,
+        { ...fixtureTicket, id: "TKT-1002", subject: "Second ticket" },
+      ],
+      diagnosesByTicket: {
+        "TKT-1001": [fixtureDiagnosisView({ summary: "First ticket diagnosis." })],
+        "TKT-1002": [fixtureDiagnosisView({ id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", summary: "Second ticket diagnosis." })],
+      },
+      ticketDetailDelayTicks: { "TKT-1001": 30 },
+      diagnosisDelayTicks: { "TKT-1001": 30 },
+    });
+
+    app.selectTicketWithoutSettling("TKT-1001");
+    app.selectTicketWithoutSettling("TKT-1002");
+    await app.wait(50);
+
+    expect(app.el("ticketPanel").innerHTML).toContain("Second ticket");
+    expect(app.el("diagnosisPanel").innerHTML).toContain("Second ticket diagnosis.");
+    expect(app.el("diagnosisPanel").innerHTML).not.toContain("First ticket diagnosis.");
+  });
+
+  it("does not let delayed review or fix mutations render into a newer ticket", async () => {
+    const firstDiagnosis = fixtureDiagnosisView({ summary: "First ticket diagnosis." });
+    const secondDiagnosis = fixtureDiagnosisView({
+      id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+      summary: "Second ticket diagnosis.",
+    });
+    const app = await startApprovalDeskApp({
+      tickets: [
+        fixtureTicket,
+        { ...fixtureTicket, id: "TKT-1002", subject: "Second ticket" },
+      ],
+      diagnosesByTicket: { "TKT-1001": [firstDiagnosis], "TKT-1002": [secondDiagnosis] },
+      diagnosisReviewDelayTicks: { "TKT-1001": 30 },
+      diagnosisFixDelayTicks: { "TKT-1001": 30 },
+      diagnosisFixAuditEvents: [{ ticketId: "TKT-1001", action: "fix-available", result: "success" }],
+    });
+
+    await app.selectFirstTicket();
+    await app.reviewDiagnosis("approve");
+    await app.selectTicket("TKT-1002");
+    await app.wait(40);
+    expect(app.el("diagnosisPanel").innerHTML).toContain("Second ticket diagnosis.");
+    expect(app.el("diagnosisPanel").innerHTML).not.toContain("Scoped fix results");
+
+    await app.selectTicket("TKT-1001");
+    app.setImpactRationale("The selected ticket is affected.");
+    app.setImpactTicketReason("TKT-1001", "The source ticket is affected.");
+    app.selectImpactTicket("TKT-1001");
+    await app.applyDiagnosisFix();
+    await app.selectTicket("TKT-1002");
+    await app.wait(40);
+    expect(app.el("diagnosisPanel").innerHTML).toContain("Second ticket diagnosis.");
+    expect(app.el("diagnosisPanel").innerHTML).not.toContain("Scoped fix results");
+  });
+
+  it("does not let a late failed diagnosis review or fix replace the newer ticket result", async () => {
+    const firstDiagnosis = fixtureDiagnosisView({ summary: "First ticket diagnosis." });
+    const secondDiagnosis = fixtureDiagnosisView({
+      id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+      summary: "Second ticket diagnosis.",
+    });
+    const app = await startApprovalDeskApp({
+      tickets: [
+        fixtureTicket,
+        { ...fixtureTicket, id: "TKT-1002", subject: "Second ticket" },
+      ],
+      diagnosesByTicket: { "TKT-1001": [firstDiagnosis], "TKT-1002": [secondDiagnosis] },
+      diagnosisReviewDelayTicks: { "TKT-1001": 30 },
+      diagnosisReviewFailures: ["TKT-1001"],
+      diagnosisFixDelayTicks: { "TKT-1001": 30 },
+      diagnosisFixFailures: ["TKT-1001"],
+    });
+
+    await app.selectFirstTicket();
+    await app.reviewDiagnosis("approve");
+    await app.selectTicket("TKT-1002");
+    await app.wait(40);
+    expect(app.parsedResult()).not.toEqual(expect.objectContaining({ error: "Diagnosis review is unavailable." }));
+
+    await app.selectTicket("TKT-1001");
+    app.setImpactRationale("The selected ticket is affected.");
+    app.setImpactTicketReason("TKT-1001", "The source ticket is affected.");
+    app.selectImpactTicket("TKT-1001");
+    await app.applyDiagnosisFix();
+    await app.selectTicket("TKT-1002");
+    await app.wait(40);
+    expect(app.parsedResult()).not.toEqual(expect.objectContaining({ error: "Diagnosis fix is unavailable." }));
+  });
+
+  it("uses server-provided diagnosis and fix guidance instead of timeline inference", async () => {
+    const diagnosisGuided = await startApprovalDeskApp({
+      ticketDetailRecommendation: {
+        ...fixtureRecommendation,
+        missingEvidence: [evidenceRequirement("trace-id", "Trace ID", "a trace ID")],
+      },
+      ticketDetail: {
+        recommendationSummary: { workflowState: "active" },
+        operatorGuidance: { nextAction: "record-diagnosis" },
+      },
+    });
+    await diagnosisGuided.selectFirstTicket();
+    expect(diagnosisGuided.el("diagnoseButton").hidden).toBe(false);
+
+    const fixGuided = await startApprovalDeskApp({
+      ticketDetail: {
+        recommendationSummary: { workflowState: "active" },
+        operatorGuidance: { nextAction: "mark-fix-available" },
+      },
+    });
+    await fixGuided.selectFirstTicket();
+    expect(fixGuided.el("fixButton").hidden).toBe(false);
+  });
+
   it("shows an evidence-backed knowledge review gate without changing the response workflow", async () => {
     const app = await startApprovalDeskApp({
       knowledgeCandidate: {
@@ -1053,7 +1222,7 @@ describe("approvalDeskHtml", () => {
     expect(app.el("replyControls").hidden).toBe(false);
   });
 
-  it("shows Diagnose after a done response with complete evidence", async () => {
+  it("shows the diagnosis action when the server guidance allows it", async () => {
     const app = await startApprovalDeskApp({
       ticketDetailRecommendation: {
         ...fixtureRecommendation,
@@ -1062,6 +1231,7 @@ describe("approvalDeskHtml", () => {
         missingEvidence: [],
       },
       ticketDetail: {
+        operatorGuidance: { nextAction: "record-diagnosis" },
         conversationTimeline: [
           {
             kind: "support-response-sent",
@@ -1096,7 +1266,7 @@ describe("approvalDeskHtml", () => {
     expect(app.el("createUpdatedRecommendation").textContent).toBe("Update");
   });
 
-  it("shows Diagnose after a newer customer reply has been evaluated despite an older diagnosis", async () => {
+  it("shows the diagnosis action when server guidance permits a refreshed diagnosis", async () => {
     const app = await startApprovalDeskApp({
       ticketDetailRecommendation: {
         ...fixtureRecommendation,
@@ -1106,6 +1276,7 @@ describe("approvalDeskHtml", () => {
         missingEvidence: [],
       },
       ticketDetail: {
+        operatorGuidance: { nextAction: "record-diagnosis" },
         conversationTimeline: [
           {
             kind: "diagnosis",
@@ -1151,7 +1322,7 @@ describe("approvalDeskHtml", () => {
     expect(app.el("fixButton").hidden).toBe(true);
   });
 
-  it("shows Fix only after diagnosis has been recorded and response sent", async () => {
+  it("shows the fix action when the server guidance allows it", async () => {
     const app = await startApprovalDeskApp({
       ticketDetailRecommendation: {
         ...fixtureRecommendation,
@@ -1160,6 +1331,7 @@ describe("approvalDeskHtml", () => {
         missingEvidence: [],
       },
       ticketDetail: {
+        operatorGuidance: { nextAction: "mark-fix-available" },
         conversationTimeline: [
           {
             kind: "diagnosis",
@@ -1198,89 +1370,6 @@ describe("approvalDeskHtml", () => {
       path: "/api/tickets/TKT-1001/fix",
       }),
     );
-  });
-
-  it("does not show Fix while the latest diagnosis is only likely", async () => {
-    const app = await startApprovalDeskApp({
-      ticketDetailRecommendation: {
-        ...fixtureRecommendation,
-        resolution: "approved",
-        supportState: "diagnosing",
-        missingEvidence: [],
-      },
-      ticketDetail: {
-        conversationTimeline: [
-          {
-            kind: "diagnosis",
-            timestamp: "2026-06-10T09:04:00.000Z",
-            actor: "product-support",
-            summary: "The details narrow this to campaign editor loading.",
-            confidence: "likely",
-            owner: "engineering",
-          },
-          {
-            kind: "support-response-sent",
-            timestamp: "2026-06-10T09:05:00.000Z",
-            actor: "approval-desk",
-            recommendationId: fixtureRecommendation.id,
-            body: "Please try the browser-session checks next.",
-          },
-        ],
-        recommendationSummary: {
-          workflowState: "waiting",
-          latestRecommendationId: fixtureRecommendation.id,
-          latestResolution: "approved",
-          hasSentResponse: true,
-          hasCustomerReply: false,
-        },
-      },
-    });
-    await app.selectFirstTicket();
-
-    expect(app.el("diagnoseButton").hidden).toBe(true);
-    expect(app.el("fixButton").hidden).toBe(true);
-  });
-
-  it("does not show Fix for a confirmed customer-owned diagnosis", async () => {
-    const app = await startApprovalDeskApp({
-      ticketDetailRecommendation: {
-        ...fixtureRecommendation,
-        resolution: "approved",
-        supportState: "diagnosing",
-        missingEvidence: [],
-      },
-      ticketDetail: {
-        conversationTimeline: [
-          {
-            kind: "diagnosis",
-            timestamp: "2026-06-10T09:04:00.000Z",
-            actor: "product-support",
-            summary:
-              "The editor works in a private window, so the issue is local browser session state.",
-            confidence: "confirmed",
-            owner: "customer",
-          },
-          {
-            kind: "support-response-sent",
-            timestamp: "2026-06-10T09:05:00.000Z",
-            actor: "approval-desk",
-            recommendationId: fixtureRecommendation.id,
-            body: "Please clear site data or continue in the working browser session.",
-          },
-        ],
-        recommendationSummary: {
-          workflowState: "waiting",
-          latestRecommendationId: fixtureRecommendation.id,
-          latestResolution: "approved",
-          hasSentResponse: true,
-          hasCustomerReply: false,
-        },
-      },
-    });
-    await app.selectFirstTicket();
-
-    expect(app.el("diagnoseButton").hidden).toBe(true);
-    expect(app.el("fixButton").hidden).toBe(true);
   });
 
   it("shows Evaluate for a diagnosis update when sent-response status comes from the summary", async () => {
@@ -2540,11 +2629,11 @@ const fixtureConversationTimeline = [
   },
 ];
 
-function fixtureDiagnosisView(options: { stale?: boolean } = {}) {
+function fixtureDiagnosisView(options: { stale?: boolean; id?: string; summary?: string } = {}) {
   const diagnosis = {
     status: "completed",
     causeType: "platform-delay",
-    customerSafeSummary: "Checkout event processing is delayed.",
+    customerSafeSummary: options.summary ?? "Checkout event processing is delayed.",
     evidenceUsed: ["request trace", "affected timestamp"],
     confidence: "confirmed",
     owner: "engineering",
@@ -2553,7 +2642,7 @@ function fixtureDiagnosisView(options: { stale?: boolean } = {}) {
   };
   return {
     originalDiagnosis: {
-      id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      id: options.id ?? "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
       timestamp: "2026-06-10T09:00:00.000Z",
       actor: "casey",
       action: "diagnosis-completed",
@@ -2604,6 +2693,7 @@ async function startApprovalDeskApp(options: {
     conversationTimeline?: Array<Record<string, unknown>>;
     recommendationHistory?: FixtureRecommendation[];
     recommendationSummary?: Record<string, unknown>;
+    operatorGuidance?: Record<string, unknown>;
   };
   knowledgeCandidate?: Record<string, unknown>;
   knowledgeGptAdvisory?: Record<string, unknown>;
@@ -2611,6 +2701,13 @@ async function startApprovalDeskApp(options: {
   knowledgeDiscoveryDelayTicks?: Record<string, number>;
   ticketDetailDelayTicks?: Record<string, number>;
   diagnoses?: Array<Record<string, unknown>>;
+  diagnosesByTicket?: Record<string, Array<Record<string, unknown>>>;
+  diagnosisDelayTicks?: Record<string, number>;
+  diagnosisFailures?: string[];
+  diagnosisReviewDelayTicks?: Record<string, number>;
+  diagnosisReviewFailures?: string[];
+  diagnosisFixDelayTicks?: Record<string, number>;
+  diagnosisFixFailures?: string[];
   diagnosisFixAuditEvents?: Array<Record<string, unknown>>;
 } = {}) {
   const elements = createElements();
@@ -2618,6 +2715,7 @@ async function startApprovalDeskApp(options: {
   const recommendation = options.recommendation ?? fixtureRecommendation;
   const tickets = options.tickets ?? [fixtureTicket];
   const selectedFixtureTicket = tickets[0]!;
+  const defaultOperatorGuidance = { nextAction: "evaluate-ticket" };
   const metrics = { pendingRecommendations: 0, queueDepth: 1 };
   let createdRecommendation: FixtureRecommendation | undefined;
   const conversationTimeline = [
@@ -2667,16 +2765,36 @@ async function startApprovalDeskApp(options: {
         object: { id: "known-cause-diagnosis-a", status: "approved", version: 1 },
       });
     }
-    if (path === `/api/tickets/${selectedFixtureTicket.id}/diagnoses`) {
-      return jsonResponse({ diagnoses: options.diagnoses ?? [] });
+    const diagnosisList = /^\/api\/tickets\/(TKT-\d{4})\/diagnoses$/.exec(path);
+    if (diagnosisList !== null) {
+      const ticketId = diagnosisList[1]!;
+      await settle(options.diagnosisDelayTicks?.[ticketId] ?? 0);
+      if (options.diagnosisFailures?.includes(ticketId) === true) {
+        return jsonResponse({ error: { message: "Diagnosis review is unavailable." } }, 503);
+      }
+      return jsonResponse({
+        diagnoses: options.diagnosesByTicket?.[ticketId] ?? options.diagnoses ?? [],
+      });
     }
-    if (/^\/api\/tickets\/TKT-1001\/diagnoses\/[^/]+\/review$/.test(path)) {
+    const diagnosisReview = /^\/api\/tickets\/(TKT-\d{4})\/diagnoses\/[^/]+\/review$/.exec(path);
+    if (diagnosisReview !== null) {
+      const ticketId = diagnosisReview[1]!;
+      await settle(options.diagnosisReviewDelayTicks?.[ticketId] ?? 0);
+      if (options.diagnosisReviewFailures?.includes(ticketId) === true) {
+        return jsonResponse({ error: { message: "Diagnosis review is unavailable." } }, 503);
+      }
       return jsonResponse({
         auditEvent: { action: "diagnosis-reviewed" },
-        diagnoses: options.diagnoses ?? [],
+        diagnoses: options.diagnosesByTicket?.[ticketId] ?? options.diagnoses ?? [],
       }, 201);
     }
-    if (/^\/api\/tickets\/TKT-1001\/diagnoses\/[^/]+\/fix$/.test(path)) {
+    const diagnosisFix = /^\/api\/tickets\/(TKT-\d{4})\/diagnoses\/[^/]+\/fix$/.exec(path);
+    if (diagnosisFix !== null) {
+      const ticketId = diagnosisFix[1]!;
+      await settle(options.diagnosisFixDelayTicks?.[ticketId] ?? 0);
+      if (options.diagnosisFixFailures?.includes(ticketId) === true) {
+        return jsonResponse({ error: { message: "Diagnosis fix is unavailable." } }, 503);
+      }
       return jsonResponse({ auditEvents: options.diagnosisFixAuditEvents ?? [] }, 201);
     }
     const ticketDetail = /^\/api\/tickets\/([^/]+)$/.exec(path);
@@ -2691,10 +2809,14 @@ async function startApprovalDeskApp(options: {
           recommendationHistory: ticket.id === selectedFixtureTicket.id ? (options.ticketDetail?.recommendationHistory ?? []) : [],
           recommendationSummary: ticket.id === selectedFixtureTicket.id ? options.ticketDetail?.recommendationSummary : undefined,
           latestRecommendation: ticket.id === selectedFixtureTicket.id ? options.ticketDetailRecommendation : undefined,
+          operatorGuidance: ticket.id === selectedFixtureTicket.id
+            ? (options.ticketDetail?.operatorGuidance ?? defaultOperatorGuidance)
+            : defaultOperatorGuidance,
         });
       }
     }
     if (path === `/api/tickets/${selectedFixtureTicket.id}`) {
+      await settle(options.ticketDetailDelayTicks?.[selectedFixtureTicket.id] ?? 0);
       const recommendationHistory = createdRecommendation === undefined
         ? (options.ticketDetail?.recommendationHistory ?? [])
         : [
@@ -2717,6 +2839,7 @@ async function startApprovalDeskApp(options: {
         recommendationSummary: options.ticketDetail?.recommendationSummary,
         latestRecommendation:
           createdRecommendation ?? options.ticketDetailRecommendation,
+        operatorGuidance: options.ticketDetail?.operatorGuidance ?? defaultOperatorGuidance,
       });
     }
     if (path === `/api/tickets/${selectedFixtureTicket.id}/customer-replies`) {
@@ -2884,6 +3007,11 @@ async function startApprovalDeskApp(options: {
       button!.dispatch("click");
       await settle();
     },
+    selectTicketWithoutSettling: (id: string) => {
+      const button = elements.ticketList.children.find((item) => item.innerHTML.includes(id));
+      button!.dispatch("click");
+    },
+    wait: settle,
     createRecommendation: async () => {
       elements.createRecommendation.dispatch("click");
       await settle();

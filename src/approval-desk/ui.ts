@@ -1203,7 +1203,10 @@ export const approvalDeskHtml = `<!doctype html>
         knowledgeCandidate: null,
         knowledgeAdvisory: null,
         knowledgeRequestId: 0,
+        ticketRequestId: 0,
+        operatorGuidance: null,
         diagnoses: [],
+        diagnosisLoading: false,
         selectedDiagnosisId: null,
         diagnosisDraft: null,
         diagnosisReviewRationale: '',
@@ -1441,7 +1444,19 @@ export const approvalDeskHtml = `<!doctype html>
       }
 
       function diagnosisContextForView(view) {
-        return view?.latestReview?.editedDiagnosis ?? view?.originalDiagnosis?.after?.diagnosis ?? null;
+        const review = view?.latestReview;
+        return review?.decision === 'approve' || review?.decision === 'revalidate'
+          ? review.editedDiagnosis
+          : view?.originalDiagnosis?.after?.diagnosis ?? null;
+      }
+
+      function isCurrentTicketRequest(ticketId, requestId) {
+        return state.ticketRequestId === requestId && state.selectedTicket?.id === ticketId;
+      }
+
+      function isCurrentDiagnosisRequest(ticketId, diagnosisId, requestId) {
+        return isCurrentTicketRequest(ticketId, requestId) &&
+          selectedDiagnosisView()?.originalDiagnosis?.id === diagnosisId;
       }
 
       function diagnosisDraftForView(view) {
@@ -1480,6 +1495,10 @@ export const approvalDeskHtml = `<!doctype html>
       function renderDiagnosisPanel() {
         if (state.selectedTicket === null) {
           els.diagnosisPanel.innerHTML = '<p class="hint">Select a ticket to review recorded diagnoses.</p>';
+          return;
+        }
+        if (state.diagnosisLoading === true) {
+          els.diagnosisPanel.innerHTML = '<p class="hint">Loading diagnosis review...</p>';
           return;
         }
         const view = selectedDiagnosisView();
@@ -1569,12 +1588,15 @@ export const approvalDeskHtml = `<!doctype html>
           '</div>';
       }
 
-      async function loadDiagnoses(ticketId) {
-        const data = await requestJson('/api/tickets/' + encodeURIComponent(ticketId) + '/diagnoses');
-        if (state.selectedTicket?.id !== ticketId) {
+      async function loadDiagnoses(ticketId, ticketRequestId) {
+        const data = await requestJson('/api/tickets/' + encodeURIComponent(ticketId) + '/diagnoses', undefined, {
+          writeErrorToResult: false
+        });
+        if (!isCurrentTicketRequest(ticketId, ticketRequestId)) {
           return;
         }
         state.diagnoses = Array.isArray(data.diagnoses) ? data.diagnoses : [];
+        state.diagnosisLoading = false;
         renderDiagnosisPanel();
       }
 
@@ -1584,6 +1606,9 @@ export const approvalDeskHtml = `<!doctype html>
         if (state.selectedTicket === null || view === null || draft === null) {
           return;
         }
+        const ticketId = state.selectedTicket.id;
+        const diagnosisId = view.originalDiagnosis.id;
+        const ticketRequestId = state.ticketRequestId;
         const body = {
           decision,
           sourceTicketRevision: view.sourceTicketRevision,
@@ -1594,10 +1619,21 @@ export const approvalDeskHtml = `<!doctype html>
         if (state.diagnosisReviewRationale.trim() !== '') {
           body.rationale = state.diagnosisReviewRationale.trim();
         }
-        const data = await requestJson('/api/tickets/' + encodeURIComponent(state.selectedTicket.id) + '/diagnoses/' + encodeURIComponent(view.originalDiagnosis.id) + '/review', {
-          method: 'POST',
-          body: JSON.stringify(body)
-        });
+        let data;
+        try {
+          data = await requestJson('/api/tickets/' + encodeURIComponent(ticketId) + '/diagnoses/' + encodeURIComponent(diagnosisId) + '/review', {
+            method: 'POST',
+            body: JSON.stringify(body)
+          }, { writeErrorToResult: false });
+        } catch (error) {
+          if (isCurrentDiagnosisRequest(ticketId, diagnosisId, ticketRequestId)) {
+            setResult({ error: error instanceof Error ? error.message : 'Request failed.' });
+          }
+          return;
+        }
+        if (!isCurrentDiagnosisRequest(ticketId, diagnosisId, ticketRequestId)) {
+          return;
+        }
         state.diagnoses = Array.isArray(data.diagnoses) ? data.diagnoses : state.diagnoses;
         state.diagnosisDraft = null;
         state.diagnosisReviewRationale = '';
@@ -1612,23 +1648,37 @@ export const approvalDeskHtml = `<!doctype html>
         if (state.selectedTicket === null || view === null) {
           return;
         }
+        const ticketId = state.selectedTicket.id;
+        const diagnosisId = view.originalDiagnosis.id;
+        const ticketRequestId = state.ticketRequestId;
         const actor = els.actor.value.trim() || 'approval-desk';
         const selectedTicketIds = Array.isArray(state.diagnosisImpact.selectedTicketIds)
           ? state.diagnosisImpact.selectedTicketIds
           : [];
-        const data = await requestJson('/api/tickets/' + encodeURIComponent(state.selectedTicket.id) + '/diagnoses/' + encodeURIComponent(view.originalDiagnosis.id) + '/fix', {
-          method: 'POST',
-          body: JSON.stringify({
-            actor,
-            impactSet: {
+        let data;
+        try {
+          data = await requestJson('/api/tickets/' + encodeURIComponent(ticketId) + '/diagnoses/' + encodeURIComponent(diagnosisId) + '/fix', {
+            method: 'POST',
+            body: JSON.stringify({
               actor,
-              rationale: state.diagnosisImpact.rationale,
-              tickets: selectedTicketIds.map(function (ticketId) {
-                return { ticketId, reason: state.diagnosisImpact.ticketReasons?.[ticketId] ?? '' };
-              })
-            }
-          })
-        });
+              impactSet: {
+                actor,
+                rationale: state.diagnosisImpact.rationale,
+                tickets: selectedTicketIds.map(function (ticketId) {
+                  return { ticketId, reason: state.diagnosisImpact.ticketReasons?.[ticketId] ?? '' };
+                })
+              }
+            })
+          }, { writeErrorToResult: false });
+        } catch (error) {
+          if (isCurrentDiagnosisRequest(ticketId, diagnosisId, ticketRequestId)) {
+            setResult({ error: error instanceof Error ? error.message : 'Request failed.' });
+          }
+          return;
+        }
+        if (!isCurrentDiagnosisRequest(ticketId, diagnosisId, ticketRequestId)) {
+          return;
+        }
         state.diagnosisFixResults = Array.isArray(data.auditEvents) ? data.auditEvents : [];
         state.diagnosisImpact = { rationale: '', selectedTicketIds: [], ticketReasons: {} };
         state.diagnosisDraft = null;
@@ -1901,9 +1951,11 @@ export const approvalDeskHtml = `<!doctype html>
         const waitingForReply = isTaskDoneWaitingForReply();
         const customerReplyReady = latestUnconsumedCustomerReply() !== null;
         const closeReady = shouldShowCloseTicketAction();
-        const workflowActionReady = shouldShowCreateUpdatedRecommendation() || shouldShowDiagnoseAction() || shouldShowFixAction() || closeReady;
+        const diagnosisActionReady = shouldShowDiagnoseAction();
+        const fixActionReady = shouldShowFixAction();
+        const workflowActionReady = shouldShowCreateUpdatedRecommendation() || diagnosisActionReady || fixActionReady || closeReady;
         els.setupControls.hidden = hasRecommendation;
-        els.decisionControls.hidden = !hasRecommendation || (waitingForReply && !workflowActionReady) || state.stage === 'approval' || state.stage === 'reject';
+        els.decisionControls.hidden = (!hasRecommendation && !diagnosisActionReady && !fixActionReady) || (waitingForReply && !workflowActionReady) || state.stage === 'approval' || state.stage === 'reject';
         els.editApprovalControls.hidden = !(hasRecommendation && state.stage === 'approval');
         els.rejectControls.hidden = !(hasRecommendation && state.stage === 'reject');
         els.replyControls.hidden = !shouldShowReplyControls();
@@ -1919,11 +1971,11 @@ export const approvalDeskHtml = `<!doctype html>
         els.continueApproval.hidden = !hasRecommendation || approvedWorkflow || shouldShowCreateUpdatedRecommendation();
         els.markSentButton.hidden = true;
         els.createUpdatedRecommendation.hidden = !shouldShowCreateUpdatedRecommendation();
-        els.diagnoseButton.hidden = !shouldShowDiagnoseAction();
-        els.fixButton.hidden = !shouldShowFixAction();
+        els.diagnoseButton.hidden = !diagnosisActionReady;
+        els.fixButton.hidden = !fixActionReady;
         els.closeTicketButton.hidden = !closeReady;
-        els.approveButton.hidden = shouldShowCreateUpdatedRecommendation() || closeReady;
-        els.startRejectButton.hidden = approvedWorkflow || closeReady;
+        els.approveButton.hidden = !hasRecommendation || shouldShowCreateUpdatedRecommendation() || closeReady;
+        els.startRejectButton.hidden = !hasRecommendation || approvedWorkflow || closeReady;
         els.backToRecommendation.hidden = !(hasRecommendation && state.stage === 'approval');
         els.decisionChips.innerHTML = hasRecommendation ? renderDecisionChips(state.recommendation) : '';
         els.decisionSummary.textContent = hasRecommendation ? decisionSummaryText(state.recommendation) : 'Review the draft and evidence, then approve or edit.';
@@ -2093,44 +2145,13 @@ export const approvalDeskHtml = `<!doctype html>
       }
 
       function shouldShowDiagnoseAction() {
-        if (state.selectedTicket === null || state.recommendation === null) {
-          return false;
-        }
-        const missing = Array.isArray(state.recommendation.missingEvidence) ? state.recommendation.missingEvidence : [];
-        const supportState = state.recommendation.supportState ?? '';
-        return isTaskDoneWaitingForReply() &&
-          latestUnconsumedCustomerReply() === null &&
-          missing.length === 0 &&
-          (supportState === 'diagnosing' || supportState === 'waiting-on-platform-fix') &&
-          !hasDiagnosisForCurrentContext();
-      }
-
-      function hasDiagnosisForCurrentContext() {
-        const diagnosis = latestTimelineItem('diagnosis');
-        if (diagnosis === null) {
-          return false;
-        }
-        const latestReply = latestCustomerReply();
-        return latestReply === null ||
-          String(diagnosis.timestamp ?? '') >= String(latestReply.timestamp ?? '');
+        return state.selectedTicket !== null &&
+          (state.operatorGuidance === null || state.operatorGuidance.nextAction === 'record-diagnosis');
       }
 
       function shouldShowFixAction() {
-        if (state.selectedTicket === null || state.recommendation === null) {
-          return false;
-        }
-        const diagnosis = latestTimelineItem('diagnosis');
-        if (diagnosis === null || latestTimelineItem('fix') !== null) {
-          return false;
-        }
-        if (!diagnosisAllowsPlatformFix(diagnosis)) {
-          return false;
-        }
-        const supportAfterDiagnosis = latestTimelineItem('support-response-sent');
-        return isTaskDoneWaitingForReply() &&
-          latestUnconsumedCustomerReply() === null &&
-          supportAfterDiagnosis !== null &&
-          String(supportAfterDiagnosis.timestamp ?? '') >= String(diagnosis.timestamp ?? '');
+        return state.selectedTicket !== null &&
+          (state.operatorGuidance === null || state.operatorGuidance.nextAction === 'mark-fix-available');
       }
 
       function shouldShowCloseTicketAction() {
@@ -2139,11 +2160,6 @@ export const approvalDeskHtml = `<!doctype html>
           ticketWorkflowState(state.selectedTicket) !== 'resolved' &&
           state.recommendation.supportState === 'ready-for-close' &&
           isTaskDoneWaitingForReply();
-      }
-
-      function diagnosisAllowsPlatformFix(diagnosis) {
-        return diagnosis.confidence === 'confirmed' &&
-          (diagnosis.owner === 'engineering' || diagnosis.owner === 'integration-partner');
       }
 
       function renderPendingReplyPreview() {
@@ -2174,8 +2190,8 @@ export const approvalDeskHtml = `<!doctype html>
       function shouldShowReplyControls() {
         return state.selectedTicket !== null &&
           !shouldShowCloseTicketAction() &&
-          !shouldShowDiagnoseAction() &&
-          !shouldShowFixAction() &&
+          state.operatorGuidance?.nextAction !== 'record-diagnosis' &&
+          state.operatorGuidance?.nextAction !== 'mark-fix-available' &&
           (isTaskDoneWaitingForReply() || latestUnconsumedCustomerReply() !== null);
       }
 
@@ -2429,9 +2445,23 @@ export const approvalDeskHtml = `<!doctype html>
 
       async function selectTicket(id) {
         const previousTicketId = state.selectedTicket?.id;
+        const newSelection = previousTicketId !== id;
         const switchingTickets = previousTicketId !== undefined && previousTicketId !== id;
-        resetDiagnosisInteraction();
-        state.diagnoses = [];
+        const ticketRequestId = ++state.ticketRequestId;
+        if (newSelection) {
+          resetDiagnosisInteraction();
+          state.diagnoses = [];
+          state.diagnosisLoading = true;
+          state.operatorGuidance = null;
+          state.selectedTicket = null;
+          state.recommendation = null;
+          state.stage = 'empty';
+          renderTicketList();
+          renderTicket();
+          renderConversationContext();
+          renderRecommendation();
+          els.diagnosisPanel.innerHTML = '<p class="hint">Loading diagnosis review...</p>';
+        }
         if (switchingTickets) {
           state.consumedCustomerReplyTimestamp = null;
         }
@@ -2439,21 +2469,37 @@ export const approvalDeskHtml = `<!doctype html>
         state.knowledgeCandidate = null;
         state.knowledgeAdvisory = null;
         if (switchingTickets) {
-          state.recommendation = null;
-          state.stage = 'empty';
-          renderRecommendation();
           els.recommendationPanel.innerHTML =
             '<section class="hero-card description"><strong>Loading ticket...</strong>' +
             '<p>Refreshing the ticket and knowledge review state.</p></section>';
         }
-        const data = await requestJson('/api/tickets/' + encodeURIComponent(id));
+        let data;
+        try {
+          data = await requestJson('/api/tickets/' + encodeURIComponent(id), undefined, {
+            writeErrorToResult: false
+          });
+        } catch (error) {
+          if (state.ticketRequestId === ticketRequestId) {
+            state.diagnosisLoading = false;
+            els.diagnosisPanel.innerHTML = '<p class="warning">Ticket could not be loaded: ' +
+              escapeHtml(error instanceof Error ? error.message : 'Request failed.') + '</p>';
+            setResult({ error: error instanceof Error ? error.message : 'Request failed.' });
+          }
+          return;
+        }
+        if (state.ticketRequestId !== ticketRequestId) {
+          return;
+        }
         state.selectedTicket = data.recommendationSummary === undefined
           ? data.ticket
           : { ...data.ticket, recommendationSummary: data.recommendationSummary };
-        void loadDiagnoses(id).catch(function (error) {
-          if (state.selectedTicket?.id === id) {
+        state.operatorGuidance = data.operatorGuidance ?? null;
+        void loadDiagnoses(id, ticketRequestId).catch(function (error) {
+          if (isCurrentTicketRequest(id, ticketRequestId)) {
+            state.diagnosisLoading = false;
             els.diagnosisPanel.innerHTML = '<p class="warning">Diagnosis review could not be loaded: ' +
               escapeHtml(error instanceof Error ? error.message : 'Request failed.') + '</p>';
+            setResult({ error: error instanceof Error ? error.message : 'Request failed.' });
           }
         });
         state.conversationTimeline = Array.isArray(data.conversationTimeline) ? data.conversationTimeline : [];

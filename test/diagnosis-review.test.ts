@@ -246,6 +246,49 @@ describe("diagnosis review contracts", () => {
     ).toMatchObject({ decision: "revalidate" });
   });
 
+  it("selects the latest review chronologically when valid offsets sort differently as text", () => {
+    const earlier = AuditEventSchema.parse({
+      ...reviewAudit({
+        decision: "reject",
+        rationale: "The first review found incomplete evidence.",
+        reviewedAt: "2026-06-10T12:30:00.000+02:00",
+      }),
+      timestamp: "2026-06-10T12:30:00.000+02:00",
+    });
+    const later = AuditEventSchema.parse({
+      ...reviewAudit({
+        decision: "revalidate",
+        rationale: "The later review confirms the same diagnosis.",
+        reviewedAt: "2026-06-10T11:00:00.000Z",
+      }),
+      id: "44444444-4444-4444-8444-444444444444",
+      timestamp: "2026-06-10T11:00:00.000Z",
+      after: {
+        diagnosisReview: reviewDecision({
+          decision: "revalidate",
+          rationale: "The later review confirms the same diagnosis.",
+          reviewedAt: "2026-06-10T11:00:00.000Z",
+        }),
+      },
+    });
+
+    expect(
+      latestDiagnosisReview([earlier, later], "22222222-2222-4222-8222-222222222222"),
+    ).toMatchObject({ decision: "revalidate" });
+  });
+
+  it("accepts an audit timestamp that represents the same reviewed instant in another offset", () => {
+    const semanticallyEqual = AuditEventSchema.parse({
+      ...reviewAudit({ reviewedAt: "2026-06-10T10:00:00.000Z" }),
+      timestamp: "2026-06-10T12:00:00.000+02:00",
+      after: { diagnosisReview: reviewDecision({ reviewedAt: "2026-06-10T10:00:00.000Z" }) },
+    });
+
+    expect(
+      latestDiagnosisReview([semanticallyEqual], "22222222-2222-4222-8222-222222222222"),
+    ).toMatchObject({ decision: "approve" });
+  });
+
   it("ignores review audits whose outer ticket, actor, or timestamp does not match the review", () => {
     const mismatched = AuditEventSchema.parse({
       ...reviewAudit({ rationale: "The diagnosis is ready for approval." }),

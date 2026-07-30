@@ -131,7 +131,7 @@ export const DiagnosisStalenessInputSchema = z
     if (
       diagnosisTimestamp !== undefined &&
       input.diagnosisReplyWatermark !== undefined &&
-      diagnosisTimestamp !== input.diagnosisReplyWatermark
+      !isSameInstant(diagnosisTimestamp, input.diagnosisReplyWatermark)
     ) {
       context.addIssue({
         code: "custom",
@@ -145,7 +145,7 @@ export const DiagnosisStalenessInputSchema = z
     if (
       latestTimestamp !== undefined &&
       input.latestReplyAt !== undefined &&
-      latestTimestamp !== input.latestReplyAt
+      !isSameInstant(latestTimestamp, input.latestReplyAt)
     ) {
       context.addIssue({
         code: "custom",
@@ -232,13 +232,13 @@ export function latestDiagnosisReview(
         parsed.data.diagnosisId === diagnosisId &&
         event.ticketId === parsed.data.ticketId &&
         event.actor === parsed.data.actor &&
-        event.timestamp === parsed.data.reviewedAt
-        ? [{ review: parsed.data, timestamp: event.timestamp, index, id: event.id }]
+        isSameInstant(event.timestamp, parsed.data.reviewedAt)
+        ? [{ review: parsed.data, epoch: toEpoch(event.timestamp), index, id: event.id }]
         : [];
     })
     .sort(
       (left, right) =>
-        right.timestamp.localeCompare(left.timestamp) ||
+        right.epoch - left.epoch ||
         right.index - left.index ||
         right.id.localeCompare(left.id),
     )[0]?.review;
@@ -256,7 +256,7 @@ function hasNewerCustomerReply(input: DiagnosisStalenessInput): boolean {
     }
     return (
       isAfter(latestWatermark.timestamp, diagnosisWatermark.timestamp) ||
-      (latestWatermark.timestamp === diagnosisWatermark.timestamp &&
+      (isSameInstant(latestWatermark.timestamp, diagnosisWatermark.timestamp) &&
         latestWatermark.id !== diagnosisWatermark.id)
     );
   }
@@ -266,5 +266,17 @@ function hasNewerCustomerReply(input: DiagnosisStalenessInput): boolean {
 }
 
 function isAfter(left: string, right: string): boolean {
-  return Date.parse(left) > Date.parse(right);
+  return toEpoch(left) > toEpoch(right);
+}
+
+function isSameInstant(left: string, right: string): boolean {
+  return toEpoch(left) === toEpoch(right);
+}
+
+function toEpoch(timestamp: string): number {
+  const epoch = Date.parse(timestamp);
+  if (Number.isNaN(epoch)) {
+    throw new Error("Expected a validated ISO timestamp.");
+  }
+  return epoch;
 }

@@ -126,6 +126,28 @@ describe("diagnosis review contracts", () => {
     ).toMatchObject({ stale: true, staleReasons: ["newer-customer-reply"] });
   });
 
+  it("marks sub-millisecond newer customer replies as stale", () => {
+    expect(
+      isDiagnosisStale({
+        diagnosisTimestamp: "2026-06-10T10:00:00.0001Z",
+        diagnosisTicketRevision: 2,
+        currentTicketRevision: 2,
+        latestReplyAt: "2026-06-10T10:00:00.0009Z",
+      }),
+    ).toMatchObject({ stale: true, staleReasons: ["newer-customer-reply"] });
+  });
+
+  it("compares valid minute-precision ISO instants", () => {
+    expect(
+      isDiagnosisStale({
+        diagnosisTimestamp: "2026-06-10T10:00Z",
+        diagnosisTicketRevision: 2,
+        currentTicketRevision: 2,
+        latestReplyAt: "2026-06-10T10:01Z",
+      }),
+    ).toMatchObject({ stale: true, staleReasons: ["newer-customer-reply"] });
+  });
+
   it("rejects invalid staleness timestamps and stale-reason values", () => {
     expect(() =>
       isDiagnosisStale({
@@ -277,6 +299,37 @@ describe("diagnosis review contracts", () => {
     ).toMatchObject({ decision: "revalidate" });
   });
 
+  it("selects the later review when only sub-millisecond precision differs", () => {
+    const later = AuditEventSchema.parse({
+      ...reviewAudit({
+        decision: "revalidate",
+        rationale: "The later review confirms the diagnosis.",
+        reviewedAt: "2026-06-10T10:00:00.0009Z",
+      }),
+      id: "44444444-4444-4444-8444-444444444444",
+      timestamp: "2026-06-10T10:00:00.0009Z",
+      after: {
+        diagnosisReview: reviewDecision({
+          decision: "revalidate",
+          rationale: "The later review confirms the diagnosis.",
+          reviewedAt: "2026-06-10T10:00:00.0009Z",
+        }),
+      },
+    });
+    const earlier = AuditEventSchema.parse({
+      ...reviewAudit({
+        decision: "reject",
+        rationale: "The earlier review found incomplete evidence.",
+        reviewedAt: "2026-06-10T10:00:00.0001Z",
+      }),
+      timestamp: "2026-06-10T10:00:00.0001Z",
+    });
+
+    expect(
+      latestDiagnosisReview([later, earlier], "22222222-2222-4222-8222-222222222222"),
+    ).toMatchObject({ decision: "revalidate" });
+  });
+
   it("accepts an audit timestamp that represents the same reviewed instant in another offset", () => {
     const semanticallyEqual = AuditEventSchema.parse({
       ...reviewAudit({ reviewedAt: "2026-06-10T10:00:00.000Z" }),
@@ -287,6 +340,18 @@ describe("diagnosis review contracts", () => {
     expect(
       latestDiagnosisReview([semanticallyEqual], "22222222-2222-4222-8222-222222222222"),
     ).toMatchObject({ decision: "approve" });
+  });
+
+  it("does not associate audit and review timestamps that differ below a millisecond", () => {
+    const subtlyDifferent = AuditEventSchema.parse({
+      ...reviewAudit({ reviewedAt: "2026-06-10T10:00:00.0009Z" }),
+      timestamp: "2026-06-10T10:00:00.0001Z",
+      after: { diagnosisReview: reviewDecision({ reviewedAt: "2026-06-10T10:00:00.0009Z" }) },
+    });
+
+    expect(
+      latestDiagnosisReview([subtlyDifferent], "22222222-2222-4222-8222-222222222222"),
+    ).toBeUndefined();
   });
 
   it("ignores review audits whose outer ticket, actor, or timestamp does not match the review", () => {

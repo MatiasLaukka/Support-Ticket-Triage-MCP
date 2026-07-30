@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { AsyncLocalStorage } from "node:async_hooks";
 import { z } from "zod";
 import {
   AiExecutionTraceSchema,
@@ -66,7 +65,7 @@ export type { DiagnosisImpactSet } from "./domain.js";
 const NonBlankStringSchema = z.string().trim().min(1);
 const recommendationOperations = new Map<string, Promise<void>>();
 const ticketOperations = new Map<TicketId, Promise<void>>();
-const activeTicketOperations = new AsyncLocalStorage<ReadonlySet<TicketId>>();
+const submitWithinTicketLockCapability = Symbol("submitWithinTicketLock");
 const NEWER_REPLY_SUPERSESSION_REASON =
   "A newer customer reply requires a fresh recommendation.";
 
@@ -490,8 +489,12 @@ export class TriageService {
 
   async submit(
     input: SubmitRecommendationInput,
+    capability?: symbol,
   ): Promise<TriageRecommendation> {
     const parsed = SubmitRecommendationInputSchema.parse(input);
+    if (capability === submitWithinTicketLockCapability) {
+      return this.submitValidated(parsed);
+    }
     return serializeTicket(parsed.ticketId, () => this.submitValidated(parsed));
   }
 
@@ -657,7 +660,10 @@ export class TriageService {
       ) {
         throw stale("Evaluation customer reply snapshot is stale.");
       }
-      const recommendation = await this.submit(recommendationInput);
+      const recommendation = await this.submit(
+        recommendationInput,
+        submitWithinTicketLockCapability,
+      );
       const recommendations =
         await this.supersedePendingRecommendationsWithNewerReply({
           ticketId: recommendationInput.ticketId,
@@ -1755,10 +1761,6 @@ async function serializeTicket<T>(
   ticketId: TicketId,
   operation: () => Promise<T>,
 ): Promise<T> {
-  const active = activeTicketOperations.getStore();
-  if (active?.has(ticketId)) {
-    return operation();
-  }
   const previous = ticketOperations.get(ticketId) ?? Promise.resolve();
   let release = (): void => undefined;
   const current = new Promise<void>((resolveOperation) => {
@@ -1767,10 +1769,7 @@ async function serializeTicket<T>(
   ticketOperations.set(ticketId, current);
   await previous;
   try {
-    return await activeTicketOperations.run(
-      new Set([...(active ?? []), ticketId]),
-      operation,
-    );
+    return await operation();
   } finally {
     release();
     if (ticketOperations.get(ticketId) === current) {

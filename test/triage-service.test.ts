@@ -329,6 +329,64 @@ describe("TriageService", () => {
     ]);
   });
 
+  it("queues deferred audit-callback work behind a later same-ticket operation", async () => {
+    const harness = makeHarness();
+    const deferredWorkStarted = deferred();
+    let deferredReply: Promise<AuditEvent> | undefined;
+
+    harness.audit.beforeNextAppend = async () => {
+      setImmediate(() => {
+        deferredReply = harness.service.addCustomerReply({
+          ticketId: "TKT-1001",
+          actor: "Maya Chen",
+          body: "Deferred customer follow-up from the audit callback.",
+          receivedAt: "2026-06-10T09:02:00.000Z",
+        });
+        deferredWorkStarted.resolve();
+      });
+    };
+    await harness.service.submit(
+      makeSubmitInput({ submittedAt: "2026-06-10T09:00:00.000Z" }),
+    );
+
+    const secondAppendStarted = deferred();
+    const releaseSecondAppend = deferred();
+    harness.audit.beforeNextAppend = async () => {
+      secondAppendStarted.resolve();
+      await releaseSecondAppend.promise;
+    };
+    const secondReply = harness.service.addCustomerReply({
+      ticketId: "TKT-1001",
+      actor: "Maya Chen",
+      body: "Later same-ticket customer reply.",
+      receivedAt: "2026-06-10T09:01:00.000Z",
+    });
+    await secondAppendStarted.promise;
+    await deferredWorkStarted.promise;
+    if (deferredReply === undefined) {
+      throw new Error("Expected the audit callback to schedule deferred work.");
+    }
+
+    const deferredState = await pendingState(deferredReply);
+    releaseSecondAppend.resolve();
+    await expect(secondReply).resolves.toMatchObject({
+      action: "customer-reply-received",
+    });
+    await expect(deferredReply).resolves.toMatchObject({
+      action: "customer-reply-received",
+    });
+    expect(deferredState).toBe("waiting");
+    expect(
+      harness.audit.events.map((event) =>
+        event.action === "customer-reply-received" ? event.after.body : event.action,
+      ),
+    ).toEqual([
+      "recommendation-submitted",
+      "Later same-ticket customer reply.",
+      "Deferred customer follow-up from the audit callback.",
+    ]);
+  });
+
   it("approves an unchanged diagnosis and records the review event", async () => {
     const harness = makeHarness();
     const original = await harness.service.recordDiagnosis(makeRecordDiagnosisInput());

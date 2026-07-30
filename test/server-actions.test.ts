@@ -22,6 +22,7 @@ import { createTriageServer } from "../src/server.js";
 import { TicketRepository } from "../src/ticket-repository.js";
 import {
   TriageService,
+  customerReplyWatermarkFromAudits,
   type DiagnosisContext,
   type FixContext,
   type RejectRecommendationInput,
@@ -423,6 +424,49 @@ async function approveAndSend(
   });
 }
 
+async function approveLatestDiagnosis(
+  fixture: Fixture,
+  ticketId: Ticket["id"] = "TKT-1001",
+): Promise<void> {
+  const [ticket, audits] = await Promise.all([
+    fixture.tickets.get(ticketId),
+    fixture.audits.list(ticketId),
+  ]);
+  const original = audits.filter(
+    (event) =>
+      event.action === "diagnosis-completed" ||
+      event.action === "diagnostic-escalated",
+  ).at(-1)!;
+  await fixture.service.reviewDiagnosis({
+    decision: "approve",
+    diagnosisId: original.id,
+    ticketId,
+    sourceTicketRevision: ticket.revision,
+    sourceConversationWatermark: customerReplyWatermarkFromAudits(audits),
+    editedDiagnosis: original.after.diagnosis as DiagnosisContext,
+    actor: "casey",
+    reviewedAt: now.toISOString(),
+  });
+}
+
+async function appendDiagnosisResponseSent(
+  fixture: Fixture,
+  ticketId: Ticket["id"] = "TKT-1001",
+): Promise<void> {
+  await fixture.audits.append(AuditEventSchema.parse({
+    id: "99999999-9999-4999-8999-999999999999",
+    timestamp: now.toISOString(),
+    actor: "casey",
+    action: "customer-response-sent",
+    ticketId,
+    before: {},
+    after: { sentAt: now.toISOString() },
+    rationale: "The approved diagnosis response was sent.",
+    knowledgeArticleIds: [],
+    result: "success",
+  }));
+}
+
 const lifecycleBlockerCases: Array<{
   name: string;
   tool: "record_diagnosis" | "mark_fix_available" | "close_ticket";
@@ -516,6 +560,7 @@ const lifecycleBlockerCases: Array<{
         diagnosis: diagnosisContext({ confidence: "likely" }),
         knowledgeArticleIds: [],
       });
+      await approveLatestDiagnosis(fixture);
     },
   },
   {
@@ -530,12 +575,13 @@ const lifecycleBlockerCases: Array<{
         diagnosis: diagnosisContext({ owner: "support" }),
         knowledgeArticleIds: [],
       });
+      await approveLatestDiagnosis(fixture);
     },
   },
   {
-    name: "fix rejects a newer existing fix",
+    name: "fix rejects a diagnosis made stale by an existing fix",
     tool: "mark_fix_available",
-    message: "A fix has already been recorded for the latest diagnosis.",
+    message: "An approved current diagnosis is required before marking a fix available.",
     setup: async (fixture) => {
       await fixture.service.recordDiagnosis({
         ticketId: "TKT-1001",
@@ -544,6 +590,8 @@ const lifecycleBlockerCases: Array<{
         diagnosis: diagnosisContext(),
         knowledgeArticleIds: [],
       });
+      await approveLatestDiagnosis(fixture);
+      await appendDiagnosisResponseSent(fixture);
       await fixture.service.recordFix({
         ticketId: "TKT-1001",
         actor: "product-support",
@@ -1590,9 +1638,9 @@ describe("createTriageServer action protocol", () => {
     expect(workflow.structuredContent).toMatchObject({
       operatorGuidance: {
         stage: "diagnosis-recorded",
-        nextAction: "evaluate-ticket",
-        approval: { required: false, fields: [] },
-        unlocksTool: "evaluate_ticket",
+        nextAction: "review-diagnosis",
+        approval: { required: true, fields: [] },
+        unlocksTool: "review_diagnosis",
       },
     });
     await expect(fixture.tickets.get("TKT-1001")).resolves.toEqual(
@@ -1665,6 +1713,7 @@ describe("createTriageServer action protocol", () => {
       "record_diagnosis",
       { ticketId: "TKT-2010", actor: "product-support" },
     );
+    await approveLatestDiagnosis(fixture, "TKT-2010");
     const fix = await callTool(await connect(fixture), "mark_fix_available", {
       ticketId: "TKT-2010",
       actor: "product-support",
@@ -1743,6 +1792,7 @@ describe("createTriageServer action protocol", () => {
       ticketId: "TKT-1001",
       actor: "product-support",
     });
+    await approveLatestDiagnosis(fixture);
     const fix = await callTool(client, "mark_fix_available", {
       ticketId: "TKT-1001",
       actor: "product-support",

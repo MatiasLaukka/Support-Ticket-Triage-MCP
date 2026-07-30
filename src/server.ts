@@ -53,7 +53,6 @@ import {
   buildOperatorGuidance,
   closeBlockers,
   diagnosisBlockers,
-  fixBlockers,
   latestDiagnosisAudit,
 } from "./approval-desk/workflow-guidance.js";
 import { automaticReplyForTicket } from "./approval-desk/automatic-customer-replies.js";
@@ -917,10 +916,6 @@ async function markFixAvailable(
     deps.audits.list(input.ticketId),
     deps.recommendations.list(),
   ]);
-  const [fixBlocker] = fixBlockers({ audits });
-  if (fixBlocker !== undefined) {
-    throw new DomainError(fixBlocker, "INVALID_APPROVAL_FIELDS");
-  }
   const latestDiagnosis = latestDiagnosisAudit(audits) as AuditEvent;
   const latest = summarizeRecommendationsForTicket(
     ticket,

@@ -4,7 +4,11 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createApprovalDeskHttpServer } from "../src/approval-desk/http.js";
-import { AuditEventSchema } from "../src/domain.js";
+import { AuditEventSchema, type Ticket } from "../src/domain.js";
+import {
+  customerReplyWatermarkFromAudits,
+  type DiagnosisContext,
+} from "../src/triage-service.js";
 import { evaluateTicketWithAi } from "../src/approval-desk/ai-evaluation.js";
 import type { ClassificationReasoningProvider } from "../src/approval-desk/classification-reasoning-provider.js";
 import type { CustomerResponseDraftProvider } from "../src/approval-desk/draft-response-provider.js";
@@ -1055,7 +1059,7 @@ describe("createApprovalDeskHttpServer", () => {
 
   it("uses a customer-safe platform delay fix summary", async () => {
     let currentNow = new Date("2026-06-10T09:00:00.000Z");
-    const { json } = await startFixture({}, { now: () => currentNow });
+    const { deps, json } = await startFixture({}, { now: () => currentNow });
     const diagnosisRecommendation = await createDiagnosedPlatformDelayTicket(
       json,
       (value) => {
@@ -1095,6 +1099,7 @@ describe("createApprovalDeskHttpServer", () => {
       body: JSON.stringify({ actor: "approval-desk" }),
     });
     await approveAndSend(json, "TKT-1001", confirmedDiagnosisDraft.body.recommendation);
+    await approveLatestDiagnosis(deps, "TKT-1001");
     currentNow = new Date("2026-06-10T09:21:00.000Z");
     const fix = await json("/api/tickets/TKT-1001/fix", {
       method: "POST",
@@ -1249,7 +1254,7 @@ describe("createApprovalDeskHttpServer", () => {
     );
   });
 
-  it("rejects fix while the latest diagnosis is still likely", async () => {
+  it("rejects fix while the latest diagnosis is ambiguous and unreviewed", async () => {
     const { deps, json } = await startFixture();
     await deps.tickets.update("TKT-1010", 0, (ticket) => ({
       ...ticket,
@@ -1333,7 +1338,6 @@ describe("createApprovalDeskHttpServer", () => {
     expect(likelyDiagnosisSent.body.automaticReply.after.body).not.toMatch(
       /available for this ticket/i,
     );
-
     const fix = await json("/api/tickets/TKT-1010/fix", {
       method: "POST",
       body: JSON.stringify({ actor: "product-support" }),
@@ -1341,7 +1345,7 @@ describe("createApprovalDeskHttpServer", () => {
 
     expect(fix.status).toBe(400);
     expect(fix.body.error.message).toBe(
-      "A confirmed diagnosis is required before marking a fix available.",
+      "An approved current diagnosis is required before marking a fix available.",
     );
   });
 
@@ -1420,6 +1424,7 @@ describe("createApprovalDeskHttpServer", () => {
       "TKT-1010",
       confirmedDiagnosisDraft.body.recommendation,
     );
+    await approveLatestDiagnosis(deps, "TKT-1010");
     const fix = await json("/api/tickets/TKT-1010/fix", {
       method: "POST",
       body: JSON.stringify({ actor: "product-support" }),
@@ -1531,6 +1536,7 @@ describe("createApprovalDeskHttpServer", () => {
       confirmedDiagnosisDraft.body.recommendation.draftCustomerResponse,
     ).not.toContain("frontend engineering");
     await approveAndSend(json, "TKT-1010", confirmedDiagnosisDraft.body.recommendation);
+    await approveLatestDiagnosis(deps, "TKT-1010");
 
     const fix = await json("/api/tickets/TKT-1010/fix", {
       method: "POST",
@@ -1594,6 +1600,7 @@ describe("createApprovalDeskHttpServer", () => {
       body: JSON.stringify({ actor: "approval-desk" }),
     });
     await approveAndSend(json, "TKT-1010", confirmedDiagnosisDraft.body.recommendation);
+    await approveLatestDiagnosis(deps, "TKT-1010");
     await json("/api/tickets/TKT-1010/fix", {
       method: "POST",
       body: JSON.stringify({ actor: "product-support" }),
@@ -1727,6 +1734,7 @@ describe("createApprovalDeskHttpServer", () => {
       body: JSON.stringify({ actor: "approval-desk" }),
     });
     await approveAndSend(json, "TKT-1001", diagnosisUpdate.body.recommendation);
+    await approveLatestDiagnosis(deps, "TKT-1001");
     currentNow = new Date("2026-06-10T09:21:00.000Z");
     await json("/api/tickets/TKT-1001/fix", {
       method: "POST",
@@ -2982,6 +2990,32 @@ async function ticketRevision(
 ): Promise<number> {
   const detail = await json(`/api/tickets/${ticketId}`);
   return detail.body.ticket.revision;
+}
+
+async function approveLatestDiagnosis(
+  deps: Awaited<ReturnType<typeof createRuntimeDependencies>>,
+  ticketId: Ticket["id"],
+): Promise<void> {
+  const [ticket, audits] = await Promise.all([
+    deps.tickets.get(ticketId),
+    deps.audits.list(ticketId),
+  ]);
+  const original = audits.filter(
+    (event) =>
+      event.action === "diagnosis-completed" ||
+      event.action === "diagnostic-escalated",
+  ).at(-1)!;
+  await deps.service.reviewDiagnosis({
+    decision: "revalidate",
+    diagnosisId: original.id,
+    ticketId,
+    sourceTicketRevision: ticket.revision,
+    sourceConversationWatermark: customerReplyWatermarkFromAudits(audits),
+    editedDiagnosis: original.after.diagnosis as DiagnosisContext,
+    actor: "matias-reviewer",
+    rationale: "The current ticket context still supports the unchanged diagnosis.",
+    reviewedAt: audits.at(-1)?.timestamp ?? now.toISOString(),
+  });
 }
 
 async function approveAndSend(

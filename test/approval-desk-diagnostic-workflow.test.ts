@@ -173,6 +173,40 @@ describe("diagnosisContextForTicket", () => {
     });
   });
 
+  it("does not select edited diagnosis context from a rejected review", () => {
+    const reviewedAt = "2026-06-10T09:05:00.000Z";
+    const original = diagnosisAudit("2026-06-10T09:02:00.000Z", ambiguousState);
+    const review = AuditEventSchema.parse({
+      id: auditId("40000000"),
+      timestamp: reviewedAt,
+      actor: "casey",
+      action: "diagnosis-reviewed",
+      ticketId: ticket.id,
+      before: {},
+      after: {
+        diagnosisReview: {
+          decision: "reject",
+          diagnosisId: original.id,
+          ticketId: ticket.id,
+          sourceTicketRevision: ticket.revision,
+          sourceConversationWatermark: { state: "none" },
+          editedDiagnosis: {
+            ...(original.after.diagnosis as Record<string, unknown>),
+            customerSafeSummary: "Rejected context must not drive evaluation.",
+          },
+          actor: "casey",
+          rationale: "The edited diagnosis is not supported by the evidence.",
+          reviewedAt,
+        },
+      },
+      rationale: "Diagnosis rejected by the operator.",
+      knowledgeArticleIds: [],
+      result: "success",
+    });
+
+    expect(diagnosisContextFromAudit(review)).toBeUndefined();
+  });
+
   it("projects an active known event into the existing platform-delay diagnosis", () => {
     const eventTicket = TicketSchema.parse({
       ...ticket,

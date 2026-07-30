@@ -61,7 +61,6 @@ import {
   buildOperatorGuidance,
   closeBlockers,
   diagnosisBlockers,
-  fixBlockers,
   latestDiagnosisAudit,
 } from "./workflow-guidance.js";
 import {
@@ -1131,10 +1130,6 @@ async function recordFix(
     deps.audits.list(ticketId),
     deps.recommendations.list(),
   ]);
-  const [fixBlocker] = fixBlockers({ audits });
-  if (fixBlocker !== undefined) {
-    throw invalidRequest(fixBlocker);
-  }
   const latestDiagnosis = latestDiagnosisAudit(audits)!;
   const latest = latestCurrentRecommendation(ticketId, recommendations, audits);
 

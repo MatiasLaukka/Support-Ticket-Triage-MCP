@@ -13,6 +13,7 @@ import {
   diagnosisBlockers,
   fixBlockers,
   latestAuthoritativeDiagnosis,
+  latestDiagnosisAudit,
 } from "../src/approval-desk/workflow-guidance.js";
 
 const ticketId = "TKT-1001" as const;
@@ -848,13 +849,65 @@ describe("shared lifecycle blockers", () => {
     });
   });
 
+  it("invalidates an older review when a causally later diagnosis is backdated", () => {
+    const original = diagnosisAudit({
+      timestamp: "2026-06-10T09:02:00.000Z",
+      confidence: "confirmed",
+      owner: "engineering",
+    });
+    const review = diagnosisReviewAudit(original, "2026-06-10T09:03:00.000Z");
+    const replacement = diagnosisAudit({
+      timestamp: "2026-06-10T09:01:00.000Z",
+      confidence: "likely",
+      owner: "support",
+    });
+
+    expect(latestDiagnosisAudit([original, review, replacement])?.id).toBe(
+      replacement.id,
+    );
+    expect(
+      latestAuthoritativeDiagnosis(ticketId, [original, review, replacement]),
+    ).toBeUndefined();
+  });
+
+  it("does not let an older fix bypass a causally later unreviewed diagnosis at closure", () => {
+    const original = diagnosisAudit({
+      timestamp: "2026-06-10T09:02:00.000Z",
+      confidence: "confirmed",
+      owner: "engineering",
+    });
+    const review = diagnosisReviewAudit(original, "2026-06-10T09:03:00.000Z");
+    const fix = audit("fix-available", "2026-06-10T09:04:00.000Z", {
+      after: { fix: { status: "available" } },
+    });
+    const replacement = diagnosisAudit({
+      timestamp: "2026-06-10T09:01:00.000Z",
+      confidence: "confirmed",
+      owner: "engineering",
+    });
+
+    expect(
+      closeBlockers({
+        ticket: ticket(),
+        recommendation: recommendation({ supportState: "ready-for-close" }),
+        audits: [
+          original,
+          review,
+          fix,
+          replacement,
+          sentAudit("2026-06-10T09:05:00.000Z"),
+        ],
+      }),
+    ).toContain("A current approved diagnosis is required before ticket closure.");
+  });
+
   it("blocks a fix when the diagnosis is unreviewed or its review is stale", () => {
     const original = diagnosisAudit({
       timestamp: "2026-06-10T09:02:00.000Z",
       confidence: "confirmed",
       owner: "engineering",
     });
-    expect(fixBlockers({ audits: [original] })).toContain(
+    expect(fixBlockers({ ticket: ticket(), audits: [original] })).toContain(
       "An approved current diagnosis is required before marking a fix available.",
     );
 
@@ -863,7 +916,7 @@ describe("shared lifecycle blockers", () => {
       actor: "Maya Chen",
       after: { body: "The symptoms changed after the review." },
     });
-    expect(fixBlockers({ audits: [original, review, newerReply] })).toContain(
+    expect(fixBlockers({ ticket: ticket(), audits: [original, review, newerReply] })).toContain(
       "An approved current diagnosis is required before marking a fix available.",
     );
   });
@@ -939,12 +992,13 @@ describe("shared lifecycle blockers", () => {
   });
 
   it("returns exact fix blocker arrays in enforced order", () => {
-    expect(fixBlockers({ audits: [] })).toEqual([
+    expect(fixBlockers({ ticket: ticket(), audits: [] })).toEqual([
       "A completed diagnosis is required before marking a fix available.",
     ]);
 
     expect(
       fixBlockers({
+        ticket: ticket(),
         audits: [
           diagnosisAudit({
             timestamp: "2026-06-10T09:02:00.000Z",
@@ -965,7 +1019,7 @@ describe("shared lifecycle blockers", () => {
     ]);
 
     const input = confirmedEngineeringDiagnosisWorkflow();
-    expect(fixBlockers({ audits: input.audits })).toEqual([]);
+    expect(fixBlockers({ ticket: input.ticket, audits: input.audits })).toEqual([]);
   });
 
   it("blocks fixes when a diagnosis still has unresolved plausible causes", () => {
@@ -1009,7 +1063,7 @@ describe("shared lifecycle blockers", () => {
       diagnosisResponse,
     ];
 
-    expect(fixBlockers({ audits: input.audits })).toEqual([
+    expect(fixBlockers({ ticket: input.ticket, audits: input.audits })).toEqual([
       "An approved current diagnosis is required before marking a fix available.",
       "A diagnosis with unresolved plausible causes cannot unlock a fix.",
     ]);
@@ -1019,6 +1073,7 @@ describe("shared lifecycle blockers", () => {
     const diagnosis = escalatedDiagnosisAudit();
     expect(
       fixBlockers({
+        ticket: ticket(),
         audits: [
           diagnosis,
           sentAudit("2026-06-10T09:03:00.000Z"),

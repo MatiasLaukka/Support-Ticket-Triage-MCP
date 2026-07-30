@@ -4,6 +4,7 @@ import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   ApprovalSchema,
+  AuditEventSchema,
   TicketSchema,
   TriageRecommendationSchema,
   type Approval,
@@ -161,6 +162,45 @@ describe("TriageService", () => {
         customerSafeSummary: "The reviewed customer-safe diagnosis summary.",
       },
     });
+  });
+
+  it("rejects a review when a causally later diagnosis was backdated", async () => {
+    const harness = makeHarness();
+    const original = await harness.service.recordDiagnosis(makeRecordDiagnosisInput());
+    await harness.service.recordDiagnosis({
+      ...makeRecordDiagnosisInput(),
+      diagnosedAt: "2026-06-10T09:04:00.000Z",
+      diagnosis: {
+        ...makeRecordDiagnosisInput().diagnosis,
+        customerSafeSummary: "A later investigation produced a replacement diagnosis.",
+      },
+    });
+
+    await expect(
+      harness.service.reviewDiagnosis(
+        makeDiagnosisReviewInput({ diagnosisId: original.id }),
+      ),
+    ).rejects.toMatchObject({ code: "INVALID_APPROVAL_FIELDS" });
+  });
+
+  it("enforces diagnosis review freshness inside the serialized fix mutation", async () => {
+    const harness = makeHarness();
+    const original = await harness.service.recordDiagnosis(makeRecordDiagnosisInput());
+    await harness.service.reviewDiagnosis(
+      makeDiagnosisReviewInput({ diagnosisId: original.id }),
+    );
+    await appendDiagnosisResponseSent(harness.audit);
+    await harness.tickets.update("TKT-1001", 2, (ticket) => ({
+      ...ticket,
+      priority: "P2",
+    }));
+
+    await expect(
+      harness.service.recordFix(makeRecordFixInput()),
+    ).rejects.toMatchObject({ code: "INVALID_APPROVAL_FIELDS" });
+    expect(
+      harness.audit.events.filter((event) => event.action === "fix-available"),
+    ).toEqual([]);
   });
 
   it("submits an evaluation when the customer reply watermark still matches", async () => {
@@ -1735,7 +1775,12 @@ function makeHarness(ticket = makeTicket()) {
   const tickets = new MemoryTicketStore(ticket);
   const recommendations = new MemoryRecommendationStore();
   const audit = new MemoryAuditStore();
-  const ids = [recommendationId, auditId, auditId, auditId];
+  const ids = [
+    recommendationId,
+    auditId,
+    "33333333-3333-4333-8333-333333333333",
+    "44444444-4444-4444-8444-444444444444",
+  ];
   const service = new TriageService({
     tickets,
     recommendations,
@@ -1897,6 +1942,39 @@ function makeRecordDiagnosisInput() {
     },
     knowledgeArticleIds: [],
   };
+}
+
+function makeRecordFixInput() {
+  return {
+    ticketId: "TKT-1001" as const,
+    actor: "casey",
+    fixedAt: "2026-06-10T09:09:00.000Z",
+    fix: {
+      status: "available" as const,
+      customerSafeSummary: "The governed mitigation is available.",
+      customerAction: "Please retry the affected API request.",
+      verificationRequest: "Let us know whether the request now succeeds.",
+    },
+    knowledgeArticleIds: [],
+  };
+}
+
+async function appendDiagnosisResponseSent(audit: MemoryAuditStore): Promise<void> {
+  await audit.append(
+    AuditEventSchema.parse({
+      id: "55555555-5555-4555-8555-555555555555",
+      timestamp: "2026-06-10T09:08:00.000Z",
+      actor: "casey",
+      action: "customer-response-sent",
+      ticketId: "TKT-1001",
+      recommendationId,
+      before: {},
+      after: { sentAt: "2026-06-10T09:08:00.000Z" },
+      rationale: "The reviewed diagnosis response was sent.",
+      knowledgeArticleIds: [],
+      result: "success",
+    }),
+  );
 }
 
 function makeDiagnosisReviewInput(

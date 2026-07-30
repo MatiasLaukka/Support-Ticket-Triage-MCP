@@ -16,6 +16,7 @@ import {
 } from "./diagnostic-workflow.js";
 import {
   DiagnosisReviewDecisionSchema,
+  compareAuditCausalOrder,
   isDiagnosisStale,
   latestDiagnosisReview,
   type DiagnosisReviewDecision,
@@ -130,7 +131,7 @@ export function diagnosisBlockers(
 }
 
 export function fixBlockers(input: {
-  ticket?: Pick<Ticket, "revision">;
+  ticket: Pick<Ticket, "revision">;
   audits: readonly AuditEvent[];
 }): string[] {
   const latestRecordedDiagnosis = latestDiagnosisAudit(input.audits);
@@ -144,8 +145,7 @@ export function fixBlockers(input: {
     input.audits,
   );
   const authoritative = selectedAuthoritative !== undefined &&
-      (input.ticket === undefined ||
-        selectedAuthoritative.review.sourceTicketRevision === input.ticket.revision)
+      selectedAuthoritative.review.sourceTicketRevision === input.ticket.revision
     ? selectedAuthoritative
     : undefined;
   if (authoritative === undefined) {
@@ -212,7 +212,23 @@ export function closeBlockers(input: {
       selectedAuthoritativeDiagnosis.review.sourceTicketRevision === input.ticket.revision
     ? selectedAuthoritativeDiagnosis
     : undefined;
-  if (latestDiagnosis !== undefined && authoritativeDiagnosis === undefined) {
+  const latestFix = latestFixAudit(input.audits);
+  const closureUsesRecordedFix =
+    input.recommendation?.supportState === "ready-for-close" &&
+    latestDiagnosis !== undefined &&
+    latestFix !== undefined &&
+    compareAuditCausalOrder(
+      { event: latestFix, index: input.audits.indexOf(latestFix) },
+      {
+        event: latestDiagnosis,
+        index: input.audits.indexOf(latestDiagnosis),
+      },
+    ) > 0;
+  if (
+    latestDiagnosis !== undefined &&
+    authoritativeDiagnosis === undefined &&
+    !closureUsesRecordedFix
+  ) {
     blockers.push("A current approved diagnosis is required before ticket closure.");
   }
   const diagnosticState = diagnosticStateFromDiagnosis(
@@ -547,10 +563,7 @@ export function latestDiagnosisAudit(
         event.after.diagnosis !== null,
     )
     .sort(
-      (left, right) =>
-        right.event.timestamp.localeCompare(left.event.timestamp) ||
-        right.index - left.index ||
-        right.event.id.localeCompare(left.event.id),
+      (left, right) => compareAuditCausalOrder(right, left),
     )[0]?.event;
 }
 
@@ -604,7 +617,7 @@ export function latestAuthoritativeDiagnosis(
       currentTicketRevision: review.sourceTicketRevision,
       latestConversationWatermark,
     });
-    const laterInvalidation = audits.some((event) => {
+    const laterInvalidation = audits.some((event, index) => {
       if (event === reviewAudit.event || event.ticketId !== ticketId) return false;
       if (
         event.action !== "diagnosis-completed" &&
@@ -613,16 +626,10 @@ export function latestAuthoritativeDiagnosis(
       ) {
         return false;
       }
-      return isDiagnosisStale({
-        diagnosisTimestamp: review.reviewedAt,
-        diagnosisTicketRevision: review.sourceTicketRevision,
-        diagnosisConversationWatermark: review.sourceConversationWatermark,
-        currentTicketRevision: review.sourceTicketRevision,
-        latestConversationWatermark: review.sourceConversationWatermark,
-        ...(event.action === "fix-available"
-          ? { invalidatingFixAt: event.timestamp }
-          : { newerDiagnosisAt: event.timestamp }),
-      }).stale;
+      return compareAuditCausalOrder(
+        { event, index },
+        reviewAudit,
+      ) > 0;
     });
     if (baseStaleness.stale || laterInvalidation) return [];
     return [{
@@ -635,9 +642,11 @@ export function latestAuthoritativeDiagnosis(
     }];
   });
 
-  const latest = candidates.sort(
-    (left, right) => right.auditIndex - left.auditIndex,
-  )[0];
+  const latest = candidates.sort((left, right) =>
+    compareAuditCausalOrder(
+      { event: right.reviewAudit, index: right.auditIndex },
+      { event: left.reviewAudit, index: left.auditIndex },
+    ))[0];
   if (latest === undefined) return undefined;
   const { auditIndex: _auditIndex, ...authoritative } = latest;
   return authoritative;
@@ -653,10 +662,7 @@ function latestFixAudit(audits: readonly AuditEvent[]): AuditEvent | undefined {
         event.after.fix !== null,
     )
     .sort(
-      (left, right) =>
-        right.event.timestamp.localeCompare(left.event.timestamp) ||
-        right.index - left.index ||
-        right.event.id.localeCompare(left.event.id),
+      (left, right) => compareAuditCausalOrder(right, left),
     )[0]?.event;
 }
 

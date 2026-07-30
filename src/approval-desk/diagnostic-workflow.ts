@@ -8,6 +8,10 @@ import {
   DiagnosticStateSnapshotSchema,
   type DiagnosticStateSnapshot,
 } from "./diagnostic-state.js";
+import {
+  DiagnosisReviewDecisionSchema,
+  compareAuditCausalOrder,
+} from "./diagnosis-review.js";
 
 export function diagnosisContextForTicket(
   ticket: Ticket,
@@ -277,8 +281,7 @@ function latestDiagnosticSnapshot(
     )
     .sort(
       (left, right) =>
-        right.event.timestamp.localeCompare(left.event.timestamp) ||
-        right.index - left.index,
+        compareAuditCausalOrder(right, left),
     )
     .map(({ event }) => {
       const diagnosis = diagnosisValueFromAudit(event);
@@ -317,8 +320,18 @@ function containsContradictoryEvidence(value: string): boolean {
 
 export function fixContextForTicket(
   ticket: Ticket,
-  diagnosisEvent: AuditEvent,
+  diagnosisEvent: AuditEvent | undefined,
 ): FixContext {
+  if (diagnosisEvent === undefined) {
+    return {
+      status: "available",
+      customerSafeSummary:
+        "A reviewed mitigation will be shared after the diagnosis is approved.",
+      customerAction: "Please wait for the reviewed support update.",
+      verificationRequest:
+        "No verification is requested until the diagnosis and mitigation are approved.",
+    };
+  }
   const diagnosis = diagnosisFromAudit(diagnosisEvent);
   if (isCampaignEditorDiagnosis(diagnosis)) {
     return {
@@ -435,7 +448,15 @@ function diagnosisValueFromAudit(
   }
   const review = event.after.diagnosisReview;
   if (typeof review !== "object" || review === null) return undefined;
-  const editedDiagnosis = (review as { editedDiagnosis?: unknown }).editedDiagnosis;
+  const parsedReview = DiagnosisReviewDecisionSchema.safeParse(review);
+  if (
+    !parsedReview.success ||
+    (parsedReview.data.decision !== "approve" &&
+      parsedReview.data.decision !== "revalidate")
+  ) {
+    return undefined;
+  }
+  const editedDiagnosis = parsedReview.data.editedDiagnosis;
   return typeof editedDiagnosis === "object" && editedDiagnosis !== null
     ? editedDiagnosis as Record<string, unknown>
     : undefined;

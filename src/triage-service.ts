@@ -778,6 +778,7 @@ export class TriageService {
   async reviewDiagnosis(input: DiagnosisReviewInput): Promise<AuditEvent> {
     const {
       DiagnosisReviewDecisionSchema,
+      compareAuditCausalOrder,
       isDiagnosisStale,
       latestDiagnosisReview,
     } = await import("./approval-desk/diagnosis-review.js");
@@ -843,19 +844,16 @@ export class TriageService {
       const originalConversationWatermark = CustomerReplyWatermarkSchema.safeParse(
         original.after.sourceConversationWatermark,
       ).data ?? conversationWatermarkAt(audits, original.id);
+      const originalPosition = {
+        event: original,
+        index: audits.findIndex((event) => event.id === original.id),
+      };
       const newerDiagnoses = audits.filter(
-        (event) =>
+        (event, index) =>
           event.id !== original.id &&
           (event.action === "diagnosis-completed" ||
             event.action === "diagnostic-escalated") &&
-          isDiagnosisStale({
-            diagnosisTimestamp: original.timestamp,
-            diagnosisTicketRevision: originalSourceRevision,
-            diagnosisConversationWatermark: originalConversationWatermark,
-            currentTicketRevision: originalSourceRevision,
-            latestConversationWatermark: originalConversationWatermark,
-            newerDiagnosisAt: event.timestamp,
-          }).stale,
+          compareAuditCausalOrder({ event, index }, originalPosition) > 0,
       );
       const staleDiagnosis = isDiagnosisStale({
         diagnosisTimestamp: original.timestamp,
@@ -907,24 +905,34 @@ export class TriageService {
 
   async recordFix(input: RecordFixInput): Promise<AuditEvent> {
     const fix = RecordFixInputSchema.parse(input);
-    await this.dependencies.tickets.get(fix.ticketId);
+    return serializeTicket(fix.ticketId, async () => {
+      const [ticket, audits] = await Promise.all([
+        this.dependencies.tickets.get(fix.ticketId),
+        this.dependencies.audit.list(fix.ticketId),
+      ]);
+      const { fixBlockers } = await import("./approval-desk/workflow-guidance.js");
+      const [fixBlocker] = fixBlockers({ ticket, audits });
+      if (fixBlocker !== undefined) {
+        throw new DomainError(fixBlocker, "INVALID_APPROVAL_FIELDS");
+      }
 
-    const auditEvent = AuditEventSchema.parse({
-      id: this.uuid(),
-      timestamp: fix.fixedAt,
-      actor: fix.actor,
-      action: "fix-available",
-      ticketId: fix.ticketId,
-      before: {},
-      after: {
-        fix: fix.fix,
-      },
-      rationale: "Fix or mitigation is available for customer verification.",
-      knowledgeArticleIds: fix.knowledgeArticleIds,
-      result: "success",
+      const auditEvent = AuditEventSchema.parse({
+        id: this.uuid(),
+        timestamp: fix.fixedAt,
+        actor: fix.actor,
+        action: "fix-available",
+        ticketId: fix.ticketId,
+        before: {},
+        after: {
+          fix: fix.fix,
+        },
+        rationale: "Fix or mitigation is available for customer verification.",
+        knowledgeArticleIds: fix.knowledgeArticleIds,
+        result: "success",
+      });
+      await this.dependencies.audit.append(auditEvent);
+      return auditEvent;
     });
-    await this.dependencies.audit.append(auditEvent);
-    return auditEvent;
   }
 
   async supersedeRecommendation(

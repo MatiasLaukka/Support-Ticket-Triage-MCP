@@ -168,6 +168,20 @@ export type DiagnosisStalenessInput = z.infer<
 export type DiagnosisStaleReason = z.infer<typeof DiagnosisStaleReasonSchema>;
 export type DiagnosisStaleness = z.infer<typeof DiagnosisStalenessSchema>;
 
+export interface AuditCausalPosition {
+  event: AuditEvent;
+  index: number;
+}
+
+export function compareAuditCausalOrder(
+  left: AuditCausalPosition,
+  right: AuditCausalPosition,
+): number {
+  return left.index - right.index ||
+    compareIsoInstants(left.event.timestamp, right.event.timestamp) ||
+    left.event.id.localeCompare(right.event.id);
+}
+
 export function isDiagnosisStale(input: DiagnosisStalenessInput): DiagnosisStaleness {
   const staleness = DiagnosisStalenessInputSchema.parse(input);
   const staleReasons: DiagnosisStaleReason[] = [];
@@ -233,14 +247,15 @@ export function latestDiagnosisReview(
         event.ticketId === parsed.data.ticketId &&
         event.actor === parsed.data.actor &&
         isSameInstant(event.timestamp, parsed.data.reviewedAt)
-        ? [{ review: parsed.data, timestamp: event.timestamp, index, id: event.id }]
+        ? [{ review: parsed.data, event, index }]
         : [];
     })
     .sort(
       (left, right) =>
-        compareIsoInstants(right.timestamp, left.timestamp) ||
-        right.index - left.index ||
-        right.id.localeCompare(left.id),
+        compareAuditCausalOrder(
+          { event: right.event, index: right.index },
+          { event: left.event, index: left.index },
+        ),
     )[0]?.review;
 }
 

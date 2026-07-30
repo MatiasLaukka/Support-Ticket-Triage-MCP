@@ -827,6 +827,8 @@ describe("createTriageServer action protocol", () => {
         "add_customer_reply",
         "evaluate_ticket",
         "record_diagnosis",
+        "review_diagnosis",
+        "apply_diagnosis_fix",
         "mark_fix_available",
         "mark_response_done",
         "close_ticket",
@@ -834,11 +836,13 @@ describe("createTriageServer action protocol", () => {
     );
     expect(operatorActions.map(({ name }) => name).sort()).toEqual([
       "add_customer_reply",
+      "apply_diagnosis_fix",
       "close_ticket",
       "evaluate_ticket",
       "mark_fix_available",
       "mark_response_done",
       "record_diagnosis",
+      "review_diagnosis",
     ]);
     expect(
       operatorActions.find(({ name }) => name === "add_customer_reply")
@@ -876,6 +880,45 @@ describe("createTriageServer action protocol", () => {
       idempotentHint: false,
       openWorldHint: false,
     });
+    for (const actionName of ["review_diagnosis", "apply_diagnosis_fix"]) {
+      expect(
+        operatorActions.find(({ name }) => name === actionName)?.annotations,
+      ).toEqual({
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: false,
+        openWorldHint: false,
+      });
+    }
+    const reviewDiagnosis = operatorActions.find(
+      ({ name }) => name === "review_diagnosis",
+    )!;
+    expect(reviewDiagnosis.inputSchema.required).toEqual(
+      expect.arrayContaining([
+        "decision",
+        "diagnosisId",
+        "ticketId",
+        "sourceTicketRevision",
+        "sourceConversationWatermark",
+        "editedDiagnosis",
+        "actor",
+      ]),
+    );
+    expect(reviewDiagnosis.inputSchema.properties).not.toHaveProperty("reviewedAt");
+    expect(reviewDiagnosis.inputSchema.additionalProperties).toBe(false);
+    const applyDiagnosisFix = operatorActions.find(
+      ({ name }) => name === "apply_diagnosis_fix",
+    )!;
+    expect(applyDiagnosisFix.inputSchema.required).toEqual(
+      expect.arrayContaining([
+        "diagnosisId",
+        "sourceTicketId",
+        "impactSet",
+        "actor",
+      ]),
+    );
+    expect(applyDiagnosisFix.inputSchema.properties).not.toHaveProperty("fixedAt");
+    expect(applyDiagnosisFix.inputSchema.additionalProperties).toBe(false);
     expect(
       operatorActions.find(({ name }) => name === "mark_fix_available")
         ?.annotations,
@@ -1996,6 +2039,99 @@ describe("createTriageServer action protocol", () => {
         unlocksTool: "evaluate_ticket",
       },
     });
+  });
+
+  it("reviews an original diagnosis and applies its scoped fix through MCP tools", async () => {
+    const fixture = await createFixture();
+    const original = await fixture.service.recordDiagnosis({
+      ticketId: "TKT-1001",
+      actor: "casey",
+      diagnosedAt: now.toISOString(),
+      diagnosis: diagnosisContext(),
+      knowledgeArticleIds: ["api-reference"],
+    });
+    const client = await connect(fixture);
+
+    const review = await callTool(client, "review_diagnosis", {
+      decision: "approve",
+      diagnosisId: original.id,
+      ticketId: "TKT-1001",
+      sourceTicketRevision: 2,
+      sourceConversationWatermark: { state: "none" },
+      editedDiagnosis: original.after.diagnosis,
+      actor: "casey",
+    });
+    await appendDiagnosisResponseSent(fixture);
+    const fix = await callTool(client, "apply_diagnosis_fix", {
+      diagnosisId: original.id,
+      sourceTicketId: "TKT-1001",
+      actor: "casey",
+      impactSet: {
+        actor: "casey",
+        rationale: "The confirmed diagnosis applies to the selected ticket.",
+        tickets: [
+          {
+            ticketId: "TKT-1001",
+            reason: "The source ticket reproduced the reviewed diagnosis.",
+          },
+        ],
+      },
+    });
+
+    expect(review.isError, textOf(review)).not.toBe(true);
+    expect(expectStableStructured(review)).toMatchObject({
+      auditEvent: {
+        action: "diagnosis-reviewed",
+        before: { diagnosisId: original.id },
+      },
+      diagnoses: [
+        expect.objectContaining({
+          originalDiagnosis: expect.objectContaining({ id: original.id }),
+          latestReview: expect.objectContaining({ decision: "approve" }),
+        }),
+      ],
+    });
+    expect(fix.isError, textOf(fix)).not.toBe(true);
+    expect(expectStableStructured(fix)).toMatchObject({
+      auditEvents: [
+        expect.objectContaining({
+          action: "fix-available",
+          ticketId: "TKT-1001",
+          after: expect.objectContaining({ diagnosisId: original.id }),
+        }),
+      ],
+    });
+    await expect(fixture.tickets.get("TKT-1001")).resolves.toMatchObject({
+      status: "triage",
+    });
+  });
+
+  it("requires an operator actor for diagnosis review without appending an audit", async () => {
+    const fixture = await createFixture();
+    const original = await fixture.service.recordDiagnosis({
+      ticketId: "TKT-1001",
+      actor: "casey",
+      diagnosedAt: now.toISOString(),
+      diagnosis: diagnosisContext(),
+      knowledgeArticleIds: ["api-reference"],
+    });
+    const client = await connect(fixture);
+
+    const result = await callTool(client, "review_diagnosis", {
+      decision: "approve",
+      diagnosisId: original.id,
+      ticketId: "TKT-1001",
+      sourceTicketRevision: 2,
+      sourceConversationWatermark: { state: "none" },
+      editedDiagnosis: original.after.diagnosis,
+    });
+
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toContain("Input validation error");
+    expect(textOf(result)).toContain("actor");
+    await expect(fixture.audits.list("TKT-1001")).resolves.toEqual([
+      original,
+    ]);
   });
 
   it("closes a ticket through the operator tool after a ready-for-close response is sent", async () => {

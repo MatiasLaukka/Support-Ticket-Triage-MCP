@@ -50,6 +50,14 @@ import {
   hasCustomerReplyAfterRecommendation,
   selectPersistedDiagnosticWorkflowContext,
 } from "./diagnostic-workflow.js";
+import {
+  DiagnosisFixActionOutputSchema,
+  DiagnosisImpactSetSchema,
+  DiagnosisReviewActionOutputSchema,
+  DiagnosisReviewDraftSchema,
+  DiagnosisReviewListOutputSchema,
+  diagnosisReviewViews,
+} from "./diagnosis-review.js";
 import { automaticReplyForTicket } from "./automatic-customer-replies.js";
 import {
   buildTicketWorkflowReadModel,
@@ -194,6 +202,17 @@ const WorkflowActionBodySchema = z
     actor: z.string().trim().min(1),
   })
   .strict();
+const ReviewDiagnosisBodySchema = DiagnosisReviewDraftSchema.omit({
+  diagnosisId: true,
+  ticketId: true,
+  reviewedAt: true,
+});
+const ApplyDiagnosisFixBodySchema = z
+  .object({
+    actor: z.string().trim().min(1),
+    impactSet: DiagnosisImpactSetSchema,
+  })
+  .strict();
 const KnowledgeDiscoveryBodySchema = z.object({
   ticketId: TicketIdSchema.optional(),
   includeGpt: z.boolean().default(false),
@@ -303,6 +322,36 @@ function matchRoute(
     return {
       status: 201,
       handle: (context) => recordDiagnosis(context, diagnosis[1]!),
+    };
+  }
+
+  const diagnoses = /^\/api\/tickets\/([^/]+)\/diagnoses$/.exec(pathname);
+  if (method === "GET" && diagnoses !== null) {
+    return {
+      status: 200,
+      handle: (context) => getTicketDiagnoses(context, diagnoses[1]!),
+    };
+  }
+
+  const diagnosisReview = /^\/api\/tickets\/([^/]+)\/diagnoses\/([^/]+)\/review$/.exec(
+    pathname,
+  );
+  if (method === "POST" && diagnosisReview !== null) {
+    return {
+      status: 201,
+      handle: (context) =>
+        reviewDiagnosis(context, diagnosisReview[1]!, diagnosisReview[2]!),
+    };
+  }
+
+  const diagnosisFix = /^\/api\/tickets\/([^/]+)\/diagnoses\/([^/]+)\/fix$/.exec(
+    pathname,
+  );
+  if (method === "POST" && diagnosisFix !== null) {
+    return {
+      status: 201,
+      handle: (context) =>
+        applyDiagnosisFix(context, diagnosisFix[1]!, diagnosisFix[2]!),
     };
   }
 
@@ -724,6 +773,60 @@ async function recordDiagnosis(
       },
     }),
   };
+}
+
+async function getTicketDiagnoses(
+  { deps }: RouteContext,
+  id: string,
+): Promise<unknown> {
+  const ticketId = TicketIdSchema.parse(id);
+  const [ticket, audits] = await Promise.all([
+    deps.tickets.get(ticketId),
+    deps.audits.list(ticketId),
+  ]);
+  return DiagnosisReviewListOutputSchema.parse({
+    diagnoses: diagnosisReviewViews({ ticket, audits }),
+  });
+}
+
+async function reviewDiagnosis(
+  { deps, request }: RouteContext,
+  id: string,
+  diagnosisId: string,
+): Promise<unknown> {
+  const ticketId = TicketIdSchema.parse(id);
+  const body = ReviewDiagnosisBodySchema.parse(await readJsonBody(request));
+  const auditEvent = await deps.service.reviewDiagnosis({
+    ...body,
+    ticketId,
+    diagnosisId,
+    reviewedAt: deps.now().toISOString(),
+  });
+  const [ticket, audits] = await Promise.all([
+    deps.tickets.get(ticketId),
+    deps.audits.list(ticketId),
+  ]);
+  return DiagnosisReviewActionOutputSchema.parse({
+    auditEvent,
+    diagnoses: diagnosisReviewViews({ ticket, audits }),
+  });
+}
+
+async function applyDiagnosisFix(
+  { deps, request }: RouteContext,
+  id: string,
+  diagnosisId: string,
+): Promise<unknown> {
+  const sourceTicketId = TicketIdSchema.parse(id);
+  const body = ApplyDiagnosisFixBodySchema.parse(await readJsonBody(request));
+  const auditEvents = await deps.service.applyDiagnosisFix({
+    diagnosisId,
+    sourceTicketId,
+    impactSet: body.impactSet,
+    actor: body.actor,
+    fixedAt: deps.now().toISOString(),
+  });
+  return DiagnosisFixActionOutputSchema.parse({ auditEvents });
 }
 
 async function recordFix(

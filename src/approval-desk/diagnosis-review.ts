@@ -9,6 +9,7 @@ import {
   type AuditEvent,
   type CustomerReplyWatermark,
   type DiagnosisImpactSet as DomainDiagnosisImpactSet,
+  type Ticket,
 } from "../domain.js";
 import { DiagnosisContextSchema } from "../triage-service.js";
 import { compareIsoInstants } from "../iso-instant.js";
@@ -24,7 +25,8 @@ export type { AuditCausalPosition } from "./workflow-causal-context.js";
 const NonBlankStringSchema = z.string().trim().min(1);
 const TicketRevisionSchema = z.number().int().nonnegative();
 
-export const DiagnosisReviewDecisionSchema = z
+/** Strict persisted-review shape before decision-specific domain constraints. */
+export const DiagnosisReviewDraftSchema = z
   .object({
     decision: z.enum(["approve", "reject", "revalidate"]),
     diagnosisId: DiagnosisIdSchema,
@@ -36,7 +38,9 @@ export const DiagnosisReviewDecisionSchema = z
     rationale: NonBlankStringSchema.optional(),
     reviewedAt: IsoTimestampSchema,
   })
-  .strict()
+  .strict();
+
+export const DiagnosisReviewDecisionSchema = DiagnosisReviewDraftSchema
   .superRefine((decision, context) => {
     if (
       (decision.decision === "reject" || decision.decision === "revalidate") &&
@@ -84,6 +88,30 @@ export const DiagnosisReviewSnapshotSchema = z
   })
   .strict();
 
+/**
+ * The transport-safe causal view of one immutable diagnosis. This preserves
+ * the original audit, every valid review decision, and the current freshness
+ * calculation without treating a review as a replacement diagnosis.
+ */
+export const DiagnosisReviewViewSchema = DiagnosisReviewSnapshotSchema.extend({
+  reviews: z.array(DiagnosisReviewDecisionSchema),
+}).strict();
+
+export const DiagnosisReviewListOutputSchema = z
+  .object({ diagnoses: z.array(DiagnosisReviewViewSchema) })
+  .strict();
+
+export const DiagnosisReviewActionOutputSchema = z
+  .object({
+    auditEvent: AuditEventSchema,
+    diagnoses: z.array(DiagnosisReviewViewSchema),
+  })
+  .strict();
+
+export const DiagnosisFixActionOutputSchema = z
+  .object({ auditEvents: z.array(AuditEventSchema).min(1) })
+  .strict();
+
 export type DiagnosisReviewInput = z.infer<
   typeof DiagnosisReviewDecisionSchema
 >;
@@ -92,6 +120,7 @@ export type DiagnosisImpactSet = DomainDiagnosisImpactSet;
 export type DiagnosisReviewSnapshot = z.infer<
   typeof DiagnosisReviewSnapshotSchema
 >;
+export type DiagnosisReviewView = z.infer<typeof DiagnosisReviewViewSchema>;
 
 export const DiagnosisStalenessInputSchema = z
   .object({
@@ -289,6 +318,86 @@ export function latestStrictDiagnosisReviewRecord(
     .sort((left, right) => compareAuditCausalOrder(right, left))[0];
 }
 
+/**
+ * Build one shared diagnosis read-model for HTTP, MCP, and UI consumers.
+ * Persisted audit order is the causal source of truth; timestamp order only
+ * remains a tie-breaker inside the shared audit-order helper.
+ */
+export function diagnosisReviewViews(input: {
+  ticket: Pick<Ticket, "id" | "revision">;
+  audits: readonly AuditEvent[];
+}): DiagnosisReviewView[] {
+  const positions = auditCausalPositions(input.audits);
+  const latestConversationWatermark = conversationWatermarkFromAudits(
+    input.audits,
+  );
+
+  return positions
+    .filter(
+      ({ event }) =>
+        event.ticketId === input.ticket.id &&
+        OriginalDiagnosisAuditSchema.safeParse(event).success,
+    )
+    .map((originalPosition) => {
+      const originalDiagnosis = OriginalDiagnosisAuditSchema.parse(
+        originalPosition.event,
+      );
+      const reviews = positions
+        .flatMap((position) => {
+          const record = strictDiagnosisReviewRecord(input.audits, position);
+          return record?.review.diagnosisId === originalDiagnosis.id
+            ? [record]
+            : [];
+        })
+        .sort((left, right) => compareAuditCausalOrder(left, right));
+      const latestReview = reviews.at(-1)?.review;
+      const currentReview =
+        latestReview?.decision === "approve" ||
+          latestReview?.decision === "revalidate"
+          ? latestReview
+          : undefined;
+      const sourceTicketRevision = currentReview?.sourceTicketRevision ??
+        TicketRevisionSchema.safeParse(
+          originalDiagnosis.after.sourceTicketRevision,
+        ).data ?? input.ticket.revision;
+      const sourceConversationWatermark =
+        currentReview?.sourceConversationWatermark ??
+        CustomerReplyWatermarkSchema.safeParse(
+          originalDiagnosis.after.sourceConversationWatermark,
+        ).data ?? conversationWatermarkAt(
+          input.audits,
+          originalPosition.index,
+        );
+      const freshness = isDiagnosisStale({
+        diagnosisTimestamp: currentReview?.reviewedAt ?? originalDiagnosis.timestamp,
+        diagnosisTicketRevision: sourceTicketRevision,
+        diagnosisConversationWatermark: sourceConversationWatermark,
+        currentTicketRevision: input.ticket.revision,
+        latestConversationWatermark,
+      });
+      const laterDiagnosis = positions.some(
+        (position) =>
+          position.event.id !== originalDiagnosis.id &&
+          OriginalDiagnosisAuditSchema.safeParse(position.event).success &&
+          compareAuditCausalOrder(position, originalPosition) > 0,
+      );
+      const staleReasons = [
+        ...freshness.staleReasons,
+        ...(laterDiagnosis ? ["newer-diagnosis" as const] : []),
+      ];
+
+      return DiagnosisReviewViewSchema.parse({
+        originalDiagnosis,
+        reviews: reviews.map(({ review }) => review),
+        latestReview: latestReview ?? null,
+        stale: staleReasons.length > 0,
+        staleReasons,
+        sourceTicketRevision,
+        sourceConversationWatermark,
+      });
+    });
+}
+
 export function customerReplyWatermarksMatch(
   evaluated: CustomerReplyWatermark,
   current: CustomerReplyWatermark,
@@ -326,4 +435,27 @@ function isAfter(left: string, right: string): boolean {
 
 function isSameInstant(left: string, right: string): boolean {
   return compareIsoInstants(left, right) === 0;
+}
+
+function conversationWatermarkFromAudits(
+  audits: readonly AuditEvent[],
+): CustomerReplyWatermark {
+  return conversationWatermarkAt(audits, audits.length);
+}
+
+function conversationWatermarkAt(
+  audits: readonly AuditEvent[],
+  endExclusive: number,
+): CustomerReplyWatermark {
+  const latestReply = audits
+    .slice(0, endExclusive)
+    .filter((event) => event.action === "customer-reply-received")
+    .at(-1);
+  return latestReply === undefined
+    ? { state: "none" }
+    : {
+      state: "reply",
+      timestamp: latestReply.timestamp,
+      id: latestReply.id,
+    };
 }

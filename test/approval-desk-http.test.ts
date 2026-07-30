@@ -411,6 +411,413 @@ describe("createApprovalDeskHttpServer", () => {
     }
   });
 
+  it("lists immutable diagnosis history through the HTTP read endpoint without mutating it", async () => {
+    const { deps, json } = await startFixture();
+    const original = await recordCurrentDiagnosis(deps, "TKT-1001");
+    const before = await deps.audits.list("TKT-1001");
+
+    const response = await json("/api/tickets/TKT-1001/diagnoses");
+
+    expect(response.status, JSON.stringify(response.body)).toBe(200);
+    expect(response.body).toMatchObject({
+      diagnoses: [
+        {
+          originalDiagnosis: { id: original.id, action: "diagnosis-completed" },
+          reviews: [],
+          latestReview: null,
+          stale: false,
+          staleReasons: [],
+          sourceTicketRevision: 2,
+          sourceConversationWatermark: { state: "none" },
+        },
+      ],
+    });
+    await expect(deps.audits.list("TKT-1001")).resolves.toEqual(before);
+  });
+
+  it("records a diagnosis review through HTTP and returns the updated causal view", async () => {
+    const { deps, json } = await startFixture();
+    const original = await recordCurrentDiagnosis(deps, "TKT-1001");
+    const ticket = await deps.tickets.get("TKT-1001");
+
+    const response = await json(
+      `/api/tickets/TKT-1001/diagnoses/${original.id}/review`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          decision: "approve",
+          sourceTicketRevision: ticket.revision,
+          sourceConversationWatermark: { state: "none" },
+          editedDiagnosis: original.after.diagnosis,
+          actor: "casey",
+        }),
+      },
+    );
+
+    expect(response.status, JSON.stringify(response.body)).toBe(201);
+    expect(response.body).toMatchObject({
+      auditEvent: {
+        action: "diagnosis-reviewed",
+        before: { diagnosisId: original.id },
+        after: {
+          diagnosisReview: {
+            diagnosisId: original.id,
+            decision: "approve",
+            actor: "casey",
+          },
+        },
+      },
+      diagnoses: [
+        {
+          originalDiagnosis: { id: original.id },
+          reviews: [expect.objectContaining({ decision: "approve" })],
+          latestReview: expect.objectContaining({ decision: "approve" }),
+          stale: false,
+        },
+      ],
+    });
+    await expect(deps.audits.list("TKT-1001")).resolves.toEqual(
+      expect.arrayContaining([original]),
+    );
+  });
+
+  it("shows a causally revalidated diagnosis as current against its new customer-reply watermark", async () => {
+    const { deps, json } = await startFixture();
+    const original = await recordCurrentDiagnosis(deps, "TKT-1001");
+    await deps.service.addCustomerReply({
+      ticketId: "TKT-1001",
+      actor: "Maya Chen",
+      body: "The same diagnosed failure still reproduces with the new trace.",
+      receivedAt: "2026-06-10T08:59:59.9999Z",
+      source: "revalidation-test",
+    });
+    const [ticket, audits] = await Promise.all([
+      deps.tickets.get("TKT-1001"),
+      deps.audits.list("TKT-1001"),
+    ]);
+
+    const response = await json(
+      `/api/tickets/TKT-1001/diagnoses/${original.id}/review`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          decision: "revalidate",
+          sourceTicketRevision: ticket.revision,
+          sourceConversationWatermark: customerReplyWatermarkFromAudits(audits),
+          editedDiagnosis: original.after.diagnosis,
+          actor: "casey",
+          rationale: "The new customer evidence confirms the unchanged diagnosis.",
+        }),
+      },
+    );
+
+    expect(response.status, JSON.stringify(response.body)).toBe(201);
+    expect(response.body).toMatchObject({
+      diagnoses: [
+        {
+          originalDiagnosis: { id: original.id },
+          latestReview: expect.objectContaining({ decision: "revalidate" }),
+          stale: false,
+          staleReasons: [],
+          sourceConversationWatermark: customerReplyWatermarkFromAudits(audits),
+        },
+      ],
+    });
+  });
+
+  it("applies a reviewed diagnosis fix to the selected impact set without closing the ticket", async () => {
+    const { deps, json } = await startFixture();
+    const original = await recordCurrentDiagnosis(deps, "TKT-1001");
+    const ticket = await deps.tickets.get("TKT-1001");
+    const review = await json(
+      `/api/tickets/TKT-1001/diagnoses/${original.id}/review`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          decision: "approve",
+          sourceTicketRevision: ticket.revision,
+          sourceConversationWatermark: { state: "none" },
+          editedDiagnosis: original.after.diagnosis,
+          actor: "casey",
+        }),
+      },
+    );
+    expect(review.status, JSON.stringify(review.body)).toBe(201);
+    await appendDiagnosisResponseForTransport(deps, "TKT-1001");
+
+    const response = await json(
+      `/api/tickets/TKT-1001/diagnoses/${original.id}/fix`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          actor: "casey",
+          impactSet: {
+            actor: "casey",
+            rationale: "The confirmed diagnosis applies to the selected ticket.",
+            tickets: [
+              {
+                ticketId: "TKT-1001",
+                reason: "The source ticket reproduced the reviewed diagnosis.",
+              },
+              {
+                ticketId: "TKT-1002",
+                reason: "The matching active ticket is part of the approved impact set.",
+              },
+            ],
+          },
+        }),
+      },
+    );
+
+    expect(response.status, JSON.stringify(response.body)).toBe(201);
+    expect(response.body.auditEvents).toEqual(
+      expect.arrayContaining([
+      expect.objectContaining({
+        action: "fix-available",
+        ticketId: "TKT-1001",
+        after: expect.objectContaining({ diagnosisId: original.id }),
+      }),
+        expect.objectContaining({
+          action: "fix-available",
+          ticketId: "TKT-1002",
+          after: expect.objectContaining({ diagnosisId: original.id }),
+        }),
+      ]),
+    );
+    expect(response.body.auditEvents).toHaveLength(2);
+    const [sourceTicket, relatedTicket] = await Promise.all([
+      deps.tickets.get("TKT-1001"),
+      deps.tickets.get("TKT-1002"),
+    ]);
+    expect(sourceTicket.status).toBe("triage");
+    expect(relatedTicket.status).not.toBe("resolved");
+  });
+
+  it("returns the same stale-review domain error from HTTP and MCP after a causally later backdated reply", async () => {
+    const { deps, json } = await startFixture();
+    const original = await recordCurrentDiagnosis(deps, "TKT-1001");
+    const ticket = await deps.tickets.get("TKT-1001");
+    await deps.service.addCustomerReply({
+      ticketId: "TKT-1001",
+      actor: "Maya Chen",
+      body: "A later reply changes the diagnostic context.",
+      receivedAt: "2026-06-10T08:59:59.9999Z",
+      source: "parity-test",
+    });
+    const staleView = await json("/api/tickets/TKT-1001/diagnoses");
+    const reviewInput = {
+      decision: "approve",
+      diagnosisId: original.id,
+      ticketId: "TKT-1001",
+      sourceTicketRevision: ticket.revision,
+      sourceConversationWatermark: { state: "none" },
+      editedDiagnosis: original.after.diagnosis,
+      actor: "casey",
+    };
+
+    const http = await json(
+      `/api/tickets/TKT-1001/diagnoses/${original.id}/review`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          ...reviewInput,
+          diagnosisId: undefined,
+          ticketId: undefined,
+        }),
+      },
+    );
+    const server = createTriageServer(deps);
+    const client = new Client({ name: "stale-review-parity", version: "1.0.0" });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    await server.connect(serverTransport);
+    await client.connect(clientTransport);
+    try {
+      const mcp = await client.callTool({
+        name: "review_diagnosis",
+        arguments: reviewInput,
+      });
+
+      expect(http.status).toBe(409);
+      expect(staleView.status).toBe(200);
+      expect(staleView.body).toMatchObject({
+        diagnoses: [
+          {
+            originalDiagnosis: { id: original.id },
+            stale: true,
+            staleReasons: ["newer-customer-reply"],
+          },
+        ],
+      });
+      expect(http.body).toEqual({
+        error: {
+          code: "STALE_APPROVAL",
+          message: "Diagnosis review conversation snapshot is stale.",
+        },
+      });
+      expect(mcp.isError).toBe(true);
+      expect(mcpText(mcp as any)).toBe(
+        "STALE_APPROVAL: Diagnosis review conversation snapshot is stale.",
+      );
+    } finally {
+      await Promise.allSettled([client.close(), server.close()]);
+    }
+  });
+
+  it("keeps strict revalidation rationale errors safe and equivalent across HTTP and MCP", async () => {
+    const { deps, json } = await startFixture();
+    const original = await recordCurrentDiagnosis(deps, "TKT-1001");
+    const ticket = await deps.tickets.get("TKT-1001");
+    const reviewInput = {
+      decision: "revalidate",
+      diagnosisId: original.id,
+      ticketId: "TKT-1001",
+      sourceTicketRevision: ticket.revision,
+      sourceConversationWatermark: { state: "none" },
+      editedDiagnosis: original.after.diagnosis,
+      actor: "casey",
+    };
+
+    const http = await json(
+      `/api/tickets/TKT-1001/diagnoses/${original.id}/review`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          ...reviewInput,
+          diagnosisId: undefined,
+          ticketId: undefined,
+        }),
+      },
+    );
+    const server = createTriageServer(deps);
+    const client = new Client({ name: "review-rationale-parity", version: "1.0.0" });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    await server.connect(serverTransport);
+    await client.connect(clientTransport);
+    try {
+      const mcp = await client.callTool({
+        name: "review_diagnosis",
+        arguments: reviewInput,
+      });
+
+      expect(http.status).toBe(400);
+      expect(http.body).toEqual({
+        error: {
+          code: "INVALID_REQUEST",
+          message: "Reject and revalidate diagnosis reviews require a rationale.",
+        },
+      });
+      expect(mcp.isError).toBe(true);
+      expect(mcpText(mcp as any)).toBe(
+        "INVALID_REQUEST: Reject and revalidate diagnosis reviews require a rationale.",
+      );
+    } finally {
+      await Promise.allSettled([client.close(), server.close()]);
+    }
+  });
+
+  it("rejects duplicate impact selections consistently before either transport applies a fix", async () => {
+    const { deps, json } = await startFixture();
+    const original = await recordCurrentDiagnosis(deps, "TKT-1001");
+    const impactSet = {
+      actor: "casey",
+      rationale: "The selected tickets share the diagnosis.",
+      tickets: [
+        { ticketId: "TKT-1001", reason: "The source ticket is affected." },
+        { ticketId: "TKT-1001", reason: "This duplicate must be rejected." },
+      ],
+    };
+
+    const http = await json(
+      `/api/tickets/TKT-1001/diagnoses/${original.id}/fix`,
+      {
+        method: "POST",
+        body: JSON.stringify({ actor: "casey", impactSet }),
+      },
+    );
+    const server = createTriageServer(deps);
+    const client = new Client({ name: "impact-set-parity", version: "1.0.0" });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    await server.connect(serverTransport);
+    await client.connect(clientTransport);
+    try {
+      const mcp = await client.callTool({
+        name: "apply_diagnosis_fix",
+        arguments: {
+          diagnosisId: original.id,
+          sourceTicketId: "TKT-1001",
+          actor: "casey",
+          impactSet,
+        },
+      });
+
+      expect(http.status).toBe(400);
+      expect(http.body).toEqual({
+        error: {
+          code: "INVALID_REQUEST",
+          message: "Impact-set ticket IDs must be unique.",
+        },
+      });
+      expect(mcp.isError).toBe(true);
+      expect(mcpText(mcp as any)).toContain("Input validation error");
+      expect(mcpText(mcp as any)).toContain("Impact-set ticket IDs must be unique.");
+      await expect(deps.audits.list("TKT-1001")).resolves.toEqual([
+        original,
+      ]);
+    } finally {
+      await Promise.allSettled([client.close(), server.close()]);
+    }
+  });
+
+  it("returns the same source-selection error when an impact set omits its source ticket", async () => {
+    const { deps, json } = await startFixture();
+    const original = await recordCurrentDiagnosis(deps, "TKT-1001");
+    const impactSet = {
+      actor: "casey",
+      rationale: "A related ticket was selected, but the source was omitted.",
+      tickets: [
+        { ticketId: "TKT-1002", reason: "This is the other affected ticket." },
+      ],
+    };
+
+    const http = await json(
+      `/api/tickets/TKT-1001/diagnoses/${original.id}/fix`,
+      {
+        method: "POST",
+        body: JSON.stringify({ actor: "casey", impactSet }),
+      },
+    );
+    const server = createTriageServer(deps);
+    const client = new Client({ name: "missing-source-parity", version: "1.0.0" });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    await server.connect(serverTransport);
+    await client.connect(clientTransport);
+    try {
+      const mcp = await client.callTool({
+        name: "apply_diagnosis_fix",
+        arguments: {
+          diagnosisId: original.id,
+          sourceTicketId: "TKT-1001",
+          actor: "casey",
+          impactSet,
+        },
+      });
+
+      expect(http.status).toBe(400);
+      expect(http.body).toEqual({
+        error: {
+          code: "INVALID_REQUEST",
+          message: "The source ticket must be explicitly selected in the impact set.",
+        },
+      });
+      expect(mcp.isError).toBe(true);
+      expect(mcpText(mcp as any)).toBe(
+        "INVALID_REQUEST: The source ticket must be explicitly selected in the impact set.",
+      );
+    } finally {
+      await Promise.allSettled([client.close(), server.close()]);
+    }
+  });
+
   it("serves the temporary Approval Desk UI", async () => {
     const { baseUrl } = await startFixture();
 
@@ -3414,6 +3821,46 @@ async function approveLatestDiagnosis(
     rationale: "The current ticket context still supports the unchanged diagnosis.",
     reviewedAt: audits.at(-1)?.timestamp ?? now.toISOString(),
   });
+}
+
+async function recordCurrentDiagnosis(
+  deps: Awaited<ReturnType<typeof createRuntimeDependencies>>,
+  ticketId: Ticket["id"],
+) {
+  return deps.service.recordDiagnosis({
+    ticketId,
+    actor: "casey",
+    diagnosedAt: now.toISOString(),
+    diagnosis: {
+      status: "completed",
+      causeType: "configuration",
+      customerSafeSummary: "The reviewed configuration diagnosis is ready for the operator.",
+      evidenceUsed: ["request trace"],
+      confidence: "confirmed",
+      owner: "engineering",
+      recommendedNextAction: "Apply the governed configuration change.",
+      doNotSay: ["Do not expose internal diagnostic notes."],
+    },
+    knowledgeArticleIds: ["api-reference"],
+  });
+}
+
+async function appendDiagnosisResponseForTransport(
+  deps: Awaited<ReturnType<typeof createRuntimeDependencies>>,
+  ticketId: Ticket["id"],
+): Promise<void> {
+  await deps.audits.append(AuditEventSchema.parse({
+    id: "70000000-0000-4000-8000-000000000001",
+    timestamp: "2026-06-10T08:59:59.9999Z",
+    actor: "casey",
+    action: "customer-response-sent",
+    ticketId,
+    before: {},
+    after: { sentAt: "2026-06-10T08:59:59.9999Z" },
+    rationale: "The reviewed diagnosis update was sent to the customer.",
+    knowledgeArticleIds: ["api-reference"],
+    result: "success",
+  }));
 }
 
 async function approveAndSend(

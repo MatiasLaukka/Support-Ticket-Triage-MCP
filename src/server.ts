@@ -12,6 +12,8 @@ import {
   CategorySchema,
   DuplicateCandidateSchema,
   DraftCustomerResponseStyleInputSchema,
+  DiagnosisIdSchema,
+  DiagnosisImpactSetSchema,
   IsoTimestampSchema,
   KnowledgeArticleSchema,
   PrioritySchema,
@@ -58,6 +60,13 @@ import {
   hasCustomerReplyAfterRecommendation,
   selectPersistedDiagnosticWorkflowContext,
 } from "./approval-desk/diagnostic-workflow.js";
+import {
+  DiagnosisFixActionOutputSchema,
+  DiagnosisReviewActionOutputSchema,
+  DiagnosisReviewDraftSchema,
+  DiagnosisReviewListOutputSchema,
+  diagnosisReviewViews,
+} from "./approval-desk/diagnosis-review.js";
 import type { TicketRepository } from "./ticket-repository.js";
 import type {
   RejectRecommendationInput,
@@ -218,6 +227,17 @@ const WorkflowActionInputSchema = z
   .object({
     ticketId: TicketIdSchema,
     actor: NonBlankStringSchema.default("approval-desk"),
+  })
+  .strict();
+const ReviewDiagnosisToolInputSchema = DiagnosisReviewDraftSchema.omit({
+  reviewedAt: true,
+});
+const ApplyDiagnosisFixToolInputSchema = z
+  .object({
+    diagnosisId: DiagnosisIdSchema,
+    sourceTicketId: TicketIdSchema,
+    impactSet: DiagnosisImpactSetSchema,
+    actor: NonBlankStringSchema,
   })
   .strict();
 const DiscoverKnowledgeCandidatesInputSchema = z.object({
@@ -438,6 +458,18 @@ export function createTriageServer(
   );
 
   server.registerTool(
+    "get_ticket_diagnoses",
+    {
+      description:
+        "Read immutable diagnosis history, review decisions, and current freshness for one ticket.",
+      inputSchema: z.object({ ticketId: TicketIdSchema }).strict(),
+      outputSchema: DiagnosisReviewListOutputSchema,
+      annotations: ReadOnlyAnnotations,
+    },
+    async ({ ticketId }) => toolResult(() => getTicketDiagnoses(deps, ticketId)),
+  );
+
+  server.registerTool(
     "discover_knowledge_candidates",
     {
       description: "Discover deterministic, evidence-backed knowledge candidates without changing customer responses.",
@@ -644,6 +676,30 @@ export function createTriageServer(
   );
 
   server.registerTool(
+    "review_diagnosis",
+    {
+      description:
+        "Record an immutable operator review of one original diagnosis audit.",
+      inputSchema: ReviewDiagnosisToolInputSchema,
+      outputSchema: DiagnosisReviewActionOutputSchema,
+      annotations: SubmissionAnnotations,
+    },
+    async (input) => toolResult(() => reviewDiagnosis(deps, input)),
+  );
+
+  server.registerTool(
+    "apply_diagnosis_fix",
+    {
+      description:
+        "Apply a reviewed diagnosis fix to an explicitly selected impact set without closing tickets.",
+      inputSchema: ApplyDiagnosisFixToolInputSchema,
+      outputSchema: DiagnosisFixActionOutputSchema,
+      annotations: SubmissionAnnotations,
+    },
+    async (input) => toolResult(() => applyDiagnosisFix(deps, input)),
+  );
+
+  server.registerTool(
     "mark_fix_available",
     {
       description:
@@ -763,6 +819,48 @@ async function getTicketWorkflow(
   return TicketWorkflowOutputSchema.parse(
     buildTicketWorkflowReadModel({ ticket, audits, recommendations }),
   );
+}
+
+async function getTicketDiagnoses(
+  deps: TriageServerDependencies,
+  ticketId: TicketId,
+): Promise<z.infer<typeof DiagnosisReviewListOutputSchema>> {
+  const [ticket, audits] = await Promise.all([
+    deps.tickets.get(ticketId),
+    deps.audits.list(ticketId),
+  ]);
+  return DiagnosisReviewListOutputSchema.parse({
+    diagnoses: diagnosisReviewViews({ ticket, audits }),
+  });
+}
+
+async function reviewDiagnosis(
+  deps: TriageServerDependencies,
+  input: z.infer<typeof ReviewDiagnosisToolInputSchema>,
+): Promise<z.infer<typeof DiagnosisReviewActionOutputSchema>> {
+  const auditEvent = await deps.service.reviewDiagnosis({
+    ...input,
+    reviewedAt: deps.now().toISOString(),
+  });
+  const [ticket, audits] = await Promise.all([
+    deps.tickets.get(input.ticketId),
+    deps.audits.list(input.ticketId),
+  ]);
+  return DiagnosisReviewActionOutputSchema.parse({
+    auditEvent,
+    diagnoses: diagnosisReviewViews({ ticket, audits }),
+  });
+}
+
+async function applyDiagnosisFix(
+  deps: TriageServerDependencies,
+  input: z.infer<typeof ApplyDiagnosisFixToolInputSchema>,
+): Promise<z.infer<typeof DiagnosisFixActionOutputSchema>> {
+  const auditEvents = await deps.service.applyDiagnosisFix({
+    ...input,
+    fixedAt: deps.now().toISOString(),
+  });
+  return DiagnosisFixActionOutputSchema.parse({ auditEvents });
 }
 
 async function evaluateTicket(
@@ -1189,6 +1287,17 @@ async function toolResult<T extends object>(
       structuredContent,
     };
   } catch (error) {
+    if (error instanceof z.ZodError) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `INVALID_REQUEST: ${error.issues[0]?.message ?? "Invalid request."}`,
+          },
+        ],
+        isError: true,
+      };
+    }
     if (error instanceof DomainError) {
       return {
         content: [

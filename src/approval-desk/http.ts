@@ -23,7 +23,6 @@ import type {
 import { DomainError } from "../errors.js";
 import { calculateQueueMetrics } from "../metrics.js";
 import type { RuntimeDependencies } from "../runtime.js";
-import type { DiagnosisContext, FixContext } from "../triage-service.js";
 import { customerReplyWatermarkFromAudits } from "../triage-service.js";
 import {
   loadExpectedOutcomes,
@@ -54,14 +53,14 @@ import {
 import {
   diagnosisContextForTicket,
   fixContextForTicket,
+  hasCustomerReplyAfterRecommendation,
+  selectPersistedDiagnosticWorkflowContext,
 } from "./diagnostic-workflow.js";
-import { DiagnosticStateSnapshotSchema } from "./diagnostic-state.js";
 import { automaticReplyForTicket } from "./automatic-customer-replies.js";
 import {
   buildOperatorGuidance,
   closeBlockers,
   diagnosisBlockers,
-  latestDiagnosisAudit,
 } from "./workflow-guidance.js";
 import {
   KnowledgeCandidateApprovalOutputSchema,
@@ -779,157 +778,6 @@ function latestCurrentRecommendation(
     .sort(compareRecommendationsNewestFirst(audits))[0];
 }
 
-function latestDiagnosisContext(
-  audits: readonly AuditEvent[],
-): DiagnosisContext | undefined {
-  const event = latestDiagnosisAudit(audits);
-  if (
-    event === undefined ||
-    isSupersededByCustomerReply(audits, event, {
-      preserveForQuestionReplies: true,
-    })
-  ) {
-    return undefined;
-  }
-  return parseDiagnosisContext(event.after.diagnosis);
-}
-
-function latestFixContext(audits: readonly AuditEvent[]): FixContext | undefined {
-  const event = latestFixAudit(audits);
-  if (
-    event === undefined ||
-    isSupersededByCustomerReply(audits, event, {
-      preserveForQuestionReplies: true,
-    })
-  ) {
-    return undefined;
-  }
-  return parseFixContext(event?.after.fix);
-}
-
-function latestFixAudit(audits: readonly AuditEvent[]): AuditEvent | undefined {
-  return audits
-    .map((event, index) => ({ event, index }))
-    .filter(
-      ({ event }) =>
-        event.action === "fix-available" &&
-        typeof event.after.fix === "object" &&
-        event.after.fix !== null,
-    )
-    .sort(
-      (left, right) =>
-        right.event.timestamp.localeCompare(left.event.timestamp) ||
-        right.index - left.index,
-    )[0]?.event;
-}
-
-function isSupersededByCustomerReply(
-  audits: readonly AuditEvent[],
-  event: AuditEvent,
-  options: { preserveForQuestionReplies?: boolean } = {},
-): boolean {
-  const eventIndex = audits.indexOf(event);
-  return audits.some(
-    (candidate, index) => {
-      if (candidate.action !== "customer-reply-received") {
-        return false;
-      }
-      const isNewer =
-        candidate.timestamp > event.timestamp ||
-        (candidate.timestamp === event.timestamp && index > eventIndex);
-      if (!isNewer) {
-        return false;
-      }
-      if (
-        options.preserveForQuestionReplies === true &&
-        customerReplyCanUseExistingDiagnosis(candidate)
-      ) {
-        return false;
-      }
-      return true;
-    },
-  );
-}
-
-function customerReplyCanUseExistingDiagnosis(event: AuditEvent): boolean {
-  const body =
-    typeof event.after.body === "string" ? event.after.body : "";
-  return isCustomerStatusFollowUp(body) || isCustomerExplanationRequest(body);
-}
-
-function isCustomerStatusFollowUp(value: string): boolean {
-  return /\b(?:how long|eta|estimated time|when (?:will|can|should)|any update|status update|what'?s (?:the )?(?:current )?status|current status(?: of (?:the )?ticket)?|wait for (?:a )?fix|fix be ready|fixed|resolved)\b/i.test(
-    value,
-  );
-}
-
-function isCustomerExplanationRequest(value: string): boolean {
-  return /\b(?:what'?s|what is|whats)\s+(?:the\s+)?(?:problem|issue|wrong|happening|going on|cause)|\bwhy\s+(?:is|are|did|does|do)\b.{0,80}\b(?:happening|broken|failing|delayed|missing|not working|not showing)|\bwhat happened\b|\bwhat caused\b|\broot cause\b/i.test(
-    value,
-  );
-}
-
-function parseDiagnosisContext(value: unknown): DiagnosisContext | undefined {
-  if (typeof value !== "object" || value === null) {
-    return undefined;
-  }
-  const context = value as Partial<DiagnosisContext>;
-  if (
-    context.status !== "completed" ||
-    typeof context.causeType !== "string" ||
-    typeof context.customerSafeSummary !== "string" ||
-    !Array.isArray(context.evidenceUsed) ||
-    typeof context.confidence !== "string" ||
-    typeof context.owner !== "string" ||
-    typeof context.recommendedNextAction !== "string" ||
-    !Array.isArray(context.doNotSay)
-  ) {
-    return undefined;
-  }
-  return {
-    status: "completed",
-    causeType: context.causeType as DiagnosisContext["causeType"],
-    customerSafeSummary: context.customerSafeSummary,
-    evidenceUsed: context.evidenceUsed.filter(
-      (item): item is string => typeof item === "string",
-    ),
-    confidence: context.confidence as DiagnosisContext["confidence"],
-    owner: context.owner as DiagnosisContext["owner"],
-    recommendedNextAction: context.recommendedNextAction,
-    doNotSay: context.doNotSay.filter(
-      (item): item is string => typeof item === "string",
-    ),
-    ...(DiagnosticStateSnapshotSchema.safeParse(context.diagnosticState).success
-      ? {
-          diagnosticState: DiagnosticStateSnapshotSchema.parse(
-            context.diagnosticState,
-          ),
-        }
-      : {}),
-  };
-}
-
-function parseFixContext(value: unknown): FixContext | undefined {
-  if (typeof value !== "object" || value === null) {
-    return undefined;
-  }
-  const context = value as Partial<FixContext>;
-  if (
-    context.status !== "available" ||
-    typeof context.customerSafeSummary !== "string" ||
-    typeof context.customerAction !== "string" ||
-    typeof context.verificationRequest !== "string"
-  ) {
-    return undefined;
-  }
-  return {
-    status: "available",
-    customerSafeSummary: context.customerSafeSummary,
-    customerAction: context.customerAction,
-    verificationRequest: context.verificationRequest,
-  };
-}
-
 function conversationWorkflowState(input: {
   ticket: Ticket;
   latest?: TriageRecommendation;
@@ -1026,8 +874,9 @@ async function createRecommendation(
     ticketId,
     audits,
   );
-  const diagnosisContext = latestDiagnosisContext(audits);
-  const fixContext = latestFixContext(audits);
+  const persistedDiagnosticContext = selectPersistedDiagnosticWorkflowContext(
+    audits,
+  );
   const customerReplies = [...persistedCustomerReplies, ...body.customerReplies.map((reply) => ({
     ...reply,
     ticketId,
@@ -1045,8 +894,8 @@ async function createRecommendation(
     approvedObjects,
     customerReplies,
     previousSupportResponse,
-    diagnosisContext,
-    fixContext,
+    diagnosisContext: persistedDiagnosticContext.diagnosis?.context,
+    fixContext: persistedDiagnosticContext.fix?.context,
     aiPreference: body.aiPreference,
     responseStyle: body.responseStyle,
     classificationProvider:
@@ -1130,7 +979,9 @@ async function recordFix(
     deps.audits.list(ticketId),
     deps.recommendations.list(),
   ]);
-  const latestDiagnosis = latestDiagnosisAudit(audits)!;
+  const persistedDiagnosticContext = selectPersistedDiagnosticWorkflowContext(
+    audits,
+  );
   const latest = latestCurrentRecommendation(ticketId, recommendations, audits);
 
   return {
@@ -1138,7 +989,7 @@ async function recordFix(
       ticketId,
       actor: body.actor,
       fixedAt: deps.now().toISOString(),
-      fix: fixContextForTicket(ticket, latestDiagnosis),
+      fix: fixContextForTicket(ticket, persistedDiagnosticContext.diagnosis?.event),
       knowledgeArticleIds: latest?.knowledgeArticleIds ?? [],
     }),
   };
@@ -1295,13 +1146,12 @@ async function maybeAddAutomaticCustomerReplyAfterSent(input: {
   auditsBeforeSent: readonly AuditEvent[];
   sentAt: string;
 }): Promise<AuditEvent | undefined> {
-  const latestReplyAfterRecommendation = latestAuditTimestamp(
-    input.auditsBeforeSent.filter(
-      (event) => event.timestamp > input.recommendation.createdAt,
-    ),
-    "customer-reply-received",
-  );
-  if (latestReplyAfterRecommendation !== undefined) {
+  if (
+    hasCustomerReplyAfterRecommendation(
+      input.auditsBeforeSent,
+      input.recommendation,
+    )
+  ) {
     return undefined;
   }
   const ticket = await input.deps.tickets.get(input.ticketId);

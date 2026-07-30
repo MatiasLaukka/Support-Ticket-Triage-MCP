@@ -8,6 +8,7 @@ import { AuditEventSchema, type Ticket } from "../src/domain.js";
 import {
   customerReplyWatermarkFromAudits,
   type DiagnosisContext,
+  type FixContext,
 } from "../src/triage-service.js";
 import { evaluateTicketWithAi } from "../src/approval-desk/ai-evaluation.js";
 import type { ClassificationReasoningProvider } from "../src/approval-desk/classification-reasoning-provider.js";
@@ -85,6 +86,60 @@ afterEach(async () => {
 });
 
 describe("createApprovalDeskHttpServer", () => {
+  it("does not pass stale fix context into HTTP evaluation after a causally later backdated reply", async () => {
+    const observedFixContexts: Array<FixContext | undefined> = [];
+    const { deps, json } = await startFixture({
+      draftProvider: {
+        async draft(input) {
+          observedFixContexts.push(input.fixContext);
+          return parityDraftProvider.draft(input);
+        },
+      },
+    });
+    await deps.audits.append(AuditEventSchema.parse({
+      id: "60000000-0000-4000-8000-000000000011",
+      timestamp: "2026-06-10T10:00:00.0008+02:00",
+      actor: "product-support",
+      action: "fix-available",
+      ticketId: "TKT-1010",
+      before: {},
+      after: {
+        fix: {
+          status: "available",
+          customerSafeSummary: "The mitigation is available.",
+          customerAction: "Retry the affected workflow.",
+          verificationRequest: "Confirm whether the issue remains.",
+        },
+      },
+      rationale: "The confirmed mitigation is available.",
+      knowledgeArticleIds: [],
+      result: "success",
+    }));
+    await deps.audits.append(AuditEventSchema.parse({
+      id: "60000000-0000-4000-8000-000000000012",
+      timestamp: "2026-06-10T07:59:59.9999Z",
+      actor: "Jamie Lee",
+      action: "customer-reply-received",
+      ticketId: "TKT-1010",
+      before: {},
+      after: {
+        body: "The issue is still failing after the mitigation.",
+        source: "manual",
+      },
+      rationale: "Customer supplied a later follow-up.",
+      knowledgeArticleIds: [],
+      result: "success",
+    }));
+
+    const evaluation = await json("/api/tickets/TKT-1010/recommendations", {
+      method: "POST",
+      body: JSON.stringify({ actor: "approval-desk", aiPreference: "gpt-preferred" }),
+    });
+
+    expect(evaluation.status, JSON.stringify(evaluation.body)).toBe(201);
+    expect(observedFixContexts).toEqual([undefined]);
+  });
+
   it("keeps MCP and HTTP knowledge discovery and review results equivalent", async () => {
     const { deps, json } = await startFixture();
     await seedKnowledgeCandidateSupport(deps);

@@ -4,25 +4,35 @@ import type {
   Ticket,
   TriageRecommendation,
 } from "../domain.js";
+import { compareIsoInstants } from "../iso-instant.js";
+import { selectPersistedDiagnosticWorkflowContext } from "./diagnostic-workflow.js";
 
 export function automaticReplyForTicket(input: {
   ticket: Ticket;
   recommendation: TriageRecommendation;
   auditsBeforeSent: readonly AuditEvent[];
 }): string | undefined {
-  const fixEvent = latestAuditByAction(input.auditsBeforeSent, "fix-available");
-  if (fixEvent !== undefined && input.recommendation.createdAt >= fixEvent.timestamp) {
-    const latestReplyAt = latestAuditTimestamp(
-      input.auditsBeforeSent,
-      "customer-reply-received",
-    );
-    if (latestReplyAt !== undefined && latestReplyAt > fixEvent.timestamp) {
+  const persistedContext = selectPersistedDiagnosticWorkflowContext(
+    input.auditsBeforeSent,
+  );
+  const fix = persistedContext.fix;
+  if (
+    fix !== undefined &&
+    compareIsoInstants(input.recommendation.createdAt, fix.event.timestamp) >= 0
+  ) {
+    if (
+      persistedContext.latestCustomerReply !== undefined &&
+      persistedContext.latestCustomerReply.index > fix.position.index
+    ) {
       return undefined;
     }
     return automaticResolvedReply(input.ticket);
   }
 
-  const diagnosticReply = automaticDiagnosticFollowUpReply(input);
+  const diagnosticReply = automaticDiagnosticFollowUpReply(
+    input,
+    persistedContext,
+  );
   if (diagnosticReply !== undefined) {
     return diagnosticReply;
   }
@@ -48,28 +58,26 @@ function automaticDiagnosticFollowUpReply(input: {
   ticket: Ticket;
   recommendation: TriageRecommendation;
   auditsBeforeSent: readonly AuditEvent[];
-}): string | undefined {
-  const diagnosisEvent = latestDiagnosticAudit(input.auditsBeforeSent);
+}, persistedContext: ReturnType<typeof selectPersistedDiagnosticWorkflowContext>): string | undefined {
+  const diagnosis = persistedContext.diagnosis;
   if (
-    diagnosisEvent === undefined ||
-    input.recommendation.createdAt < diagnosisEvent.timestamp
+    diagnosis === undefined ||
+    compareIsoInstants(input.recommendation.createdAt, diagnosis.event.timestamp) < 0
   ) {
     return undefined;
   }
-  if (diagnosisEvent.action === "diagnostic-escalated") {
+  if (diagnosis.event.action === "diagnostic-escalated") {
     return undefined;
   }
 
-  const latestReplyAt = latestAuditTimestamp(
-    input.auditsBeforeSent,
-    "customer-reply-received",
-  );
-  if (latestReplyAt !== undefined && latestReplyAt > diagnosisEvent.timestamp) {
+  if (
+    persistedContext.latestCustomerReply !== undefined &&
+    persistedContext.latestCustomerReply.index > diagnosis.position.index
+  ) {
     return undefined;
   }
 
-  const diagnosis = diagnosisFromAudit(diagnosisEvent);
-  if (diagnosis?.confidence === "confirmed") {
+  if (diagnosis.context.confidence === "confirmed") {
     return undefined;
   }
 
@@ -270,45 +278,6 @@ function ticketText(ticket: Ticket): string {
   ]
     .join(" ")
     .toLowerCase();
-}
-
-function latestAuditByAction(
-  audits: readonly AuditEvent[],
-  action: string,
-): AuditEvent | undefined {
-  return audits
-    .filter((event) => event.action === action)
-    .sort((left, right) => right.timestamp.localeCompare(left.timestamp))[0];
-}
-
-function latestDiagnosticAudit(
-  audits: readonly AuditEvent[],
-): AuditEvent | undefined {
-  return audits
-    .filter(
-      (event) =>
-        event.action === "diagnosis-completed" ||
-        event.action === "diagnostic-escalated",
-    )
-    .sort((left, right) => right.timestamp.localeCompare(left.timestamp))[0];
-}
-
-function latestAuditTimestamp(
-  audits: readonly AuditEvent[],
-  action: string,
-): string | undefined {
-  return latestAuditByAction(audits, action)?.timestamp;
-}
-
-function diagnosisFromAudit(event: AuditEvent): { confidence?: string } | undefined {
-  const after = event.after;
-  if (typeof after !== "object" || after === null || !("diagnosis" in after)) {
-    return undefined;
-  }
-  const diagnosis = (after as { diagnosis?: unknown }).diagnosis;
-  return typeof diagnosis === "object" && diagnosis !== null
-    ? (diagnosis as { confidence?: string })
-    : undefined;
 }
 
 function stripTrailingPeriod(value: string): string {

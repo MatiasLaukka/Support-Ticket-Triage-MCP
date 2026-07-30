@@ -1276,6 +1276,62 @@ describe("createTriageServer action protocol", () => {
     });
   });
 
+  it("does not pass stale fix context into MCP evaluation after a causally later backdated reply", async () => {
+    const fixture = await createFixture(ordinaryEvaluationTicket());
+    const observedFixContexts: Array<FixContext | undefined> = [];
+    await fixture.audits.append(AuditEventSchema.parse({
+      id: "60000000-0000-4000-8000-000000000021",
+      timestamp: "2026-06-10T10:00:00.0008+02:00",
+      actor: "product-support",
+      action: "fix-available",
+      ticketId: "TKT-1001",
+      before: {},
+      after: {
+        fix: {
+          status: "available",
+          customerSafeSummary: "The mitigation is available.",
+          customerAction: "Retry the affected workflow.",
+          verificationRequest: "Confirm whether the issue remains.",
+        },
+      },
+      rationale: "The confirmed mitigation is available.",
+      knowledgeArticleIds: [],
+      result: "success",
+    }));
+    await fixture.audits.append(AuditEventSchema.parse({
+      id: "60000000-0000-4000-8000-000000000022",
+      timestamp: "2026-06-10T07:59:59.9999Z",
+      actor: "Northstar Labs",
+      action: "customer-reply-received",
+      ticketId: "TKT-1001",
+      before: {},
+      after: {
+        body: "The issue is still failing after the mitigation.",
+        source: "manual",
+      },
+      rationale: "Customer supplied a later follow-up.",
+      knowledgeArticleIds: [],
+      result: "success",
+    }));
+    const client = await connect(fixture, {
+      draftProvider: {
+        async draft(input) {
+          observedFixContexts.push(input.fixContext);
+          return acceptedDraftProvider.draft(input);
+        },
+      },
+    });
+
+    const evaluation = await callTool(client, "evaluate_ticket", {
+      ticketId: "TKT-1001",
+      actor: "approval-desk",
+      aiPreference: "gpt-preferred",
+    });
+
+    expect(evaluation.isError, textOf(evaluation)).not.toBe(true);
+    expect(observedFixContexts).toEqual([undefined]);
+  });
+
   it("rejects evaluate_ticket when a customer reply arrives during provider work", async () => {
     const fixture = await createFixture(ordinaryEvaluationTicket());
     const providerStarted = deferred();

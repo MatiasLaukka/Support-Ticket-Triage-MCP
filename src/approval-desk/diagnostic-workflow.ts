@@ -1,5 +1,6 @@
 import type { AuditEvent, Ticket, TriageRecommendation } from "../domain.js";
 import type { DiagnosisContext, FixContext } from "../triage-service.js";
+import { compareIsoInstants } from "../iso-instant.js";
 import { diagnoseFromPlaybook } from "./diagnostic-playbooks.js";
 import { getKnownCause } from "./known-cause-catalog.js";
 import { getKnownEvent } from "./known-event-catalog.js";
@@ -408,23 +409,125 @@ export function fixContextFromAudit(
   };
 }
 
+export interface PersistedDiagnosticContext<T> {
+  event: AuditEvent;
+  position: AuditCausalPosition;
+  context: T;
+}
+
+export interface PersistedDiagnosticWorkflowContext {
+  diagnosis?: PersistedDiagnosticContext<DiagnosisContext>;
+  fix?: PersistedDiagnosticContext<FixContext>;
+  latestCustomerReply?: AuditCausalPosition;
+}
+
+/**
+ * Select the current persisted diagnostic context from causal audit order.
+ *
+ * A customer reply that is appended after a diagnosis or fix invalidates that
+ * context unless it is a status or explanation question that can safely reuse
+ * the current context. This is the shared read boundary for transports and
+ * customer-drafting code; timestamps never decide lifecycle freshness alone.
+ */
+export function selectPersistedDiagnosticWorkflowContext(
+  audits: readonly AuditEvent[],
+): PersistedDiagnosticWorkflowContext {
+  const latestCustomerReply = latestAuditPosition(
+    audits,
+    (event) => event.action === "customer-reply-received",
+  );
+  const diagnosis = currentPersistedContext(
+    audits,
+    (event) =>
+      (event.action === "diagnosis-completed" ||
+        event.action === "diagnostic-escalated") &&
+      typeof event.after.diagnosis === "object" &&
+      event.after.diagnosis !== null,
+    diagnosisContextFromAudit,
+  );
+  const fix = currentPersistedContext(
+    audits,
+    (event) => event.action === "fix-available",
+    fixContextFromAudit,
+  );
+  return {
+    ...(diagnosis === undefined ? {} : { diagnosis }),
+    ...(fix === undefined ? {} : { fix }),
+    ...(latestCustomerReply === undefined ? {} : { latestCustomerReply }),
+  };
+}
+
 /** Return the latest fix that is still current for the conversation. */
 export function latestFixContextFromAudits(
   audits: readonly AuditEvent[],
 ): FixContext | undefined {
-  const latest = audits
+  return selectPersistedDiagnosticWorkflowContext(audits).fix?.context;
+}
+
+/**
+ * Returns whether a customer reply was persisted after a recommendation was
+ * submitted. Audit order is authoritative when that submission audit exists;
+ * the ISO instant is only the safe fallback for legacy recommendations.
+ */
+export function hasCustomerReplyAfterRecommendation(
+  audits: readonly AuditEvent[],
+  recommendation: Pick<TriageRecommendation, "id" | "createdAt">,
+): boolean {
+  const submission = latestAuditPosition(
+    audits,
+    (event) =>
+      event.action === "recommendation-submitted" &&
+      event.recommendationId === recommendation.id,
+  );
+  if (submission !== undefined) {
+    return audits.some(
+      (event, index) =>
+        event.action === "customer-reply-received" &&
+        compareAuditCausalOrder({ event, index }, submission) > 0,
+    );
+  }
+  return audits.some(
+    (event) =>
+      event.action === "customer-reply-received" &&
+      compareIsoInstants(event.timestamp, recommendation.createdAt) > 0,
+  );
+}
+
+function currentPersistedContext<T>(
+  audits: readonly AuditEvent[],
+  matches: (event: AuditEvent) => boolean,
+  parse: (event: AuditEvent | undefined) => T | undefined,
+): PersistedDiagnosticContext<T> | undefined {
+  const latest = latestAuditPosition(audits, matches);
+  if (latest === undefined || hasSupersedingCustomerReply(audits, latest)) {
+    return undefined;
+  }
+  const context = parse(latest.event);
+  return context === undefined
+    ? undefined
+    : { event: latest.event, position: latest, context };
+}
+
+function latestAuditPosition(
+  audits: readonly AuditEvent[],
+  matches: (event: AuditEvent) => boolean,
+): AuditCausalPosition | undefined {
+  return audits
     .map((event, index) => ({ event, index }))
-    .filter(({ event }) => event.action === "fix-available")
-    .sort(
-      (left, right) => compareAuditCausalOrder(right, left),
-    )[0];
-  if (latest === undefined) return undefined;
-  const superseded = audits.some((candidate, index) => {
+    .filter(({ event }) => matches(event))
+    .sort((left, right) => compareAuditCausalOrder(right, left))[0];
+}
+
+function hasSupersedingCustomerReply(
+  audits: readonly AuditEvent[],
+  context: AuditCausalPosition,
+): boolean {
+  return audits.some((candidate, index) => {
     if (candidate.action !== "customer-reply-received") return false;
     if (
       compareAuditCausalOrder(
         { event: candidate, index },
-        latest,
+        context,
       ) <= 0
     ) return false;
     const body = typeof candidate.after.body === "string"
@@ -432,7 +535,6 @@ export function latestFixContextFromAudits(
       : "";
     return !customerReplyCanUseExistingContext(body);
   });
-  return superseded ? undefined : fixContextFromAudit(latest.event);
 }
 
 function customerReplyCanUseExistingContext(value: string): boolean {

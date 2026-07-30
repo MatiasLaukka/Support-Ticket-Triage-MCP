@@ -6,6 +6,7 @@ import {
   IsoTimestampSchema,
   TicketIdSchema,
   type AuditEvent,
+  type CustomerReplyWatermark,
 } from "../domain.js";
 import { DiagnosisContextSchema } from "../triage-service.js";
 
@@ -173,6 +174,10 @@ export interface AuditCausalPosition {
   index: number;
 }
 
+export interface DiagnosisReviewRecord extends AuditCausalPosition {
+  review: DiagnosisReviewDecision;
+}
+
 export function compareAuditCausalOrder(
   left: AuditCausalPosition,
   right: AuditCausalPosition,
@@ -233,6 +238,13 @@ export function latestDiagnosisReview(
   audits: readonly AuditEvent[],
   diagnosisId: z.infer<typeof DiagnosisIdSchema>,
 ): DiagnosisReviewDecision | undefined {
+  return latestDiagnosisReviewRecord(audits, diagnosisId)?.review;
+}
+
+export function latestDiagnosisReviewRecord(
+  audits: readonly AuditEvent[],
+  diagnosisId: z.infer<typeof DiagnosisIdSchema>,
+): DiagnosisReviewRecord | undefined {
   return audits
     .map((event, index) => ({ event, index }))
     .flatMap(({ event, index }) => {
@@ -256,7 +268,18 @@ export function latestDiagnosisReview(
           { event: right.event, index: right.index },
           { event: left.event, index: left.index },
         ),
-    )[0]?.review;
+    )[0];
+}
+
+export function customerReplyWatermarksMatch(
+  evaluated: CustomerReplyWatermark,
+  current: CustomerReplyWatermark,
+): boolean {
+  return evaluated.state === current.state &&
+    (evaluated.state === "none" ||
+      (current.state === "reply" &&
+        evaluated.id === current.id &&
+        isSameInstant(evaluated.timestamp, current.timestamp)));
 }
 
 function hasNewerCustomerReply(input: DiagnosisStalenessInput): boolean {
@@ -269,9 +292,9 @@ function hasNewerCustomerReply(input: DiagnosisStalenessInput): boolean {
     if (diagnosisWatermark.state === "none") {
       return true;
     }
-    return (
-      latestWatermark.id !== diagnosisWatermark.id ||
-      isAfter(latestWatermark.timestamp, diagnosisWatermark.timestamp)
+    return !customerReplyWatermarksMatch(
+      diagnosisWatermark,
+      latestWatermark,
     );
   }
 

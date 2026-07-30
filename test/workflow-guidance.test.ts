@@ -852,6 +852,31 @@ describe("shared lifecycle blockers", () => {
     });
   });
 
+  it("uses only the strictly associated review audit as the authority position", () => {
+    const original = diagnosisAudit({
+      timestamp: "2026-06-10T09:02:00.000Z",
+      confidence: "confirmed",
+      owner: "engineering",
+    });
+    const validReview = diagnosisReviewAudit(
+      original,
+      "2026-06-10T09:03:00.000Z",
+    );
+    const mismatchedOuterAudit = AuditEventSchema.parse({
+      ...validReview,
+      id: "29999999-9999-4999-8999-999999999999",
+      actor: "different-actor",
+    });
+
+    expect(
+      latestAuthoritativeDiagnosis(ticketId, [
+        original,
+        validReview,
+        mismatchedOuterAudit,
+      ])?.reviewAudit.id,
+    ).toBe(validReview.id);
+  });
+
   it("invalidates an older review when a causally later diagnosis is backdated", () => {
     const original = diagnosisAudit({
       timestamp: "2026-06-10T09:02:00.000Z",
@@ -940,6 +965,88 @@ describe("shared lifecycle blockers", () => {
         ticket: ticket(),
         recommendation: recommendation({ supportState: "ready-for-close" }),
         audits,
+      }),
+    ).toContain("A current approved diagnosis is required before ticket closure.");
+  });
+
+  it("does not let an earlier fix bypass closure after a causally later customer reply", () => {
+    const firstReply = audit("customer-reply-received", "2026-06-10T09:00:00.000Z", {
+      actor: "Maya Chen",
+      after: { body: "The original trace still reproduces the issue." },
+    });
+    const original = diagnosisAudit({
+      timestamp: "2026-06-10T09:02:00.000Z",
+      confidence: "confirmed",
+      owner: "engineering",
+    });
+    const review = diagnosisReviewAudit(
+      original,
+      "2026-06-10T09:03:00.000Z",
+      "approve",
+      { state: "reply", timestamp: firstReply.timestamp, id: firstReply.id },
+    );
+    const diagnosisSent = sentAudit("2026-06-10T09:04:00.000Z");
+    const fix = audit("fix-available", "2026-06-10T09:05:00.000Z", {
+      after: { fix: { status: "available" } },
+    });
+    const backdatedReply = audit(
+      "customer-reply-received",
+      "2026-06-10T08:59:00.000Z",
+      {
+        actor: "Maya Chen",
+        after: { body: "The issue changed after the recorded fix." },
+      },
+    );
+    const readyResponse = sentAudit("2026-06-10T09:06:00.000Z");
+
+    expect(
+      closeBlockers({
+        ticket: ticket(),
+        recommendation: recommendation({ supportState: "ready-for-close" }),
+        audits: [
+          firstReply,
+          original,
+          review,
+          diagnosisSent,
+          fix,
+          backdatedReply,
+          readyResponse,
+        ],
+      }),
+    ).toContain("A current approved diagnosis is required before ticket closure.");
+  });
+
+  it("does not let an ungoverned fix after a newer reply bypass closure", () => {
+    const firstReply = audit("customer-reply-received", "2026-06-10T09:00:00.000Z");
+    const original = diagnosisAudit({
+      timestamp: "2026-06-10T09:02:00.000Z",
+      confidence: "confirmed",
+      owner: "engineering",
+    });
+    const review = diagnosisReviewAudit(
+      original,
+      "2026-06-10T09:03:00.000Z",
+      "approve",
+      { state: "reply", timestamp: firstReply.timestamp, id: firstReply.id },
+    );
+    const newerReply = audit("customer-reply-received", "2026-06-10T09:04:00.000Z");
+    const ungovernedFix = audit("fix-available", "2026-06-10T09:05:00.000Z", {
+      after: { fix: { status: "available" } },
+    });
+
+    expect(
+      closeBlockers({
+        ticket: ticket(),
+        recommendation: recommendation({ supportState: "ready-for-close" }),
+        audits: [
+          firstReply,
+          original,
+          review,
+          sentAudit("2026-06-10T09:03:30.000Z"),
+          newerReply,
+          ungovernedFix,
+          sentAudit("2026-06-10T09:06:00.000Z"),
+        ],
       }),
     ).toContain("A current approved diagnosis is required before ticket closure.");
   });

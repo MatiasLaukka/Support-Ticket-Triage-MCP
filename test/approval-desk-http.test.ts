@@ -1762,6 +1762,7 @@ describe("createApprovalDeskHttpServer", () => {
     });
     expect(closingDraft.body.recommendation.supportState).toBe("ready-for-close");
     await approveAndSend(json, "TKT-1001", closingDraft.body.recommendation);
+    await approveLatestDiagnosis(deps, "TKT-1001");
     currentNow = new Date("2026-06-10T09:25:00.000Z");
 
     const close = await json("/api/tickets/TKT-1001/close", {

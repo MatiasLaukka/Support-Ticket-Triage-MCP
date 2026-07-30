@@ -418,19 +418,6 @@ export function customerReplyWatermarkFromAudits(
       };
 }
 
-function customerReplyWatermarksMatch(
-  evaluated: CustomerReplyWatermark,
-  current: CustomerReplyWatermark,
-): boolean {
-  return (
-    evaluated.state === current.state &&
-    (evaluated.state === "none" ||
-      (current.state === "reply" &&
-        evaluated.timestamp === current.timestamp &&
-        evaluated.id === current.id))
-  );
-}
-
 export class TriageService {
   private readonly now: () => Date;
   private readonly uuid: () => string;
@@ -585,6 +572,9 @@ export class TriageService {
     recommendations: TriageRecommendation[];
   }> {
     const parsed = SubmitEvaluationInputSchema.parse(input);
+    const { customerReplyWatermarksMatch } = await import(
+      "./approval-desk/diagnosis-review.js"
+    );
     const { evaluatedCustomerReplyWatermark, ...recommendationInput } = parsed;
     return serializeTicket(recommendationInput.ticketId, async () => {
       const currentCustomerReplyWatermark = customerReplyWatermarkFromAudits(
@@ -779,6 +769,7 @@ export class TriageService {
     const {
       DiagnosisReviewDecisionSchema,
       compareAuditCausalOrder,
+      customerReplyWatermarksMatch,
       isDiagnosisStale,
       latestDiagnosisReview,
     } = await import("./approval-desk/diagnosis-review.js");

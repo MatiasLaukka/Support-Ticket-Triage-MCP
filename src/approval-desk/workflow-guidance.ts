@@ -15,10 +15,9 @@ import {
   diagnosisContextFromAudit,
 } from "./diagnostic-workflow.js";
 import {
-  DiagnosisReviewDecisionSchema,
   compareAuditCausalOrder,
   isDiagnosisStale,
-  latestDiagnosisReview,
+  latestDiagnosisReviewRecord,
   type DiagnosisReviewDecision,
 } from "./diagnosis-review.js";
 import { DiagnosticStateSnapshotSchema } from "./diagnostic-state.js";
@@ -213,17 +212,33 @@ export function closeBlockers(input: {
     ? selectedAuthoritativeDiagnosis
     : undefined;
   const latestFix = latestFixAudit(input.audits);
+  const latestCustomerReply = input.audits
+    .map((event, index) => ({ event, index }))
+    .filter(({ event }) => event.action === "customer-reply-received")
+    .sort((left, right) => compareAuditCausalOrder(right, left))[0];
+  const latestFixPosition = latestFix === undefined
+    ? undefined
+    : { event: latestFix, index: input.audits.indexOf(latestFix) };
+  const authoritativeDiagnosisAtFix = latestFixPosition === undefined
+    ? undefined
+    : latestAuthoritativeDiagnosis(
+        input.ticket.id,
+        input.audits.slice(0, latestFixPosition.index),
+      );
   const closureUsesRecordedFix =
     input.recommendation?.supportState === "ready-for-close" &&
     latestDiagnosis !== undefined &&
-    latestFix !== undefined &&
+    latestFixPosition !== undefined &&
+    authoritativeDiagnosisAtFix !== undefined &&
     compareAuditCausalOrder(
-      { event: latestFix, index: input.audits.indexOf(latestFix) },
+      latestFixPosition,
       {
         event: latestDiagnosis,
         index: input.audits.indexOf(latestDiagnosis),
       },
-    ) > 0;
+    ) > 0 &&
+    (latestCustomerReply === undefined ||
+      compareAuditCausalOrder(latestFixPosition, latestCustomerReply) > 0);
   if (
     latestDiagnosis !== undefined &&
     authoritativeDiagnosis === undefined &&
@@ -588,23 +603,18 @@ export function latestAuthoritativeDiagnosis(
     ) {
       return [];
     }
-    const review = latestDiagnosisReview(audits, originalDiagnosis.id);
+    const reviewRecord = latestDiagnosisReviewRecord(
+      audits,
+      originalDiagnosis.id,
+    );
+    const review = reviewRecord?.review;
     if (
       review === undefined ||
       (review.decision !== "approve" && review.decision !== "revalidate")
     ) {
       return [];
     }
-    const reviewAudit = audits
-      .map((event, index) => ({ event, index }))
-      .filter(({ event }) => {
-        if (event.action !== "diagnosis-reviewed") return false;
-        const parsed = DiagnosisReviewDecisionSchema.safeParse(
-          event.after.diagnosisReview,
-        );
-        return parsed.success && sameReviewDecision(parsed.data, review);
-      })
-      .at(-1);
+    const reviewAudit = reviewRecord;
     if (reviewAudit === undefined) return [];
     const diagnosis = diagnosisContextFromAudit(reviewAudit.event);
     if (diagnosis === undefined) return [];
@@ -746,13 +756,6 @@ function diagnosisFromAudit(
     event.after.diagnosis !== null
     ? (event.after.diagnosis as Record<string, unknown>)
     : undefined;
-}
-
-function sameReviewDecision(
-  left: DiagnosisReviewDecision,
-  right: DiagnosisReviewDecision,
-): boolean {
-  return JSON.stringify(left) === JSON.stringify(right);
 }
 
 function conversationWatermarkFromAudits(

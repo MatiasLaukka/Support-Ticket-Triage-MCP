@@ -226,6 +226,34 @@ describe("TriageService", () => {
     expect(harness.recommendations.values).toHaveLength(1);
   });
 
+  it("accepts the same customer reply watermark with an equivalent ISO instant", async () => {
+    const harness = makeHarness();
+    await harness.service.addCustomerReply({
+      ticketId: "TKT-1001",
+      actor: "Maya Chen",
+      body: "The API still returns 503.",
+      receivedAt: "2026-06-10T08:55:00.000Z",
+    });
+    const current = customerReplyWatermarkFromAudits(
+      await harness.audit.list("TKT-1001"),
+    );
+    if (current.state !== "reply") {
+      throw new Error("Expected a customer reply watermark.");
+    }
+
+    await expect(
+      harness.service.submitEvaluation({
+        ...makeSubmitInput(),
+        evaluatedCustomerReplyWatermark: {
+          ...current,
+          timestamp: "2026-06-10T08:55:00+00:00",
+        },
+      }),
+    ).resolves.toMatchObject({
+      recommendation: { resolution: "pending" },
+    });
+  });
+
   it("rejects an evaluation when the latest customer reply changed after its snapshot", async () => {
     const harness = makeHarness();
     await harness.service.addCustomerReply({

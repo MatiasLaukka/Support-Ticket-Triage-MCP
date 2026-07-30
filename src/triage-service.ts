@@ -1355,6 +1355,39 @@ export class TriageService {
       result: "success",
     });
 
+    // Customer-response approval authorizes an outbound message, but does not
+    // change ticket state or evidence. Keeping the ticket revision stable lets
+    // an already-reviewed diagnosis remain current until customer context or
+    // an actual ticket field changes.
+    if (approval.approvedFields.every((field) => field === "customerResponse")) {
+      await this.dependencies.recommendations.transitionResolution(
+        recommendation.id,
+        "pending",
+        "approved",
+      );
+      try {
+        await this.dependencies.audit.append(auditEvent);
+      } catch (auditError) {
+        try {
+          await this.dependencies.recommendations.transitionResolution(
+            recommendation.id,
+            "approved",
+            "pending",
+          );
+        } catch {
+          throw domainErrorWithCause(
+            "Approval audit failed and recommendation rollback was not safe.",
+            auditError,
+          );
+        }
+        throw domainErrorWithCause(
+          "Approval audit failed; recommendation was compensated.",
+          auditError,
+        );
+      }
+      return { ticket: ticketBefore, auditEvent };
+    }
+
     const { ticket: updated, result: committedAuditEvent } =
       await this.dependencies.tickets.updateWithCommit(
         ticketBefore.id,

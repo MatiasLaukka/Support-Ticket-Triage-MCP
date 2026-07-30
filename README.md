@@ -159,6 +159,53 @@ The recorded portfolio results cover controlled and deterministic modes only;
 no live showcase run is claimed. Unknown arguments and repeated or conflicting
 mode flags fail safely, so a typo cannot silently select controlled mode.
 
+## Governed Diagnosis Review And Fixes
+
+Once the required evidence is complete, an operator can record an immutable
+diagnosis and review it before it becomes authoritative. The Approval Desk and
+MCP tools call the same `TriageService` rules; neither duplicates diagnosis
+freshness, fix gating, or lifecycle transitions. Replay presents the resulting
+audit-backed lifecycle without making its own decisions.
+
+The normal operator journey is deliberately bounded:
+
+1. Complete the evidence checklist and send the approved evidence update.
+2. Record the original diagnosis, then explicitly approve or revalidate it.
+   A review is a separate audit event; it never rewrites the original
+   diagnosis.
+3. Send the reviewed, customer-safe diagnosis response. Authorizing only that
+   outbound response does not change ticket revision or invalidate otherwise
+   current diagnostic evidence.
+4. Select every ticket that the approved diagnosis should affect and explain
+   why. A diagnosis-scoped fix writes a separate audit event for every
+   selected ticket; it does not resolve any ticket.
+5. Send a customer-safe verification request. A new customer reply or a real
+   ticket-field change makes the earlier review stale, so an operator must
+   revalidate before any later governed action can rely on it.
+6. Close only after the customer has confirmed the result, the configured
+   ready-to-close response has been approved and sent, and an operator takes
+   the explicit close action.
+
+Customer-facing updates say what was investigated or corrected and what the
+customer should verify. They do not expose internal policy, detection,
+similarity, prompt, or secret-handling details. Optional GPT assistance can
+propose drafts, but deterministic checks and explicit human approval remain
+authoritative.
+
+See the detailed synthetic walkthrough in
+[docs/diagnosis-review-example.md](docs/diagnosis-review-example.md). The
+ordered regression is runnable locally:
+
+```powershell
+npx vitest run test/approval-desk-diagnostic-workflow.test.ts test/demo-skill-showcase.test.ts
+```
+
+This diagnosis-review slice does not itself add revision-aware queue analysis,
+evidence-graph similarity or emerging-pattern detection, GPT-drafted candidate
+knowledge objects, automated promotion, or executable/versioned workflow
+migration. Those capabilities must remain separately governed and explicitly
+audited rather than being inferred from a reviewed diagnosis.
+
 ## Screenshots
 
 The screenshots below are generated from local synthetic data.

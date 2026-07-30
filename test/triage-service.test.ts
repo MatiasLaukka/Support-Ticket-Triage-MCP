@@ -1400,6 +1400,54 @@ describe("TriageService", () => {
     });
   });
 
+  it("keeps ticket revision unchanged when approval authorizes only an outbound customer response", async () => {
+    const harness = makeHarness();
+    const recommendation = await harness.service.submit(makeSubmitInput());
+    const before = await harness.tickets.get("TKT-1001");
+
+    const approved = await harness.service.approve(
+      makeApproval({
+        recommendationId: recommendation.id,
+        approvedFields: ["customerResponse"],
+        editedCustomerResponse: recommendation.draftCustomerResponse,
+      }),
+    );
+
+    expect(approved.ticket).toEqual(before);
+    expect(await harness.tickets.get("TKT-1001")).toEqual(before);
+    expect(harness.audit.events.at(-1)).toMatchObject({
+      action: "recommendation-approved",
+      before: { customerResponse: null },
+      after: { customerResponse: recommendation.draftCustomerResponse },
+    });
+    await expect(harness.recommendations.get(recommendation.id)).resolves.toMatchObject({
+      resolution: "approved",
+    });
+  });
+
+  it("compensates a response-only approval when its audit cannot persist", async () => {
+    const harness = makeHarness();
+    const recommendation = await harness.service.submit(makeSubmitInput());
+    const before = await harness.tickets.get("TKT-1001");
+    harness.audit.failNext = true;
+
+    await expect(
+      harness.service.approve(
+        makeApproval({
+          recommendationId: recommendation.id,
+          approvedFields: ["customerResponse"],
+          editedCustomerResponse: recommendation.draftCustomerResponse,
+        }),
+      ),
+    ).rejects.toMatchObject({ code: "REPOSITORY_ERROR" });
+
+    expect(await harness.tickets.get("TKT-1001")).toEqual(before);
+    await expect(harness.recommendations.get(recommendation.id)).resolves.toMatchObject({
+      resolution: "pending",
+    });
+    expect(harness.audit.events).toHaveLength(1);
+  });
+
   it("supersedes and rejects approval of a pending recommendation after a newer customer reply", async () => {
     const harness = makeHarness();
     await harness.service.submit(makeSubmitInput());

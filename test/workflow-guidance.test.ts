@@ -577,6 +577,43 @@ describe("buildOperatorGuidance", () => {
     });
   });
 
+  it("requires revalidation when a customer reply made a review stale without changing ticket fields", () => {
+    const diagnosis = diagnosisAudit({
+      timestamp: "2026-06-10T09:02:00.000Z",
+      confidence: "confirmed",
+      owner: "engineering",
+    });
+    const customerReply = audit(
+      "customer-reply-received",
+      "2026-06-10T09:04:00.000Z",
+      { actor: "Maya Chen", after: { body: "The mitigation worked." } },
+    );
+    const readyToClose = recommendation({
+      supportState: "ready-for-close",
+      createdAt: "2026-06-10T09:05:00.000Z",
+    });
+    const input: WorkflowInput = {
+      ticket: ticket({ revision: 2 }),
+      recommendations: [readyToClose],
+      audits: [
+        diagnosis,
+        diagnosisReviewAudit(diagnosis, "2026-06-10T09:03:00.000Z"),
+        customerReply,
+        audit("recommendation-submitted", "2026-06-10T09:05:00.000Z", {
+          recommendationId: readyToClose.id,
+        }),
+        sentAudit("2026-06-10T09:06:00.000Z", readyToClose.id),
+      ],
+    };
+
+    expect(buildOperatorGuidance(input)).toMatchObject({
+      stage: "diagnosis-recorded",
+      nextAction: "review-diagnosis",
+      approval: { required: true, fields: [] },
+      unlocksTool: "review_diagnosis",
+    });
+  });
+
   it("allows a revalidated diagnosis to unlock a fix after its diagnosis response was already sent", () => {
     const original = diagnosisAudit({
       timestamp: "2026-06-10T09:02:00.000Z",

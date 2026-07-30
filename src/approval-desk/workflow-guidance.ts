@@ -409,6 +409,17 @@ export function buildOperatorGuidance(input: {
   const latestDiagnosisReview = latestDiagnosis === undefined
     ? undefined
     : latestStrictDiagnosisReviewRecord(input.audits, latestDiagnosis.id);
+  const currentDiagnosisReviewIsStale = latestDiagnosisReview !== undefined &&
+    (latestDiagnosisReview.review.decision === "approve" ||
+      latestDiagnosisReview.review.decision === "revalidate") &&
+    isDiagnosisStale({
+      diagnosisTimestamp: latestDiagnosisReview.review.reviewedAt,
+      diagnosisTicketRevision: latestDiagnosisReview.review.sourceTicketRevision,
+      diagnosisConversationWatermark:
+        latestDiagnosisReview.review.sourceConversationWatermark,
+      currentTicketRevision: input.ticket.revision,
+      latestConversationWatermark: conversationWatermarkFromAudits(input.audits),
+    }).stale;
   if (
     latest?.supportState === "escalated" ||
     latestDiagnosticContext?.diagnosticState?.state === "escalated" ||
@@ -432,14 +443,14 @@ export function buildOperatorGuidance(input: {
     latestDiagnosisReview !== undefined &&
     (latestDiagnosisReview.review.decision === "approve" ||
       latestDiagnosisReview.review.decision === "revalidate") &&
-    latestDiagnosisReview.review.sourceTicketRevision !== input.ticket.revision
+    currentDiagnosisReviewIsStale
   ) {
     return OperatorGuidanceSchema.parse({
       stage: "diagnosis-recorded",
-      changed: "The ticket changed after the prior diagnosis review.",
+      changed: "The ticket context changed after the prior diagnosis review.",
       nextAction: "review-diagnosis",
       reason:
-        "The unchanged diagnosis must be revalidated against the current ticket revision before it can unlock governed fix or closure work.",
+        "The unchanged diagnosis must be revalidated against the current ticket and customer context before it can unlock governed fix or closure work.",
       approval: { required: true, fields: [] },
       unlocksTool: "review_diagnosis",
       blockers: [],

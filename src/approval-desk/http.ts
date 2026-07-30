@@ -17,7 +17,6 @@ import {
 } from "../domain.js";
 import type {
   AuditEvent,
-  Ticket,
   TriageRecommendation,
 } from "../domain.js";
 import { DomainError } from "../errors.js";
@@ -47,10 +46,6 @@ import {
 import { loadDiagnosticEvaluationScenarios } from "./diagnostic-evaluation-scenarios.js";
 import type { DiagnosticEvaluationScenario } from "./diagnostic-evaluation.js";
 import {
-  buildConversationHistory,
-  buildConversationTimeline,
-} from "./conversation-history.js";
-import {
   diagnosisContextForTicket,
   fixContextForTicket,
   hasCustomerReplyAfterRecommendation,
@@ -58,10 +53,16 @@ import {
 } from "./diagnostic-workflow.js";
 import { automaticReplyForTicket } from "./automatic-customer-replies.js";
 import {
-  buildOperatorGuidance,
   closeBlockers,
   diagnosisBlockers,
 } from "./workflow-guidance.js";
+import {
+  buildTicketWorkflowReadModel,
+  customerRepliesFromAudits,
+  latestRecommendationApprovalAudit,
+  latestSupportResponseFromAudits,
+  summarizeRecommendationsForTicket,
+} from "./workflow-read-model.js";
 import {
   KnowledgeCandidateApprovalOutputSchema,
   KnowledgeCandidateDefermentOutputSchema,
@@ -603,258 +604,15 @@ async function getTicketDetail(
     deps.audits.list(ticketId),
     deps.recommendations.list(),
   ]);
-  const recommendation = summarizeRecommendationsForTicket(
+  const workflow = buildTicketWorkflowReadModel({
     ticket,
     recommendations,
-    ticketAudits,
-  );
+    audits: ticketAudits,
+  });
   return {
-    ticket,
     audits: auditPage,
-    conversationHistory: buildConversationHistory(ticketAudits),
-    conversationTimeline: buildConversationTimeline({
-      ticket,
-      audits: ticketAudits,
-      recommendations: recommendation.history,
-    }),
-    recommendationHistory: recommendation.history,
-    recommendationSummary: recommendation.summary,
-    latestRecommendation: recommendation.latest,
-    operatorGuidance: buildOperatorGuidance({
-      ticket,
-      recommendations,
-      audits: ticketAudits,
-    }),
+    ...workflow,
   };
-}
-
-type RecommendationWorkflowState =
-  | "active"
-  | "draft-ready"
-  | "waiting"
-  | "customer-replied"
-  | "resolved";
-
-function summarizeRecommendationsForTicket(
-  ticket: Ticket,
-  recommendations: readonly TriageRecommendation[],
-  audits: readonly AuditEvent[],
-): {
-  summary: {
-    latestRecommendationId?: string;
-    latestResolution?: TriageRecommendation["resolution"];
-    hasPendingRecommendation: boolean;
-    hasApprovedRecommendation: boolean;
-    workflowState: RecommendationWorkflowState;
-    outageRisk?: TriageRecommendation["outageRisk"];
-    securityRisk?: TriageRecommendation["securityRisk"];
-    slaRisk?: TriageRecommendation["slaRisk"];
-    priority?: TriageRecommendation["priority"];
-    hasSentResponse: boolean;
-    hasCustomerReply: boolean;
-    latestSentAt?: string;
-    latestCustomerReplyAt?: string;
-  };
-  latest?: TriageRecommendation;
-  history: TriageRecommendation[];
-} {
-  const related = recommendations
-    .filter((recommendation) => recommendation.ticketId === ticket.id)
-    .sort(compareRecommendationsNewestFirst(audits));
-  const currentRelated = related.filter((recommendation) =>
-    ["pending", "approved"].includes(recommendation.resolution),
-  );
-  const latest = currentRelated[0];
-  const hasPendingRecommendation = currentRelated.some(
-    (recommendation) => recommendation.resolution === "pending",
-  );
-  const hasApprovedRecommendation = currentRelated.some(
-    (recommendation) => recommendation.resolution === "approved",
-  );
-  const ticketAudits = audits.filter((event) => event.ticketId === ticket.id);
-  const latestSentAt = latestAuditTimestamp(
-    ticketAudits,
-    "customer-response-sent",
-  );
-  const latestCustomerReplyAt = latestAuditTimestamp(
-    ticketAudits,
-    "customer-reply-received",
-  );
-  const hasSentResponse = latestSentAt !== undefined;
-  const hasCustomerReply = latestCustomerReplyAt !== undefined;
-  const workflowState = conversationWorkflowState({
-    ticket,
-    latest,
-    latestSentAt,
-    latestCustomerReplyAt,
-  });
-  return {
-    summary: {
-      latestRecommendationId: latest?.id,
-      latestResolution: latest?.resolution,
-      hasPendingRecommendation,
-      hasApprovedRecommendation,
-      workflowState,
-      outageRisk: latest?.outageRisk,
-      securityRisk: latest?.securityRisk,
-      slaRisk: latest?.slaRisk,
-      priority: latest?.priority,
-      hasSentResponse,
-      hasCustomerReply,
-      latestSentAt,
-      latestCustomerReplyAt,
-    },
-    latest,
-    history: related,
-  };
-}
-
-function latestAuditTimestamp(
-  audits: readonly AuditEvent[],
-  action: AuditEvent["action"],
-): string | undefined {
-  return audits
-    .filter((event) => event.action === action)
-    .map((event) =>
-      action === "customer-response-sent" && typeof event.after.sentAt === "string"
-        ? event.after.sentAt
-        : event.timestamp,
-    )
-    .sort((left, right) => right.localeCompare(left))[0];
-}
-
-function latestSentAtForRecommendation(
-  audits: readonly AuditEvent[],
-  recommendationId: string,
-): string | undefined {
-  return audits
-    .filter(
-      (event) =>
-        event.action === "customer-response-sent" &&
-        event.recommendationId === recommendationId,
-    )
-    .map((event) =>
-      typeof event.after.sentAt === "string" ? event.after.sentAt : event.timestamp,
-    )
-    .sort((left, right) => right.localeCompare(left))[0];
-}
-
-function compareRecommendationsNewestFirst(
-  audits: readonly AuditEvent[],
-): (left: TriageRecommendation, right: TriageRecommendation) => number {
-  const submittedOrder = submittedAuditIndexByRecommendation(audits);
-  return (left, right) =>
-    right.createdAt.localeCompare(left.createdAt) ||
-    (submittedOrder.get(right.id) ?? -1) - (submittedOrder.get(left.id) ?? -1) ||
-    right.id.localeCompare(left.id);
-}
-
-function submittedAuditIndexByRecommendation(
-  audits: readonly AuditEvent[],
-): Map<string, number> {
-  const indexes = new Map<string, number>();
-  audits.forEach((event, index) => {
-    if (
-      event.action === "recommendation-submitted" &&
-      event.recommendationId !== undefined
-    ) {
-      indexes.set(event.recommendationId, index);
-    }
-  });
-  return indexes;
-}
-
-function latestCurrentRecommendation(
-  ticketId: string,
-  recommendations: readonly TriageRecommendation[],
-  audits: readonly AuditEvent[],
-): TriageRecommendation | undefined {
-  return recommendations
-    .filter(
-      (recommendation) =>
-        recommendation.ticketId === ticketId &&
-        ["pending", "approved"].includes(recommendation.resolution),
-    )
-    .sort(compareRecommendationsNewestFirst(audits))[0];
-}
-
-function conversationWorkflowState(input: {
-  ticket: Ticket;
-  latest?: TriageRecommendation;
-  latestSentAt?: string;
-  latestCustomerReplyAt?: string;
-}): RecommendationWorkflowState {
-  if (input.ticket.status === "resolved") {
-    return "resolved";
-  }
-
-  if (
-    input.latest?.resolution === "approved" &&
-    input.latestSentAt !== undefined &&
-    input.latestSentAt >= input.latest.createdAt
-  ) {
-    return input.latestCustomerReplyAt !== undefined &&
-      input.latestCustomerReplyAt > input.latestSentAt
-      ? "customer-replied"
-      : "waiting";
-  }
-
-  if (input.latest !== undefined) {
-    return input.latestCustomerReplyAt !== undefined &&
-      input.latestCustomerReplyAt > input.latest.createdAt
-      ? "customer-replied"
-      : "draft-ready";
-  }
-
-  if (
-    input.latestCustomerReplyAt !== undefined &&
-    (input.latestSentAt === undefined ||
-      input.latestCustomerReplyAt > input.latestSentAt)
-  ) {
-    return "customer-replied";
-  }
-
-  return input.latestSentAt === undefined ? "active" : "waiting";
-}
-
-function customerRepliesFromAudits(
-  ticketId: string,
-  audits: readonly AuditEvent[],
-): Array<{ id: string; ticketId: string; createdAt: string; body: string }> {
-  return audits
-    .filter(
-      (event) =>
-        event.ticketId === ticketId &&
-        event.action === "customer-reply-received" &&
-        typeof event.after.body === "string",
-    )
-    .map((event) => ({
-      id: event.id,
-      ticketId,
-      createdAt: event.timestamp,
-      body: event.after.body as string,
-    }));
-}
-
-function latestSupportResponseFromAudits(
-  ticketId: string,
-  audits: readonly AuditEvent[],
-): { sentAt: string; body: string } | undefined {
-  return audits
-    .filter(
-      (event) =>
-        event.ticketId === ticketId &&
-        event.action === "customer-response-sent" &&
-        typeof event.after.customerResponse === "string",
-    )
-    .map((event) => ({
-      sentAt:
-        typeof event.after.sentAt === "string"
-          ? event.after.sentAt
-          : event.timestamp,
-      body: event.after.customerResponse as string,
-    }))
-    .sort((left, right) => right.sentAt.localeCompare(left.sentAt))[0];
 }
 
 async function createRecommendation(
@@ -945,7 +703,11 @@ async function recordDiagnosis(
     deps.audits.list(ticketId),
     deps.recommendations.list(),
   ]);
-  const latest = latestCurrentRecommendation(ticketId, recommendations, audits);
+  const latest = summarizeRecommendationsForTicket(
+    ticket,
+    recommendations,
+    audits,
+  ).latest;
   const [diagnosisBlocker] = diagnosisBlockers({
     recommendation: latest,
     audits,
@@ -982,7 +744,11 @@ async function recordFix(
   const persistedDiagnosticContext = selectPersistedDiagnosticWorkflowContext(
     audits,
   );
-  const latest = latestCurrentRecommendation(ticketId, recommendations, audits);
+  const latest = summarizeRecommendationsForTicket(
+    ticket,
+    recommendations,
+    audits,
+  ).latest;
 
   return {
     auditEvent: await deps.service.recordFix({
@@ -1098,13 +864,10 @@ async function markRecommendationSent(
     if (alreadySent) {
       throw invalidRequest("Customer response has already been marked sent.");
     }
-    const approval = audits
-      .filter(
-        (event) =>
-          event.action === "recommendation-approved" &&
-          event.recommendationId === recommendationId,
-      )
-      .sort((left, right) => right.timestamp.localeCompare(left.timestamp))[0];
+    const approval = latestRecommendationApprovalAudit(
+      audits,
+      recommendationId,
+    );
     if (approval === undefined) {
       throw invalidRequest("Approved recommendation audit was not found.");
     }

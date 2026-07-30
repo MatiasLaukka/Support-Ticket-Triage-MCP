@@ -8,6 +8,7 @@ import {
   diagnosisContextForTicket,
   diagnosisContextFromAudit,
   latestFixContextFromAudits,
+  selectPersistedDiagnosticWorkflowContext,
 } from "../src/approval-desk/diagnostic-workflow.js";
 
 const ticket = TicketSchema.parse({
@@ -172,7 +173,7 @@ describe("diagnosisContextForTicket", () => {
       actor: "casey",
       action: "diagnosis-reviewed",
       ticketId: ticket.id,
-      before: {},
+      before: { diagnosisId: original.id },
       after: {
         diagnosisReview: {
           decision: "approve",
@@ -205,7 +206,7 @@ describe("diagnosisContextForTicket", () => {
       actor: "casey",
       action: "diagnosis-reviewed",
       ticketId: ticket.id,
-      before: {},
+      before: { diagnosisId: original.id },
       after: {
         diagnosisReview: {
           decision: "reject",
@@ -228,6 +229,87 @@ describe("diagnosisContextForTicket", () => {
     });
 
     expect(diagnosisContextFromAudit(review)).toBeUndefined();
+    expect(
+      selectPersistedDiagnosticWorkflowContext([original, review]).diagnosis,
+    ).toBeUndefined();
+  });
+
+  it("selects only a strictly associated revalidation as the current persisted diagnosis context", () => {
+    const original = diagnosisAudit("2026-06-10T09:02:00.000Z", ambiguousState);
+    const reply = customerReply(
+      "2026-06-10T08:59:59.9999+00:00",
+      "The same behavior is still happening after the first investigation.",
+    );
+    const revalidatedAt = "2026-06-10T10:00:00.0008+02:00";
+    const editedDiagnosis = {
+      ...(original.after.diagnosis as Record<string, unknown>),
+      customerSafeSummary: "The revalidated diagnosis remains customer-safe.",
+    };
+    const revalidated = AuditEventSchema.parse({
+      id: auditId("40000000"),
+      timestamp: revalidatedAt,
+      actor: "casey",
+      action: "diagnosis-reviewed",
+      ticketId: ticket.id,
+      before: { diagnosisId: original.id },
+      after: {
+        diagnosisReview: {
+          decision: "revalidate",
+          diagnosisId: original.id,
+          ticketId: ticket.id,
+          sourceTicketRevision: ticket.revision,
+          sourceConversationWatermark: {
+            state: "reply",
+            id: reply.id,
+            timestamp: reply.timestamp,
+          },
+          editedDiagnosis,
+          actor: "casey",
+          rationale: "The later reply supports the existing diagnosis.",
+          reviewedAt: revalidatedAt,
+        },
+      },
+      rationale: "Diagnosis revalidated by the operator.",
+      knowledgeArticleIds: [],
+      result: "success",
+    });
+    const malformedLaterReview = AuditEventSchema.parse({
+      ...revalidated,
+      id: auditId("40000000"),
+      actor: "not-casey",
+      after: {
+        diagnosisReview: {
+          decision: "approve",
+          diagnosisId: original.id,
+          ticketId: ticket.id,
+          sourceTicketRevision: ticket.revision,
+          sourceConversationWatermark: {
+            state: "reply",
+            id: reply.id,
+            timestamp: reply.timestamp,
+          },
+          editedDiagnosis,
+          actor: "casey",
+          rationale: undefined,
+          reviewedAt: "2026-06-10T10:00:00.0009+02:00",
+        },
+      },
+      timestamp: "2026-06-10T10:00:00.0009+02:00",
+    });
+
+    const context = selectPersistedDiagnosticWorkflowContext([
+      original,
+      reply,
+      revalidated,
+      malformedLaterReview,
+    ]);
+
+    expect(context.diagnosis).toMatchObject({
+      event: { id: revalidated.id },
+      context: {
+        customerSafeSummary: "The revalidated diagnosis remains customer-safe.",
+      },
+    });
   });
 
   it("projects an active known event into the existing platform-delay diagnosis", () => {

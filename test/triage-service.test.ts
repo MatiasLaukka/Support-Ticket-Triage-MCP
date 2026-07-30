@@ -1079,21 +1079,21 @@ describe("TriageService", () => {
     ]);
   });
 
-  it("allows approval when the latest customer reply is not newer than the recommendation", async () => {
+  it("supersedes and rejects approval when a causally later reply has a backdated offset timestamp", async () => {
     const harness = makeHarness();
     await harness.service.submit(makeSubmitInput());
     await harness.service.addCustomerReply({
       ticketId: "TKT-1001",
       actor: "Maya Chen",
       body: "This reply belongs to the evaluated context.",
-      receivedAt: "2026-06-10T09:00:00.000Z",
+      receivedAt: "2026-06-10T08:59:59.9999+00:00",
     });
 
     await expect(
       harness.service.approve(makeApproval({ approvedFields: ["priority"] })),
-    ).resolves.toMatchObject({
-      ticket: { revision: 3 },
-      auditEvent: { action: "recommendation-approved" },
+    ).rejects.toMatchObject({ code: "STALE_APPROVAL" });
+    expect(await harness.recommendations.get(recommendationId)).toMatchObject({
+      resolution: "superseded",
     });
   });
 

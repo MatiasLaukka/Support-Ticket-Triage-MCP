@@ -4,7 +4,11 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createApprovalDeskHttpServer } from "../src/approval-desk/http.js";
-import { AuditEventSchema, type Ticket } from "../src/domain.js";
+import {
+  AuditEventSchema,
+  TriageRecommendationSchema,
+  type Ticket,
+} from "../src/domain.js";
 import {
   customerReplyWatermarkFromAudits,
   type DiagnosisContext,
@@ -138,6 +142,107 @@ describe("createApprovalDeskHttpServer", () => {
 
     expect(evaluation.status, JSON.stringify(evaluation.body)).toBe(201);
     expect(observedFixContexts).toEqual([undefined]);
+  });
+
+  it("passes the same strictly revalidated diagnosis context through HTTP and MCP evaluation", async () => {
+    const httpContexts: Array<DiagnosisContext | undefined> = [];
+    const mcpContexts: Array<DiagnosisContext | undefined> = [];
+    const { deps, json } = await startFixture({
+      draftProvider: {
+        async draft(input) {
+          httpContexts.push(input.diagnosisContext);
+          return parityDraftProvider.draft(input);
+        },
+      },
+    });
+    const mcpDraftProvider: CustomerResponseDraftProvider = {
+      async draft(input) {
+        mcpContexts.push(input.diagnosisContext);
+        return parityDraftProvider.draft(input);
+      },
+    };
+    const ticket = await deps.tickets.get("TKT-1010");
+    const diagnosis: DiagnosisContext = {
+      status: "completed",
+      causeType: "performance",
+      customerSafeSummary: "The confirmed editor diagnosis is ready for follow-up.",
+      evidenceUsed: ["The editor remains blank in Chrome."],
+      confidence: "confirmed",
+      owner: "engineering",
+      recommendedNextAction: "Share the governed remediation update.",
+      doNotSay: ["Do not expose internal diagnostic notes."],
+    };
+    const original = AuditEventSchema.parse({
+      id: "61000000-0000-4000-8000-000000000001",
+      timestamp: "2026-06-10T09:00:00.0000Z",
+      actor: "product-support",
+      action: "diagnosis-completed",
+      ticketId: ticket.id,
+      before: {},
+      after: {
+        diagnosis,
+        sourceTicketRevision: ticket.revision,
+        sourceConversationWatermark: { state: "none" },
+      },
+      rationale: "The original diagnosis was recorded.",
+      knowledgeArticleIds: ["performance-troubleshooting"],
+      result: "success",
+    });
+    const reply = AuditEventSchema.parse({
+      id: "61000000-0000-4000-8000-000000000002",
+      timestamp: "2026-06-10T08:59:59.9999+00:00",
+      actor: ticket.customer.name,
+      action: "customer-reply-received",
+      ticketId: ticket.id,
+      before: {},
+      after: { body: "The editor still remains blank.", source: "manual" },
+      rationale: "The customer confirmed the same behavior.",
+      knowledgeArticleIds: [],
+      result: "success",
+    });
+    await deps.audits.append(original);
+    await deps.audits.append(reply);
+    await deps.service.reviewDiagnosis({
+      decision: "revalidate",
+      diagnosisId: original.id,
+      ticketId: ticket.id,
+      sourceTicketRevision: ticket.revision,
+      sourceConversationWatermark: customerReplyWatermarkFromAudits(
+        await deps.audits.list(ticket.id),
+      ),
+      editedDiagnosis: diagnosis,
+      actor: "casey",
+      rationale: "The customer reply confirms the original diagnosis.",
+      reviewedAt: "2026-06-10T10:00:00.0008+02:00",
+    });
+
+    const httpEvaluation = await json("/api/tickets/TKT-1010/recommendations", {
+      method: "POST",
+      body: JSON.stringify({ actor: "approval-desk", aiPreference: "gpt-preferred" }),
+    });
+    expect(httpEvaluation.status, JSON.stringify(httpEvaluation.body)).toBe(201);
+
+    const server = createTriageServer({ ...deps, draftProvider: mcpDraftProvider });
+    const client = new Client({ name: "revalidated-context-parity", version: "1.0.0" });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    await server.connect(serverTransport);
+    await client.connect(clientTransport);
+    try {
+      const mcpEvaluation = await client.callTool({
+        name: "evaluate_ticket",
+        arguments: {
+          ticketId: ticket.id,
+          actor: "approval-desk",
+          aiPreference: "gpt-preferred",
+        },
+      });
+      expect(mcpEvaluation.isError, mcpText(mcpEvaluation as any)).not.toBe(true);
+    } finally {
+      await Promise.allSettled([client.close(), server.close()]);
+    }
+
+    expect(httpContexts).toEqual([diagnosis]);
+    expect(mcpContexts).toEqual(httpContexts);
   });
 
   it("keeps MCP and HTTP knowledge discovery and review results equivalent", async () => {
@@ -387,6 +492,60 @@ describe("createApprovalDeskHttpServer", () => {
         recommendationId: created.body.recommendation.id,
       }),
     ]);
+  });
+
+  it("uses causal recommendation submission order consistently in HTTP and MCP workflow reads", async () => {
+    const { deps, json } = await startFixture();
+    const created = await json("/api/tickets/TKT-1005/recommendations", {
+      method: "POST",
+      body: JSON.stringify({ actor: "approval-desk" }),
+    });
+    const first = TriageRecommendationSchema.parse(created.body.recommendation);
+    const causallyLater = TriageRecommendationSchema.parse({
+      ...first,
+      id: "90000000-0000-4000-8000-000000000001",
+      createdAt: "2026-06-10T08:59:59.9999+00:00",
+      draftCustomerResponse: "This later audit must become the current draft.",
+    });
+    await deps.recommendations.create(causallyLater);
+    await deps.audits.append(AuditEventSchema.parse({
+      id: "90000000-0000-4000-8000-000000000002",
+      timestamp: causallyLater.createdAt,
+      actor: "approval-desk",
+      action: "recommendation-submitted",
+      ticketId: causallyLater.ticketId,
+      recommendationId: causallyLater.id,
+      before: {},
+      after: { resolution: "pending" },
+      rationale: "A later persisted recommendation replaces the earlier draft.",
+      knowledgeArticleIds: causallyLater.knowledgeArticleIds,
+      result: "success",
+    }));
+
+    const httpDetail = await json("/api/tickets/TKT-1005");
+    const server = createTriageServer(deps);
+    const client = new Client({ name: "causal-read-parity", version: "1.0.0" });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    await server.connect(serverTransport);
+    await client.connect(clientTransport);
+    try {
+      const mcpWorkflow = await client.callTool({
+        name: "get_ticket_workflow",
+        arguments: { id: "TKT-1005" },
+      });
+
+      expect(httpDetail.body.latestRecommendation.id).toBe(causallyLater.id);
+      expect((mcpWorkflow.structuredContent as any).latestRecommendation.id).toBe(
+        causallyLater.id,
+      );
+      expect(httpDetail.body.recommendationSummary).toEqual(
+        JSON.parse(JSON.stringify(
+          (mcpWorkflow.structuredContent as any).recommendationSummary,
+        )),
+      );
+    } finally {
+      await Promise.allSettled([client.close(), server.close()]);
+    }
   });
 
   it("exposes the same specialist-review guidance as MCP reads", async () => {

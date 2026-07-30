@@ -56,6 +56,7 @@ import {
 } from "./approval-desk/diagnostic-state.js";
 import type { CompletedDiagnosis } from "./knowledge-evolution/domain.js";
 import type { DiagnosisReviewInput } from "./approval-desk/diagnosis-review.js";
+import { hasCustomerReplyAfterRecommendation } from "./approval-desk/workflow-causal-context.js";
 export type {
   DiagnosisReviewInput,
 } from "./approval-desk/diagnosis-review.js";
@@ -1094,19 +1095,11 @@ export class TriageService {
       this.dependencies.recommendations.list(),
     ]);
     let recommendations = [...storedRecommendations];
-    const latestReplyAt = audits
-      .filter((event) => event.action === "customer-reply-received")
-      .map((event) => event.timestamp)
-      .sort((left, right) => right.localeCompare(left))[0];
-    if (latestReplyAt === undefined) {
-      return recommendations;
-    }
-
     for (const recommendation of recommendations.filter(
       (candidate) =>
         candidate.ticketId === input.ticketId &&
         candidate.resolution === "pending" &&
-        latestReplyAt > candidate.createdAt,
+        hasCustomerReplyAfterRecommendation(audits, candidate),
     )) {
       await serializeRecommendation(recommendation.id, () =>
         this.supersedeRecommendationValidated({

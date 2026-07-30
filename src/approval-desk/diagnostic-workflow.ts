@@ -14,6 +14,7 @@ import {
   compareAuditCausalOrder,
   type AuditCausalPosition,
 } from "./diagnosis-review.js";
+export { hasCustomerReplyAfterRecommendation } from "./workflow-causal-context.js";
 
 export function diagnosisContextForTicket(
   ticket: Ticket,
@@ -349,12 +350,7 @@ export function fixContextForTicket(
     };
   }
 
-  if (
-    typeof diagnosisEvent.after.diagnosis === "object" &&
-    diagnosisEvent.after.diagnosis !== null &&
-    "causeType" in diagnosisEvent.after.diagnosis &&
-    diagnosisEvent.after.diagnosis.causeType === "platform-delay"
-  ) {
+  if (diagnosis?.causeType === "platform-delay") {
     return {
       status: "available",
       customerSafeSummary:
@@ -439,10 +435,7 @@ export function selectPersistedDiagnosticWorkflowContext(
   const diagnosis = currentPersistedContext(
     audits,
     (event) =>
-      (event.action === "diagnosis-completed" ||
-        event.action === "diagnostic-escalated") &&
-      typeof event.after.diagnosis === "object" &&
-      event.after.diagnosis !== null,
+      isPersistedDiagnosisContextEvent(event, audits),
     diagnosisContextFromAudit,
   );
   const fix = currentPersistedContext(
@@ -457,40 +450,81 @@ export function selectPersistedDiagnosticWorkflowContext(
   };
 }
 
+function isPersistedDiagnosisContextEvent(
+  event: AuditEvent,
+  audits: readonly AuditEvent[],
+): boolean {
+  if (
+    (event.action === "diagnosis-completed" ||
+      event.action === "diagnostic-escalated") &&
+    typeof event.after.diagnosis === "object" &&
+    event.after.diagnosis !== null
+  ) {
+    const latestReview = latestStrictDiagnosisReview(audits, event.id);
+    return latestReview?.decision !== "reject" &&
+      diagnosisContextFromAudit(event) !== undefined;
+  }
+  const review = strictDiagnosisReview(event, audits);
+  if (
+    review === undefined ||
+    (review.decision !== "approve" && review.decision !== "revalidate") ||
+    diagnosisContextFromAudit(event) === undefined
+  ) {
+    return false;
+  }
+  return true;
+}
+
+function latestStrictDiagnosisReview(
+  audits: readonly AuditEvent[],
+  diagnosisId: string,
+) {
+  return audits
+    .map((event, index) => ({ event, index }))
+    .flatMap(({ event, index }) => {
+      const review = strictDiagnosisReview(event, audits);
+      return review?.diagnosisId === diagnosisId
+        ? [{ review, event, index }]
+        : [];
+    })
+    .sort((left, right) =>
+      compareAuditCausalOrder(right, left),
+    )[0]?.review;
+}
+
+function strictDiagnosisReview(
+  event: AuditEvent,
+  audits: readonly AuditEvent[],
+) {
+  if (event.action !== "diagnosis-reviewed") return undefined;
+  const parsedReview = DiagnosisReviewDecisionSchema.safeParse(
+    event.after.diagnosisReview,
+  );
+  if (
+    !parsedReview.success ||
+    event.ticketId !== parsedReview.data.ticketId ||
+    event.actor !== parsedReview.data.actor ||
+    event.before.diagnosisId !== parsedReview.data.diagnosisId ||
+    compareIsoInstants(event.timestamp, parsedReview.data.reviewedAt) !== 0
+  ) {
+    return undefined;
+  }
+  const original = audits.find(
+    (candidate) =>
+      candidate.id === parsedReview.data.diagnosisId &&
+      candidate.ticketId === parsedReview.data.ticketId &&
+      (candidate.action === "diagnosis-completed" ||
+        candidate.action === "diagnostic-escalated") &&
+      diagnosisContextFromAudit(candidate) !== undefined,
+  );
+  return original === undefined ? undefined : parsedReview.data;
+}
+
 /** Return the latest fix that is still current for the conversation. */
 export function latestFixContextFromAudits(
   audits: readonly AuditEvent[],
 ): FixContext | undefined {
   return selectPersistedDiagnosticWorkflowContext(audits).fix?.context;
-}
-
-/**
- * Returns whether a customer reply was persisted after a recommendation was
- * submitted. Audit order is authoritative when that submission audit exists;
- * the ISO instant is only the safe fallback for legacy recommendations.
- */
-export function hasCustomerReplyAfterRecommendation(
-  audits: readonly AuditEvent[],
-  recommendation: Pick<TriageRecommendation, "id" | "createdAt">,
-): boolean {
-  const submission = latestAuditPosition(
-    audits,
-    (event) =>
-      event.action === "recommendation-submitted" &&
-      event.recommendationId === recommendation.id,
-  );
-  if (submission !== undefined) {
-    return audits.some(
-      (event, index) =>
-        event.action === "customer-reply-received" &&
-        compareAuditCausalOrder({ event, index }, submission) > 0,
-    );
-  }
-  return audits.some(
-    (event) =>
-      event.action === "customer-reply-received" &&
-      compareIsoInstants(event.timestamp, recommendation.createdAt) > 0,
-  );
 }
 
 function currentPersistedContext<T>(

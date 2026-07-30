@@ -1807,7 +1807,7 @@ describe("createTriageServer action protocol", () => {
   it("records diagnosis and fix lifecycle events through operator tools", async () => {
     const fixture = await createFixture();
     const client = await connect(fixture);
-    const recommendation = await fixture.service.submit(
+    await fixture.service.submit(
       {
         ...makeSubmitInput({
           supportState: "waiting-on-platform-fix",
@@ -1826,6 +1826,18 @@ describe("createTriageServer action protocol", () => {
         "This affects multiple EU stores. The tracking calls were accepted successfully by the API, but the checkout events are still missing from the profile timelines.",
       receivedAt: "2026-06-10T09:59:00.000Z",
     });
+    const recommendation = await fixture.service.submit(
+      {
+        ...makeSubmitInput({
+          supportState: "waiting-on-platform-fix",
+          missingInformation: [],
+          actor: "approval-desk",
+          draftCustomerResponse: "We are checking the platform delay.",
+          knowledgeArticleIds: ["incident-response"],
+        }),
+        submittedAt: now.toISOString(),
+      },
+    );
     await fixture.service.approve({
       recommendationId: recommendation.id,
       ticketId: "TKT-1001",

@@ -12,6 +12,7 @@ import {
   closeBlockers,
   diagnosisBlockers,
   fixBlockers,
+  latestAuthoritativeDiagnosis,
 } from "../src/approval-desk/workflow-guidance.js";
 
 const ticketId = "TKT-1001" as const;
@@ -157,6 +158,7 @@ function confirmedEngineeringDiagnosisWorkflow(): WorkflowInput {
     audits: [
       ...input.audits,
       diagnosis,
+      diagnosisReviewAudit(diagnosis, "2026-06-10T09:02:30.000Z"),
       sentAudit("2026-06-10T09:03:00.000Z"),
     ],
   };
@@ -284,8 +286,38 @@ function diagnosisAudit(input: {
     after: {
       diagnosis: {
         status: "completed",
+        causeType: "platform-delay",
+        customerSafeSummary: "A platform processing delay caused the reported issue.",
+        evidenceUsed: ["request trace"],
         confidence: input.confidence,
         owner: input.owner,
+        recommendedNextAction: "Apply the governed mitigation.",
+        doNotSay: [],
+      },
+    },
+  });
+}
+
+function diagnosisReviewAudit(
+  diagnosis: AuditEvent,
+  reviewedAt: string,
+  decision: "approve" | "reject" | "revalidate" = "approve",
+): AuditEvent {
+  return audit("diagnosis-reviewed", reviewedAt, {
+    actor: "casey",
+    after: {
+      diagnosisReview: {
+        decision,
+        diagnosisId: diagnosis.id,
+        ticketId,
+        sourceTicketRevision: 2,
+        sourceConversationWatermark: { state: "none" },
+        editedDiagnosis: diagnosis.after.diagnosis,
+        actor: "casey",
+        ...(decision === "approve"
+          ? {}
+          : { rationale: "The reviewed context supports this decision." }),
+        reviewedAt,
       },
     },
   });
@@ -377,9 +409,9 @@ describe("buildOperatorGuidance", () => {
       name: "diagnosis-recorded",
       input: diagnosisRecordedWorkflow(),
       stage: "diagnosis-recorded",
-      nextAction: "evaluate-ticket",
-      unlocksTool: "evaluate_ticket",
-      approval: { required: false, fields: [] },
+      nextAction: "review-diagnosis",
+      unlocksTool: "review_diagnosis",
+      approval: { required: true, fields: [] },
     },
     {
       name: "diagnosis-ready",
@@ -456,12 +488,20 @@ describe("buildOperatorGuidance", () => {
     });
   });
 
-  it.each([
-    ["diagnosis-recorded", diagnosisRecordedWorkflow()],
-    ["verification", verificationWorkflow()],
-  ] as const)("returns safe backend-owned %s transition copy", (stage, input) => {
-    const guidance = buildOperatorGuidance(input);
-    expect(guidance.stage).toBe(stage);
+  it("requires governed review after a diagnosis is recorded", () => {
+    const guidance = buildOperatorGuidance(diagnosisRecordedWorkflow());
+    expect(guidance.stage).toBe("diagnosis-recorded");
+    expect(guidance.changed).not.toBe("");
+    expect(guidance.reason).not.toBe("");
+    expect(guidance.nextAction).toBe("review-diagnosis");
+    expect(guidance.approval).toEqual({ required: true, fields: [] });
+    expect(guidance.unlocksTool).toBe("review_diagnosis");
+    expect(guidance.blockers).toEqual([]);
+  });
+
+  it("returns safe backend-owned verification transition copy", () => {
+    const guidance = buildOperatorGuidance(verificationWorkflow());
+    expect(guidance.stage).toBe("verification");
     expect(guidance.changed).not.toBe("");
     expect(guidance.reason).not.toBe("");
     expect(guidance.customerNextStep).not.toBe("");
@@ -705,18 +745,21 @@ describe("buildOperatorGuidance", () => {
 
   it("resolves equal diagnosis timestamps by later audit index", () => {
     const input = diagnosisReadyWorkflow();
+    const likely = diagnosisAudit({
+      timestamp: "2026-06-10T09:02:00.000Z",
+      confidence: "likely",
+      owner: "support",
+    });
+    const confirmed = diagnosisAudit({
+      timestamp: "2026-06-10T09:02:00.000Z",
+      confidence: "confirmed",
+      owner: "engineering",
+    });
     input.audits = [
       ...input.audits,
-      diagnosisAudit({
-        timestamp: "2026-06-10T09:02:00.000Z",
-        confidence: "likely",
-        owner: "support",
-      }),
-      diagnosisAudit({
-        timestamp: "2026-06-10T09:02:00.000Z",
-        confidence: "confirmed",
-        owner: "engineering",
-      }),
+      likely,
+      confirmed,
+      diagnosisReviewAudit(confirmed, "2026-06-10T09:02:30.000Z"),
       sentAudit("2026-06-10T09:03:00.000Z"),
     ];
 
@@ -734,13 +777,15 @@ describe("buildOperatorGuidance", () => {
     expect(buildOperatorGuidance(replyEqual).stage).toBe("active");
 
     const diagnosisEqual = diagnosisReadyWorkflow();
+    const equalDiagnosis = diagnosisAudit({
+      timestamp: "2026-06-10T09:01:00.000Z",
+      confidence: "confirmed",
+      owner: "engineering",
+    });
     diagnosisEqual.audits = [
       sentAudit("2026-06-10T09:01:00.000Z"),
-      diagnosisAudit({
-        timestamp: "2026-06-10T09:01:00.000Z",
-        confidence: "confirmed",
-        owner: "engineering",
-      }),
+      equalDiagnosis,
+      diagnosisReviewAudit(equalDiagnosis, "2026-06-10T09:01:00.000Z"),
     ];
     expect(buildOperatorGuidance(diagnosisEqual).stage).toBe("fix-ready");
 
@@ -787,6 +832,58 @@ describe("buildOperatorGuidance", () => {
 });
 
 describe("shared lifecycle blockers", () => {
+  it("selects only an approved current diagnosis as authoritative", () => {
+    const original = diagnosisAudit({
+      timestamp: "2026-06-10T09:02:00.000Z",
+      confidence: "confirmed",
+      owner: "engineering",
+    });
+    expect(latestAuthoritativeDiagnosis(ticketId, [original])).toBeUndefined();
+
+    const review = diagnosisReviewAudit(original, "2026-06-10T09:03:00.000Z");
+    expect(latestAuthoritativeDiagnosis(ticketId, [original, review])).toMatchObject({
+      diagnosisId: original.id,
+      diagnosis: { confidence: "confirmed", owner: "engineering" },
+      review: { decision: "approve" },
+    });
+  });
+
+  it("blocks a fix when the diagnosis is unreviewed or its review is stale", () => {
+    const original = diagnosisAudit({
+      timestamp: "2026-06-10T09:02:00.000Z",
+      confidence: "confirmed",
+      owner: "engineering",
+    });
+    expect(fixBlockers({ audits: [original] })).toContain(
+      "An approved current diagnosis is required before marking a fix available.",
+    );
+
+    const review = diagnosisReviewAudit(original, "2026-06-10T09:03:00.000Z");
+    const newerReply = audit("customer-reply-received", "2026-06-10T09:04:00.000Z", {
+      actor: "Maya Chen",
+      after: { body: "The symptoms changed after the review." },
+    });
+    expect(fixBlockers({ audits: [original, review, newerReply] })).toContain(
+      "An approved current diagnosis is required before marking a fix available.",
+    );
+  });
+
+  it("blocks fix and closure gates after the reviewed ticket revision changes", () => {
+    const input = confirmedEngineeringDiagnosisWorkflow();
+    const revisedTicket = ticket({ revision: 3 });
+
+    expect(fixBlockers({ ticket: revisedTicket, audits: input.audits })).toContain(
+      "An approved current diagnosis is required before marking a fix available.",
+    );
+    expect(
+      closeBlockers({
+        ticket: revisedTicket,
+        recommendation: recommendation({ supportState: "ready-for-close" }),
+        audits: input.audits,
+      }),
+    ).toContain("A current approved diagnosis is required before ticket closure.");
+  });
+
   it("returns exact diagnosis blocker arrays in enforced order", () => {
     expect(diagnosisBlockers({ recommendation: undefined, audits: [] })).toEqual([
       "A completed evaluation is required before diagnosis.",
@@ -860,6 +957,7 @@ describe("shared lifecycle blockers", () => {
         ],
       }),
     ).toEqual([
+      "An approved current diagnosis is required before marking a fix available.",
       "A confirmed diagnosis is required before marking a fix available.",
       "This confirmed diagnosis does not require a platform fix.",
       "A fix has already been recorded for the latest diagnosis.",
@@ -873,7 +971,7 @@ describe("shared lifecycle blockers", () => {
   it("blocks fixes when a diagnosis still has unresolved plausible causes", () => {
     const input = confirmedEngineeringDiagnosisWorkflow();
     const sent = input.audits[0];
-    const diagnosisResponse = input.audits[2];
+    const diagnosisResponse = input.audits.at(-1)!;
     expect(sent).toBeDefined();
     expect(diagnosisResponse).toBeDefined();
     input.audits = [
@@ -912,6 +1010,7 @@ describe("shared lifecycle blockers", () => {
     ];
 
     expect(fixBlockers({ audits: input.audits })).toEqual([
+      "An approved current diagnosis is required before marking a fix available.",
       "A diagnosis with unresolved plausible causes cannot unlock a fix.",
     ]);
   });

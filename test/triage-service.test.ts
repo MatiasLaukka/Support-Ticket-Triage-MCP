@@ -19,6 +19,7 @@ import {
   TriageService,
   customerReplyWatermarkFromAudits,
   type AuditStore,
+  type DiagnosisReviewInput,
   type RecommendationStore,
   type RejectRecommendationInput,
   type SubmitRecommendationInput,
@@ -39,6 +40,129 @@ afterEach(async () => {
 });
 
 describe("TriageService", () => {
+  it("approves an unchanged diagnosis and records the review event", async () => {
+    const harness = makeHarness();
+    const original = await harness.service.recordDiagnosis(makeRecordDiagnosisInput());
+
+    const reviewed = await harness.service.reviewDiagnosis(
+      makeDiagnosisReviewInput({ diagnosisId: original.id }),
+    );
+
+    expect(reviewed).toMatchObject({
+      action: "diagnosis-reviewed",
+      ticketId: "TKT-1001",
+      actor: "casey",
+      after: {
+        diagnosisReview: {
+          decision: "approve",
+          diagnosisId: original.id,
+          sourceTicketRevision: 2,
+          sourceConversationWatermark: { state: "none" },
+          editedDiagnosis: makeRecordDiagnosisInput().diagnosis,
+        },
+      },
+    });
+    expect(harness.audit.events).toHaveLength(2);
+  });
+
+  it("rejects a diagnosis review with a stale ticket revision", async () => {
+    const harness = makeHarness();
+    const original = await harness.service.recordDiagnosis(makeRecordDiagnosisInput());
+
+    await expect(
+      harness.service.reviewDiagnosis(
+        makeDiagnosisReviewInput({
+          diagnosisId: original.id,
+          sourceTicketRevision: 1,
+        }),
+      ),
+    ).rejects.toMatchObject({ code: "STALE_APPROVAL" });
+    expect(harness.audit.events).toHaveLength(1);
+  });
+
+  it("rejects approval of a diagnosis made stale by a newer customer reply", async () => {
+    const harness = makeHarness();
+    const original = await harness.service.recordDiagnosis(makeRecordDiagnosisInput());
+    await harness.service.addCustomerReply({
+      ticketId: "TKT-1001",
+      actor: "Maya Chen",
+      body: "The latest trace now returns a different failure.",
+      receivedAt: "2026-06-10T09:06:00.000Z",
+    });
+    const sourceConversationWatermark = customerReplyWatermarkFromAudits(
+      await harness.audit.list("TKT-1001"),
+    );
+
+    await expect(
+      harness.service.reviewDiagnosis(
+        makeDiagnosisReviewInput({
+          diagnosisId: original.id,
+          sourceConversationWatermark,
+        }),
+      ),
+    ).rejects.toMatchObject({ code: "INVALID_APPROVAL_FIELDS" });
+    expect(
+      harness.audit.events.filter((event) => event.action === "diagnosis-reviewed"),
+    ).toEqual([]);
+  });
+
+  it("revalidates an unchanged diagnosis with the current conversation watermark", async () => {
+    const harness = makeHarness();
+    const original = await harness.service.recordDiagnosis(makeRecordDiagnosisInput());
+    await harness.service.addCustomerReply({
+      ticketId: "TKT-1001",
+      actor: "Maya Chen",
+      body: "The same request trace still reproduces the diagnosed failure.",
+      receivedAt: "2026-06-10T09:06:00.000Z",
+    });
+    const sourceConversationWatermark = customerReplyWatermarkFromAudits(
+      await harness.audit.list("TKT-1001"),
+    );
+
+    await expect(
+      harness.service.reviewDiagnosis(
+        makeDiagnosisReviewInput({
+          decision: "revalidate",
+          diagnosisId: original.id,
+          sourceConversationWatermark,
+          rationale: "The new reply confirms the diagnosis remains unchanged.",
+        }),
+      ),
+    ).resolves.toMatchObject({
+      action: "diagnosis-reviewed",
+      after: {
+        diagnosisReview: {
+          decision: "revalidate",
+          diagnosisId: original.id,
+          sourceConversationWatermark,
+        },
+      },
+    });
+  });
+
+  it("never mutates the original diagnosis audit during review", async () => {
+    const harness = makeHarness();
+    const original = await harness.service.recordDiagnosis(makeRecordDiagnosisInput());
+    const originalSnapshot = structuredClone(original);
+
+    await harness.service.reviewDiagnosis(
+      makeDiagnosisReviewInput({
+        diagnosisId: original.id,
+        editedDiagnosis: {
+          ...makeRecordDiagnosisInput().diagnosis,
+          customerSafeSummary: "The reviewed customer-safe diagnosis summary.",
+        },
+      }),
+    );
+
+    expect(harness.audit.events[0]).toEqual(originalSnapshot);
+    expect(harness.audit.events[1]?.after.diagnosisReview).toMatchObject({
+      editedDiagnosis: {
+        customerSafeSummary: "The reviewed customer-safe diagnosis summary.",
+      },
+    });
+  });
+
   it("submits an evaluation when the customer reply watermark still matches", async () => {
     const harness = makeHarness();
     await harness.service.addCustomerReply({
@@ -1772,5 +1896,21 @@ function makeRecordDiagnosisInput() {
       doNotSay: [],
     },
     knowledgeArticleIds: [],
+  };
+}
+
+function makeDiagnosisReviewInput(
+  overrides: Partial<DiagnosisReviewInput> = {},
+): DiagnosisReviewInput {
+  return {
+    decision: "approve",
+    diagnosisId: recommendationId,
+    ticketId: "TKT-1001",
+    sourceTicketRevision: 2,
+    sourceConversationWatermark: { state: "none" },
+    editedDiagnosis: makeRecordDiagnosisInput().diagnosis,
+    actor: "casey",
+    reviewedAt: "2026-06-10T09:07:00.000Z",
+    ...overrides,
   };
 }

@@ -6,8 +6,20 @@ import {
   type Ticket,
   type TriageRecommendation,
 } from "../domain.js";
-import type { DiagnosisContext } from "../triage-service.js";
-import { diagnosisContextForTicket } from "./diagnostic-workflow.js";
+import type {
+  CustomerReplyWatermark,
+  DiagnosisContext,
+} from "../triage-service.js";
+import {
+  diagnosisContextForTicket,
+  diagnosisContextFromAudit,
+} from "./diagnostic-workflow.js";
+import {
+  DiagnosisReviewDecisionSchema,
+  isDiagnosisStale,
+  latestDiagnosisReview,
+  type DiagnosisReviewDecision,
+} from "./diagnosis-review.js";
 import { DiagnosticStateSnapshotSchema } from "./diagnostic-state.js";
 
 export const OperatorGuidanceSchema = z
@@ -29,6 +41,7 @@ export const OperatorGuidanceSchema = z
     nextAction: z.enum([
       "evaluate-ticket",
       "review-recommendation",
+      "review-diagnosis",
       "wait-for-customer",
       "record-diagnosis",
       "mark-fix-available",
@@ -48,6 +61,7 @@ export const OperatorGuidanceSchema = z
         "evaluate_ticket",
         "mark_response_done",
         "record_diagnosis",
+        "review_diagnosis",
         "mark_fix_available",
         "close_ticket",
       ])
@@ -115,14 +129,33 @@ export function diagnosisBlockers(
   return blockers;
 }
 
-export function fixBlockers(input: { audits: readonly AuditEvent[] }): string[] {
-  const latestDiagnosis = latestDiagnosisAudit(input.audits);
-  if (latestDiagnosis === undefined) {
+export function fixBlockers(input: {
+  ticket?: Pick<Ticket, "revision">;
+  audits: readonly AuditEvent[];
+}): string[] {
+  const latestRecordedDiagnosis = latestDiagnosisAudit(input.audits);
+  if (latestRecordedDiagnosis === undefined) {
     return ["A completed diagnosis is required before marking a fix available."];
   }
 
   const blockers: string[] = [];
-  const diagnosis = diagnosisFromAudit(latestDiagnosis);
+  const selectedAuthoritative = latestAuthoritativeDiagnosis(
+    latestRecordedDiagnosis.ticketId,
+    input.audits,
+  );
+  const authoritative = selectedAuthoritative !== undefined &&
+      (input.ticket === undefined ||
+        selectedAuthoritative.review.sourceTicketRevision === input.ticket.revision)
+    ? selectedAuthoritative
+    : undefined;
+  if (authoritative === undefined) {
+    blockers.push(
+      "An approved current diagnosis is required before marking a fix available.",
+    );
+  }
+  const diagnosis = authoritative?.diagnosis ?? diagnosisFromAudit(latestRecordedDiagnosis);
+  const diagnosisTimestamp =
+    authoritative?.reviewAudit.timestamp ?? latestRecordedDiagnosis.timestamp;
   if (diagnosis?.confidence !== "confirmed") {
     blockers.push(
       "A confirmed diagnosis is required before marking a fix available.",
@@ -145,11 +178,11 @@ export function fixBlockers(input: { audits: readonly AuditEvent[] }): string[] 
     blockers.push("An escalated diagnosis cannot unlock a fix.");
   }
   const latestFixAt = latestAuditTimestamp(input.audits, "fix-available");
-  if (latestFixAt !== undefined && latestFixAt > latestDiagnosis.timestamp) {
+  if (latestFixAt !== undefined && latestFixAt > diagnosisTimestamp) {
     blockers.push("A fix has already been recorded for the latest diagnosis.");
   }
   const sentAt = latestAuditTimestamp(input.audits, "customer-response-sent");
-  if (sentAt === undefined || sentAt < latestDiagnosis.timestamp) {
+  if (sentAt === undefined || sentAt < diagnosisTimestamp) {
     blockers.push("Send the diagnosis response before marking a fix available.");
   }
   const latestReplyAt = latestAuditTimestamp(
@@ -172,8 +205,19 @@ export function closeBlockers(input: {
     blockers.push("Ticket is already closed.");
   }
   const latestDiagnosis = latestDiagnosisAudit(input.audits);
+  const selectedAuthoritativeDiagnosis = latestDiagnosis === undefined
+    ? undefined
+    : latestAuthoritativeDiagnosis(input.ticket.id, input.audits);
+  const authoritativeDiagnosis = selectedAuthoritativeDiagnosis !== undefined &&
+      selectedAuthoritativeDiagnosis.review.sourceTicketRevision === input.ticket.revision
+    ? selectedAuthoritativeDiagnosis
+    : undefined;
+  if (latestDiagnosis !== undefined && authoritativeDiagnosis === undefined) {
+    blockers.push("A current approved diagnosis is required before ticket closure.");
+  }
   const diagnosticState = diagnosticStateFromDiagnosis(
-    latestDiagnosis === undefined ? undefined : diagnosisFromAudit(latestDiagnosis),
+    authoritativeDiagnosis?.diagnosis ??
+      (latestDiagnosis === undefined ? undefined : diagnosisFromAudit(latestDiagnosis)),
   );
   if (diagnosticState?.state === "ambiguous") {
     blockers.push("An ambiguous diagnosis cannot unlock ticket closure.");
@@ -297,7 +341,10 @@ export function buildOperatorGuidance(input: {
     latest,
     input.audits,
   );
-  const fixingBlockers = fixBlockers({ audits: input.audits });
+  const fixingBlockers = fixBlockers({
+    ticket: input.ticket,
+    audits: input.audits,
+  });
   if (fixingBlockers.length === 0 && !hasNewerFix) {
     return OperatorGuidanceSchema.parse({
       stage: "fix-ready",
@@ -333,6 +380,21 @@ export function buildOperatorGuidance(input: {
       input.audits,
     )
   ) {
+    const authoritativeDiagnosis = latestDiagnosis === undefined
+      ? undefined
+      : latestAuthoritativeDiagnosis(input.ticket.id, input.audits);
+    if (authoritativeDiagnosis === undefined) {
+      return OperatorGuidanceSchema.parse({
+        stage: "diagnosis-recorded",
+        changed: "A diagnosis was recorded and is awaiting human review.",
+        nextAction: "review-diagnosis",
+        reason:
+          "The diagnosis must be approved or revalidated before it can unlock governed fix or closure work.",
+        approval: { required: true, fields: [] },
+        unlocksTool: "review_diagnosis",
+        blockers: [],
+      });
+    }
     return OperatorGuidanceSchema.parse({
       stage: "diagnosis-recorded",
       changed: "A diagnosis was recorded after the latest evaluation.",
@@ -492,6 +554,95 @@ export function latestDiagnosisAudit(
     )[0]?.event;
 }
 
+export interface AuthoritativeDiagnosis {
+  diagnosisId: string;
+  diagnosis: DiagnosisContext;
+  originalDiagnosis: AuditEvent;
+  review: DiagnosisReviewDecision;
+  reviewAudit: AuditEvent;
+}
+
+export function latestAuthoritativeDiagnosis(
+  ticketId: string,
+  audits: readonly AuditEvent[],
+): AuthoritativeDiagnosis | undefined {
+  const candidates = audits.flatMap((originalDiagnosis) => {
+    if (
+      originalDiagnosis.ticketId !== ticketId ||
+      (originalDiagnosis.action !== "diagnosis-completed" &&
+        originalDiagnosis.action !== "diagnostic-escalated") ||
+      diagnosisContextFromAudit(originalDiagnosis) === undefined
+    ) {
+      return [];
+    }
+    const review = latestDiagnosisReview(audits, originalDiagnosis.id);
+    if (
+      review === undefined ||
+      (review.decision !== "approve" && review.decision !== "revalidate")
+    ) {
+      return [];
+    }
+    const reviewAudit = audits
+      .map((event, index) => ({ event, index }))
+      .filter(({ event }) => {
+        if (event.action !== "diagnosis-reviewed") return false;
+        const parsed = DiagnosisReviewDecisionSchema.safeParse(
+          event.after.diagnosisReview,
+        );
+        return parsed.success && sameReviewDecision(parsed.data, review);
+      })
+      .at(-1);
+    if (reviewAudit === undefined) return [];
+    const diagnosis = diagnosisContextFromAudit(reviewAudit.event);
+    if (diagnosis === undefined) return [];
+
+    const latestConversationWatermark = conversationWatermarkFromAudits(audits);
+    const baseStaleness = isDiagnosisStale({
+      diagnosisTimestamp: review.reviewedAt,
+      diagnosisTicketRevision: review.sourceTicketRevision,
+      diagnosisConversationWatermark: review.sourceConversationWatermark,
+      currentTicketRevision: review.sourceTicketRevision,
+      latestConversationWatermark,
+    });
+    const laterInvalidation = audits.some((event) => {
+      if (event === reviewAudit.event || event.ticketId !== ticketId) return false;
+      if (
+        event.action !== "diagnosis-completed" &&
+        event.action !== "diagnostic-escalated" &&
+        event.action !== "fix-available"
+      ) {
+        return false;
+      }
+      return isDiagnosisStale({
+        diagnosisTimestamp: review.reviewedAt,
+        diagnosisTicketRevision: review.sourceTicketRevision,
+        diagnosisConversationWatermark: review.sourceConversationWatermark,
+        currentTicketRevision: review.sourceTicketRevision,
+        latestConversationWatermark: review.sourceConversationWatermark,
+        ...(event.action === "fix-available"
+          ? { invalidatingFixAt: event.timestamp }
+          : { newerDiagnosisAt: event.timestamp }),
+      }).stale;
+    });
+    if (baseStaleness.stale || laterInvalidation) return [];
+    return [{
+      diagnosisId: originalDiagnosis.id,
+      diagnosis,
+      originalDiagnosis,
+      review,
+      reviewAudit: reviewAudit.event,
+      auditIndex: reviewAudit.index,
+    }];
+  });
+
+  const latest = candidates.sort(
+    (left, right) => right.auditIndex - left.auditIndex,
+  )[0];
+  if (latest === undefined) return undefined;
+  const { auditIndex: _auditIndex, ...authoritative } = latest;
+  return authoritative;
+}
+
 function latestFixAudit(audits: readonly AuditEvent[]): AuditEvent | undefined {
   return audits
     .map((event, index) => ({ event, index }))
@@ -591,8 +742,26 @@ function diagnosisFromAudit(
     : undefined;
 }
 
+function sameReviewDecision(
+  left: DiagnosisReviewDecision,
+  right: DiagnosisReviewDecision,
+): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function conversationWatermarkFromAudits(
+  audits: readonly AuditEvent[],
+): CustomerReplyWatermark {
+  const latestReply = audits
+    .filter((event) => event.action === "customer-reply-received")
+    .at(-1);
+  return latestReply === undefined
+    ? { state: "none" }
+    : { state: "reply", timestamp: latestReply.timestamp, id: latestReply.id };
+}
+
 function diagnosticStateFromDiagnosis(
-  diagnosis: Record<string, unknown> | undefined,
+  diagnosis: { diagnosticState?: unknown } | undefined,
 ) {
   return DiagnosticStateSnapshotSchema.safeParse(
     diagnosis?.diagnosticState,

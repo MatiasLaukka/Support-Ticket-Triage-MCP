@@ -179,14 +179,12 @@ export function diagnosisContextForTicket(
 export function diagnosisContextFromAudit(
   event: AuditEvent | undefined,
 ): DiagnosisContext | undefined {
-  if (
-    event === undefined ||
-    typeof event.after.diagnosis !== "object" ||
-    event.after.diagnosis === null
-  ) {
+  if (event === undefined) {
     return undefined;
   }
-  const value = event.after.diagnosis as Partial<DiagnosisContext>;
+  const diagnosisValue = diagnosisValueFromAudit(event);
+  if (diagnosisValue === undefined) return undefined;
+  const value = diagnosisValue as Partial<DiagnosisContext>;
   if (
     value.status !== "completed" ||
     typeof value.causeType !== "string" ||
@@ -273,9 +271,9 @@ function latestDiagnosticSnapshot(
       ({ event }) =>
         event.ticketId === ticketId &&
         (event.action === "diagnosis-completed" ||
-          event.action === "diagnostic-escalated") &&
-        typeof event.after.diagnosis === "object" &&
-        event.after.diagnosis !== null,
+          event.action === "diagnostic-escalated" ||
+          event.action === "diagnosis-reviewed") &&
+        diagnosisValueFromAudit(event) !== undefined,
     )
     .sort(
       (left, right) =>
@@ -283,10 +281,8 @@ function latestDiagnosticSnapshot(
         right.index - left.index,
     )
     .map(({ event }) => {
-      const diagnosis = event.after.diagnosis;
-      if (typeof diagnosis !== "object" || diagnosis === null) {
-        return undefined;
-      }
+      const diagnosis = diagnosisValueFromAudit(event);
+      if (diagnosis === undefined) return undefined;
       const parsed = DiagnosticStateSnapshotSchema.safeParse(
         (diagnosis as { diagnosticState?: unknown }).diagnosticState,
       );
@@ -428,8 +424,20 @@ function customerReplyCanUseExistingContext(value: string): boolean {
 }
 
 function diagnosisFromAudit(event: AuditEvent): Record<string, unknown> | undefined {
-  return typeof event.after.diagnosis === "object" && event.after.diagnosis !== null
-    ? event.after.diagnosis as Record<string, unknown>
+  return diagnosisValueFromAudit(event);
+}
+
+function diagnosisValueFromAudit(
+  event: AuditEvent,
+): Record<string, unknown> | undefined {
+  if (typeof event.after.diagnosis === "object" && event.after.diagnosis !== null) {
+    return event.after.diagnosis as Record<string, unknown>;
+  }
+  const review = event.after.diagnosisReview;
+  if (typeof review !== "object" || review === null) return undefined;
+  const editedDiagnosis = (review as { editedDiagnosis?: unknown }).editedDiagnosis;
+  return typeof editedDiagnosis === "object" && editedDiagnosis !== null
+    ? editedDiagnosis as Record<string, unknown>
     : undefined;
 }
 

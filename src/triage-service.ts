@@ -49,6 +49,7 @@ import {
   type DiagnosticStateSnapshot,
 } from "./approval-desk/diagnostic-state.js";
 import type { CompletedDiagnosis } from "./knowledge-evolution/domain.js";
+import type { DiagnosisReviewInput } from "./approval-desk/diagnosis-review.js";
 export type {
   DiagnosisImpactSet,
   DiagnosisReviewInput,
@@ -722,50 +723,186 @@ export class TriageService {
 
   async recordDiagnosis(input: RecordDiagnosisInput): Promise<AuditEvent> {
     const diagnosis = RecordDiagnosisInputSchema.parse(input);
-    await this.dependencies.tickets.get(diagnosis.ticketId);
-    const escalated = diagnosis.diagnosis.diagnosticState?.state === "escalated";
-
-    const auditEvent = AuditEventSchema.parse({
-      id: this.uuid(),
-      timestamp: diagnosis.diagnosedAt,
-      actor: diagnosis.actor,
-      action: escalated ? "diagnostic-escalated" : "diagnosis-completed",
-      ticketId: diagnosis.ticketId,
-      before: {},
-      after: {
-        diagnosis: diagnosis.diagnosis,
-      },
-      rationale: escalated
-        ? "Diagnosis reached a bounded ambiguity limit and was escalated for specialist review."
-        : "Diagnosis completed from trusted support context.",
-      knowledgeArticleIds: diagnosis.knowledgeArticleIds,
-      result: "success",
-    });
-    const completedDiagnosis = !escalated && this.dependencies.diagnoses !== undefined
-      ? completedDiagnosisFrom(auditEvent, diagnosis)
-      : undefined;
-    if (completedDiagnosis !== undefined) {
-      await this.dependencies.diagnoses!.save(completedDiagnosis);
-      try {
-        await this.dependencies.audit.append(auditEvent);
-      } catch (auditError) {
+    return serializeTicket(diagnosis.ticketId, async () => {
+      const [ticket, audits] = await Promise.all([
+        this.dependencies.tickets.get(diagnosis.ticketId),
+        this.dependencies.audit.list(diagnosis.ticketId),
+      ]);
+      const escalated = diagnosis.diagnosis.diagnosticState?.state === "escalated";
+      const auditEvent = AuditEventSchema.parse({
+        id: this.uuid(),
+        timestamp: diagnosis.diagnosedAt,
+        actor: diagnosis.actor,
+        action: escalated ? "diagnostic-escalated" : "diagnosis-completed",
+        ticketId: diagnosis.ticketId,
+        before: {},
+        after: {
+          diagnosis: diagnosis.diagnosis,
+          sourceTicketRevision: ticket.revision,
+          sourceConversationWatermark: customerReplyWatermarkFromAudits(audits),
+        },
+        rationale: escalated
+          ? "Diagnosis reached a bounded ambiguity limit and was escalated for specialist review."
+          : "Diagnosis completed from trusted support context.",
+        knowledgeArticleIds: diagnosis.knowledgeArticleIds,
+        result: "success",
+      });
+      const completedDiagnosis = !escalated && this.dependencies.diagnoses !== undefined
+        ? completedDiagnosisFrom(auditEvent, diagnosis)
+        : undefined;
+      if (completedDiagnosis !== undefined) {
+        await this.dependencies.diagnoses!.save(completedDiagnosis);
         try {
-          await this.dependencies.diagnoses!.remove(completedDiagnosis.id);
-        } catch {
+          await this.dependencies.audit.append(auditEvent);
+        } catch (auditError) {
+          try {
+            await this.dependencies.diagnoses!.remove(completedDiagnosis.id);
+          } catch {
+            throw domainErrorWithCause(
+              "Diagnosis audit failed and completed diagnosis rollback was not safe.",
+              auditError,
+            );
+          }
           throw domainErrorWithCause(
-            "Diagnosis audit failed and completed diagnosis rollback was not safe.",
+            "Diagnosis audit failed; completed diagnosis was compensated.",
             auditError,
           );
         }
-        throw domainErrorWithCause(
-          "Diagnosis audit failed; completed diagnosis was compensated.",
-          auditError,
+        return auditEvent;
+      }
+      await this.dependencies.audit.append(auditEvent);
+      return auditEvent;
+    });
+  }
+
+  async reviewDiagnosis(input: DiagnosisReviewInput): Promise<AuditEvent> {
+    const {
+      DiagnosisReviewDecisionSchema,
+      isDiagnosisStale,
+      latestDiagnosisReview,
+    } = await import("./approval-desk/diagnosis-review.js");
+    const review = DiagnosisReviewDecisionSchema.parse(input);
+
+    return serializeTicket(review.ticketId, async () => {
+      const [ticket, audits] = await Promise.all([
+        this.dependencies.tickets.get(review.ticketId),
+        this.dependencies.audit.list(review.ticketId),
+      ]);
+      if (ticket.revision !== review.sourceTicketRevision) {
+        throw stale("Diagnosis review ticket revision is stale.");
+      }
+      const currentConversationWatermark = customerReplyWatermarkFromAudits(audits);
+      if (
+        !customerReplyWatermarksMatch(
+          review.sourceConversationWatermark,
+          currentConversationWatermark,
+        )
+      ) {
+        throw stale("Diagnosis review conversation snapshot is stale.");
+      }
+
+      const original = audits.find(
+        (event) =>
+          event.id === review.diagnosisId &&
+          event.ticketId === review.ticketId &&
+          (event.action === "diagnosis-completed" ||
+            event.action === "diagnostic-escalated"),
+      );
+      const originalDiagnosis = DiagnosisContextSchema.safeParse(
+        original?.after.diagnosis,
+      );
+      if (original === undefined || !originalDiagnosis.success) {
+        throw invalidDiagnosisReview("Diagnosis review must reference an original diagnosis audit.");
+      }
+      const diagnosticState = originalDiagnosis.data.diagnosticState?.state;
+      if (
+        review.decision !== "reject" &&
+        (original.action === "diagnostic-escalated" ||
+          diagnosticState === "ambiguous" ||
+          diagnosticState === "escalated")
+      ) {
+        throw invalidDiagnosisReview(
+          "An ambiguous or escalated diagnosis cannot become authoritative.",
         );
       }
+
+      const previousReview = latestDiagnosisReview(audits, original.id);
+      const previousDiagnosis = previousReview?.editedDiagnosis ?? originalDiagnosis.data;
+      if (
+        review.decision === "revalidate" &&
+        !sameStructuredValue(review.editedDiagnosis, previousDiagnosis)
+      ) {
+        throw invalidDiagnosisReview(
+          "Revalidation must preserve the previously reviewed diagnosis fields.",
+        );
+      }
+
+      const originalSourceRevision = readNonnegativeInteger(
+        original.after.sourceTicketRevision,
+      ) ?? review.sourceTicketRevision;
+      const originalConversationWatermark = CustomerReplyWatermarkSchema.safeParse(
+        original.after.sourceConversationWatermark,
+      ).data ?? conversationWatermarkAt(audits, original.id);
+      const newerDiagnoses = audits.filter(
+        (event) =>
+          event.id !== original.id &&
+          (event.action === "diagnosis-completed" ||
+            event.action === "diagnostic-escalated") &&
+          isDiagnosisStale({
+            diagnosisTimestamp: original.timestamp,
+            diagnosisTicketRevision: originalSourceRevision,
+            diagnosisConversationWatermark: originalConversationWatermark,
+            currentTicketRevision: originalSourceRevision,
+            latestConversationWatermark: originalConversationWatermark,
+            newerDiagnosisAt: event.timestamp,
+          }).stale,
+      );
+      const staleDiagnosis = isDiagnosisStale({
+        diagnosisTimestamp: original.timestamp,
+        diagnosisTicketRevision: originalSourceRevision,
+        diagnosisConversationWatermark: originalConversationWatermark,
+        currentTicketRevision: ticket.revision,
+        latestConversationWatermark: currentConversationWatermark,
+        ...(newerDiagnoses[0] === undefined
+          ? {}
+          : { newerDiagnosisAt: newerDiagnoses[0].timestamp }),
+      });
+      if (
+        review.decision === "approve" &&
+        (staleDiagnosis.stale || newerDiagnoses.length > 0)
+      ) {
+        throw invalidDiagnosisReview(
+          "A stale diagnosis must be re-evaluated or revalidated before approval.",
+        );
+      }
+      if (review.decision === "revalidate" && newerDiagnoses.length > 0) {
+        throw invalidDiagnosisReview(
+          "A superseded diagnosis cannot be revalidated.",
+        );
+      }
+
+      const auditEvent = AuditEventSchema.parse({
+        id: this.uuid(),
+        timestamp: review.reviewedAt,
+        actor: review.actor,
+        action: "diagnosis-reviewed",
+        ticketId: review.ticketId,
+        before: {
+          diagnosisId: original.id,
+          previousReview: previousReview ?? null,
+        },
+        after: { diagnosisReview: review },
+        rationale:
+          review.rationale ??
+          (review.decision === "approve"
+            ? "Diagnosis approved by the operator."
+            : "Diagnosis review recorded by the operator."),
+        knowledgeArticleIds: original.knowledgeArticleIds,
+        result: "success",
+      });
+      await this.dependencies.audit.append(auditEvent);
       return auditEvent;
-    }
-    await this.dependencies.audit.append(auditEvent);
-    return auditEvent;
+    });
   }
 
   async recordFix(input: RecordFixInput): Promise<AuditEvent> {
@@ -1237,6 +1374,30 @@ async function serializeRecommendation<T>(
 
 function stale(message: string): DomainError {
   return new DomainError(message, "STALE_APPROVAL");
+}
+
+function invalidDiagnosisReview(message: string): DomainError {
+  return new DomainError(message, "INVALID_APPROVAL_FIELDS");
+}
+
+function sameStructuredValue(left: unknown, right: unknown): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function readNonnegativeInteger(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0
+    ? value
+    : undefined;
+}
+
+function conversationWatermarkAt(
+  audits: readonly AuditEvent[],
+  auditId: string,
+): CustomerReplyWatermark {
+  const auditIndex = audits.findIndex((event) => event.id === auditId);
+  return customerReplyWatermarkFromAudits(
+    auditIndex < 0 ? [] : audits.slice(0, auditIndex),
+  );
 }
 
 function domainErrorWithCause(message: string, cause: unknown): DomainError {

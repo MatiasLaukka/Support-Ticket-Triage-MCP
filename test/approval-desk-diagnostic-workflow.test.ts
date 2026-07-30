@@ -4,7 +4,10 @@ import {
   TicketSchema,
   TriageRecommendationSchema,
 } from "../src/domain.js";
-import { diagnosisContextForTicket } from "../src/approval-desk/diagnostic-workflow.js";
+import {
+  diagnosisContextForTicket,
+  diagnosisContextFromAudit,
+} from "../src/approval-desk/diagnostic-workflow.js";
 
 const ticket = TicketSchema.parse({
   id: "TKT-1010",
@@ -133,6 +136,43 @@ const ambiguousState = {
 };
 
 describe("diagnosisContextForTicket", () => {
+  it("selects the edited diagnosis context from a governed review audit", () => {
+    const reviewedAt = "2026-06-10T09:05:00.000Z";
+    const original = diagnosisAudit("2026-06-10T09:02:00.000Z", ambiguousState);
+    const editedDiagnosis = {
+      ...(original.after.diagnosis as Record<string, unknown>),
+      customerSafeSummary: "The reviewed diagnosis uses customer-safe wording.",
+    };
+    const review = AuditEventSchema.parse({
+      id: auditId("40000000"),
+      timestamp: reviewedAt,
+      actor: "casey",
+      action: "diagnosis-reviewed",
+      ticketId: ticket.id,
+      before: {},
+      after: {
+        diagnosisReview: {
+          decision: "approve",
+          diagnosisId: original.id,
+          ticketId: ticket.id,
+          sourceTicketRevision: ticket.revision,
+          sourceConversationWatermark: { state: "none" },
+          editedDiagnosis,
+          actor: "casey",
+          reviewedAt,
+        },
+      },
+      rationale: "Diagnosis reviewed by the operator.",
+      knowledgeArticleIds: [],
+      result: "success",
+    });
+
+    expect(diagnosisContextFromAudit(review)).toMatchObject({
+      customerSafeSummary: "The reviewed diagnosis uses customer-safe wording.",
+      diagnosticState: { state: "ambiguous" },
+    });
+  });
+
   it("projects an active known event into the existing platform-delay diagnosis", () => {
     const eventTicket = TicketSchema.parse({
       ...ticket,

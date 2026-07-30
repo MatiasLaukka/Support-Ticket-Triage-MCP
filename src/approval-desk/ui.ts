@@ -1211,7 +1211,8 @@ export const approvalDeskHtml = `<!doctype html>
         diagnosisDraft: null,
         diagnosisReviewRationale: '',
         diagnosisImpact: { rationale: '', selectedTicketIds: [], ticketReasons: {} },
-        diagnosisFixResults: []
+        diagnosisFixResults: [],
+        diagnosisMutationTokens: {}
       };
 
       const els = {
@@ -1459,6 +1460,22 @@ export const approvalDeskHtml = `<!doctype html>
           selectedDiagnosisView()?.originalDiagnosis?.id === diagnosisId;
       }
 
+      function diagnosisMutationKey(ticketId, diagnosisId) {
+        return ticketId + ':' + diagnosisId;
+      }
+
+      function beginDiagnosisMutation(ticketId, diagnosisId) {
+        const key = diagnosisMutationKey(ticketId, diagnosisId);
+        const nextToken = (state.diagnosisMutationTokens[key] ?? 0) + 1;
+        state.diagnosisMutationTokens[key] = nextToken;
+        return nextToken;
+      }
+
+      function isCurrentDiagnosisMutation(ticketId, diagnosisId, requestId, mutationToken) {
+        return isCurrentDiagnosisRequest(ticketId, diagnosisId, requestId) &&
+          state.diagnosisMutationTokens[diagnosisMutationKey(ticketId, diagnosisId)] === mutationToken;
+      }
+
       function diagnosisDraftForView(view) {
         if (state.diagnosisDraft !== null) {
           return state.diagnosisDraft;
@@ -1609,6 +1626,7 @@ export const approvalDeskHtml = `<!doctype html>
         const ticketId = state.selectedTicket.id;
         const diagnosisId = view.originalDiagnosis.id;
         const ticketRequestId = state.ticketRequestId;
+        const mutationToken = beginDiagnosisMutation(ticketId, diagnosisId);
         const body = {
           decision,
           sourceTicketRevision: view.sourceTicketRevision,
@@ -1626,12 +1644,12 @@ export const approvalDeskHtml = `<!doctype html>
             body: JSON.stringify(body)
           }, { writeErrorToResult: false });
         } catch (error) {
-          if (isCurrentDiagnosisRequest(ticketId, diagnosisId, ticketRequestId)) {
+          if (isCurrentDiagnosisMutation(ticketId, diagnosisId, ticketRequestId, mutationToken)) {
             setResult({ error: error instanceof Error ? error.message : 'Request failed.' });
           }
           return;
         }
-        if (!isCurrentDiagnosisRequest(ticketId, diagnosisId, ticketRequestId)) {
+        if (!isCurrentDiagnosisMutation(ticketId, diagnosisId, ticketRequestId, mutationToken)) {
           return;
         }
         state.diagnoses = Array.isArray(data.diagnoses) ? data.diagnoses : state.diagnoses;
@@ -1651,6 +1669,7 @@ export const approvalDeskHtml = `<!doctype html>
         const ticketId = state.selectedTicket.id;
         const diagnosisId = view.originalDiagnosis.id;
         const ticketRequestId = state.ticketRequestId;
+        const mutationToken = beginDiagnosisMutation(ticketId, diagnosisId);
         const actor = els.actor.value.trim() || 'approval-desk';
         const selectedTicketIds = Array.isArray(state.diagnosisImpact.selectedTicketIds)
           ? state.diagnosisImpact.selectedTicketIds
@@ -1671,12 +1690,12 @@ export const approvalDeskHtml = `<!doctype html>
             })
           }, { writeErrorToResult: false });
         } catch (error) {
-          if (isCurrentDiagnosisRequest(ticketId, diagnosisId, ticketRequestId)) {
+          if (isCurrentDiagnosisMutation(ticketId, diagnosisId, ticketRequestId, mutationToken)) {
             setResult({ error: error instanceof Error ? error.message : 'Request failed.' });
           }
           return;
         }
-        if (!isCurrentDiagnosisRequest(ticketId, diagnosisId, ticketRequestId)) {
+        if (!isCurrentDiagnosisMutation(ticketId, diagnosisId, ticketRequestId, mutationToken)) {
           return;
         }
         state.diagnosisFixResults = Array.isArray(data.auditEvents) ? data.auditEvents : [];

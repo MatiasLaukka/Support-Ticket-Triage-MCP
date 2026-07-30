@@ -305,6 +305,65 @@ describe("approvalDeskHtml", () => {
     expect(app.parsedResult()).not.toEqual(expect.objectContaining({ error: "Diagnosis fix is unavailable." }));
   });
 
+  it("keeps a later same-diagnosis review result when an earlier review succeeds last", async () => {
+    const earlierDiagnosis = fixtureDiagnosisView({ summary: "Earlier review result." });
+    const laterDiagnosis = fixtureDiagnosisView({ summary: "Later review result." });
+    const app = await startApprovalDeskApp({
+      diagnoses: [fixtureDiagnosisView()],
+      diagnosisReviewPlans: {
+        "TKT-1001": [
+          {
+            delayTicks: 40,
+            auditEvent: { action: "earlier-review" },
+            diagnoses: [earlierDiagnosis],
+          },
+          {
+            delayTicks: 1,
+            auditEvent: { action: "later-review" },
+            diagnoses: [laterDiagnosis],
+          },
+        ],
+      },
+    });
+
+    await app.selectFirstTicket();
+    await app.reviewDiagnosis("approve");
+    await app.reviewDiagnosis("approve");
+    await app.wait(50);
+
+    expect(app.el("diagnosisPanel").innerHTML).toContain("Later review result.");
+    expect(app.el("diagnosisPanel").innerHTML).not.toContain("Earlier review result.");
+    expect(app.parsedResult()).toMatchObject({ auditEvent: { action: "later-review" } });
+  });
+
+  it("keeps a later scoped-fix result when an earlier same-diagnosis review fails last", async () => {
+    const app = await startApprovalDeskApp({
+      diagnoses: [fixtureDiagnosisView()],
+      diagnosisReviewPlans: {
+        "TKT-1001": [{ delayTicks: 40, error: "Earlier review failed." }],
+      },
+      diagnosisFixPlans: {
+        "TKT-1001": [
+          {
+            delayTicks: 1,
+            auditEvents: [{ ticketId: "TKT-1001", action: "fix-available", result: "success" }],
+          },
+        ],
+      },
+    });
+
+    await app.selectFirstTicket();
+    await app.reviewDiagnosis("approve");
+    app.setImpactRationale("The selected ticket is affected.");
+    app.setImpactTicketReason("TKT-1001", "The source ticket is affected.");
+    app.selectImpactTicket("TKT-1001");
+    await app.applyDiagnosisFix();
+    await app.wait(50);
+
+    expect(app.el("diagnosisPanel").innerHTML).toContain("Scoped fix results");
+    expect(app.parsedResult()).not.toEqual(expect.objectContaining({ error: "Earlier review failed." }));
+  });
+
   it("uses server-provided diagnosis and fix guidance instead of timeline inference", async () => {
     const diagnosisGuided = await startApprovalDeskApp({
       ticketDetailRecommendation: {
@@ -2680,6 +2739,14 @@ type FixtureRecommendation = Omit<typeof fixtureRecommendation, "classificationS
   recommendedNextAction?: string;
 };
 
+type DiagnosisMutationPlan = {
+  delayTicks?: number;
+  error?: string;
+  diagnoses?: Array<Record<string, unknown>>;
+  auditEvent?: Record<string, unknown>;
+  auditEvents?: Array<Record<string, unknown>>;
+};
+
 async function startApprovalDeskApp(options: {
   failEvidenceAfter?: number;
   failRecommendation?: boolean;
@@ -2706,8 +2773,10 @@ async function startApprovalDeskApp(options: {
   diagnosisFailures?: string[];
   diagnosisReviewDelayTicks?: Record<string, number>;
   diagnosisReviewFailures?: string[];
+  diagnosisReviewPlans?: Record<string, DiagnosisMutationPlan[]>;
   diagnosisFixDelayTicks?: Record<string, number>;
   diagnosisFixFailures?: string[];
+  diagnosisFixPlans?: Record<string, DiagnosisMutationPlan[]>;
   diagnosisFixAuditEvents?: Array<Record<string, unknown>>;
 } = {}) {
   const elements = createElements();
@@ -2717,6 +2786,8 @@ async function startApprovalDeskApp(options: {
   const selectedFixtureTicket = tickets[0]!;
   const defaultOperatorGuidance = { nextAction: "evaluate-ticket" };
   const metrics = { pendingRecommendations: 0, queueDepth: 1 };
+  const diagnosisReviewRequestCounts = new Map<string, number>();
+  const diagnosisFixRequestCounts = new Map<string, number>();
   let createdRecommendation: FixtureRecommendation | undefined;
   const conversationTimeline = [
     ...(options.ticketDetail?.conversationTimeline ?? []),
@@ -2779,23 +2850,35 @@ async function startApprovalDeskApp(options: {
     const diagnosisReview = /^\/api\/tickets\/(TKT-\d{4})\/diagnoses\/[^/]+\/review$/.exec(path);
     if (diagnosisReview !== null) {
       const ticketId = diagnosisReview[1]!;
-      await settle(options.diagnosisReviewDelayTicks?.[ticketId] ?? 0);
+      const requestIndex = diagnosisReviewRequestCounts.get(ticketId) ?? 0;
+      diagnosisReviewRequestCounts.set(ticketId, requestIndex + 1);
+      const plan = options.diagnosisReviewPlans?.[ticketId]?.[requestIndex];
+      await settle(plan?.delayTicks ?? options.diagnosisReviewDelayTicks?.[ticketId] ?? 0);
+      if (plan?.error !== undefined) {
+        return jsonResponse({ error: { message: plan.error } }, 503);
+      }
       if (options.diagnosisReviewFailures?.includes(ticketId) === true) {
         return jsonResponse({ error: { message: "Diagnosis review is unavailable." } }, 503);
       }
       return jsonResponse({
-        auditEvent: { action: "diagnosis-reviewed" },
-        diagnoses: options.diagnosesByTicket?.[ticketId] ?? options.diagnoses ?? [],
+        auditEvent: plan?.auditEvent ?? { action: "diagnosis-reviewed" },
+        diagnoses: plan?.diagnoses ?? options.diagnosesByTicket?.[ticketId] ?? options.diagnoses ?? [],
       }, 201);
     }
     const diagnosisFix = /^\/api\/tickets\/(TKT-\d{4})\/diagnoses\/[^/]+\/fix$/.exec(path);
     if (diagnosisFix !== null) {
       const ticketId = diagnosisFix[1]!;
-      await settle(options.diagnosisFixDelayTicks?.[ticketId] ?? 0);
+      const requestIndex = diagnosisFixRequestCounts.get(ticketId) ?? 0;
+      diagnosisFixRequestCounts.set(ticketId, requestIndex + 1);
+      const plan = options.diagnosisFixPlans?.[ticketId]?.[requestIndex];
+      await settle(plan?.delayTicks ?? options.diagnosisFixDelayTicks?.[ticketId] ?? 0);
+      if (plan?.error !== undefined) {
+        return jsonResponse({ error: { message: plan.error } }, 503);
+      }
       if (options.diagnosisFixFailures?.includes(ticketId) === true) {
         return jsonResponse({ error: { message: "Diagnosis fix is unavailable." } }, 503);
       }
-      return jsonResponse({ auditEvents: options.diagnosisFixAuditEvents ?? [] }, 201);
+      return jsonResponse({ auditEvents: plan?.auditEvents ?? options.diagnosisFixAuditEvents ?? [] }, 201);
     }
     const ticketDetail = /^\/api\/tickets\/([^/]+)$/.exec(path);
     if (ticketDetail !== null) {

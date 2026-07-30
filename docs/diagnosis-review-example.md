@@ -37,8 +37,10 @@ through MCP reads. It includes the evidence reply, recommendation submission
 and approval, immutable diagnosis, review, per-ticket fix audits, verification
 response, customer confirmation, revalidation, closing response, and final
 ticket update. After closure the historical diagnosis stays queryable for
-replay, while its review correctly appears stale because resolution advanced
-the ticket revision.
+the Approval Desk and MCP diagnosis reads, while its review correctly appears
+stale because resolution advanced the ticket revision. Lifecycle Replay stays
+a separate read-only evaluation-report snapshot view; it is not a live audit
+or chronology source.
 
 ## Authority boundaries
 
@@ -59,12 +61,12 @@ the ticket revision.
 ## Scope boundary
 
 This walkthrough proves governed diagnosis review and diagnosis-scoped fix
-application. It is not evidence that the system has silently added a
-revision-aware queue-analysis layer, an evidence-graph similarity engine,
-emerging-pattern detection, GPT-drafted candidate knowledge objects with
-human promotion, or executable/versioned knowledge-object workflows and
-migration. Those are separate capabilities with their own governance and
-audit requirements.
+application. It does not add or re-prove the existing separately governed
+candidate discovery, optional GPT candidate drafting, or human promotion
+workflow. It also does not add a revision-aware queue-analysis layer, an
+evidence-graph similarity engine, or executable/versioned knowledge-object
+workflows and migration. Those remain separate capabilities with their own
+governance and audit requirements.
 
 Run the focused proof locally:
 

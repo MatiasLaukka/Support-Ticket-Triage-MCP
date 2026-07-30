@@ -164,8 +164,10 @@ mode flags fail safely, so a typo cannot silently select controlled mode.
 Once the required evidence is complete, an operator can record an immutable
 diagnosis and review it before it becomes authoritative. The Approval Desk and
 MCP tools call the same `TriageService` rules; neither duplicates diagnosis
-freshness, fix gating, or lifecycle transitions. Replay presents the resulting
-audit-backed lifecycle without making its own decisions.
+freshness, fix gating, or lifecycle transitions. The Approval Desk and MCP
+diagnosis reads present the live audit-backed history. Lifecycle Replay is a
+separate, read-only evaluation-report snapshot view; it does not read live
+audits or make lifecycle decisions.
 
 The normal operator journey is deliberately bounded:
 
@@ -200,11 +202,12 @@ ordered regression is runnable locally:
 npx vitest run test/approval-desk-diagnostic-workflow.test.ts test/demo-skill-showcase.test.ts
 ```
 
-This diagnosis-review slice does not itself add revision-aware queue analysis,
-evidence-graph similarity or emerging-pattern detection, GPT-drafted candidate
-knowledge objects, automated promotion, or executable/versioned workflow
-migration. Those capabilities must remain separately governed and explicitly
-audited rather than being inferred from a reviewed diagnosis.
+This diagnosis-review slice does not add or re-prove the existing separately
+governed candidate discovery, optional GPT candidate drafting, or human
+promotion workflow. It also does not add revision-aware queue analysis,
+evidence-graph similarity, or executable/versioned workflow migration. Those
+capabilities remain separately governed and explicitly audited rather than
+being inferred from a reviewed diagnosis.
 
 ## Screenshots
 

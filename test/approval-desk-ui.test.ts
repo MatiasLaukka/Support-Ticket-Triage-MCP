@@ -60,6 +60,106 @@ describe("approvalDeskHtml", () => {
     expect(approvalDeskHtml).not.toMatch(/fetch\(\s*['"`]https?:\/\//);
   });
 
+  it("renders a safe immutable diagnosis view and keeps review edits local until explicit approval", async () => {
+    const app = await startApprovalDeskApp({
+      diagnoses: [fixtureDiagnosisView({ stale: true })],
+    });
+
+    await app.selectFirstTicket();
+
+    expect(app.el("diagnosisPanel").innerHTML).toContain("Original diagnosis");
+    expect(app.el("diagnosisPanel").innerHTML).toContain("A newer customer reply needs re-evaluation.");
+    expect(app.el("diagnosisPanel").innerHTML).toContain("Checkout event processing is delayed.");
+    expect(app.el("diagnosisPanel").innerHTML).not.toContain("Do not expose internal diagnostics.");
+
+    app.editDiagnosisDraft("Edited only in the local review draft.");
+
+    expect(app.el("diagnosisPanel").innerHTML).toContain("Checkout event processing is delayed.");
+    await app.reviewDiagnosis("approve");
+
+    const reviewRequests = () => app.requests.filter((request) =>
+      /\/api\/tickets\/TKT-1001\/diagnoses\/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa\/review$/.test(request.path),
+    );
+    expect(JSON.parse(String(reviewRequests()[0]?.init?.body))).toMatchObject({
+      decision: "approve",
+      editedDiagnosis: {
+        customerSafeSummary: "Edited only in the local review draft.",
+      },
+    });
+
+    app.setDiagnosisReviewRationale("The fresh customer evidence supports the same diagnosis.");
+    await app.reviewDiagnosis("revalidate");
+    app.setDiagnosisReviewRationale("The operator cannot support this diagnosis.");
+    await app.reviewDiagnosis("reject");
+
+    expect(reviewRequests().map((request) => JSON.parse(String(request.init?.body)))).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ decision: "revalidate", rationale: "The fresh customer evidence supports the same diagnosis." }),
+        expect.objectContaining({ decision: "reject", rationale: "The operator cannot support this diagnosis." }),
+      ]),
+    );
+  });
+
+  it("submits only explicitly selected diagnosis-fix impacts and renders a per-ticket result", async () => {
+    const app = await startApprovalDeskApp({
+      diagnoses: [fixtureDiagnosisView()],
+      diagnosisFixAuditEvents: [
+        { ticketId: "TKT-1001", action: "fix-available", result: "success" },
+      ],
+    });
+
+    await app.selectFirstTicket();
+
+    expect(app.el("diagnosisPanel").innerHTML).toContain("Suggested impact candidates");
+    expect(app.el("diagnosisPanel").innerHTML).toContain("not selected");
+    expect(app.requests.some((request) => request.path.endsWith("/fix"))).toBe(false);
+
+    app.setImpactRationale("The confirmed diagnosis applies to this selected ticket.");
+    app.setImpactTicketReason(
+      "TKT-1001",
+      "The source ticket reproduces the reviewed diagnosis.",
+    );
+    app.selectImpactTicket("TKT-1001");
+    await app.applyDiagnosisFix();
+
+    const fixRequest = app.requests.find((request) => request.path.endsWith("/fix"));
+    expect(JSON.parse(String(fixRequest?.init?.body))).toMatchObject({
+      actor: "approval-desk",
+      impactSet: {
+        actor: "approval-desk",
+        rationale: "The confirmed diagnosis applies to this selected ticket.",
+        tickets: [
+          {
+            ticketId: "TKT-1001",
+            reason: "The source ticket reproduces the reviewed diagnosis.",
+          },
+        ],
+      },
+    });
+    expect(app.el("diagnosisPanel").innerHTML).toContain("TKT-1001 · fix-available · success");
+    expect(app.el("diagnosisPanel").innerHTML).toContain("Verification remains governed by the ticket workflow.");
+  });
+
+  it("uses one accessible compact queue status indicator, including ready-to-close", async () => {
+    const app = await startApprovalDeskApp({
+      tickets: [
+        {
+          ...fixtureTicket,
+          recommendationSummary: {
+            workflowState: "active",
+            supportState: "ready-for-close",
+          },
+        },
+      ],
+    });
+
+    expect(app.el("ticketList").children[0]!.innerHTML).toContain("queue-status-indicator");
+    expect(app.el("ticketList").children[0]!.innerHTML).toContain("Ready to close");
+    expect(app.el("ticketList").children[0]!.innerHTML).toContain("aria-label=");
+    expect(app.el("ticketList").children[0]!.innerHTML).toContain("queue-status-info");
+    expect(app.el("ticketList").children[0]!.innerHTML).not.toContain("SLA risk");
+  });
+
   it("shows an evidence-backed knowledge review gate without changing the response workflow", async () => {
     const app = await startApprovalDeskApp({
       knowledgeCandidate: {
@@ -2440,6 +2540,39 @@ const fixtureConversationTimeline = [
   },
 ];
 
+function fixtureDiagnosisView(options: { stale?: boolean } = {}) {
+  const diagnosis = {
+    status: "completed",
+    causeType: "platform-delay",
+    customerSafeSummary: "Checkout event processing is delayed.",
+    evidenceUsed: ["request trace", "affected timestamp"],
+    confidence: "confirmed",
+    owner: "engineering",
+    recommendedNextAction: "Apply the reviewed platform fix when it is available.",
+    doNotSay: ["Do not expose internal diagnostics."],
+  };
+  return {
+    originalDiagnosis: {
+      id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      timestamp: "2026-06-10T09:00:00.000Z",
+      actor: "casey",
+      action: "diagnosis-completed",
+      ticketId: "TKT-1001",
+      before: {},
+      after: { diagnosis },
+      rationale: "Diagnosis recorded.",
+      knowledgeArticleIds: ["event-tracking-debugging"],
+      result: "success",
+    },
+    reviews: [],
+    latestReview: null,
+    stale: options.stale === true,
+    staleReasons: options.stale === true ? ["newer-customer-reply"] : [],
+    sourceTicketRevision: 0,
+    sourceConversationWatermark: { state: "none" },
+  };
+}
+
 function evidenceRequirement(id: string, label: string, customerQuestion: string) {
   return {
     id,
@@ -2477,6 +2610,8 @@ async function startApprovalDeskApp(options: {
   knowledgeCandidatesByTicket?: Record<string, Record<string, unknown>>;
   knowledgeDiscoveryDelayTicks?: Record<string, number>;
   ticketDetailDelayTicks?: Record<string, number>;
+  diagnoses?: Array<Record<string, unknown>>;
+  diagnosisFixAuditEvents?: Array<Record<string, unknown>>;
 } = {}) {
   const elements = createElements();
   const requests: Array<{ path: string; init?: RequestInit }> = [];
@@ -2531,6 +2666,18 @@ async function startApprovalDeskApp(options: {
       return jsonResponse({
         object: { id: "known-cause-diagnosis-a", status: "approved", version: 1 },
       });
+    }
+    if (path === `/api/tickets/${selectedFixtureTicket.id}/diagnoses`) {
+      return jsonResponse({ diagnoses: options.diagnoses ?? [] });
+    }
+    if (/^\/api\/tickets\/TKT-1001\/diagnoses\/[^/]+\/review$/.test(path)) {
+      return jsonResponse({
+        auditEvent: { action: "diagnosis-reviewed" },
+        diagnoses: options.diagnoses ?? [],
+      }, 201);
+    }
+    if (/^\/api\/tickets\/TKT-1001\/diagnoses\/[^/]+\/fix$/.test(path)) {
+      return jsonResponse({ auditEvents: options.diagnosisFixAuditEvents ?? [] }, 201);
     }
     const ticketDetail = /^\/api\/tickets\/([^/]+)$/.exec(path);
     if (ticketDetail !== null) {
@@ -2761,6 +2908,46 @@ async function startApprovalDeskApp(options: {
       elements.approveButton.dispatch("click");
       await settle(10);
     },
+    editDiagnosisDraft: (value: string) => {
+      elements.diagnosisPanel.dispatch("input", {
+        target: {
+          dataset: { diagnosisDraftField: "customerSafeSummary" },
+          value,
+        },
+      });
+    },
+    reviewDiagnosis: async (decision: string) => {
+      elements.diagnosisPanel.dispatch("click", {
+        target: { dataset: { action: "review-diagnosis", decision } },
+      });
+      await settle(10);
+    },
+    setDiagnosisReviewRationale: (value: string) => {
+      elements.diagnosisPanel.dispatch("input", {
+        target: { dataset: { diagnosisReviewRationale: "true" }, value },
+      });
+    },
+    setImpactRationale: (value: string) => {
+      elements.diagnosisPanel.dispatch("input", {
+        target: { dataset: { impactField: "rationale" }, value },
+      });
+    },
+    setImpactTicketReason: (ticketId: string, value: string) => {
+      elements.diagnosisPanel.dispatch("input", {
+        target: { dataset: { impactTicketReason: ticketId }, value },
+      });
+    },
+    selectImpactTicket: (ticketId: string) => {
+      elements.diagnosisPanel.dispatch("change", {
+        target: { dataset: { impactTicket: ticketId }, checked: true },
+      });
+    },
+    applyDiagnosisFix: async () => {
+      elements.diagnosisPanel.dispatch("click", {
+        target: { dataset: { action: "apply-diagnosis-fix" } },
+      });
+      await settle(10);
+    },
     reject: async () => {
       elements.rejectButton.dispatch("click");
       await settle();
@@ -2797,6 +2984,7 @@ function createElements(): Record<string, FakeElement> {
       "decisionChips",
       "decisionControls",
       "decisionSummary",
+      "diagnosisPanel",
       "diagnoseButton",
       "draftStyle",
       "editApprovalControls",

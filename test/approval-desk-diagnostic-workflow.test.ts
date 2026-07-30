@@ -7,6 +7,7 @@ import {
 import {
   diagnosisContextForTicket,
   diagnosisContextFromAudit,
+  latestFixContextFromAudits,
 } from "../src/approval-desk/diagnostic-workflow.js";
 
 const ticket = TicketSchema.parse({
@@ -109,6 +110,28 @@ function customerReply(timestamp: string, body: string) {
     after: { body },
     rationale: "Customer supplied diagnostic follow-up evidence.",
     knowledgeArticleIds: [],
+    result: "success",
+  });
+}
+
+function fixAudit(timestamp: string) {
+  return AuditEventSchema.parse({
+    id: auditId("50000000"),
+    timestamp,
+    actor: "product-support",
+    action: "fix-available",
+    ticketId: ticket.id,
+    before: {},
+    after: {
+      fix: {
+        status: "available",
+        customerSafeSummary: "A governed mitigation is available.",
+        customerAction: "Retry the affected campaign editor.",
+        verificationRequest: "Tell us whether the editor still appears blank.",
+      },
+    },
+    rationale: "Persisted fix context for the next evaluation.",
+    knowledgeArticleIds: ["performance-troubleshooting"],
     result: "success",
   });
 }
@@ -394,5 +417,47 @@ describe("diagnosisContextForTicket", () => {
         ]),
       },
     });
+  });
+
+  it("advances persisted diagnostic state across offset and sub-millisecond timestamps", () => {
+    const diagnosis = diagnosisContextForTicket(ticket, recommendation, [
+      diagnosisAudit("2026-06-10T12:00:00.0008+02:00", ambiguousState),
+      customerReply(
+        "2026-06-10T10:00:00.0009Z",
+        "The campaign editor works in a private window.",
+      ),
+    ]);
+
+    expect(diagnosis).toMatchObject({
+      confidence: "confirmed",
+      diagnosticState: { state: "confirmed" },
+    });
+  });
+
+  it("advances diagnostic state from a causally later backdated reply", () => {
+    const diagnosis = diagnosisContextForTicket(ticket, recommendation, [
+      diagnosisAudit("2026-06-10T10:00:00.0009Z", ambiguousState),
+      customerReply(
+        "2026-06-10T10:00:00.0001Z",
+        "The campaign editor works in a private window.",
+      ),
+    ]);
+
+    expect(diagnosis).toMatchObject({
+      confidence: "confirmed",
+      diagnosticState: { state: "confirmed" },
+    });
+  });
+
+  it("invalidates fix context after a causally later backdated reply", () => {
+    expect(
+      latestFixContextFromAudits([
+        fixAudit("2026-06-10T10:00:00.0009Z"),
+        customerReply(
+          "2026-06-10T10:00:00.0001Z",
+          "The campaign editor is still blank after the mitigation.",
+        ),
+      ]),
+    ).toBeUndefined();
   });
 });

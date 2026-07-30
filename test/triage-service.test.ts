@@ -203,6 +203,314 @@ describe("TriageService", () => {
     ).toEqual([]);
   });
 
+  it("applies a confirmed current diagnosis without waiting for a customer confirmation", async () => {
+    const harness = makeHarness();
+    const original = await harness.service.recordDiagnosis(makeRecordDiagnosisInput());
+    await harness.service.reviewDiagnosis(
+      makeDiagnosisReviewInput({ diagnosisId: original.id }),
+    );
+    await appendDiagnosisResponseSent(harness.audit);
+
+    const events = await harness.service.applyDiagnosisFix(
+      makeApplyDiagnosisFixInput({ diagnosisId: original.id }),
+    );
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      action: "fix-available",
+      ticketId: "TKT-1001",
+      actor: "casey",
+      after: {
+        diagnosisId: original.id,
+        sourceTicketId: "TKT-1001",
+        impactSet: {
+          actor: "casey",
+          rationale: "The confirmed platform diagnosis affects the selected tickets.",
+          tickets: [{ ticketId: "TKT-1001", reason: "The source ticket reproduced the diagnosis." }],
+        },
+        fix: { status: "available" },
+      },
+    });
+    expect(
+      (await harness.tickets.get("TKT-1001")).status,
+    ).not.toBe("resolved");
+  });
+
+  it("rejects a backdated fix timestamp before the governed diagnosis response", async () => {
+    const harness = makeHarness();
+    const original = await harness.service.recordDiagnosis(makeRecordDiagnosisInput());
+    await harness.service.reviewDiagnosis(
+      makeDiagnosisReviewInput({ diagnosisId: original.id }),
+    );
+    await appendDiagnosisResponseSent(harness.audit);
+
+    await expect(
+      harness.service.applyDiagnosisFix(
+        makeApplyDiagnosisFixInput({
+          diagnosisId: original.id,
+          fixedAt: "2026-06-10T09:06:00.000Z",
+        }),
+      ),
+    ).rejects.toMatchObject({ code: "INVALID_APPROVAL_FIELDS" });
+    expect(
+      harness.audit.events.filter((event) => event.action === "fix-available"),
+    ).toEqual([]);
+  });
+
+  it("rejects a fix timestamp that predates context only below millisecond precision", async () => {
+    const harness = makeHarness();
+    const original = await harness.service.recordDiagnosis(makeRecordDiagnosisInput());
+    await harness.service.reviewDiagnosis(
+      makeDiagnosisReviewInput({ diagnosisId: original.id }),
+    );
+    await appendDiagnosisResponseSent(harness.audit);
+    await harness.audit.append(
+      AuditEventSchema.parse({
+        id: "66666666-6666-4666-8666-666666666666",
+        timestamp: "2026-06-10T09:08:00.0009Z",
+        actor: "casey",
+        action: "customer-response-sent",
+        ticketId: "TKT-1001",
+        recommendationId,
+        before: {},
+        after: { sentAt: "2026-06-10T09:08:00.0009Z" },
+        rationale: "The governed customer response was sent after review.",
+        knowledgeArticleIds: [],
+        result: "success",
+      }),
+    );
+
+    await expect(
+      harness.service.applyDiagnosisFix(
+        makeApplyDiagnosisFixInput({
+          diagnosisId: original.id,
+          fixedAt: "2026-06-10T09:08:00.0008Z",
+        }),
+      ),
+    ).rejects.toMatchObject({ code: "INVALID_APPROVAL_FIELDS" });
+  });
+
+  it("rejects every non-authoritative diagnosis before applying its fix", async () => {
+    const unreviewed = makeHarness();
+    const unreviewedDiagnosis = await unreviewed.service.recordDiagnosis(
+      makeRecordDiagnosisInput(),
+    );
+    await appendDiagnosisResponseSent(unreviewed.audit);
+
+    const rejected = makeHarness();
+    const rejectedDiagnosis = await rejected.service.recordDiagnosis(
+      makeRecordDiagnosisInput(),
+    );
+    await rejected.service.reviewDiagnosis(
+      makeDiagnosisReviewInput({
+        decision: "reject",
+        diagnosisId: rejectedDiagnosis.id,
+        rationale: "The evidence does not support this diagnosis.",
+      }),
+    );
+    await appendDiagnosisResponseSent(rejected.audit);
+
+    const stale = makeHarness();
+    const staleDiagnosis = await stale.service.recordDiagnosis(
+      makeRecordDiagnosisInput(),
+    );
+    await stale.service.reviewDiagnosis(
+      makeDiagnosisReviewInput({ diagnosisId: staleDiagnosis.id }),
+    );
+    await appendDiagnosisResponseSent(stale.audit);
+    await stale.tickets.update("TKT-1001", 2, (ticket) => ({
+      ...ticket,
+      priority: "P2",
+    }));
+
+    const ambiguous = makeHarness();
+    const ambiguousDiagnosis = await ambiguous.service.recordDiagnosis({
+      ...makeRecordDiagnosisInput(),
+      diagnosis: {
+        ...makeRecordDiagnosisInput().diagnosis,
+        diagnosticState: {
+          state: "ambiguous",
+          hypotheses: [{
+            id: "configuration",
+            label: "Configuration issue",
+            status: "plausible",
+            evidenceUsed: ["request trace"],
+            evidenceToConfirm: ["Configuration diff"],
+          }],
+          evidenceToRequest: ["Configuration diff"],
+          diagnosticAttempts: 0,
+        },
+      },
+    });
+    await appendDiagnosisResponseSent(ambiguous.audit);
+
+    const escalated = makeHarness();
+    const escalatedDiagnosis = await escalated.service.recordDiagnosis({
+      ...makeRecordDiagnosisInput(),
+      diagnosis: {
+        ...makeRecordDiagnosisInput().diagnosis,
+        diagnosticState: {
+          state: "escalated",
+          hypotheses: [{
+            id: "configuration",
+            label: "Configuration issue",
+            status: "plausible",
+            evidenceUsed: ["request trace"],
+            evidenceToConfirm: ["Configuration diff"],
+          }],
+          evidenceToRequest: ["Configuration diff"],
+          diagnosticAttempts: 2,
+          escalationReason: "diagnostic-ambiguity",
+          specialistTeam: "api-platform",
+        },
+      },
+    });
+    await appendDiagnosisResponseSent(escalated.audit);
+
+    for (const [harness, diagnosisId] of [
+      [unreviewed, unreviewedDiagnosis.id],
+      [rejected, rejectedDiagnosis.id],
+      [stale, staleDiagnosis.id],
+      [ambiguous, ambiguousDiagnosis.id],
+      [escalated, escalatedDiagnosis.id],
+    ] as const) {
+      await expect(
+        harness.service.applyDiagnosisFix(
+          makeApplyDiagnosisFixInput({ diagnosisId }),
+        ),
+      ).rejects.toMatchObject({ code: "INVALID_APPROVAL_FIELDS" });
+      expect(
+        harness.audit.events.filter((event) => event.action === "fix-available"),
+      ).toEqual([]);
+    }
+  });
+
+  it("requires a non-empty, unique, source-selected impact set", async () => {
+    const harness = makeHarness();
+    const original = await harness.service.recordDiagnosis(makeRecordDiagnosisInput());
+    await harness.service.reviewDiagnosis(
+      makeDiagnosisReviewInput({ diagnosisId: original.id }),
+    );
+    await appendDiagnosisResponseSent(harness.audit);
+
+    for (const impactSet of [
+      { ...makeApplyDiagnosisFixInput().impactSet, tickets: [] },
+      {
+        ...makeApplyDiagnosisFixInput().impactSet,
+        tickets: [
+          { ticketId: "TKT-1001" as const, reason: "The source ticket reproduced the diagnosis." },
+          { ticketId: "TKT-1001" as const, reason: "Duplicate selection." },
+        ],
+      },
+      {
+        ...makeApplyDiagnosisFixInput().impactSet,
+        tickets: [{ ticketId: "TKT-1002" as const, reason: "A related ticket." }],
+      },
+    ]) {
+      await expect(
+        harness.service.applyDiagnosisFix(
+          makeApplyDiagnosisFixInput({
+            diagnosisId: original.id,
+            impactSet,
+          }),
+        ),
+      ).rejects.toBeTruthy();
+    }
+    expect(harness.audit.events).toHaveLength(3);
+  });
+
+  it("writes a linked fix audit for each selected ticket without resolving either ticket", async () => {
+    const harness = makeMultiHarness();
+    const original = await harness.service.recordDiagnosis(makeRecordDiagnosisInput());
+    await harness.service.reviewDiagnosis(
+      makeDiagnosisReviewInput({ diagnosisId: original.id }),
+    );
+    await appendDiagnosisResponseSent(harness.audit);
+
+    const events = await harness.service.applyDiagnosisFix(
+      makeApplyDiagnosisFixInput({
+        diagnosisId: original.id,
+        impactSet: {
+          actor: "casey",
+          rationale: "The confirmed platform diagnosis affects the selected tickets.",
+          tickets: [
+            { ticketId: "TKT-1001", reason: "The source ticket reproduced the diagnosis." },
+            { ticketId: "TKT-1002", reason: "The same platform symptom was confirmed by the operator." },
+          ],
+        },
+      }),
+    );
+
+    expect(events.map((event) => event.ticketId)).toEqual(["TKT-1001", "TKT-1002"]);
+    for (const event of events) {
+      expect(event).toMatchObject({
+        action: "fix-available",
+        after: {
+          diagnosisId: original.id,
+          sourceTicketId: "TKT-1001",
+          impactSet: {
+            rationale: "The confirmed platform diagnosis affects the selected tickets.",
+          },
+        },
+      });
+    }
+    expect((await harness.tickets.get("TKT-1001")).status).not.toBe("resolved");
+    expect((await harness.tickets.get("TKT-1002")).status).not.toBe("resolved");
+  });
+
+  it("does not leave a half-applied impact set when the audit batch append fails", async () => {
+    const harness = makeMultiHarness();
+    const original = await harness.service.recordDiagnosis(makeRecordDiagnosisInput());
+    await harness.service.reviewDiagnosis(
+      makeDiagnosisReviewInput({ diagnosisId: original.id }),
+    );
+    await appendDiagnosisResponseSent(harness.audit);
+    harness.audit.failBatchAfter = 1;
+
+    await expect(
+      harness.service.applyDiagnosisFix(
+        makeApplyDiagnosisFixInput({
+          diagnosisId: original.id,
+          impactSet: {
+            actor: "casey",
+            rationale: "The confirmed platform diagnosis affects the selected tickets.",
+            tickets: [
+              { ticketId: "TKT-1001", reason: "The source ticket reproduced the diagnosis." },
+              { ticketId: "TKT-1002", reason: "The same platform symptom was confirmed by the operator." },
+            ],
+          },
+        }),
+      ),
+    ).rejects.toMatchObject({ code: "REPOSITORY_ERROR" });
+    expect(
+      harness.audit.events.filter((event) => event.action === "fix-available"),
+    ).toEqual([]);
+  });
+
+  it("routes the legacy one-ticket recordFix operation through the scoped fix workflow", async () => {
+    const harness = makeHarness();
+    const original = await harness.service.recordDiagnosis(makeRecordDiagnosisInput());
+    await harness.service.reviewDiagnosis(
+      makeDiagnosisReviewInput({ diagnosisId: original.id }),
+    );
+    await appendDiagnosisResponseSent(harness.audit);
+
+    const event = await harness.service.recordFix(makeRecordFixInput());
+
+    expect(event).toMatchObject({
+      action: "fix-available",
+      ticketId: "TKT-1001",
+      after: {
+        diagnosisId: original.id,
+        sourceTicketId: "TKT-1001",
+        impactSet: {
+          tickets: [{ ticketId: "TKT-1001" }],
+        },
+        fix: makeRecordFixInput().fix,
+      },
+    });
+  });
+
   it("submits an evaluation when the customer reply watermark still matches", async () => {
     const harness = makeHarness();
     await harness.service.addCustomerReply({
@@ -1506,7 +1814,7 @@ describe("TriageService", () => {
     const failingAudit = new AuditRepository(harness.auditFile, {
       open: (async (...args: Parameters<typeof open>) => {
         const handle = await open(...args);
-        if (args[1] !== "a+") {
+        if (args[1] !== "wx") {
           return handle;
         }
         return {
@@ -1625,6 +1933,66 @@ class MemoryTicketStore implements TicketStore {
   }
 }
 
+class MultiMemoryTicketStore implements TicketStore {
+  private readonly values: Map<Ticket["id"], Ticket>;
+
+  constructor(tickets: readonly Ticket[]) {
+    this.values = new Map(
+      tickets.map((ticket) => [ticket.id, structuredClone(ticket)]),
+    );
+  }
+
+  async get(id: Ticket["id"]): Promise<Ticket> {
+    const ticket = this.values.get(id);
+    if (ticket === undefined) {
+      throw new DomainError("Ticket was not found.", "TICKET_NOT_FOUND");
+    }
+    return structuredClone(ticket);
+  }
+
+  async update(
+    id: Ticket["id"],
+    expectedRevision: number,
+    mutate: (ticket: Ticket) => Ticket,
+  ): Promise<Ticket> {
+    const { ticket } = await this.updateWithCommit(
+      id,
+      expectedRevision,
+      mutate,
+      async () => undefined,
+    );
+    return ticket;
+  }
+
+  async updateWithCommit<T>(
+    id: Ticket["id"],
+    expectedRevision: number,
+    mutate: (ticket: Ticket) => Ticket,
+    commit: (updated: Ticket, previous: Ticket) => Promise<T>,
+  ): Promise<{ ticket: Ticket; result: T }> {
+    const previous = await this.get(id);
+    if (previous.revision !== expectedRevision) {
+      throw new DomainError(
+        "Ticket revision does not match.",
+        "REVISION_CONFLICT",
+      );
+    }
+    const updated = TicketSchema.parse({
+      ...mutate(previous),
+      id,
+      revision: expectedRevision + 1,
+    });
+    this.values.set(id, updated);
+    try {
+      const result = await commit(structuredClone(updated), previous);
+      return { ticket: structuredClone(updated), result };
+    } catch (error) {
+      this.values.set(id, previous);
+      throw error;
+    }
+  }
+}
+
 class MemoryRecommendationStore implements RecommendationStore {
   values: TriageRecommendation[] = [];
   failNextResolution = false;
@@ -1729,6 +2097,7 @@ class MemoryRecommendationStore implements RecommendationStore {
 class MemoryAuditStore implements AuditStore {
   events: AuditEvent[] = [];
   failNext = false;
+  failBatchAfter?: number;
   nextFailure?: Error;
   beforeFailure?: () => Promise<void>;
   beforeNextAppend?: () => Promise<void>;
@@ -1751,6 +2120,25 @@ class MemoryAuditStore implements AuditStore {
       );
     }
     this.events.push(structuredClone(event));
+  }
+
+  async appendBatch(events: readonly AuditEvent[]): Promise<void> {
+    const before = structuredClone(this.events);
+    try {
+      for (const [index, event] of events.entries()) {
+        if (this.failBatchAfter === index) {
+          this.failBatchAfter = undefined;
+          throw new DomainError(
+            "Audit event could not be persisted.",
+            "REPOSITORY_ERROR",
+          );
+        }
+        await this.append(event);
+      }
+    } catch (error) {
+      this.events = before;
+      throw error;
+    }
   }
 
   async list(ticketId?: Ticket["id"]): Promise<AuditEvent[]> {
@@ -1801,6 +2189,33 @@ function deferred() {
 
 function makeHarness(ticket = makeTicket()) {
   const tickets = new MemoryTicketStore(ticket);
+  const recommendations = new MemoryRecommendationStore();
+  const audit = new MemoryAuditStore();
+  const ids = [
+    recommendationId,
+    auditId,
+    "33333333-3333-4333-8333-333333333333",
+    "44444444-4444-4444-8444-444444444444",
+  ];
+  const service = new TriageService({
+    tickets,
+    recommendations,
+    audit,
+    now: () => fixedNow,
+    uuid: () => ids.shift() ?? auditId,
+  });
+  return { service, tickets, recommendations, audit };
+}
+
+function makeMultiHarness() {
+  const tickets = new MultiMemoryTicketStore([
+    makeTicket(),
+    makeTicket({
+      id: "TKT-1002",
+      subject: "A related API request returns 503",
+      description: "The same production failure affects a second customer.",
+    }),
+  ]);
   const recommendations = new MemoryRecommendationStore();
   const audit = new MemoryAuditStore();
   const ids = [
@@ -1984,6 +2399,38 @@ function makeRecordFixInput() {
       verificationRequest: "Let us know whether the request now succeeds.",
     },
     knowledgeArticleIds: [],
+  };
+}
+
+function makeApplyDiagnosisFixInput(
+  overrides: {
+    diagnosisId?: string;
+    sourceTicketId?: "TKT-1001";
+    impactSet?: {
+      actor: string;
+      rationale: string;
+      tickets: { ticketId: "TKT-1001" | "TKT-1002"; reason: string }[];
+    };
+    actor?: string;
+    fixedAt?: string;
+  } = {},
+) {
+  return {
+    diagnosisId: recommendationId,
+    sourceTicketId: "TKT-1001" as const,
+    impactSet: {
+      actor: "casey",
+      rationale: "The confirmed platform diagnosis affects the selected tickets.",
+      tickets: [
+        {
+          ticketId: "TKT-1001" as const,
+          reason: "The source ticket reproduced the diagnosis.",
+        },
+      ],
+    },
+    actor: "casey",
+    fixedAt: "2026-06-10T09:09:00.000Z",
+    ...overrides,
   };
 }
 

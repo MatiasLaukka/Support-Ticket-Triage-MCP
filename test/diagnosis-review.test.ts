@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { AuditEventSchema } from "../src/domain.js";
 import { buildConversationTimeline } from "../src/approval-desk/conversation-history.js";
 import {
+  compareIsoInstants,
   DiagnosisImpactSetSchema,
   DiagnosisReviewDecisionSchema,
   DiagnosisReviewSnapshotSchema,
@@ -57,6 +58,15 @@ function reviewAudit(overrides: Record<string, unknown> = {}) {
 }
 
 describe("diagnosis review contracts", () => {
+  it("compares sub-millisecond ISO instants exactly across offsets", () => {
+    expect(
+      compareIsoInstants(
+        "2026-06-10T10:00:00.0009Z",
+        "2026-06-10T12:00:00.0008+02:00",
+      ),
+    ).toBe(1);
+  });
+
   it("rejects duplicate impact-set ticket IDs", () => {
     expect(() =>
       DiagnosisImpactSetSchema.parse({

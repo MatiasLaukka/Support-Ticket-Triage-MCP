@@ -595,7 +595,7 @@ const lifecycleBlockerCases: Array<{
       await fixture.service.recordFix({
         ticketId: "TKT-1001",
         actor: "product-support",
-        fixedAt: "2026-06-10T09:04:00.000Z",
+        fixedAt: "2026-06-10T10:01:00.000Z",
         fix: availableFix,
         knowledgeArticleIds: [],
       });

@@ -15,6 +15,7 @@ import {
   diagnosisContextFromAudit,
 } from "./diagnostic-workflow.js";
 import {
+  compareIsoInstants,
   compareAuditCausalOrder,
   isDiagnosisStale,
   latestDiagnosisReviewRecord,
@@ -115,14 +116,15 @@ export function diagnosisBlockers(
   if (
     sentAt !== undefined &&
     latestReplyAt !== undefined &&
-    latestReplyAt > sentAt
+    compareIsoInstants(latestReplyAt, sentAt) > 0
   ) {
     blockers.push("Evaluate the latest customer reply before diagnosis.");
   }
   const latestDiagnosisAt = latestAuditTimestamp(audits, "diagnosis-completed");
   if (
     latestDiagnosisAt !== undefined &&
-    (latestReplyAt === undefined || latestDiagnosisAt > latestReplyAt)
+    (latestReplyAt === undefined ||
+      compareIsoInstants(latestDiagnosisAt, latestReplyAt) > 0)
   ) {
     blockers.push("Diagnosis has already been recorded for the latest context.");
   }
@@ -132,6 +134,7 @@ export function diagnosisBlockers(
 export function fixBlockers(input: {
   ticket: Pick<Ticket, "revision">;
   audits: readonly AuditEvent[];
+  diagnosisId?: string;
 }): string[] {
   const latestRecordedDiagnosis = latestDiagnosisAudit(input.audits);
   if (latestRecordedDiagnosis === undefined) {
@@ -144,7 +147,9 @@ export function fixBlockers(input: {
     input.audits,
   );
   const authoritative = selectedAuthoritative !== undefined &&
-      selectedAuthoritative.review.sourceTicketRevision === input.ticket.revision
+      selectedAuthoritative.review.sourceTicketRevision === input.ticket.revision &&
+      (input.diagnosisId === undefined ||
+        selectedAuthoritative.diagnosisId === input.diagnosisId)
     ? selectedAuthoritative
     : undefined;
   if (authoritative === undefined) {
@@ -177,18 +182,28 @@ export function fixBlockers(input: {
     blockers.push("An escalated diagnosis cannot unlock a fix.");
   }
   const latestFixAt = latestAuditTimestamp(input.audits, "fix-available");
-  if (latestFixAt !== undefined && latestFixAt > diagnosisTimestamp) {
+  if (
+    latestFixAt !== undefined &&
+    compareIsoInstants(latestFixAt, diagnosisTimestamp) > 0
+  ) {
     blockers.push("A fix has already been recorded for the latest diagnosis.");
   }
   const sentAt = latestAuditTimestamp(input.audits, "customer-response-sent");
-  if (sentAt === undefined || sentAt < diagnosisTimestamp) {
+  if (
+    sentAt === undefined ||
+    compareIsoInstants(sentAt, latestRecordedDiagnosis.timestamp) < 0
+  ) {
     blockers.push("Send the diagnosis response before marking a fix available.");
   }
   const latestReplyAt = latestAuditTimestamp(
     input.audits,
     "customer-reply-received",
   );
-  if (sentAt !== undefined && latestReplyAt !== undefined && latestReplyAt > sentAt) {
+  if (
+    sentAt !== undefined &&
+    latestReplyAt !== undefined &&
+    compareIsoInstants(latestReplyAt, sentAt) > 0
+  ) {
     blockers.push("Evaluate the latest customer reply before marking a fix available.");
   }
   return blockers;
@@ -319,7 +334,7 @@ export function buildOperatorGuidance(input: {
   );
   if (
     latestReplyAt !== undefined &&
-    (latest === undefined || latestReplyAt > latest.createdAt)
+    (latest === undefined || compareIsoInstants(latestReplyAt, latest.createdAt) > 0)
   ) {
     return OperatorGuidanceSchema.parse({
       stage: "customer-replied",
@@ -349,9 +364,18 @@ export function buildOperatorGuidance(input: {
     });
   }
 
+  const latestDiagnosis = latestDiagnosisAudit(input.audits);
+  const latestRecordedDiagnosticState = diagnosticStateFromDiagnosis(
+    latestDiagnosis === undefined ? undefined : diagnosisFromAudit(latestDiagnosis),
+  );
+  const latestDiagnosisReview = latestDiagnosis === undefined
+    ? undefined
+    : latestDiagnosisReviewRecord(input.audits, latestDiagnosis.id);
   if (
     latest?.supportState === "escalated" ||
-    latestDiagnosticContext?.diagnosticState?.state === "escalated"
+    latestDiagnosticContext?.diagnosticState?.state === "escalated" ||
+    latestDiagnosis?.action === "diagnostic-escalated" ||
+    latestRecordedDiagnosticState?.state === "escalated"
   ) {
     return OperatorGuidanceSchema.parse({
       stage: "escalated",
@@ -363,6 +387,24 @@ export function buildOperatorGuidance(input: {
       blockers: [],
       customerNextStep:
         "No further diagnostic action is required from you right now; support will update you after specialist review.",
+    });
+  }
+
+  if (
+    latestDiagnosisReview !== undefined &&
+    (latestDiagnosisReview.review.decision === "approve" ||
+      latestDiagnosisReview.review.decision === "revalidate") &&
+    latestDiagnosisReview.review.sourceTicketRevision !== input.ticket.revision
+  ) {
+    return OperatorGuidanceSchema.parse({
+      stage: "diagnosis-recorded",
+      changed: "The ticket changed after the prior diagnosis review.",
+      nextAction: "review-diagnosis",
+      reason:
+        "The unchanged diagnosis must be revalidated against the current ticket revision before it can unlock governed fix or closure work.",
+      approval: { required: true, fields: [] },
+      unlocksTool: "review_diagnosis",
+      blockers: [],
     });
   }
 
@@ -403,7 +445,6 @@ export function buildOperatorGuidance(input: {
     });
   }
 
-  const latestDiagnosis = latestDiagnosisAudit(input.audits);
   if (
     isAuditNewerThanRecommendation(
       latestDiagnosis,
@@ -411,6 +452,21 @@ export function buildOperatorGuidance(input: {
       input.audits,
     )
   ) {
+    if (latestRecordedDiagnosticState?.state === "ambiguous") {
+      return OperatorGuidanceSchema.parse({
+        stage: "diagnosis-recorded",
+        changed: "The recorded diagnosis still has unresolved plausible causes.",
+        nextAction: "evaluate-ticket",
+        reason:
+          "The requested diagnostic evidence must resolve the ambiguity before human review can make a diagnosis authoritative.",
+        approval: noApproval,
+        unlocksTool: "evaluate_ticket",
+        blockers: [],
+        customerNextStep: customerNextStepForGuidance(
+          diagnosisContextFromAudit(latestDiagnosis),
+        ),
+      });
+    }
     const authoritativeDiagnosis = latestDiagnosis === undefined
       ? undefined
       : latestAuthoritativeDiagnosis(input.ticket.id, input.audits);
@@ -462,7 +518,7 @@ export function buildOperatorGuidance(input: {
       : latestSentAtForRecommendation(input.audits, latest.id);
   if (
     latestSentAt !== undefined &&
-    (latestReplyAt === undefined || latestReplyAt <= latestSentAt)
+    (latestReplyAt === undefined || compareIsoInstants(latestReplyAt, latestSentAt) <= 0)
   ) {
     return OperatorGuidanceSchema.parse({
       stage: "waiting-customer",
@@ -558,7 +614,7 @@ function latestCurrentRecommendation(input: {
     )
     .sort(
       (left, right) =>
-        right.createdAt.localeCompare(left.createdAt) ||
+        compareIsoInstants(right.createdAt, left.createdAt) ||
         (submittedOrder.get(right.id) ?? -1) -
           (submittedOrder.get(left.id) ?? -1) ||
         right.id.localeCompare(left.id),
@@ -723,7 +779,7 @@ function recommendationPosition(
     )
     .sort(
       (left, right) =>
-        right.event.timestamp.localeCompare(left.event.timestamp) ||
+        compareIsoInstants(right.event.timestamp, left.event.timestamp) ||
         right.index - left.index ||
         right.event.id.localeCompare(left.event.id),
     )[0];
@@ -744,7 +800,7 @@ function compareWorkflowPosition(
   left: WorkflowPosition,
   right: WorkflowPosition,
 ): number {
-  return left.timestamp.localeCompare(right.timestamp) ||
+  return compareIsoInstants(left.timestamp, right.timestamp) ||
     left.auditIndex - right.auditIndex ||
     left.id.localeCompare(right.id);
 }
@@ -792,7 +848,7 @@ function latestSentAtForRecommendation(
         ? event.after.sentAt
         : event.timestamp,
     )
-    .sort((left, right) => right.localeCompare(left))[0];
+    .sort((left, right) => compareIsoInstants(right, left))[0];
 }
 
 function latestAuditTimestamp(
@@ -807,5 +863,5 @@ function latestAuditTimestamp(
         ? event.after.sentAt
         : event.timestamp,
     )
-    .sort((left, right) => right.localeCompare(left))[0];
+    .sort((left, right) => compareIsoInstants(right, left))[0];
 }

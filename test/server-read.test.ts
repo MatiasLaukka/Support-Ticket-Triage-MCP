@@ -519,11 +519,57 @@ describe("createTriageServer read protocol", () => {
         after: {
           diagnosis: {
             status: "completed",
+            causeType: "integration",
+            customerSafeSummary:
+              "The webhook delivery issue is confirmed as an integration-owned failure.",
+            evidenceUsed: ["request ID", "timestamp"],
             confidence: "confirmed",
             owner: "integration-partner",
+            recommendedNextAction:
+              "Apply the reviewed integration mitigation and request verification.",
+            doNotSay: [],
           },
         },
         rationale: "Confirmed an integration-owned diagnosis.",
+        knowledgeArticleIds: ["integration-webhooks"],
+        result: "success",
+      }),
+    );
+    await diagnosisFixture.audits.append(
+      AuditEventSchema.parse({
+        id: "30000000-0000-4000-8000-000000000008",
+        timestamp: "2026-06-10T09:06:30.000Z",
+        actor: "product-support",
+        action: "diagnosis-reviewed",
+        ticketId: "TKT-1001",
+        before: {
+          diagnosisId: "30000000-0000-4000-8000-000000000002",
+          previousReview: null,
+        },
+        after: {
+          diagnosisReview: {
+            decision: "approve",
+            diagnosisId: "30000000-0000-4000-8000-000000000002",
+            ticketId: "TKT-1001",
+            sourceTicketRevision: 2,
+            sourceConversationWatermark: { state: "none" },
+            editedDiagnosis: {
+              status: "completed",
+              causeType: "integration",
+              customerSafeSummary:
+                "The webhook delivery issue is confirmed as an integration-owned failure.",
+              evidenceUsed: ["request ID", "timestamp"],
+              confidence: "confirmed",
+              owner: "integration-partner",
+              recommendedNextAction:
+                "Apply the reviewed integration mitigation and request verification.",
+              doNotSay: [],
+            },
+            actor: "product-support",
+            reviewedAt: "2026-06-10T09:06:30.000Z",
+          },
+        },
+        rationale: "A human operator approved the current diagnosis before fix work.",
         knowledgeArticleIds: ["integration-webhooks"],
         result: "success",
       }),
@@ -590,10 +636,9 @@ describe("createTriageServer read protocol", () => {
     expect(diagnosisRecorded.structuredContent).toMatchObject({
       operatorGuidance: {
         stage: "diagnosis-recorded",
-        nextAction: "evaluate-ticket",
-        approval: { required: false, fields: [] },
-        unlocksTool: "evaluate_ticket",
-        customerNextStep: expect.any(String),
+        nextAction: "review-diagnosis",
+        approval: { required: true, fields: [] },
+        unlocksTool: "review_diagnosis",
       },
     });
     await expect(

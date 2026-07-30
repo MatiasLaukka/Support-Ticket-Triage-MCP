@@ -11,6 +11,7 @@ import {
 import {
   DiagnosisReviewDecisionSchema,
   compareAuditCausalOrder,
+  type AuditCausalPosition,
 } from "./diagnosis-review.js";
 
 export function diagnosisContextForTicket(
@@ -243,7 +244,7 @@ function applyPersistedDiagnosticState(
   const replyText = customerReplyTextAfter(
     ticketId,
     audits,
-    latest.timestamp,
+    latest.position,
   );
   if (replyText.trim() === "") {
     return { ...diagnosis, diagnosticState: latest.snapshot };
@@ -268,7 +269,7 @@ function applyPersistedDiagnosticState(
 function latestDiagnosticSnapshot(
   audits: readonly AuditEvent[],
   ticketId: string,
-): { snapshot: DiagnosticStateSnapshot; timestamp: string } | undefined {
+): { snapshot: DiagnosticStateSnapshot; position: AuditCausalPosition } | undefined {
   return audits
     .map((event, index) => ({ event, index }))
     .filter(
@@ -283,33 +284,35 @@ function latestDiagnosticSnapshot(
       (left, right) =>
         compareAuditCausalOrder(right, left),
     )
-    .map(({ event }) => {
+    .map(({ event, index }) => {
       const diagnosis = diagnosisValueFromAudit(event);
       if (diagnosis === undefined) return undefined;
       const parsed = DiagnosticStateSnapshotSchema.safeParse(
         (diagnosis as { diagnosticState?: unknown }).diagnosticState,
       );
       return parsed.success
-        ? { snapshot: parsed.data, timestamp: event.timestamp }
+        ? { snapshot: parsed.data, position: { event, index } }
         : undefined;
     })
-    .find((value): value is { snapshot: DiagnosticStateSnapshot; timestamp: string } => value !== undefined);
+    .find((value): value is { snapshot: DiagnosticStateSnapshot; position: AuditCausalPosition } => value !== undefined);
 }
 
 function customerReplyTextAfter(
   ticketId: string,
   audits: readonly AuditEvent[],
-  timestamp: string,
+  diagnosisPosition: AuditCausalPosition,
 ): string {
   return audits
+    .map((event, index) => ({ event, index }))
     .filter(
-      (event) =>
+      ({ event, index }) =>
         event.ticketId === ticketId &&
         event.action === "customer-reply-received" &&
-        event.timestamp > timestamp &&
+        compareAuditCausalOrder({ event, index }, diagnosisPosition) > 0 &&
         typeof event.after.body === "string",
     )
-    .map((event) => event.after.body as string)
+    .sort(compareAuditCausalOrder)
+    .map(({ event }) => event.after.body as string)
     .join("\n\n");
 }
 
@@ -413,16 +416,17 @@ export function latestFixContextFromAudits(
     .map((event, index) => ({ event, index }))
     .filter(({ event }) => event.action === "fix-available")
     .sort(
-      (left, right) =>
-        right.event.timestamp.localeCompare(left.event.timestamp) ||
-        right.index - left.index,
+      (left, right) => compareAuditCausalOrder(right, left),
     )[0];
   if (latest === undefined) return undefined;
   const superseded = audits.some((candidate, index) => {
     if (candidate.action !== "customer-reply-received") return false;
-    const newer = candidate.timestamp > latest.event.timestamp ||
-      (candidate.timestamp === latest.event.timestamp && index > latest.index);
-    if (!newer) return false;
+    if (
+      compareAuditCausalOrder(
+        { event: candidate, index },
+        latest,
+      ) <= 0
+    ) return false;
     const body = typeof candidate.after.body === "string"
       ? candidate.after.body
       : "";
@@ -486,12 +490,14 @@ function customerReplyTextFromAudits(
   audits: readonly AuditEvent[],
 ): string {
   return audits
+    .map((event, index) => ({ event, index }))
     .filter(
-      (event) =>
+      ({ event }) =>
         event.ticketId === ticketId &&
         event.action === "customer-reply-received" &&
         typeof event.after.body === "string",
     )
-    .map((event) => event.after.body as string)
+    .sort(compareAuditCausalOrder)
+    .map(({ event }) => event.after.body as string)
     .join("\n\n");
 }

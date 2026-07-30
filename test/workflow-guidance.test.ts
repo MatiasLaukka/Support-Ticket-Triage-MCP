@@ -282,6 +282,7 @@ function diagnosisAudit(input: {
   timestamp: string;
   confidence: "confirmed" | "likely";
   owner: "engineering" | "integration-partner" | "support";
+  diagnosticState?: unknown;
 }): AuditEvent {
   return audit("diagnosis-completed", input.timestamp, {
     after: {
@@ -294,6 +295,9 @@ function diagnosisAudit(input: {
         owner: input.owner,
         recommendedNextAction: "Apply the governed mitigation.",
         doNotSay: [],
+        ...(input.diagnosticState === undefined
+          ? {}
+          : { diagnosticState: input.diagnosticState }),
       },
     },
   });
@@ -306,6 +310,7 @@ function diagnosisReviewAudit(
   sourceConversationWatermark:
     | { state: "none" }
     | { state: "reply"; timestamp: string; id: string } = { state: "none" },
+  sourceTicketRevision = 2,
 ): AuditEvent {
   return audit("diagnosis-reviewed", reviewedAt, {
     actor: "casey",
@@ -314,7 +319,7 @@ function diagnosisReviewAudit(
         decision,
         diagnosisId: diagnosis.id,
         ticketId,
-        sourceTicketRevision: 2,
+        sourceTicketRevision,
         sourceConversationWatermark,
         editedDiagnosis: diagnosis.after.diagnosis,
         actor: "casey",
@@ -503,6 +508,105 @@ describe("buildOperatorGuidance", () => {
     expect(guidance.blockers).toEqual([]);
   });
 
+  it("continues evidence evaluation instead of offering ambiguous diagnoses for review", () => {
+    const input = diagnosisRecordedWorkflow();
+    input.audits = [
+      ...input.audits.slice(0, -1),
+      diagnosisAudit({
+        timestamp: "2026-06-10T09:02:00.000Z",
+        confidence: "likely",
+        owner: "support",
+        diagnosticState: {
+          state: "ambiguous",
+          diagnosticAttempts: 1,
+          hypotheses: [
+            {
+              id: "browser-session",
+              label: "Browser session issue",
+              status: "plausible",
+              evidenceUsed: ["Blank campaign editor"],
+              evidenceToConfirm: ["Private window result"],
+            },
+          ],
+          evidenceToRequest: ["Private window result"],
+        },
+      }),
+    ];
+
+    expect(buildOperatorGuidance(input)).toMatchObject({
+      stage: "diagnosis-recorded",
+      nextAction: "evaluate-ticket",
+      approval: { required: false, fields: [] },
+      unlocksTool: "evaluate_ticket",
+      customerNextStep:
+        "Reply with the targeted diagnostic details: Private window result",
+    });
+  });
+
+  it("requires revalidation when a reviewed diagnosis is stale after a ticket revision change", () => {
+    const diagnosis = diagnosisAudit({
+      timestamp: "2026-06-10T09:02:00.000Z",
+      confidence: "confirmed",
+      owner: "engineering",
+    });
+    const input: WorkflowInput = {
+      ticket: ticket({ revision: 3 }),
+      recommendations: [
+        recommendation({ createdAt: "2026-06-10T09:04:00.000Z" }),
+      ],
+      audits: [
+        sentAudit("2026-06-10T09:01:00.000Z"),
+        diagnosis,
+        diagnosisReviewAudit(
+          diagnosis,
+          "2026-06-10T09:03:00.000Z",
+          "approve",
+          { state: "none" },
+          2,
+        ),
+        sentAudit("2026-06-10T09:05:00.000Z"),
+      ],
+    };
+
+    expect(buildOperatorGuidance(input)).toMatchObject({
+      stage: "diagnosis-recorded",
+      nextAction: "review-diagnosis",
+      approval: { required: true, fields: [] },
+      unlocksTool: "review_diagnosis",
+    });
+  });
+
+  it("allows a revalidated diagnosis to unlock a fix after its diagnosis response was already sent", () => {
+    const original = diagnosisAudit({
+      timestamp: "2026-06-10T09:02:00.000Z",
+      confidence: "confirmed",
+      owner: "engineering",
+    });
+    const initialReview = diagnosisReviewAudit(
+      original,
+      "2026-06-10T09:03:00.000Z",
+    );
+    const revalidation = diagnosisReviewAudit(
+      original,
+      "2026-06-10T09:06:00.000Z",
+      "revalidate",
+      { state: "none" },
+      3,
+    );
+
+    expect(
+      fixBlockers({
+        ticket: ticket({ revision: 3 }),
+        audits: [
+          original,
+          initialReview,
+          sentAudit("2026-06-10T09:05:00.000Z"),
+          revalidation,
+        ],
+      }),
+    ).toEqual([]);
+  });
+
   it("returns safe backend-owned verification transition copy", () => {
     const guidance = buildOperatorGuidance(verificationWorkflow());
     expect(guidance.stage).toBe("verification");
@@ -534,6 +638,26 @@ describe("buildOperatorGuidance", () => {
     expect(buildOperatorGuidance(input).stage).toBe("diagnosis-recorded");
 
     input.audits = [sentAudit("2026-06-10T09:01:00.000Z"), diagnosis, submitted];
+    expect(buildOperatorGuidance(input).stage).toBe("waiting-customer");
+  });
+
+  it("orders workflow transitions chronologically when valid offsets differ", () => {
+    const input = diagnosisRecordedWorkflow();
+    const submitted = audit(
+      "recommendation-submitted",
+      "2026-06-10T08:00:00.500Z",
+      { recommendationId },
+    );
+    const diagnosis = diagnosisAudit({
+      timestamp: "2026-06-10T09:00:00.000+02:00",
+      confidence: "likely",
+      owner: "support",
+    });
+    input.recommendations = [
+      recommendation({ createdAt: "2026-06-10T08:00:00.500Z" }),
+    ];
+    input.audits = [sentAudit("2026-06-10T06:00:00.000Z"), diagnosis, submitted];
+
     expect(buildOperatorGuidance(input).stage).toBe("waiting-customer");
   });
 

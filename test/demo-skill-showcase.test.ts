@@ -77,6 +77,7 @@ it("replays TKT-1010 through guidance, approval, diagnosis, fix, verification, a
     expect.arrayContaining([
       expect.objectContaining({ stage: "review", nextAction: "review-recommendation" }),
       expect.objectContaining({ stage: "diagnosis-ready", nextAction: "record-diagnosis" }),
+      expect.objectContaining({ stage: "diagnosis-recorded", nextAction: "review-diagnosis" }),
       expect.objectContaining({ stage: "fix-ready", nextAction: "mark-fix-available" }),
       expect.objectContaining({ stage: "verification", nextAction: "evaluate-ticket" }),
       expect.objectContaining({ stage: "ready-for-close", nextAction: "close-ticket" }),
@@ -93,6 +94,11 @@ it("replays TKT-1010 through guidance, approval, diagnosis, fix, verification, a
         fields: expect.arrayContaining(["customerResponse"]),
         actor: "portfolio-reviewer",
       }),
+      {
+        required: true,
+        fields: [],
+        actor: "portfolio-reviewer",
+      },
     ]),
   );
   expect(report.finalTicketStatus).toBe("resolved");
@@ -108,6 +114,13 @@ it("replays TKT-1010 through guidance, approval, diagnosis, fix, verification, a
   expect(report.auditEvents.every((event) =>
     Object.keys(event).every((key) => ["type", "actor", "timestamp"].includes(key)),
   )).toBe(true);
+  expect(
+    report.auditEvents.map((event) => Date.parse(event.timestamp)),
+  ).toEqual(
+    [...report.auditEvents]
+      .map((event) => Date.parse(event.timestamp))
+      .sort((left, right) => left - right),
+  );
   expect(report.serialized).not.toMatch(
     /sk-[A-Za-z0-9_-]+|authorization|raw prompt|[A-Za-z]:\\|customer body omitted|recorded [a-z-]+/i,
   );

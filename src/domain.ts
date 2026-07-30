@@ -16,6 +16,52 @@ export const CustomerReplyWatermarkSchema = z.discriminatedUnion("state", [
     })
     .strict(),
 ]);
+
+export const DiagnosisImpactSetTicketSchema = z
+  .object({
+    ticketId: TicketIdSchema,
+    reason: NonBlankStringSchema,
+  })
+  .strict();
+
+export const DiagnosisImpactSetSchema = z
+  .object({
+    tickets: z.array(DiagnosisImpactSetTicketSchema).min(1),
+    actor: NonBlankStringSchema,
+    rationale: NonBlankStringSchema,
+  })
+  .strict()
+  .superRefine((impactSet, context) => {
+    const ticketIds = new Set<string>();
+    impactSet.tickets.forEach((ticket, index) => {
+      if (ticketIds.has(ticket.ticketId)) {
+        context.addIssue({
+          code: "custom",
+          path: ["tickets", index, "ticketId"],
+          message: "Impact-set ticket IDs must be unique.",
+        });
+      }
+      ticketIds.add(ticket.ticketId);
+    });
+  });
+
+export const DiagnosisFixContextSchema = z
+  .object({
+    status: z.literal("available"),
+    customerSafeSummary: NonBlankStringSchema,
+    customerAction: NonBlankStringSchema,
+    verificationRequest: NonBlankStringSchema,
+  })
+  .strict();
+
+export const DiagnosisScopedFixAuditPayloadSchema = z
+  .object({
+    diagnosisId: DiagnosisIdSchema,
+    sourceTicketId: TicketIdSchema,
+    impactSet: DiagnosisImpactSetSchema,
+    fix: DiagnosisFixContextSchema,
+  })
+  .strict();
 export const KnownEventIdSchema = z.string().regex(/^[A-Z0-9]+(?:-[A-Z0-9]+)*$/);
 
 export const CategorySchema = z.enum([
@@ -603,6 +649,11 @@ export type TicketId = z.infer<typeof TicketIdSchema>;
 export type DiagnosisId = z.infer<typeof DiagnosisIdSchema>;
 export type CustomerReplyWatermark = z.infer<
   typeof CustomerReplyWatermarkSchema
+>;
+export type DiagnosisImpactSet = z.infer<typeof DiagnosisImpactSetSchema>;
+export type DiagnosisFixContext = z.infer<typeof DiagnosisFixContextSchema>;
+export type DiagnosisScopedFixAuditPayload = z.infer<
+  typeof DiagnosisScopedFixAuditPayloadSchema
 >;
 export type Category = z.infer<typeof CategorySchema>;
 export type Priority = z.infer<typeof PrioritySchema>;

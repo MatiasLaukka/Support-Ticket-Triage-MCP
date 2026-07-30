@@ -3,12 +3,16 @@ import {
   AuditEventSchema,
   CustomerReplyWatermarkSchema,
   DiagnosisIdSchema,
+  DiagnosisImpactSetSchema as DomainDiagnosisImpactSetSchema,
   IsoTimestampSchema,
   TicketIdSchema,
   type AuditEvent,
   type CustomerReplyWatermark,
+  type DiagnosisImpactSet as DomainDiagnosisImpactSet,
 } from "../domain.js";
 import { DiagnosisContextSchema } from "../triage-service.js";
+import { compareIsoInstants } from "../iso-instant.js";
+export { compareIsoInstants };
 
 const NonBlankStringSchema = z.string().trim().min(1);
 const TicketRevisionSchema = z.number().int().nonnegative();
@@ -39,33 +43,7 @@ export const DiagnosisReviewDecisionSchema = z
     }
   });
 
-const DiagnosisImpactSetTicketSchema = z
-  .object({
-    ticketId: TicketIdSchema,
-    reason: NonBlankStringSchema,
-  })
-  .strict();
-
-export const DiagnosisImpactSetSchema = z
-  .object({
-    tickets: z.array(DiagnosisImpactSetTicketSchema).min(1),
-    actor: NonBlankStringSchema,
-    rationale: NonBlankStringSchema,
-  })
-  .strict()
-  .superRefine((impactSet, context) => {
-    const ticketIds = new Set<string>();
-    impactSet.tickets.forEach((ticket, index) => {
-      if (ticketIds.has(ticket.ticketId)) {
-        context.addIssue({
-          code: "custom",
-          path: ["tickets", index, "ticketId"],
-          message: "Impact-set ticket IDs must be unique.",
-        });
-      }
-      ticketIds.add(ticket.ticketId);
-    });
-  });
+export const DiagnosisImpactSetSchema = DomainDiagnosisImpactSetSchema;
 
 export const DiagnosisStaleReasonSchema = z.enum([
   "newer-customer-reply",
@@ -103,7 +81,7 @@ export type DiagnosisReviewInput = z.infer<
   typeof DiagnosisReviewDecisionSchema
 >;
 export type DiagnosisReviewDecision = DiagnosisReviewInput;
-export type DiagnosisImpactSet = z.infer<typeof DiagnosisImpactSetSchema>;
+export type DiagnosisImpactSet = DomainDiagnosisImpactSet;
 export type DiagnosisReviewSnapshot = z.infer<
   typeof DiagnosisReviewSnapshotSchema
 >;
@@ -308,50 +286,4 @@ function isAfter(left: string, right: string): boolean {
 
 function isSameInstant(left: string, right: string): boolean {
   return compareIsoInstants(left, right) === 0;
-}
-
-interface ParsedIsoInstant {
-  wholeSeconds: bigint;
-  fractionalSeconds: string;
-}
-
-const IsoInstantPattern = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d+))?)?(Z|[+-]\d{2}:\d{2})$/;
-
-function compareIsoInstants(left: string, right: string): number {
-  const leftInstant = parseIsoInstant(left);
-  const rightInstant = parseIsoInstant(right);
-  if (leftInstant.wholeSeconds !== rightInstant.wholeSeconds) {
-    return leftInstant.wholeSeconds > rightInstant.wholeSeconds ? 1 : -1;
-  }
-
-  const precision = Math.max(
-    leftInstant.fractionalSeconds.length,
-    rightInstant.fractionalSeconds.length,
-  );
-  const leftFraction = leftInstant.fractionalSeconds.padEnd(precision, "0");
-  const rightFraction = rightInstant.fractionalSeconds.padEnd(precision, "0");
-  return leftFraction === rightFraction ? 0 : leftFraction > rightFraction ? 1 : -1;
-}
-
-function parseIsoInstant(timestamp: string): ParsedIsoInstant {
-  const match = IsoInstantPattern.exec(timestamp);
-  if (match === null) {
-    throw new Error("Expected a validated ISO timestamp.");
-  }
-  const [, year, month, day, hour, minute, second = "0", fractionalSeconds = "", offset] = match;
-  const date = new Date(0);
-  date.setUTCFullYear(
-    Number(year),
-    Number(month) - 1,
-    Number(day),
-  );
-  date.setUTCHours(Number(hour), Number(minute), Number(second), 0);
-  const offsetSeconds = offset === "Z"
-    ? 0
-    : (offset.startsWith("+") ? 1 : -1) *
-      (Number(offset.slice(1, 3)) * 60 * 60 + Number(offset.slice(4, 6)) * 60);
-  return {
-    wholeSeconds: BigInt(date.getTime() / 1_000) - BigInt(offsetSeconds),
-    fractionalSeconds,
-  };
 }

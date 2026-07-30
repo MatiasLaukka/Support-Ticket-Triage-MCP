@@ -1843,6 +1843,238 @@ describe("AuditRepository", () => {
     await expect(repository.list("TKT-1001")).resolves.toEqual([auditEvent]);
   });
 
+  it("preserves a valid JSONL final line without a trailing newline when appending", async () => {
+    const root = await temporaryRoot();
+    const file = resolve(root, "audit", "events.jsonl");
+    const otherEvent: AuditEvent = AuditEventSchema.parse({
+      ...auditEvent,
+      id: "19632c22-405e-4b70-8b84-0cd15f3ba7e1",
+      ticketId: "TKT-1002",
+    });
+    await mkdir(resolve(root, "audit"));
+    await writeFile(file, JSON.stringify(auditEvent), "utf8");
+
+    await new AuditRepository(file).append(otherEvent);
+
+    await expect(new AuditRepository(file).list()).resolves.toEqual([
+      auditEvent,
+      otherEvent,
+    ]);
+  });
+
+  it("fails safely while another process holds the audit write lock", async () => {
+    const root = await temporaryRoot();
+    const file = resolve(root, "audit", "events.jsonl");
+    const lockFile = resolve(root, "audit", ".events.jsonl.lock");
+    const repository = new AuditRepository(file);
+    await repository.append(auditEvent);
+    await writeFile(lockFile, "held by another process\n", "utf8");
+
+    await expect(
+      repository.append(auditEventAt(2, "TKT-1002")),
+    ).rejects.toSatisfy(
+      expectDomainError(
+        "REPOSITORY_ERROR",
+        "Audit log is busy; retry the operation.",
+      ),
+    );
+    await expect(repository.list()).resolves.toEqual([auditEvent]);
+
+    await rm(lockFile);
+    await expect(repository.append(auditEventAt(2, "TKT-1002"))).resolves.toBeUndefined();
+    await expect(repository.list()).resolves.toEqual([
+      auditEvent,
+      auditEventAt(2, "TKT-1002"),
+    ]);
+  });
+
+  it("reports failed lock cleanup without erasing a committed audit", async () => {
+    const root = await temporaryRoot();
+    const file = resolve(root, "audit", "events.jsonl");
+    const repository = constructWithFileSystem(
+      AuditRepository,
+      [file],
+      {
+        rm: async (...args: Parameters<typeof rm>) => {
+          if (String(args[0]).endsWith(".lock")) {
+            throw new Error(`lock cleanup failed at ${file}`);
+          }
+          return rm(...args);
+        },
+      },
+    );
+
+    await expect(repository.append(auditEvent)).rejects.toSatisfy(
+      expectDomainError(
+        "REPOSITORY_ERROR",
+        "Audit event was committed but repository lock cleanup failed.",
+      ),
+    );
+    await expect(new AuditRepository(file).list()).resolves.toEqual([auditEvent]);
+  });
+
+  it("preserves the primary repository failure when lock cleanup also fails", async () => {
+    const root = await temporaryRoot();
+    const file = resolve(root, "audit", "events.jsonl");
+    const linkedFile = resolve(root, "audit", "linked-events.jsonl");
+    await mkdir(resolve(root, "audit"));
+    await writeFile(file, `${JSON.stringify(auditEvent)}\n`, "utf8");
+    await link(file, linkedFile);
+    const repository = constructWithFileSystem(
+      AuditRepository,
+      [file],
+      {
+        rm: async (...args: Parameters<typeof rm>) => {
+          if (String(args[0]).endsWith(".lock")) {
+            throw new Error(`lock cleanup failed at ${file}`);
+          }
+          return rm(...args);
+        },
+      },
+    );
+
+    await expect(repository.append(auditEventAt(2, "TKT-1002"))).rejects.toSatisfy(
+      expectDomainError(
+        "REPOSITORY_ERROR",
+        "Repository contains an unsupported linked path. Repository lock cleanup also failed.",
+      ),
+    );
+    await expect(readFile(file, "utf8")).resolves.toBe(`${JSON.stringify(auditEvent)}\n`);
+  });
+
+  it("appends a related audit batch atomically", async () => {
+    const root = await temporaryRoot();
+    const file = resolve(root, "audit", "events.jsonl");
+    const repository = new AuditRepository(file);
+    const relatedEvent = AuditEventSchema.parse({
+      ...auditEvent,
+      id: "19632c22-405e-4b70-8b84-0cd15f3ba7e1",
+      ticketId: "TKT-1002",
+    });
+
+    await repository.appendBatch([auditEvent, relatedEvent]);
+
+    await expect(repository.list()).resolves.toEqual([auditEvent, relatedEvent]);
+  });
+
+  it("keeps the original audit log when staging a batch write fails", async () => {
+    const root = await temporaryRoot();
+    const file = resolve(root, "audit", "events.jsonl");
+    const setup = new AuditRepository(file);
+    const relatedEvent = AuditEventSchema.parse({
+      ...auditEvent,
+      id: "19632c22-405e-4b70-8b84-0cd15f3ba7e1",
+      ticketId: "TKT-1002",
+    });
+    await setup.append(auditEvent);
+    let stagingWriteReached = false;
+    const repository = constructWithFileSystem(
+      AuditRepository,
+      [file],
+      {
+        open: async (...args: Parameters<typeof open>) => {
+          const handle = await open(...args);
+          if (args[1] !== "wx" || !String(args[0]).endsWith(".tmp")) return handle;
+          return {
+            writeFile: async (value: Parameters<typeof handle.writeFile>[0]) => {
+              stagingWriteReached = true;
+              const buffer = Buffer.from(String(value));
+              await handle.writeFile(buffer.subarray(0, buffer.length - 1));
+              throw new Error(`staging write failed at ${file}`);
+            },
+            sync: handle.sync.bind(handle),
+            stat: handle.stat.bind(handle),
+            close: handle.close.bind(handle),
+          };
+        },
+      },
+    );
+
+    await expect(repository.appendBatch([relatedEvent])).rejects.toSatisfy(
+      expectDomainError(
+        "REPOSITORY_ERROR",
+        "Audit event could not be persisted.",
+      ),
+    );
+    expect(stagingWriteReached).toBe(true);
+    await expect(new AuditRepository(file).list()).resolves.toEqual([auditEvent]);
+  });
+
+  it("keeps the original audit log when atomically committing a staged batch fails", async () => {
+    const root = await temporaryRoot();
+    const file = resolve(root, "audit", "events.jsonl");
+    const setup = new AuditRepository(file);
+    const relatedEvent = AuditEventSchema.parse({
+      ...auditEvent,
+      id: "19632c22-405e-4b70-8b84-0cd15f3ba7e1",
+      ticketId: "TKT-1002",
+    });
+    await setup.append(auditEvent);
+    let renameReached = false;
+    const repository = constructWithFileSystem(
+      AuditRepository,
+      [file],
+      {
+        rename: async () => {
+          renameReached = true;
+          throw new Error(`atomic commit failed at ${file}`);
+        },
+      },
+    );
+
+    await expect(repository.appendBatch([relatedEvent])).rejects.toSatisfy(
+      expectDomainError(
+        "REPOSITORY_ERROR",
+        "Audit event could not be persisted.",
+      ),
+    );
+    expect(renameReached).toBe(true);
+    await expect(new AuditRepository(file).list()).resolves.toEqual([auditEvent]);
+  });
+
+  it("reports failed staging cleanup without changing the original audit log", async () => {
+    const root = await temporaryRoot();
+    const file = resolve(root, "audit", "events.jsonl");
+    const setup = new AuditRepository(file);
+    await setup.append(auditEvent);
+    let cleanupReached = false;
+    const repository = constructWithFileSystem(
+      AuditRepository,
+      [file],
+      {
+        open: async (...args: Parameters<typeof open>) => {
+          const handle = await open(...args);
+          if (args[1] !== "wx" || !String(args[0]).endsWith(".tmp")) return handle;
+          return {
+            writeFile: async () => {
+              throw new Error(`staging write failed at ${file}`);
+            },
+            sync: handle.sync.bind(handle),
+            stat: handle.stat.bind(handle),
+            close: handle.close.bind(handle),
+          };
+        },
+        rm: async (...args: Parameters<typeof rm>) => {
+          if (!String(args[0]).endsWith(".tmp")) {
+            return rm(...args);
+          }
+          cleanupReached = true;
+          throw new Error(`staging cleanup failed at ${file}`);
+        },
+      },
+    );
+
+    await expect(repository.appendBatch([auditEventAt(2, "TKT-1002")])).rejects
+      .toSatisfy(
+        expectDomainError(
+          "REPOSITORY_ERROR",
+          "Audit event could not be persisted; temporary staging cleanup failed.",
+        ),
+      );
+    expect(cleanupReached).toBe(true);
+    await expect(new AuditRepository(file).list()).resolves.toEqual([auditEvent]);
+  });
+
   it("pages more than 50 audit events with offset and bounded retention", async () => {
     const root = await temporaryRoot();
     const file = resolve(root, "audit", "events.jsonl");
@@ -1929,31 +2161,29 @@ describe("AuditRepository", () => {
     );
   });
 
-  it("rejects and rolls back a simulated partial audit write", async () => {
+  it("can retry an append after a simulated partial staging write", async () => {
     const root = await temporaryRoot();
     const file = resolve(root, "audit", "events.jsonl");
-    let injectFirstAppend = true;
-    let appendWriteReached = false;
-    let rollbackOpenReached = false;
+    let injectFirstStageWrite = true;
+    let stagingWriteReached = false;
     const repository = constructWithFileSystem(
       AuditRepository,
       [file],
       {
         open: async (...args: Parameters<typeof open>) => {
           const handle = await open(...args);
-          if (!injectFirstAppend) {
-            if (args[1] === "r+") {
-              rollbackOpenReached = true;
-            }
-            return handle;
-          }
-          injectFirstAppend = false;
+          if (
+            !injectFirstStageWrite ||
+            args[1] !== "wx" ||
+            !String(args[0]).endsWith(".tmp")
+          ) return handle;
+          injectFirstStageWrite = false;
           return {
             readFile: handle.readFile.bind(handle),
             writeFile: async (
               value: Parameters<typeof handle.writeFile>[0],
             ) => {
-              appendWriteReached = true;
+              stagingWriteReached = true;
               const buffer = Buffer.from(String(value));
               await handle.writeFile(buffer.subarray(0, buffer.length - 1));
               throw new Error(`short write at ${file}`);
@@ -1972,8 +2202,7 @@ describe("AuditRepository", () => {
         "Audit event could not be persisted.",
       ),
     );
-    expect(appendWriteReached).toBe(true);
-    expect(rollbackOpenReached).toBe(true);
+    expect(stagingWriteReached).toBe(true);
     await expect(repository.list()).resolves.toEqual([]);
 
     await expect(repository.append(auditEvent)).resolves.toBeUndefined();

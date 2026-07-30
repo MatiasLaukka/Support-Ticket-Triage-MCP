@@ -7,6 +7,10 @@ import {
   CategorySchema,
   ClassificationSignalSchema,
   CustomerReplyWatermarkSchema,
+  DiagnosisFixContextSchema,
+  DiagnosisIdSchema,
+  DiagnosisImpactSetSchema,
+  DiagnosisScopedFixAuditPayloadSchema,
   DraftCustomerResponseCheckSchema,
   DraftCustomerResponseSourceSchema,
   DraftCustomerResponseStyleSchema,
@@ -29,6 +33,7 @@ import {
   type AuditEvent,
   type Category,
   type ClassificationSignal,
+  type DiagnosisImpactSet,
   type DuplicateCandidate,
   type EvidenceRequirement,
   type GptAssist,
@@ -43,6 +48,7 @@ import {
   type TriageRecommendation,
 } from "./domain.js";
 import { DomainError } from "./errors.js";
+import { compareIsoInstants } from "./iso-instant.js";
 import { evaluateEscalation, validateApprovedFields } from "./policy.js";
 import {
   DiagnosticStateSnapshotSchema,
@@ -51,9 +57,9 @@ import {
 import type { CompletedDiagnosis } from "./knowledge-evolution/domain.js";
 import type { DiagnosisReviewInput } from "./approval-desk/diagnosis-review.js";
 export type {
-  DiagnosisImpactSet,
   DiagnosisReviewInput,
 } from "./approval-desk/diagnosis-review.js";
+export type { DiagnosisImpactSet } from "./domain.js";
 
 const NonBlankStringSchema = z.string().trim().min(1);
 const recommendationOperations = new Map<string, Promise<void>>();
@@ -176,14 +182,6 @@ export const DiagnosisContextSchema = z
     diagnosticState: DiagnosticStateSnapshotSchema.optional(),
   })
   .strict();
-const FixContextSchema = z
-  .object({
-    status: z.literal("available"),
-    customerSafeSummary: NonBlankStringSchema,
-    customerAction: NonBlankStringSchema,
-    verificationRequest: NonBlankStringSchema,
-  })
-  .strict();
 const RecordDiagnosisInputSchema = z
   .object({
     ticketId: TicketIdSchema,
@@ -200,12 +198,37 @@ const RecordFixInputSchema = z
     ticketId: TicketIdSchema,
     actor: NonBlankStringSchema,
     fixedAt: IsoTimestampSchema,
-    fix: FixContextSchema,
+    fix: DiagnosisFixContextSchema,
     knowledgeArticleIds: z.array(
       z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
     ),
   })
   .strict();
+const ApplyDiagnosisFixInputSchema = z
+  .object({
+    diagnosisId: DiagnosisIdSchema,
+    sourceTicketId: TicketIdSchema,
+    impactSet: DiagnosisImpactSetSchema,
+    actor: NonBlankStringSchema,
+    fixedAt: IsoTimestampSchema,
+  })
+  .strict()
+  .superRefine((input, context) => {
+    if (input.actor !== input.impactSet.actor) {
+      context.addIssue({
+        code: "custom",
+        path: ["impactSet", "actor"],
+        message: "The impact-set actor must match the fix actor.",
+      });
+    }
+    if (!input.impactSet.tickets.some((ticket) => ticket.ticketId === input.sourceTicketId)) {
+      context.addIssue({
+        code: "custom",
+        path: ["impactSet", "tickets"],
+        message: "The source ticket must be explicitly selected in the impact set.",
+      });
+    }
+  });
 
 const SupersedeRecommendationInputSchema = z
   .object({
@@ -327,12 +350,7 @@ export interface DiagnosisContext {
   diagnosticState?: DiagnosticStateSnapshot;
 }
 
-export interface FixContext {
-  status: "available";
-  customerSafeSummary: string;
-  customerAction: string;
-  verificationRequest: string;
-}
+export type FixContext = z.infer<typeof DiagnosisFixContextSchema>;
 
 export interface RecordDiagnosisInput {
   ticketId: TicketId;
@@ -348,6 +366,14 @@ export interface RecordFixInput {
   fixedAt: string;
   fix: FixContext;
   knowledgeArticleIds: string[];
+}
+
+export interface ApplyDiagnosisFixInput {
+  diagnosisId: string;
+  sourceTicketId: TicketId;
+  impactSet: DiagnosisImpactSet;
+  actor: string;
+  fixedAt: string;
 }
 
 export interface SupersedeRecommendationInput {
@@ -391,6 +417,7 @@ export interface RecommendationStore {
 
 export interface AuditStore {
   append(event: AuditEvent): Promise<void>;
+  appendBatch(events: readonly AuditEvent[]): Promise<void>;
   list(ticketId?: TicketId): Promise<AuditEvent[]>;
 }
 
@@ -896,33 +923,153 @@ export class TriageService {
 
   async recordFix(input: RecordFixInput): Promise<AuditEvent> {
     const fix = RecordFixInputSchema.parse(input);
-    return serializeTicket(fix.ticketId, async () => {
-      const [ticket, audits] = await Promise.all([
-        this.dependencies.tickets.get(fix.ticketId),
-        this.dependencies.audit.list(fix.ticketId),
-      ]);
-      const { fixBlockers } = await import("./approval-desk/workflow-guidance.js");
-      const [fixBlocker] = fixBlockers({ ticket, audits });
+    const [ticket, audits] = await Promise.all([
+      this.dependencies.tickets.get(fix.ticketId),
+      this.dependencies.audit.list(fix.ticketId),
+    ]);
+    const { fixBlockers, latestAuthoritativeDiagnosis } = await import(
+      "./approval-desk/workflow-guidance.js"
+    );
+    const [fixBlocker] = fixBlockers({ ticket, audits });
+    if (fixBlocker !== undefined) {
+      throw new DomainError(fixBlocker, "INVALID_APPROVAL_FIELDS");
+    }
+    const diagnosis = latestAuthoritativeDiagnosis(fix.ticketId, audits);
+    if (diagnosis === undefined) {
+      throw new DomainError(
+        "An approved current diagnosis is required before marking a fix available.",
+        "INVALID_APPROVAL_FIELDS",
+      );
+    }
+
+    const [auditEvent] = await this.applyDiagnosisFixValidated(
+      ApplyDiagnosisFixInputSchema.parse({
+        diagnosisId: diagnosis.diagnosisId,
+        sourceTicketId: fix.ticketId,
+        impactSet: {
+          tickets: [{
+            ticketId: fix.ticketId,
+            reason: "The source ticket was explicitly selected for the legacy fix operation.",
+          }],
+          actor: fix.actor,
+          rationale: "The legacy single-ticket fix operation selected the source ticket.",
+        },
+        actor: fix.actor,
+        fixedAt: fix.fixedAt,
+      }),
+      { fix: fix.fix, knowledgeArticleIds: fix.knowledgeArticleIds },
+    );
+    if (auditEvent === undefined) {
+      throw new DomainError(
+        "A scoped fix audit was not created.",
+        "REPOSITORY_ERROR",
+      );
+    }
+    return auditEvent;
+  }
+
+  async applyDiagnosisFix(input: ApplyDiagnosisFixInput): Promise<AuditEvent[]> {
+    return this.applyDiagnosisFixValidated(
+      ApplyDiagnosisFixInputSchema.parse(input),
+    );
+  }
+
+  private async applyDiagnosisFixValidated(
+    input: z.infer<typeof ApplyDiagnosisFixInputSchema>,
+    legacy?: { fix: FixContext; knowledgeArticleIds: string[] },
+  ): Promise<AuditEvent[]> {
+    const ticketIds = input.impactSet.tickets.map(({ ticketId }) => ticketId);
+    return serializeTickets(ticketIds, async () => {
+      const selectedTickets = await Promise.all(
+        ticketIds.map((ticketId) => this.dependencies.tickets.get(ticketId)),
+      );
+      const sourceTicket = selectedTickets.find(
+        (ticket) => ticket.id === input.sourceTicketId,
+      );
+      if (sourceTicket === undefined) {
+        throw new DomainError(
+          "The source ticket must be explicitly selected in the impact set.",
+          "INVALID_APPROVAL_FIELDS",
+        );
+      }
+      const closedTicket = selectedTickets.find(
+        (ticket) => ticket.status === "resolved",
+      );
+      if (closedTicket !== undefined) {
+        throw new DomainError(
+          "A fix cannot be applied to a closed ticket.",
+          "INVALID_APPROVAL_FIELDS",
+        );
+      }
+
+      const auditsByTicket = new Map(
+        await Promise.all(
+          ticketIds.map(async (ticketId) => [
+            ticketId,
+            await this.dependencies.audit.list(ticketId),
+          ] as const),
+        ),
+      );
+      const sourceAudits = auditsByTicket.get(input.sourceTicketId) ?? [];
+      assertFixTimestampIsCurrent(
+        input.fixedAt,
+        [...auditsByTicket.values()].flat(),
+      );
+      const { fixBlockers, latestAuthoritativeDiagnosis } = await import(
+        "./approval-desk/workflow-guidance.js"
+      );
+      const [fixBlocker] = fixBlockers({
+        ticket: sourceTicket,
+        audits: sourceAudits,
+        diagnosisId: input.diagnosisId,
+      });
       if (fixBlocker !== undefined) {
         throw new DomainError(fixBlocker, "INVALID_APPROVAL_FIELDS");
       }
+      const diagnosis = latestAuthoritativeDiagnosis(
+        input.sourceTicketId,
+        sourceAudits,
+      );
+      if (diagnosis?.diagnosisId !== input.diagnosisId) {
+        throw new DomainError(
+          "An approved current diagnosis is required before marking a fix available.",
+          "INVALID_APPROVAL_FIELDS",
+        );
+      }
 
-      const auditEvent = AuditEventSchema.parse({
-        id: this.uuid(),
-        timestamp: fix.fixedAt,
-        actor: fix.actor,
-        action: "fix-available",
-        ticketId: fix.ticketId,
-        before: {},
-        after: {
-          fix: fix.fix,
-        },
-        rationale: "Fix or mitigation is available for customer verification.",
-        knowledgeArticleIds: fix.knowledgeArticleIds,
-        result: "success",
+      const { fixContextForTicket } = await import(
+        "./approval-desk/diagnostic-workflow.js"
+      );
+      const payload = DiagnosisScopedFixAuditPayloadSchema.parse({
+        diagnosisId: input.diagnosisId,
+        sourceTicketId: input.sourceTicketId,
+        impactSet: input.impactSet,
+        fix:
+          legacy?.fix ??
+          fixContextForTicket(sourceTicket, diagnosis.reviewAudit),
       });
-      await this.dependencies.audit.append(auditEvent);
-      return auditEvent;
+      const events = input.impactSet.tickets.map((selectedTicket) =>
+        AuditEventSchema.parse({
+          id: this.uuid(),
+          timestamp: input.fixedAt,
+          actor: input.actor,
+          action: "fix-available",
+          ticketId: selectedTicket.ticketId,
+          before: {
+            diagnosisId: input.diagnosisId,
+            sourceTicketId: input.sourceTicketId,
+          },
+          after: payload,
+          rationale:
+            `Fix or mitigation is available for customer verification. ` +
+            `Impact selection: ${selectedTicket.reason}`,
+          knowledgeArticleIds:
+            legacy?.knowledgeArticleIds ?? diagnosis.originalDiagnosis.knowledgeArticleIds,
+          result: "success",
+        }),
+      );
+      await this.dependencies.audit.appendBatch(events);
+      return events;
     });
   }
 
@@ -1389,6 +1536,28 @@ function readNonnegativeInteger(value: unknown): number | undefined {
     : undefined;
 }
 
+function assertFixTimestampIsCurrent(
+  fixedAt: string,
+  priorAudits: readonly AuditEvent[],
+): void {
+  const latestContextTimestamp = priorAudits.reduce<string | undefined>(
+    (latest, event) =>
+      latest === undefined || compareIsoInstants(event.timestamp, latest) > 0
+        ? event.timestamp
+        : latest,
+    undefined,
+  );
+  if (
+    latestContextTimestamp !== undefined &&
+    compareIsoInstants(fixedAt, latestContextTimestamp) < 0
+  ) {
+    throw new DomainError(
+      "Fix timestamp cannot predate the governed ticket context.",
+      "INVALID_APPROVAL_FIELDS",
+    );
+  }
+}
+
 function conversationWatermarkAt(
   audits: readonly AuditEvent[],
   auditId: string,
@@ -1446,6 +1615,19 @@ async function serializeTicket<T>(
       ticketOperations.delete(ticketId);
     }
   }
+}
+
+async function serializeTickets<T>(
+  ticketIds: readonly TicketId[],
+  operation: () => Promise<T>,
+): Promise<T> {
+  const ordered = [...new Set(ticketIds)].sort();
+  const acquire = async (index: number): Promise<T> => {
+    const ticketId = ordered[index];
+    if (ticketId === undefined) return operation();
+    return serializeTicket(ticketId, () => acquire(index + 1));
+  };
+  return acquire(0);
 }
 
 function ticketValue(ticket: Ticket, field: ApprovedField): unknown {

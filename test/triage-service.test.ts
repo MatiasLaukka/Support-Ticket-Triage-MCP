@@ -135,6 +135,200 @@ describe("TriageService", () => {
     });
   });
 
+  it("serializes cancellation after a close that has already validated its recommendation", async () => {
+    const harness = makeHarness();
+    harness.tickets.serializeReads = false;
+    const recommendation = await harness.service.submit(
+      makeSubmitInput({
+        supportState: "ready-for-close",
+        draftCustomerResponse: "Thanks for confirming that the issue is resolved.",
+      }),
+    );
+    await harness.service.approve(
+      makeApproval({
+        recommendationId: recommendation.id,
+        approvedFields: ["customerResponse"],
+        editedCustomerResponse: recommendation.draftCustomerResponse,
+      }),
+    );
+    await harness.service.markResponseSent({
+      recommendationId: recommendation.id,
+      ticketId: "TKT-1001",
+      actor: "casey",
+      sentAt: "2026-06-10T09:05:01.000Z",
+      customerResponse: recommendation.draftCustomerResponse,
+    });
+
+    const closeAppendStarted = deferred();
+    const allowCloseAppend = deferred();
+    harness.audit.beforeNextAppend = async () => {
+      closeAppendStarted.resolve();
+      await allowCloseAppend.promise;
+    };
+    const closing = harness.service.closeTicket({
+      ticketId: "TKT-1001",
+      actor: "casey",
+      closedAt: "2026-06-10T09:05:02.000Z",
+    });
+    await closeAppendStarted.promise;
+
+    const cancellation = harness.service.cancelApproval({
+      recommendationId: recommendation.id,
+      ticketId: "TKT-1001",
+      actor: "casey",
+      reason: "The closing response needs a later review.",
+      canceledAt: "2026-06-10T09:05:03.000Z",
+    });
+    const cancellationState = await pendingState(cancellation);
+    allowCloseAppend.resolve();
+    expect(cancellationState).toBe("waiting");
+    await expect(closing).resolves.toMatchObject({
+      ticket: { status: "resolved" },
+    });
+    await expect(cancellation).resolves.toMatchObject({
+      action: "recommendation-canceled",
+    });
+    expect(harness.audit.events.map((event) => event.action)).toEqual([
+      "recommendation-submitted",
+      "recommendation-approved",
+      "customer-response-sent",
+      "ticket-updated",
+      "recommendation-canceled",
+    ]);
+  });
+
+  it("serializes a replacement submission after diagnosis commits its evaluated workflow", async () => {
+    const harness = makeHarness();
+    const recommendation = await harness.service.submit(
+      makeSubmitInput({ supportState: "diagnosing" }),
+    );
+    await harness.service.approve(
+      makeApproval({
+        recommendationId: recommendation.id,
+        approvedFields: ["customerResponse"],
+        editedCustomerResponse: recommendation.draftCustomerResponse,
+      }),
+    );
+    await harness.service.markResponseSent({
+      recommendationId: recommendation.id,
+      ticketId: "TKT-1001",
+      actor: "casey",
+      sentAt: "2026-06-10T09:05:01.000Z",
+      customerResponse: recommendation.draftCustomerResponse,
+    });
+    const sourceWorkflow = {
+      recommendationId: recommendation.id,
+      ticketRevision: (await harness.tickets.get("TKT-1001")).revision,
+      customerReplyWatermark: customerReplyWatermarkFromAudits(
+        await harness.audit.list("TKT-1001"),
+      ),
+    };
+
+    const diagnosisAppendStarted = deferred();
+    const allowDiagnosisAppend = deferred();
+    harness.audit.beforeNextAppend = async () => {
+      diagnosisAppendStarted.resolve();
+      await allowDiagnosisAppend.promise;
+    };
+    const diagnosis = harness.service.recordDiagnosis({
+      ...makeRecordDiagnosisInput(),
+      sourceWorkflow,
+    });
+    await diagnosisAppendStarted.promise;
+
+    const replacement = harness.service.submit(
+      makeSubmitInput({
+        sourceRevision: sourceWorkflow.ticketRevision,
+        supportState: "diagnosing",
+        submittedAt: "2026-06-10T09:05:02.000Z",
+      }),
+    );
+    const replacementState = await pendingState(replacement);
+    allowDiagnosisAppend.resolve();
+    expect(replacementState).toBe("waiting");
+    await expect(diagnosis).resolves.toMatchObject({
+      action: "diagnosis-completed",
+    });
+    await expect(replacement).resolves.toMatchObject({ resolution: "pending" });
+    expect(harness.audit.events.map((event) => event.action)).toEqual([
+      "recommendation-submitted",
+      "recommendation-approved",
+      "customer-response-sent",
+      "diagnosis-completed",
+      "recommendation-submitted",
+    ]);
+  });
+
+  it("serializes rejection after diagnosis commits its evaluated workflow", async () => {
+    const harness = makeHarness();
+    const pending = await harness.service.submit(
+      makeSubmitInput({ submittedAt: "2026-06-10T09:00:00.000Z" }),
+    );
+    const recommendation = await harness.service.submit(
+      makeSubmitInput({
+        supportState: "diagnosing",
+        submittedAt: "2026-06-10T09:01:00.000Z",
+      }),
+    );
+    await harness.service.approve(
+      makeApproval({
+        recommendationId: recommendation.id,
+        approvedFields: ["customerResponse"],
+        editedCustomerResponse: recommendation.draftCustomerResponse,
+      }),
+    );
+    await harness.service.markResponseSent({
+      recommendationId: recommendation.id,
+      ticketId: "TKT-1001",
+      actor: "casey",
+      sentAt: "2026-06-10T09:05:01.000Z",
+      customerResponse: recommendation.draftCustomerResponse,
+    });
+    const sourceWorkflow = {
+      recommendationId: recommendation.id,
+      ticketRevision: (await harness.tickets.get("TKT-1001")).revision,
+      customerReplyWatermark: customerReplyWatermarkFromAudits(
+        await harness.audit.list("TKT-1001"),
+      ),
+    };
+
+    const diagnosisAppendStarted = deferred();
+    const allowDiagnosisAppend = deferred();
+    harness.audit.beforeNextAppend = async () => {
+      diagnosisAppendStarted.resolve();
+      await allowDiagnosisAppend.promise;
+    };
+    const diagnosis = harness.service.recordDiagnosis({
+      ...makeRecordDiagnosisInput(),
+      sourceWorkflow,
+    });
+    await diagnosisAppendStarted.promise;
+
+    const rejection = harness.service.reject(
+      makeRejectInput({
+        recommendationId: pending.id,
+        rejectedAt: "2026-06-10T09:05:02.000Z",
+      }),
+    );
+    const rejectionState = await pendingState(rejection);
+    allowDiagnosisAppend.resolve();
+    expect(rejectionState).toBe("waiting");
+    await expect(diagnosis).resolves.toMatchObject({
+      action: "diagnosis-completed",
+    });
+    await expect(rejection).resolves.toMatchObject({
+      action: "recommendation-rejected",
+    });
+    expect(harness.audit.events.map((event) => event.action)).toEqual([
+      "recommendation-submitted",
+      "recommendation-submitted",
+      "recommendation-approved",
+      "customer-response-sent",
+      "diagnosis-completed",
+      "recommendation-rejected",
+    ]);
+  });
+
   it("approves an unchanged diagnosis and records the review event", async () => {
     const harness = makeHarness();
     const original = await harness.service.recordDiagnosis(makeRecordDiagnosisInput());
@@ -1945,17 +2139,19 @@ describe("TriageService", () => {
 
 class MemoryTicketStore implements TicketStore {
   failRollback = false;
+  serializeReads = true;
   private operation = Promise.resolve();
 
   constructor(private value: Ticket) {}
 
   async get(id: Ticket["id"]): Promise<Ticket> {
-    return this.serialize(async () => {
+    const read = async () => {
       if (id !== this.value.id) {
         throw new DomainError("Ticket was not found.", "TICKET_NOT_FOUND");
       }
       return structuredClone(this.value);
-    });
+    };
+    return this.serializeReads ? this.serialize(read) : read();
   }
 
   async update(
@@ -2279,6 +2475,18 @@ function deferred() {
     resolve = resolvePromise;
   });
   return { promise, resolve };
+}
+
+async function pendingState(value: Promise<unknown>): Promise<"waiting" | "completed"> {
+  return Promise.race([
+    value.then(
+      () => "completed" as const,
+      () => "completed" as const,
+    ),
+    new Promise<"waiting">((resolve) =>
+      setTimeout(() => resolve("waiting"), 25),
+    ),
+  ]);
 }
 
 function makeHarness(ticket = makeTicket()) {

@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { z } from "zod";
 import {
   AiExecutionTraceSchema,
@@ -65,6 +66,7 @@ export type { DiagnosisImpactSet } from "./domain.js";
 const NonBlankStringSchema = z.string().trim().min(1);
 const recommendationOperations = new Map<string, Promise<void>>();
 const ticketOperations = new Map<TicketId, Promise<void>>();
+const activeTicketOperations = new AsyncLocalStorage<ReadonlySet<TicketId>>();
 const NEWER_REPLY_SUPERSESSION_REASON =
   "A newer customer reply requires a fresh recommendation.";
 
@@ -490,6 +492,12 @@ export class TriageService {
     input: SubmitRecommendationInput,
   ): Promise<TriageRecommendation> {
     const parsed = SubmitRecommendationInputSchema.parse(input);
+    return serializeTicket(parsed.ticketId, () => this.submitValidated(parsed));
+  }
+
+  private async submitValidated(
+    parsed: z.infer<typeof SubmitRecommendationInputSchema>,
+  ): Promise<TriageRecommendation> {
     const ticket = await this.dependencies.tickets.get(parsed.ticketId);
     if (ticket.revision !== parsed.sourceRevision) {
       throw stale("Recommendation source revision is stale.");
@@ -604,24 +612,26 @@ export class TriageService {
       result: "success",
     });
 
-    await this.dependencies.recommendations.create(recommendation);
-    try {
-      await this.dependencies.audit.append(auditEvent);
-    } catch (auditError) {
+    return serializeRecommendation(recommendation.id, async () => {
+      await this.dependencies.recommendations.create(recommendation);
       try {
-        await this.dependencies.recommendations.deletePending(recommendation.id);
-      } catch {
+        await this.dependencies.audit.append(auditEvent);
+      } catch (auditError) {
+        try {
+          await this.dependencies.recommendations.deletePending(recommendation.id);
+        } catch {
+          throw domainErrorWithCause(
+            "Submission audit failed and recommendation rollback was not safe.",
+            auditError,
+          );
+        }
         throw domainErrorWithCause(
-          "Submission audit failed and recommendation rollback was not safe.",
+          "Submission audit failed; recommendation was compensated.",
           auditError,
         );
       }
-      throw domainErrorWithCause(
-        "Submission audit failed; recommendation was compensated.",
-        auditError,
-      );
-    }
-    return recommendation;
+      return recommendation;
+    });
   }
 
   async submitEvaluation(
@@ -676,15 +686,19 @@ export class TriageService {
 
   async reject(input: RejectRecommendationInput): Promise<AuditEvent> {
     const rejection = RejectRecommendationInputSchema.parse(input);
-    return serializeRecommendation(rejection.recommendationId, () =>
-      this.rejectValidated(rejection),
+    return serializeTicket(rejection.ticketId, () =>
+      serializeRecommendation(rejection.recommendationId, () =>
+        this.rejectValidated(rejection),
+      ),
     );
   }
 
   async cancelApproval(input: CancelApprovalInput): Promise<AuditEvent> {
     const cancellation = CancelApprovalInputSchema.parse(input);
-    return serializeRecommendation(cancellation.recommendationId, () =>
-      this.cancelApprovalValidated(cancellation),
+    return serializeTicket(cancellation.ticketId, () =>
+      serializeRecommendation(cancellation.recommendationId, () =>
+        this.cancelApprovalValidated(cancellation),
+      ),
     );
   }
 
@@ -692,8 +706,10 @@ export class TriageService {
     input: MarkResponseSentInput,
   ): Promise<AuditEvent> {
     const sent = MarkResponseSentInputSchema.parse(input);
-    return serializeRecommendation(sent.recommendationId, () =>
-      this.markResponseSentValidated(sent),
+    return serializeTicket(sent.ticketId, () =>
+      serializeRecommendation(sent.recommendationId, () =>
+        this.markResponseSentValidated(sent),
+      ),
     );
   }
 
@@ -1739,6 +1755,10 @@ async function serializeTicket<T>(
   ticketId: TicketId,
   operation: () => Promise<T>,
 ): Promise<T> {
+  const active = activeTicketOperations.getStore();
+  if (active?.has(ticketId)) {
+    return operation();
+  }
   const previous = ticketOperations.get(ticketId) ?? Promise.resolve();
   let release = (): void => undefined;
   const current = new Promise<void>((resolveOperation) => {
@@ -1747,7 +1767,10 @@ async function serializeTicket<T>(
   ticketOperations.set(ticketId, current);
   await previous;
   try {
-    return await operation();
+    return await activeTicketOperations.run(
+      new Set([...(active ?? []), ticketId]),
+      operation,
+    );
   } finally {
     release();
     if (ticketOperations.get(ticketId) === current) {

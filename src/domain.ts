@@ -5,6 +5,17 @@ const SlugSchema = z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/);
 
 export const IsoTimestampSchema = z.iso.datetime({ offset: true });
 export const TicketIdSchema = z.string().regex(/^TKT-\d{4}$/);
+export const DiagnosisIdSchema = z.uuid();
+export const CustomerReplyWatermarkSchema = z.discriminatedUnion("state", [
+  z.object({ state: z.literal("none") }).strict(),
+  z
+    .object({
+      state: z.literal("reply"),
+      timestamp: IsoTimestampSchema,
+      id: z.uuid(),
+    })
+    .strict(),
+]);
 export const KnownEventIdSchema = z.string().regex(/^[A-Z0-9]+(?:-[A-Z0-9]+)*$/);
 
 export const CategorySchema = z.enum([
@@ -524,6 +535,7 @@ export const AuditActionSchema = z.enum([
     "customer-response-sent",
     "customer-reply-received",
     "diagnosis-completed",
+    "diagnosis-reviewed",
     "diagnostic-escalated",
     "fix-available",
   "ticket-updated",
@@ -588,6 +600,10 @@ export const ExpectedOutcomeSchema = z
 
 export type IsoTimestamp = z.infer<typeof IsoTimestampSchema>;
 export type TicketId = z.infer<typeof TicketIdSchema>;
+export type DiagnosisId = z.infer<typeof DiagnosisIdSchema>;
+export type CustomerReplyWatermark = z.infer<
+  typeof CustomerReplyWatermarkSchema
+>;
 export type Category = z.infer<typeof CategorySchema>;
 export type Priority = z.infer<typeof PrioritySchema>;
 export type Team = z.infer<typeof TeamSchema>;

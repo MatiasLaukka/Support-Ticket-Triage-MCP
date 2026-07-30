@@ -6,6 +6,7 @@ import {
   AuditEventSchema,
   CategorySchema,
   ClassificationSignalSchema,
+  CustomerReplyWatermarkSchema,
   DraftCustomerResponseCheckSchema,
   DraftCustomerResponseSourceSchema,
   DraftCustomerResponseStyleSchema,
@@ -48,6 +49,10 @@ import {
   type DiagnosticStateSnapshot,
 } from "./approval-desk/diagnostic-state.js";
 import type { CompletedDiagnosis } from "./knowledge-evolution/domain.js";
+export type {
+  DiagnosisImpactSet,
+  DiagnosisReviewInput,
+} from "./approval-desk/diagnosis-review.js";
 
 const NonBlankStringSchema = z.string().trim().min(1);
 const recommendationOperations = new Map<string, Promise<void>>();
@@ -110,17 +115,6 @@ const RejectRecommendationInputSchema = z
   })
   .strict();
 
-const CustomerReplyWatermarkSchema = z.discriminatedUnion("state", [
-  z.object({ state: z.literal("none") }).strict(),
-  z
-    .object({
-      state: z.literal("reply"),
-      timestamp: IsoTimestampSchema,
-      id: z.uuid(),
-    })
-    .strict(),
-]);
-
 const SubmitEvaluationInputSchema = SubmitRecommendationInputSchema.extend({
   evaluatedCustomerReplyWatermark: CustomerReplyWatermarkSchema,
 });
@@ -154,7 +148,7 @@ const AddCustomerReplyInputSchema = z
     source: NonBlankStringSchema.optional(),
   })
   .strict();
-const DiagnosisContextSchema = z
+export const DiagnosisContextSchema = z
   .object({
     status: z.literal("completed"),
     causeType: z.enum([

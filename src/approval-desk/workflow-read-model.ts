@@ -5,9 +5,11 @@ import {
   buildConversationTimeline,
 } from "./conversation-history.js";
 import {
+  auditCausalPositions,
   compareAuditCausalOrder,
+  latestAuditPosition,
   type AuditCausalPosition,
-} from "./diagnosis-review.js";
+} from "./workflow-causal-context.js";
 import { buildOperatorGuidance } from "./workflow-guidance.js";
 
 export type RecommendationWorkflowState =
@@ -214,7 +216,7 @@ function submittedAuditPositionsByRecommendation(
   audits: readonly AuditEvent[],
 ): Map<string, AuditCausalPosition> {
   const positions = new Map<string, AuditCausalPosition>();
-  audits.forEach((event, index) => {
+  auditCausalPositions(audits).forEach(({ event, index }) => {
     if (
       event.action === "recommendation-submitted" &&
       event.recommendationId !== undefined
@@ -278,16 +280,6 @@ function conversationWorkflowState(input: {
   }
 
   return input.latestSent === undefined ? "active" : "waiting";
-}
-
-function latestAuditPosition(
-  audits: readonly AuditEvent[],
-  matches: (event: AuditEvent) => boolean,
-): AuditCausalPosition | undefined {
-  return audits
-    .map((event, index) => ({ event, index }))
-    .filter(({ event }) => matches(event))
-    .sort((left, right) => compareAuditCausalOrder(right, left))[0];
 }
 
 function auditOccurredAt(position: AuditCausalPosition | undefined): string | undefined {

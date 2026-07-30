@@ -904,6 +904,37 @@ describe("createApprovalDeskHttpServer", () => {
     );
   });
 
+  it("blocks HTTP diagnosis after a causally later backdated customer reply", async () => {
+    const { deps, json } = await startFixture();
+    const created = await json("/api/tickets/TKT-1017/recommendations", {
+      method: "POST",
+      body: JSON.stringify({ actor: "approval-desk" }),
+    });
+    await approveAndSend(json, "TKT-1017", created.body.recommendation);
+    await deps.audits.append(AuditEventSchema.parse({
+      id: "60000000-0000-4000-8000-000000000099",
+      timestamp: "2026-06-10T07:59:59.9999Z",
+      actor: "Nina Brooks",
+      action: "customer-reply-received",
+      ticketId: "TKT-1017",
+      before: {},
+      after: { body: "The SMS delivery is still delayed.", source: "manual" },
+      rationale: "The customer added new diagnostic context.",
+      knowledgeArticleIds: [],
+      result: "success",
+    }));
+
+    const diagnosis = await json("/api/tickets/TKT-1017/diagnosis", {
+      method: "POST",
+      body: JSON.stringify({ actor: "product-support" }),
+    });
+
+    expect(diagnosis.status).toBe(400);
+    expect(diagnosis.body.error.message).toBe(
+      "Evaluate the latest customer reply before diagnosis.",
+    );
+  });
+
   it("allows known-cause diagnosis without extra evidence gathering", async () => {
     const { json } = await startFixture();
     const created = await json("/api/tickets/TKT-1017/recommendations", {

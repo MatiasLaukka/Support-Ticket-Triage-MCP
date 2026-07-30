@@ -12,7 +12,14 @@ import {
 } from "../domain.js";
 import { DiagnosisContextSchema } from "../triage-service.js";
 import { compareIsoInstants } from "../iso-instant.js";
+import {
+  auditCausalPositions,
+  compareAuditCausalOrder,
+  type AuditCausalPosition,
+} from "./workflow-causal-context.js";
 export { compareIsoInstants };
+export { compareAuditCausalOrder } from "./workflow-causal-context.js";
+export type { AuditCausalPosition } from "./workflow-causal-context.js";
 
 const NonBlankStringSchema = z.string().trim().min(1);
 const TicketRevisionSchema = z.number().int().nonnegative();
@@ -147,22 +154,8 @@ export type DiagnosisStalenessInput = z.infer<
 export type DiagnosisStaleReason = z.infer<typeof DiagnosisStaleReasonSchema>;
 export type DiagnosisStaleness = z.infer<typeof DiagnosisStalenessSchema>;
 
-export interface AuditCausalPosition {
-  event: AuditEvent;
-  index: number;
-}
-
 export interface DiagnosisReviewRecord extends AuditCausalPosition {
   review: DiagnosisReviewDecision;
-}
-
-export function compareAuditCausalOrder(
-  left: AuditCausalPosition,
-  right: AuditCausalPosition,
-): number {
-  return left.index - right.index ||
-    compareIsoInstants(left.event.timestamp, right.event.timestamp) ||
-    left.event.id.localeCompare(right.event.id);
 }
 
 export function isDiagnosisStale(input: DiagnosisStalenessInput): DiagnosisStaleness {
@@ -247,6 +240,53 @@ export function latestDiagnosisReviewRecord(
           { event: left.event, index: left.index },
         ),
     )[0];
+}
+
+/**
+ * Parses a review record only when the persisted review is causally linked to
+ * one real, earlier original diagnosis. Governance gates and drafting must use
+ * this parser rather than trusting a review payload by itself.
+ */
+export function strictDiagnosisReviewRecord(
+  audits: readonly AuditEvent[],
+  position: AuditCausalPosition,
+): DiagnosisReviewRecord | undefined {
+  const { event } = position;
+  if (event.action !== "diagnosis-reviewed") return undefined;
+  const parsed = DiagnosisReviewDecisionSchema.safeParse(
+    event.after.diagnosisReview,
+  );
+  if (
+    !parsed.success ||
+    event.ticketId !== parsed.data.ticketId ||
+    event.actor !== parsed.data.actor ||
+    event.before.diagnosisId !== parsed.data.diagnosisId ||
+    !isSameInstant(event.timestamp, parsed.data.reviewedAt)
+  ) {
+    return undefined;
+  }
+  const original = auditCausalPositions(audits).find(
+    (candidate) =>
+      candidate.index < position.index &&
+      candidate.event.id === parsed.data.diagnosisId &&
+      candidate.event.ticketId === parsed.data.ticketId &&
+      OriginalDiagnosisAuditSchema.safeParse(candidate.event).success,
+  );
+  return original === undefined
+    ? undefined
+    : { event, index: position.index, review: parsed.data };
+}
+
+export function latestStrictDiagnosisReviewRecord(
+  audits: readonly AuditEvent[],
+  diagnosisId: z.infer<typeof DiagnosisIdSchema>,
+): DiagnosisReviewRecord | undefined {
+  return auditCausalPositions(audits)
+    .flatMap((position) => {
+      const record = strictDiagnosisReviewRecord(audits, position);
+      return record?.review.diagnosisId === diagnosisId ? [record] : [];
+    })
+    .sort((left, right) => compareAuditCausalOrder(right, left))[0];
 }
 
 export function customerReplyWatermarksMatch(

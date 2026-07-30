@@ -1,6 +1,5 @@
 import type { AuditEvent, Ticket, TriageRecommendation } from "../domain.js";
 import type { DiagnosisContext, FixContext } from "../triage-service.js";
-import { compareIsoInstants } from "../iso-instant.js";
 import { diagnoseFromPlaybook } from "./diagnostic-playbooks.js";
 import { getKnownCause } from "./known-cause-catalog.js";
 import { getKnownEvent } from "./known-event-catalog.js";
@@ -11,9 +10,14 @@ import {
 } from "./diagnostic-state.js";
 import {
   DiagnosisReviewDecisionSchema,
-  compareAuditCausalOrder,
-  type AuditCausalPosition,
+  latestStrictDiagnosisReviewRecord,
+  strictDiagnosisReviewRecord,
 } from "./diagnosis-review.js";
+import {
+  compareAuditCausalOrder,
+  latestAuditPosition,
+  type AuditCausalPosition,
+} from "./workflow-causal-context.js";
 export { hasCustomerReplyAfterRecommendation } from "./workflow-causal-context.js";
 
 export function diagnosisContextForTicket(
@@ -275,11 +279,12 @@ function latestDiagnosticSnapshot(
   return audits
     .map((event, index) => ({ event, index }))
     .filter(
-      ({ event }) =>
+      ({ event, index }) =>
         event.ticketId === ticketId &&
         (event.action === "diagnosis-completed" ||
           event.action === "diagnostic-escalated" ||
-          event.action === "diagnosis-reviewed") &&
+          (event.action === "diagnosis-reviewed" &&
+            strictDiagnosisReviewRecord(audits, { event, index }) !== undefined)) &&
         diagnosisValueFromAudit(event) !== undefined,
     )
     .sort(
@@ -460,64 +465,22 @@ function isPersistedDiagnosisContextEvent(
     typeof event.after.diagnosis === "object" &&
     event.after.diagnosis !== null
   ) {
-    const latestReview = latestStrictDiagnosisReview(audits, event.id);
-    return latestReview?.decision !== "reject" &&
+    const latestReview = latestStrictDiagnosisReviewRecord(audits, event.id);
+    return latestReview?.review.decision !== "reject" &&
       diagnosisContextFromAudit(event) !== undefined;
   }
-  const review = strictDiagnosisReview(event, audits);
+  const position = audits.findIndex((candidate) => candidate.id === event.id);
+  const review = position < 0
+    ? undefined
+    : strictDiagnosisReviewRecord(audits, { event, index: position });
   if (
     review === undefined ||
-    (review.decision !== "approve" && review.decision !== "revalidate") ||
+    (review.review.decision !== "approve" && review.review.decision !== "revalidate") ||
     diagnosisContextFromAudit(event) === undefined
   ) {
     return false;
   }
   return true;
-}
-
-function latestStrictDiagnosisReview(
-  audits: readonly AuditEvent[],
-  diagnosisId: string,
-) {
-  return audits
-    .map((event, index) => ({ event, index }))
-    .flatMap(({ event, index }) => {
-      const review = strictDiagnosisReview(event, audits);
-      return review?.diagnosisId === diagnosisId
-        ? [{ review, event, index }]
-        : [];
-    })
-    .sort((left, right) =>
-      compareAuditCausalOrder(right, left),
-    )[0]?.review;
-}
-
-function strictDiagnosisReview(
-  event: AuditEvent,
-  audits: readonly AuditEvent[],
-) {
-  if (event.action !== "diagnosis-reviewed") return undefined;
-  const parsedReview = DiagnosisReviewDecisionSchema.safeParse(
-    event.after.diagnosisReview,
-  );
-  if (
-    !parsedReview.success ||
-    event.ticketId !== parsedReview.data.ticketId ||
-    event.actor !== parsedReview.data.actor ||
-    event.before.diagnosisId !== parsedReview.data.diagnosisId ||
-    compareIsoInstants(event.timestamp, parsedReview.data.reviewedAt) !== 0
-  ) {
-    return undefined;
-  }
-  const original = audits.find(
-    (candidate) =>
-      candidate.id === parsedReview.data.diagnosisId &&
-      candidate.ticketId === parsedReview.data.ticketId &&
-      (candidate.action === "diagnosis-completed" ||
-        candidate.action === "diagnostic-escalated") &&
-      diagnosisContextFromAudit(candidate) !== undefined,
-  );
-  return original === undefined ? undefined : parsedReview.data;
 }
 
 /** Return the latest fix that is still current for the conversation. */
@@ -540,16 +503,6 @@ function currentPersistedContext<T>(
   return context === undefined
     ? undefined
     : { event: latest.event, position: latest, context };
-}
-
-function latestAuditPosition(
-  audits: readonly AuditEvent[],
-  matches: (event: AuditEvent) => boolean,
-): AuditCausalPosition | undefined {
-  return audits
-    .map((event, index) => ({ event, index }))
-    .filter(({ event }) => matches(event))
-    .sort((left, right) => compareAuditCausalOrder(right, left))[0];
 }
 
 function hasSupersedingCustomerReply(

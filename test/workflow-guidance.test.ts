@@ -314,6 +314,7 @@ function diagnosisReviewAudit(
 ): AuditEvent {
   return audit("diagnosis-reviewed", reviewedAt, {
     actor: "casey",
+    before: { diagnosisId: diagnosis.id },
     after: {
       diagnosisReview: {
         decision,
@@ -911,9 +912,9 @@ describe("buildOperatorGuidance", () => {
       owner: "engineering",
     });
     diagnosisEqual.audits = [
-      sentAudit("2026-06-10T09:01:00.000Z"),
       equalDiagnosis,
       diagnosisReviewAudit(equalDiagnosis, "2026-06-10T09:01:00.000Z"),
+      sentAudit("2026-06-10T09:01:00.000Z"),
     ];
     expect(buildOperatorGuidance(diagnosisEqual).stage).toBe("fix-ready");
 
@@ -999,6 +1000,35 @@ describe("shared lifecycle blockers", () => {
         mismatchedOuterAudit,
       ])?.reviewAudit.id,
     ).toBe(validReview.id);
+  });
+
+  it("does not let a review linked to another diagnosis unlock fix or closure", () => {
+    const original = diagnosisAudit({
+      timestamp: "2026-06-10T09:02:00.000Z",
+      confidence: "confirmed",
+      owner: "engineering",
+    });
+    const mislinkedReview = AuditEventSchema.parse({
+      ...diagnosisReviewAudit(original, "2026-06-10T09:03:00.000Z"),
+      before: { diagnosisId: "29999999-9999-4999-8999-999999999999" },
+    });
+    const audits = [
+      original,
+      mislinkedReview,
+      sentAudit("2026-06-10T09:04:00.000Z"),
+    ];
+
+    expect(latestAuthoritativeDiagnosis(ticketId, audits)).toBeUndefined();
+    expect(fixBlockers({ ticket: ticket(), audits })).toContain(
+      "An approved current diagnosis is required before marking a fix available.",
+    );
+    expect(
+      closeBlockers({
+        ticket: ticket(),
+        recommendation: recommendation({ supportState: "ready-for-close" }),
+        audits,
+      }),
+    ).toContain("A current approved diagnosis is required before ticket closure.");
   });
 
   it("invalidates an older review when a causally later diagnosis is backdated", () => {
@@ -1091,6 +1121,25 @@ describe("shared lifecycle blockers", () => {
         audits,
       }),
     ).toContain("A current approved diagnosis is required before ticket closure.");
+  });
+
+  it("requires evaluation after a causally later backdated reply", () => {
+    const sent = sentAudit("2026-06-10T10:00:00.0008+02:00");
+    const laterPersistedReply = audit(
+      "customer-reply-received",
+      "2026-06-10T07:59:59.9999Z",
+      {
+        actor: "Maya Chen",
+        after: { body: "The issue still occurs after the last response." },
+      },
+    );
+
+    expect(
+      diagnosisBlockers({
+        recommendation: recommendation(),
+        audits: [sent, laterPersistedReply],
+      }),
+    ).toContain("Evaluate the latest customer reply before diagnosis.");
   });
 
   it("does not let an earlier fix bypass closure after a causally later customer reply", () => {

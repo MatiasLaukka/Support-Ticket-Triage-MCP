@@ -31,12 +31,7 @@ export function buildConversationContextForTicket(
   input: ConversationContextInput,
 ): ConversationContext {
   const customerReplies = [...(input.customerReplies ?? [])]
-    .filter((reply) => reply.ticketId === input.ticket.id)
-    .sort(
-      (left, right) =>
-        left.createdAt.localeCompare(right.createdAt) ||
-        left.id.localeCompare(right.id),
-    );
+    .filter((reply) => reply.ticketId === input.ticket.id);
   const supportResponses = [...(input.previousSupportResponses ?? [])].sort(
     (left, right) => left.sentAt.localeCompare(right.sentAt),
   );

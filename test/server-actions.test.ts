@@ -1151,6 +1151,29 @@ describe("createTriageServer action protocol", () => {
     });
   });
 
+  it("blocks MCP diagnosis after a causally later backdated customer reply", async () => {
+    const fixture = await createFixture();
+    const recommendation = await seedRecommendation(fixture);
+    await approveAndSend(fixture, recommendation);
+    await fixture.service.addCustomerReply({
+      ticketId: "TKT-1001",
+      actor: "Maya Chen",
+      body: "The issue still occurs after the last response.",
+      receivedAt: "2026-06-10T08:59:59.9999Z",
+    });
+    const client = await connect(fixture);
+
+    const diagnosis = await callTool(client, "record_diagnosis", {
+      ticketId: "TKT-1001",
+      actor: "product-support",
+    });
+
+    expect(diagnosis.isError).toBe(true);
+    expect(textOf(diagnosis)).toBe(
+      "INVALID_APPROVAL_FIELDS: Evaluate the latest customer reply before diagnosis.",
+    );
+  });
+
   it("evaluates the current ticket timeline without caller-built recommendation objects", async () => {
     const fixture = await createFixture();
     const client = await connect(fixture);
@@ -1770,6 +1793,7 @@ describe("createTriageServer action protocol", () => {
       { ticketId: "TKT-2010", actor: "product-support" },
     );
     await approveLatestDiagnosis(fixture, "TKT-2010");
+    await appendDiagnosisResponseSent(fixture, "TKT-2010");
     const fix = await callTool(await connect(fixture), "mark_fix_available", {
       ticketId: "TKT-2010",
       actor: "product-support",
@@ -1861,6 +1885,7 @@ describe("createTriageServer action protocol", () => {
       actor: "product-support",
     });
     await approveLatestDiagnosis(fixture);
+    await appendDiagnosisResponseSent(fixture);
     const fix = await callTool(client, "mark_fix_available", {
       ticketId: "TKT-1001",
       actor: "product-support",

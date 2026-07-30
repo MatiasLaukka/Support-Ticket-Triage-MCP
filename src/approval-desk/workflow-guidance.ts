@@ -16,12 +16,20 @@ import {
 } from "./diagnostic-workflow.js";
 import {
   compareIsoInstants,
-  compareAuditCausalOrder,
   isDiagnosisStale,
-  latestDiagnosisReviewRecord,
+  latestStrictDiagnosisReviewRecord,
   type DiagnosisReviewDecision,
 } from "./diagnosis-review.js";
 import { DiagnosticStateSnapshotSchema } from "./diagnostic-state.js";
+import {
+  auditCausalPositions,
+  auditPositionForEvent,
+  compareAuditCausalOrder,
+  hasCustomerReplyAfterRecommendation,
+  latestAuditPosition,
+  latestRecommendationSubmissionPosition,
+  type AuditCausalPosition,
+} from "./workflow-causal-context.js";
 
 export const OperatorGuidanceSchema = z
   .object({
@@ -105,26 +113,32 @@ export function diagnosisBlockers(
   ) {
     blockers.push("Diagnosis requires a diagnosis-ready ticket state.");
   }
-  const sentAt = latestSentAtForRecommendation(audits, recommendation.id);
-  if (sentAt === undefined) {
+  const sent = latestSentResponsePositionForRecommendation(
+    audits,
+    recommendation.id,
+  );
+  if (sent === undefined) {
     blockers.push("The evaluated response must be marked done before diagnosis.");
   }
-  const latestReplyAt = latestAuditTimestamp(
+  const latestReply = latestAuditPosition(
     audits,
-    "customer-reply-received",
+    (event) => event.action === "customer-reply-received",
   );
   if (
-    sentAt !== undefined &&
-    latestReplyAt !== undefined &&
-    compareIsoInstants(latestReplyAt, sentAt) > 0
+    sent !== undefined &&
+    latestReply !== undefined &&
+    compareAuditCausalOrder(latestReply, sent) > 0
   ) {
     blockers.push("Evaluate the latest customer reply before diagnosis.");
   }
-  const latestDiagnosisAt = latestAuditTimestamp(audits, "diagnosis-completed");
+  const latestDiagnosis = latestAuditPosition(
+    audits,
+    (event) => event.action === "diagnosis-completed",
+  );
   if (
-    latestDiagnosisAt !== undefined &&
-    (latestReplyAt === undefined ||
-      compareIsoInstants(latestDiagnosisAt, latestReplyAt) > 0)
+    latestDiagnosis !== undefined &&
+    (latestReply === undefined ||
+      compareAuditCausalOrder(latestDiagnosis, latestReply) > 0)
   ) {
     blockers.push("Diagnosis has already been recorded for the latest context.");
   }
@@ -158,8 +172,6 @@ export function fixBlockers(input: {
     );
   }
   const diagnosis = authoritative?.diagnosis ?? diagnosisFromAudit(latestRecordedDiagnosis);
-  const diagnosisTimestamp =
-    authoritative?.reviewAudit.timestamp ?? latestRecordedDiagnosis.timestamp;
   if (diagnosis?.confidence !== "confirmed") {
     blockers.push(
       "A confirmed diagnosis is required before marking a fix available.",
@@ -181,28 +193,45 @@ export function fixBlockers(input: {
   if (diagnosticState?.state === "escalated") {
     blockers.push("An escalated diagnosis cannot unlock a fix.");
   }
-  const latestFixAt = latestAuditTimestamp(input.audits, "fix-available");
+  const latestFix = latestAuditPosition(
+    input.audits,
+    (event) => event.action === "fix-available",
+  );
+  const authoritativePosition = authoritative === undefined
+    ? undefined
+    : auditPositionForEvent(input.audits, authoritative.reviewAudit);
+  const diagnosisPositionForExistingFix = authoritativePosition ??
+    auditPositionForEvent(input.audits, latestRecordedDiagnosis);
   if (
-    latestFixAt !== undefined &&
-    compareIsoInstants(latestFixAt, diagnosisTimestamp) > 0
+    latestFix !== undefined &&
+    diagnosisPositionForExistingFix !== undefined &&
+    compareAuditCausalOrder(latestFix, diagnosisPositionForExistingFix) > 0
   ) {
     blockers.push("A fix has already been recorded for the latest diagnosis.");
   }
-  const sentAt = latestAuditTimestamp(input.audits, "customer-response-sent");
+  const sent = latestAuditPosition(
+    input.audits,
+    (event) => event.action === "customer-response-sent",
+  );
+  const recordedDiagnosisPosition = auditPositionForEvent(
+    input.audits,
+    latestRecordedDiagnosis,
+  );
   if (
-    sentAt === undefined ||
-    compareIsoInstants(sentAt, latestRecordedDiagnosis.timestamp) < 0
+    sent === undefined ||
+    (recordedDiagnosisPosition !== undefined &&
+      compareAuditCausalOrder(sent, recordedDiagnosisPosition) <= 0)
   ) {
     blockers.push("Send the diagnosis response before marking a fix available.");
   }
-  const latestReplyAt = latestAuditTimestamp(
+  const latestReply = latestAuditPosition(
     input.audits,
-    "customer-reply-received",
+    (event) => event.action === "customer-reply-received",
   );
   if (
-    sentAt !== undefined &&
-    latestReplyAt !== undefined &&
-    compareIsoInstants(latestReplyAt, sentAt) > 0
+    sent !== undefined &&
+    latestReply !== undefined &&
+    compareAuditCausalOrder(latestReply, sent) > 0
   ) {
     blockers.push("Evaluate the latest customer reply before marking a fix available.");
   }
@@ -227,13 +256,13 @@ export function closeBlockers(input: {
     ? selectedAuthoritativeDiagnosis
     : undefined;
   const latestFix = latestFixAudit(input.audits);
-  const latestCustomerReply = input.audits
-    .map((event, index) => ({ event, index }))
-    .filter(({ event }) => event.action === "customer-reply-received")
-    .sort((left, right) => compareAuditCausalOrder(right, left))[0];
+  const latestCustomerReply = latestAuditPosition(
+    input.audits,
+    (event) => event.action === "customer-reply-received",
+  );
   const latestFixPosition = latestFix === undefined
     ? undefined
-    : { event: latestFix, index: input.audits.indexOf(latestFix) };
+    : auditPositionForEvent(input.audits, latestFix);
   const authoritativeDiagnosisAtFix = latestFixPosition === undefined
     ? undefined
     : latestAuthoritativeDiagnosis(
@@ -278,7 +307,10 @@ export function closeBlockers(input: {
   }
   if (
     input.recommendation === undefined ||
-    latestSentAtForRecommendation(input.audits, input.recommendation.id) ===
+    latestSentResponsePositionForRecommendation(
+      input.audits,
+      input.recommendation.id,
+    ) ===
       undefined
   ) {
     blockers.push(
@@ -328,13 +360,13 @@ export function buildOperatorGuidance(input: {
     });
   }
 
-  const latestReplyAt = latestAuditTimestamp(
+  const latestReply = latestAuditPosition(
     input.audits,
-    "customer-reply-received",
+    (event) => event.action === "customer-reply-received",
   );
   if (
-    latestReplyAt !== undefined &&
-    (latest === undefined || compareIsoInstants(latestReplyAt, latest.createdAt) > 0)
+    latestReply !== undefined &&
+    (latest === undefined || hasCustomerReplyAfterRecommendation(input.audits, latest))
   ) {
     return OperatorGuidanceSchema.parse({
       stage: "customer-replied",
@@ -370,7 +402,7 @@ export function buildOperatorGuidance(input: {
   );
   const latestDiagnosisReview = latestDiagnosis === undefined
     ? undefined
-    : latestDiagnosisReviewRecord(input.audits, latestDiagnosis.id);
+    : latestStrictDiagnosisReviewRecord(input.audits, latestDiagnosis.id);
   if (
     latest?.supportState === "escalated" ||
     latestDiagnosticContext?.diagnosticState?.state === "escalated" ||
@@ -512,13 +544,17 @@ export function buildOperatorGuidance(input: {
     });
   }
 
-  const latestSentAt =
+  const latestSent =
     latest === undefined
-      ? latestAuditTimestamp(input.audits, "customer-response-sent")
-      : latestSentAtForRecommendation(input.audits, latest.id);
+      ? latestAuditPosition(
+          input.audits,
+          (event) => event.action === "customer-response-sent",
+        )
+      : latestSentResponsePositionForRecommendation(input.audits, latest.id);
   if (
-    latestSentAt !== undefined &&
-    (latestReplyAt === undefined || compareIsoInstants(latestReplyAt, latestSentAt) <= 0)
+    latestSent !== undefined &&
+    (latestReply === undefined ||
+      compareAuditCausalOrder(latestReply, latestSent) <= 0)
   ) {
     return OperatorGuidanceSchema.parse({
       stage: "waiting-customer",
@@ -597,13 +633,20 @@ function latestCurrentRecommendation(input: {
   recommendations: readonly TriageRecommendation[];
   audits: readonly AuditEvent[];
 }): TriageRecommendation | undefined {
-  const submittedOrder = new Map<string, number>();
-  input.audits.forEach((event, index) => {
+  const submittedPositions = new Map<string, AuditCausalPosition>();
+  auditCausalPositions(input.audits).forEach((position) => {
+    const { event } = position;
     if (
       event.action === "recommendation-submitted" &&
       event.recommendationId !== undefined
     ) {
-      submittedOrder.set(event.recommendationId, index);
+      const current = submittedPositions.get(event.recommendationId);
+      if (
+        current === undefined ||
+        compareAuditCausalOrder(position, current) > 0
+      ) {
+        submittedPositions.set(event.recommendationId, position);
+      }
     }
   });
   return input.recommendations
@@ -612,13 +655,19 @@ function latestCurrentRecommendation(input: {
         recommendation.ticketId === input.ticket.id &&
         ["pending", "approved"].includes(recommendation.resolution),
     )
-    .sort(
-      (left, right) =>
-        compareIsoInstants(right.createdAt, left.createdAt) ||
-        (submittedOrder.get(right.id) ?? -1) -
-          (submittedOrder.get(left.id) ?? -1) ||
-        right.id.localeCompare(left.id),
-    )[0];
+    .sort((left, right) => {
+      const leftSubmission = submittedPositions.get(left.id);
+      const rightSubmission = submittedPositions.get(right.id);
+      if (leftSubmission !== undefined && rightSubmission !== undefined) {
+        const causalOrder = compareAuditCausalOrder(
+          rightSubmission,
+          leftSubmission,
+        );
+        if (causalOrder !== 0) return causalOrder;
+      }
+      return compareIsoInstants(right.createdAt, left.createdAt) ||
+        right.id.localeCompare(left.id);
+    })[0];
 }
 
 export function latestDiagnosisAudit(
@@ -659,7 +708,7 @@ export function latestAuthoritativeDiagnosis(
     ) {
       return [];
     }
-    const reviewRecord = latestDiagnosisReviewRecord(
+    const reviewRecord = latestStrictDiagnosisReviewRecord(
       audits,
       originalDiagnosis.id,
     );
@@ -743,66 +792,15 @@ function isAuditNewerThanRecommendation(
   if (recommendation === undefined) {
     return true;
   }
-  return compareWorkflowPosition(
-    auditPosition(event, audits),
-    recommendationPosition(recommendation, audits),
-  ) > 0;
-}
-
-interface WorkflowPosition {
-  timestamp: string;
-  auditIndex: number;
-  id: string;
-}
-
-function auditPosition(
-  event: AuditEvent,
-  audits: readonly AuditEvent[],
-): WorkflowPosition {
-  return {
-    timestamp: event.timestamp,
-    auditIndex: audits.indexOf(event),
-    id: event.id,
-  };
-}
-
-function recommendationPosition(
-  recommendation: TriageRecommendation,
-  audits: readonly AuditEvent[],
-): WorkflowPosition {
-  const submission = audits
-    .map((event, index) => ({ event, index }))
-    .filter(
-      ({ event }) =>
-        event.action === "recommendation-submitted" &&
-        event.recommendationId === recommendation.id,
-    )
-    .sort(
-      (left, right) =>
-        compareIsoInstants(right.event.timestamp, left.event.timestamp) ||
-        right.index - left.index ||
-        right.event.id.localeCompare(left.event.id),
-    )[0];
-  return submission === undefined
-    ? {
-        timestamp: recommendation.createdAt,
-        auditIndex: -1,
-        id: recommendation.id,
-      }
-    : {
-        timestamp: submission.event.timestamp,
-        auditIndex: submission.index,
-        id: submission.event.id,
-      };
-}
-
-function compareWorkflowPosition(
-  left: WorkflowPosition,
-  right: WorkflowPosition,
-): number {
-  return compareIsoInstants(left.timestamp, right.timestamp) ||
-    left.auditIndex - right.auditIndex ||
-    left.id.localeCompare(right.id);
+  const auditPosition = auditPositionForEvent(audits, event);
+  const submission = latestRecommendationSubmissionPosition(
+    audits,
+    recommendation.id,
+  );
+  if (auditPosition !== undefined && submission !== undefined) {
+    return compareAuditCausalOrder(auditPosition, submission) > 0;
+  }
+  return compareIsoInstants(event.timestamp, recommendation.createdAt) > 0;
 }
 
 function diagnosisFromAudit(
@@ -833,35 +831,14 @@ function diagnosticStateFromDiagnosis(
   ).data;
 }
 
-function latestSentAtForRecommendation(
+function latestSentResponsePositionForRecommendation(
   audits: readonly AuditEvent[],
   recommendationId: string,
-): string | undefined {
-  return audits
-    .filter(
-      (event) =>
-        event.action === "customer-response-sent" &&
-        event.recommendationId === recommendationId,
-    )
-    .map((event) =>
-      typeof event.after.sentAt === "string"
-        ? event.after.sentAt
-        : event.timestamp,
-    )
-    .sort((left, right) => compareIsoInstants(right, left))[0];
-}
-
-function latestAuditTimestamp(
-  audits: readonly AuditEvent[],
-  action: AuditEvent["action"],
-): string | undefined {
-  return audits
-    .filter((event) => event.action === action)
-    .map((event) =>
-      action === "customer-response-sent" &&
-      typeof event.after.sentAt === "string"
-        ? event.after.sentAt
-        : event.timestamp,
-    )
-    .sort((left, right) => compareIsoInstants(right, left))[0];
+): AuditCausalPosition | undefined {
+  return latestAuditPosition(
+    audits,
+    (event) =>
+      event.action === "customer-response-sent" &&
+      event.recommendationId === recommendationId,
+  );
 }

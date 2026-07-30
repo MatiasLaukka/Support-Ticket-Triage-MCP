@@ -7,6 +7,38 @@ import { buildConversationContextForTicket } from "../src/approval-desk/conversa
 import { TicketSchema, type Ticket } from "../src/domain.js";
 
 describe("classifyTicket", () => {
+  it("preserves the supplied causal reply order in conversation context", () => {
+    const ticket = makeTicket({
+      subject: "Problem",
+      description: "It does not work.",
+      category: "other",
+      team: "support",
+      tags: [],
+    });
+    const firstPersisted = {
+      id: "reply-persisted-first",
+      ticketId: ticket.id,
+      createdAt: "2026-06-10T10:00:00.0008+02:00",
+      body: "The first persisted reply says the page is still blank.",
+    };
+    const laterBackdated = {
+      id: "reply-persisted-later",
+      ticketId: ticket.id,
+      createdAt: "2026-06-10T07:59:59.9999Z",
+      body: "The later persisted reply says the error changed.",
+    };
+
+    const context = buildConversationContextForTicket({
+      ticket,
+      customerReplies: [firstPersisted, laterBackdated],
+    });
+
+    expect(context.customerReplyText).toBe(
+      `${firstPersisted.body}\n\n${laterBackdated.body}`,
+    );
+    expect(context.latestCustomerReply).toEqual(laterBackdated);
+  });
+
   it("preserves cross-field flow evidence when classifying a conversation context", () => {
     const ticket = makeTicket({
       subject: "Browse Abandonment flow skipped new profiles",

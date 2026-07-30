@@ -270,9 +270,8 @@ function hasNewerCustomerReply(input: DiagnosisStalenessInput): boolean {
       return true;
     }
     return (
-      isAfter(latestWatermark.timestamp, diagnosisWatermark.timestamp) ||
-      (isSameInstant(latestWatermark.timestamp, diagnosisWatermark.timestamp) &&
-        latestWatermark.id !== diagnosisWatermark.id)
+      latestWatermark.id !== diagnosisWatermark.id ||
+      isAfter(latestWatermark.timestamp, diagnosisWatermark.timestamp)
     );
   }
 

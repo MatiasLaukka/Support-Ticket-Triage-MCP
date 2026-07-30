@@ -115,6 +115,26 @@ describe("diagnosis review contracts", () => {
     ).toMatchObject({ stale: true, staleReasons: ["newer-customer-reply"] });
   });
 
+  it("marks a diagnosis stale when a causally newer reply has an older reported timestamp", () => {
+    expect(
+      isDiagnosisStale({
+        diagnosisTimestamp: "2026-06-10T10:00:00.000Z",
+        diagnosisTicketRevision: 2,
+        currentTicketRevision: 2,
+        diagnosisConversationWatermark: {
+          state: "reply",
+          timestamp: "2026-06-10T09:00:00.000Z",
+          id: "11111111-1111-4111-8111-111111111111",
+        },
+        latestConversationWatermark: {
+          state: "reply",
+          timestamp: "2026-06-10T08:59:00.000Z",
+          id: "55555555-5555-4555-8555-555555555555",
+        },
+      }),
+    ).toMatchObject({ stale: true, staleReasons: ["newer-customer-reply"] });
+  });
+
   it("compares valid timestamps chronologically across offsets", () => {
     expect(
       isDiagnosisStale({

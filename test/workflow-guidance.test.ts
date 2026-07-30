@@ -303,6 +303,9 @@ function diagnosisReviewAudit(
   diagnosis: AuditEvent,
   reviewedAt: string,
   decision: "approve" | "reject" | "revalidate" = "approve",
+  sourceConversationWatermark:
+    | { state: "none" }
+    | { state: "reply"; timestamp: string; id: string } = { state: "none" },
 ): AuditEvent {
   return audit("diagnosis-reviewed", reviewedAt, {
     actor: "casey",
@@ -312,7 +315,7 @@ function diagnosisReviewAudit(
         diagnosisId: diagnosis.id,
         ticketId,
         sourceTicketRevision: 2,
-        sourceConversationWatermark: { state: "none" },
+        sourceConversationWatermark,
         editedDiagnosis: diagnosis.after.diagnosis,
         actor: "casey",
         ...(decision === "approve"
@@ -897,6 +900,46 @@ describe("shared lifecycle blockers", () => {
           replacement,
           sentAudit("2026-06-10T09:05:00.000Z"),
         ],
+      }),
+    ).toContain("A current approved diagnosis is required before ticket closure.");
+  });
+
+  it("invalidates a review when a causally later customer reply is backdated", () => {
+    const firstReply = audit("customer-reply-received", "2026-06-10T09:00:00.000Z", {
+      actor: "Maya Chen",
+      after: { body: "The original trace still reproduces the issue." },
+    });
+    const original = diagnosisAudit({
+      timestamp: "2026-06-10T09:02:00.000Z",
+      confidence: "confirmed",
+      owner: "engineering",
+    });
+    const review = diagnosisReviewAudit(
+      original,
+      "2026-06-10T09:03:00.000Z",
+      "approve",
+      { state: "reply", timestamp: firstReply.timestamp, id: firstReply.id },
+    );
+    const sent = sentAudit("2026-06-10T09:04:00.000Z");
+    const backdatedReply = audit(
+      "customer-reply-received",
+      "2026-06-10T08:59:00.000Z",
+      {
+        actor: "Maya Chen",
+        after: { body: "A causally newer reply reports different behavior." },
+      },
+    );
+    const audits = [firstReply, original, review, sent, backdatedReply];
+
+    expect(latestAuthoritativeDiagnosis(ticketId, audits)).toBeUndefined();
+    expect(fixBlockers({ ticket: ticket(), audits })).toContain(
+      "An approved current diagnosis is required before marking a fix available.",
+    );
+    expect(
+      closeBlockers({
+        ticket: ticket(),
+        recommendation: recommendation({ supportState: "ready-for-close" }),
+        audits,
       }),
     ).toContain("A current approved diagnosis is required before ticket closure.");
   });

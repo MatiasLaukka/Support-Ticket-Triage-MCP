@@ -41,6 +41,100 @@ afterEach(async () => {
 });
 
 describe("TriageService", () => {
+  it("rechecks diagnosis readiness inside its serialized transition", async () => {
+    const harness = makeHarness();
+    const recommendation = await harness.service.submit(
+      makeSubmitInput({ supportState: "diagnosing" }),
+    );
+    await harness.service.approve(
+      makeApproval({
+        recommendationId: recommendation.id,
+        approvedFields: ["customerResponse"],
+        editedCustomerResponse: recommendation.draftCustomerResponse,
+      }),
+    );
+    await harness.service.markResponseSent({
+      recommendationId: recommendation.id,
+      ticketId: "TKT-1001",
+      actor: "casey",
+      sentAt: "2026-06-10T09:05:01.000Z",
+      customerResponse: recommendation.draftCustomerResponse,
+    });
+    const sourceWorkflow = {
+      recommendationId: recommendation.id,
+      ticketRevision: (await harness.tickets.get("TKT-1001")).revision,
+      customerReplyWatermark: customerReplyWatermarkFromAudits(
+        await harness.audit.list("TKT-1001"),
+      ),
+    };
+
+    // This reply represents customer context that arrived after an adapter
+    // previewed the diagnosis but before the service operation began.
+    await harness.service.addCustomerReply({
+      ticketId: "TKT-1001",
+      actor: "Maya Chen",
+      body: "A new trace shows the failure has changed.",
+      receivedAt: "2026-06-10T09:05:01.0001Z",
+    });
+
+    await expect(
+      harness.service.recordDiagnosis({
+        ...makeRecordDiagnosisInput(),
+        sourceWorkflow,
+      }),
+    ).rejects.toMatchObject({
+      code: "STALE_APPROVAL",
+      message: "Diagnosis customer reply snapshot is stale.",
+    });
+    expect(
+      harness.audit.events.filter((event) => event.action === "diagnosis-completed"),
+    ).toEqual([]);
+  });
+
+  it("blocks closure when a customer reply arrives before the serialized close transition", async () => {
+    const harness = makeHarness();
+    const recommendation = await harness.service.submit(
+      makeSubmitInput({
+        supportState: "ready-for-close",
+        draftCustomerResponse: "Thanks for confirming that the issue is resolved.",
+      }),
+    );
+    await harness.service.approve(
+      makeApproval({
+        recommendationId: recommendation.id,
+        approvedFields: ["customerResponse"],
+        editedCustomerResponse: recommendation.draftCustomerResponse,
+      }),
+    );
+    await harness.service.markResponseSent({
+      recommendationId: recommendation.id,
+      ticketId: "TKT-1001",
+      actor: "casey",
+      sentAt: "2026-06-10T09:05:01.000Z",
+      customerResponse: recommendation.draftCustomerResponse,
+    });
+    await harness.service.addCustomerReply({
+      ticketId: "TKT-1001",
+      actor: "Maya Chen",
+      body: "The issue is still occurring for a different request.",
+      receivedAt: "2026-06-10T09:05:01.0001Z",
+    });
+
+    await expect(
+      harness.service.closeTicket({
+        ticketId: "TKT-1001",
+        actor: "casey",
+        closedAt: "2026-06-10T09:05:02.000Z",
+      }),
+    ).rejects.toMatchObject({
+      code: "INVALID_APPROVAL_FIELDS",
+      message: "Evaluate the latest customer reply before closing the ticket.",
+    });
+    await expect(harness.tickets.get("TKT-1001")).resolves.toMatchObject({
+      status: "triage",
+    });
+  });
+
   it("approves an unchanged diagnosis and records the review event", async () => {
     const harness = makeHarness();
     const original = await harness.service.recordDiagnosis(makeRecordDiagnosisInput());

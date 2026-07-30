@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { resolve } from "node:path";
@@ -52,10 +51,6 @@ import {
   selectPersistedDiagnosticWorkflowContext,
 } from "./diagnostic-workflow.js";
 import { automaticReplyForTicket } from "./automatic-customer-replies.js";
-import {
-  closeBlockers,
-  diagnosisBlockers,
-} from "./workflow-guidance.js";
 import {
   buildTicketWorkflowReadModel,
   customerRepliesFromAudits,
@@ -708,14 +703,10 @@ async function recordDiagnosis(
     recommendations,
     audits,
   ).latest;
-  const [diagnosisBlocker] = diagnosisBlockers({
-    recommendation: latest,
-    audits,
-  });
-  if (diagnosisBlocker !== undefined) {
-    throw invalidRequest(diagnosisBlocker);
+  if (latest === undefined) {
+    throw invalidRequest("A completed evaluation is required before diagnosis.");
   }
-  const diagnosisContext = diagnosisContextForTicket(ticket, latest!, audits);
+  const diagnosisContext = diagnosisContextForTicket(ticket, latest, audits);
 
   return {
     auditEvent: await deps.service.recordDiagnosis({
@@ -723,9 +714,14 @@ async function recordDiagnosis(
       actor: body.actor,
       diagnosedAt: deps.now().toISOString(),
       diagnosis: diagnosisContext,
-      knowledgeArticleIds: latest!.knowledgeArticleIds.length > 0
-        ? latest!.knowledgeArticleIds
-        : [latest!.knownCause ?? "known-cause"],
+      knowledgeArticleIds: latest.knowledgeArticleIds.length > 0
+        ? latest.knowledgeArticleIds
+        : [latest.knownCause ?? "known-cause"],
+      sourceWorkflow: {
+        recommendationId: latest.id,
+        ticketRevision: ticket.revision,
+        customerReplyWatermark: customerReplyWatermarkFromAudits(audits),
+      },
     }),
   };
 }
@@ -767,64 +763,11 @@ async function closeTicket(
 ): Promise<unknown> {
   const ticketId = TicketIdSchema.parse(id);
   const body = WorkflowActionBodySchema.parse(await readJsonBody(request));
-  const [ticket, audits, recommendations] = await Promise.all([
-    deps.tickets.get(ticketId),
-    deps.audits.list(ticketId),
-    deps.recommendations.list(),
-  ]);
-  const summary = summarizeRecommendationsForTicket(
-    ticket,
-    recommendations,
-    audits,
-  );
-  const latest = summary.latest;
-  const [closeBlocker] = closeBlockers({
-    ticket,
-    recommendation: latest,
-    audits,
+  return deps.service.closeTicket({
+    ticketId,
+    actor: body.actor,
+    closedAt: deps.now().toISOString(),
   });
-  if (closeBlocker !== undefined) {
-    throw invalidRequest(closeBlocker);
-  }
-
-  const closedAt = deps.now().toISOString();
-  const { ticket: updated, result: auditEvent } =
-    await deps.tickets.updateWithCommit(
-      ticketId,
-      ticket.revision,
-      (current) => ({
-        ...current,
-        status: "resolved",
-        updatedAt: closedAt,
-      }),
-      async (updatedTicket, previousTicket) => {
-        const event = AuditEventSchema.parse({
-          id: randomUUID(),
-          timestamp: closedAt,
-          actor: body.actor,
-          action: "ticket-updated",
-          ticketId,
-          recommendationId: latest!.id,
-          before: {
-            status: previousTicket.status,
-            revision: previousTicket.revision,
-          },
-          after: {
-            status: updatedTicket.status,
-            revision: updatedTicket.revision,
-            closedAt,
-          },
-          rationale:
-            "Ticket closed after the customer confirmed resolution and the closing response was sent.",
-          knowledgeArticleIds: latest!.knowledgeArticleIds,
-          result: "success",
-        });
-        await deps.audits.append(event);
-        return event;
-      },
-    );
-
-  return { ticket: updated, auditEvent };
 }
 
 async function getRecommendation(

@@ -3,6 +3,7 @@ import type {
   Ticket,
   TriageRecommendation,
 } from "../domain.js";
+import { compareIsoInstants } from "../iso-instant.js";
 
 export interface ConversationHistoryItem {
   timestamp: string;
@@ -60,8 +61,7 @@ export type ConversationTimelineItem =
 export function buildConversationHistory(
   audits: readonly AuditEvent[],
 ): ConversationHistoryItem[] {
-  return [...audits]
-    .sort((left, right) => left.timestamp.localeCompare(right.timestamp))
+  return audits
     .map((event) => ({
       timestamp: event.timestamp,
       actor: event.actor,
@@ -78,7 +78,7 @@ export function buildConversationTimeline(input: {
   audits: readonly AuditEvent[];
   recommendations: readonly TriageRecommendation[];
 }): ConversationTimelineItem[] {
-  const items: ConversationTimelineItem[] = [
+  const persistedItems: ConversationTimelineItem[] = [
     {
       kind: "original-ticket",
       timestamp: input.ticket.createdAt,
@@ -87,37 +87,35 @@ export function buildConversationTimeline(input: {
       body: input.ticket.description,
     },
     ...input.audits.map((event) => buildTimelineAuditItem(event)),
-    ...input.recommendations
-      .filter(
-        (recommendation) =>
-          !input.audits.some(
-            (event) =>
-              event.recommendationId === recommendation.id &&
-              event.action === "recommendation-submitted",
-          ),
-      )
-      .map((recommendation) => buildRecommendationTimelineItem(recommendation)),
   ];
+  const legacyRecommendationItems = input.recommendations
+    .filter(
+      (recommendation) =>
+        !input.audits.some(
+          (event) =>
+            event.recommendationId === recommendation.id &&
+            event.action === "recommendation-submitted",
+        ),
+    )
+    .sort((left, right) => compareIsoInstants(left.createdAt, right.createdAt))
+    .map((recommendation) => buildRecommendationTimelineItem(recommendation));
 
-  return items
-    .map((item, index) => ({ item, index }))
-    .sort((left, right) => {
-      const timestampOrder = left.item.timestamp.localeCompare(right.item.timestamp);
-      if (timestampOrder !== 0) {
-        return timestampOrder;
-      }
-
-      if (left.item.kind === "original-ticket") {
-        return -1;
-      }
-
-      if (right.item.kind === "original-ticket") {
-        return 1;
-      }
-
-      return left.index - right.index;
-    })
-    .map(({ item }) => item);
+  // Audit append order is the causal workflow order. Timestamps are retained
+  // for display only; they can be backdated, offset-form, or sub-millisecond.
+  // A legacy recommendation has no persisted submission audit, so it may be
+  // placed by its timestamp without ever reordering persisted audit items.
+  for (const legacy of legacyRecommendationItems) {
+    const insertionIndex = persistedItems.findIndex(
+      (item, index) =>
+        index > 0 && compareIsoInstants(legacy.timestamp, item.timestamp) < 0,
+    );
+    persistedItems.splice(
+      insertionIndex < 0 ? persistedItems.length : insertionIndex,
+      0,
+      legacy,
+    );
+  }
+  return persistedItems;
 }
 
 function buildRecommendationTimelineItem(

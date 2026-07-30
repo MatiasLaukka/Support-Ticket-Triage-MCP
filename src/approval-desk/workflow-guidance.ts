@@ -306,6 +306,12 @@ export function closeBlockers(input: {
     );
   }
   if (
+    input.recommendation !== undefined &&
+    hasCustomerReplyAfterRecommendation(input.audits, input.recommendation)
+  ) {
+    blockers.push("Evaluate the latest customer reply before closing the ticket.");
+  }
+  if (
     input.recommendation === undefined ||
     latestSentResponsePositionForRecommendation(
       input.audits,

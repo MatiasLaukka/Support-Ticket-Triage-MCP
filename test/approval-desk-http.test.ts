@@ -2,7 +2,7 @@ import type { AddressInfo } from "node:net";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createApprovalDeskHttpServer } from "../src/approval-desk/http.js";
 import {
   AuditEventSchema,
@@ -14,6 +14,7 @@ import {
   type DiagnosisContext,
   type FixContext,
 } from "../src/triage-service.js";
+import { DomainError } from "../src/errors.js";
 import { evaluateTicketWithAi } from "../src/approval-desk/ai-evaluation.js";
 import type { ClassificationReasoningProvider } from "../src/approval-desk/classification-reasoning-provider.js";
 import type { CustomerResponseDraftProvider } from "../src/approval-desk/draft-response-provider.js";
@@ -933,6 +934,42 @@ describe("createApprovalDeskHttpServer", () => {
     expect(diagnosis.body.error.message).toBe(
       "Evaluate the latest customer reply before diagnosis.",
     );
+  });
+
+  it("rejects an HTTP diagnosis when a reply arrives after the adapter preview", async () => {
+    const { deps, json } = await startFixture();
+    const created = await json("/api/tickets/TKT-1017/recommendations", {
+      method: "POST",
+      body: JSON.stringify({ actor: "approval-desk" }),
+    });
+    await approveAndSend(json, "TKT-1017", created.body.recommendation);
+    const original = deps.service.recordDiagnosis.bind(deps.service);
+    vi.spyOn(deps.service, "recordDiagnosis").mockImplementation(async (input) => {
+      await deps.service.addCustomerReply({
+        ticketId: input.ticketId,
+        actor: "Nina Brooks",
+        body: "A new reply arrived after the diagnosis preview.",
+        receivedAt: "2026-06-10T09:00:00.0001Z",
+        source: "race-regression",
+      });
+      return original(input);
+    });
+
+    const diagnosis = await json("/api/tickets/TKT-1017/diagnosis", {
+      method: "POST",
+      body: JSON.stringify({ actor: "product-support" }),
+    });
+
+    expect(diagnosis.status).toBe(409);
+    expect(diagnosis.body.error).toMatchObject({
+      code: "STALE_APPROVAL",
+      message: "Diagnosis customer reply snapshot is stale.",
+    });
+    expect(
+      (await deps.audits.list("TKT-1017")).filter(
+        (event) => event.action === "diagnosis-completed",
+      ),
+    ).toEqual([]);
   });
 
   it("allows known-cause diagnosis without extra evidence gathering", async () => {
@@ -2040,6 +2077,61 @@ describe("createApprovalDeskHttpServer", () => {
     );
     expect(await deps.tickets.get("TKT-1001")).toMatchObject({
       status: "resolved",
+    });
+  });
+
+  it("delegates HTTP closure authority to the serialized service transition", async () => {
+    const { deps, json } = await startFixture();
+    const close = vi.spyOn(deps.service, "closeTicket").mockRejectedValue(
+      new DomainError(
+        "Evaluate the latest customer reply before closing the ticket.",
+        "INVALID_APPROVAL_FIELDS",
+      ),
+    );
+
+    const response = await json("/api/tickets/TKT-1001/close", {
+      method: "POST",
+      body: JSON.stringify({ actor: "matias-reviewer" }),
+    });
+
+    expect(close).toHaveBeenCalledWith({
+      ticketId: "TKT-1001",
+      actor: "matias-reviewer",
+      closedAt: now.toISOString(),
+    });
+    expect(response.status).toBe(400);
+    expect(response.body.error.message).toBe(
+      "Evaluate the latest customer reply before closing the ticket.",
+    );
+  });
+
+  it("rejects an HTTP close when a reply arrives after the adapter preview", async () => {
+    const { deps, json } = await startFixture();
+    await seedReadyToCloseWorkflow(deps, "TKT-1001");
+    const original = deps.service.closeTicket.bind(deps.service);
+    vi.spyOn(deps.service, "closeTicket").mockImplementation(async (input) => {
+      await deps.service.addCustomerReply({
+        ticketId: input.ticketId,
+        actor: "Maya Chen",
+        body: "A new reply arrived after the HTTP close preview.",
+        receivedAt: "2026-06-10T09:02:00.0001Z",
+        source: "race-regression",
+      });
+      return original(input);
+    });
+
+    const response = await json("/api/tickets/TKT-1001/close", {
+      method: "POST",
+      body: JSON.stringify({ actor: "matias-reviewer" }),
+    });
+
+    expect(response.status).toBe(400);
+    expect(response.body.error).toMatchObject({
+      code: "INVALID_APPROVAL_FIELDS",
+      message: "Evaluate the latest customer reply before closing the ticket.",
+    });
+    await expect(deps.tickets.get("TKT-1001")).resolves.toMatchObject({
+      status: "triage",
     });
   });
 
@@ -3236,6 +3328,66 @@ async function ticketRevision(
 ): Promise<number> {
   const detail = await json(`/api/tickets/${ticketId}`);
   return detail.body.ticket.revision;
+}
+
+async function seedReadyToCloseWorkflow(
+  deps: Awaited<ReturnType<typeof createRuntimeDependencies>>,
+  ticketId: Ticket["id"],
+): Promise<void> {
+  const ticket = await deps.tickets.get(ticketId);
+  const recommendation = TriageRecommendationSchema.parse({
+    id: "88888888-8888-4888-8888-888888888888",
+    ticketId,
+    sourceRevision: ticket.revision,
+    category: "incident",
+    priority: "P1",
+    team: "incident-response",
+    duplicateCandidates: [],
+    outageRisk: "none",
+    securityRisk: "none",
+    slaRisk: "none",
+    missingInformation: [],
+    supportState: "ready-for-close",
+    knowledgeArticleIds: [],
+    draftCustomerResponse: "Thanks for confirming that the issue is resolved.",
+    rationale: "The customer-confirmed workflow is ready to close.",
+    confidence: 0.9,
+    recommendedNextAction: "Close the ticket.",
+    escalationRequired: false,
+    escalationReasons: [],
+    resolution: "approved",
+    createdAt: "2026-06-10T09:00:00.000Z",
+  });
+  await deps.recommendations.create(recommendation);
+  await deps.audits.append(AuditEventSchema.parse({
+    id: "88888888-8888-4888-8888-888888888889",
+    timestamp: "2026-06-10T09:00:00.000Z",
+    actor: "approval-desk",
+    action: "recommendation-submitted",
+    ticketId,
+    recommendationId: recommendation.id,
+    before: {},
+    after: {},
+    rationale: "Closing recommendation was submitted.",
+    knowledgeArticleIds: [],
+    result: "success",
+  }));
+  await deps.audits.append(AuditEventSchema.parse({
+    id: "88888888-8888-4888-8888-888888888890",
+    timestamp: "2026-06-10T09:01:00.000Z",
+    actor: "matias-reviewer",
+    action: "customer-response-sent",
+    ticketId,
+    recommendationId: recommendation.id,
+    before: {},
+    after: {
+      sentAt: "2026-06-10T09:01:00.000Z",
+      customerResponse: recommendation.draftCustomerResponse,
+    },
+    rationale: "Closing response was sent.",
+    knowledgeArticleIds: [],
+    result: "success",
+  }));
 }
 
 async function approveLatestDiagnosis(

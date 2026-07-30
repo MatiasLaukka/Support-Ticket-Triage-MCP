@@ -192,6 +192,14 @@ const RecordDiagnosisInputSchema = z
     knowledgeArticleIds: z.array(
       z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
     ),
+    sourceWorkflow: z
+      .object({
+        recommendationId: z.uuid(),
+        ticketRevision: z.number().int().nonnegative(),
+        customerReplyWatermark: CustomerReplyWatermarkSchema,
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 const RecordFixInputSchema = z
@@ -203,6 +211,13 @@ const RecordFixInputSchema = z
     knowledgeArticleIds: z.array(
       z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
     ),
+  })
+  .strict();
+const CloseTicketInputSchema = z
+  .object({
+    ticketId: TicketIdSchema,
+    actor: NonBlankStringSchema,
+    closedAt: IsoTimestampSchema,
   })
   .strict();
 const ApplyDiagnosisFixInputSchema = z
@@ -359,6 +374,16 @@ export interface RecordDiagnosisInput {
   diagnosedAt: string;
   diagnosis: DiagnosisContext;
   knowledgeArticleIds: string[];
+  /**
+   * Present for an evaluation-derived diagnosis. The service validates this
+   * snapshot after it owns the ticket transition, so adapters cannot advance
+   * a workflow using stale customer context.
+   */
+  sourceWorkflow?: {
+    recommendationId: string;
+    ticketRevision: number;
+    customerReplyWatermark: CustomerReplyWatermark;
+  };
 }
 
 export interface RecordFixInput {
@@ -367,6 +392,12 @@ export interface RecordFixInput {
   fixedAt: string;
   fix: FixContext;
   knowledgeArticleIds: string[];
+}
+
+export interface CloseTicketInput {
+  ticketId: TicketId;
+  actor: string;
+  closedAt: string;
 }
 
 export interface ApplyDiagnosisFixInput {
@@ -742,10 +773,47 @@ export class TriageService {
   async recordDiagnosis(input: RecordDiagnosisInput): Promise<AuditEvent> {
     const diagnosis = RecordDiagnosisInputSchema.parse(input);
     return serializeTicket(diagnosis.ticketId, async () => {
-      const [ticket, audits] = await Promise.all([
+      const [ticket, audits, recommendations] = await Promise.all([
         this.dependencies.tickets.get(diagnosis.ticketId),
         this.dependencies.audit.list(diagnosis.ticketId),
+        this.dependencies.recommendations.list(),
       ]);
+      if (diagnosis.sourceWorkflow !== undefined) {
+        const [
+          { customerReplyWatermarksMatch },
+          { diagnosisBlockers },
+          { summarizeRecommendationsForTicket },
+        ] = await Promise.all([
+          import("./approval-desk/diagnosis-review.js"),
+          import("./approval-desk/workflow-guidance.js"),
+          import("./approval-desk/workflow-read-model.js"),
+        ]);
+        if (ticket.revision !== diagnosis.sourceWorkflow.ticketRevision) {
+          throw stale("Diagnosis ticket snapshot is stale.");
+        }
+        const currentCustomerReplyWatermark = customerReplyWatermarkFromAudits(audits);
+        if (!customerReplyWatermarksMatch(
+          diagnosis.sourceWorkflow.customerReplyWatermark,
+          currentCustomerReplyWatermark,
+        )) {
+          throw stale("Diagnosis customer reply snapshot is stale.");
+        }
+        const recommendation = summarizeRecommendationsForTicket(
+          ticket,
+          recommendations,
+          audits,
+        ).latest;
+        if (recommendation?.id !== diagnosis.sourceWorkflow.recommendationId) {
+          throw stale("Diagnosis recommendation snapshot is stale.");
+        }
+        const [diagnosisBlocker] = diagnosisBlockers({
+          recommendation,
+          audits,
+        });
+        if (diagnosisBlocker !== undefined) {
+          throw new DomainError(diagnosisBlocker, "INVALID_APPROVAL_FIELDS");
+        }
+      }
       const escalated = diagnosis.diagnosis.diagnosticState?.state === "escalated";
       const auditEvent = AuditEventSchema.parse({
         id: this.uuid(),
@@ -967,6 +1035,84 @@ export class TriageService {
       );
     }
     return auditEvent;
+  }
+
+  /**
+   * The only transition that resolves a ticket. It reloads every workflow
+   * input while the ticket operation is serialized; adapters can preview the
+   * guidance but cannot make the final close decision from a stale snapshot.
+   */
+  async closeTicket(
+    input: CloseTicketInput,
+  ): Promise<{ ticket: Ticket; auditEvent: AuditEvent }> {
+    const close = CloseTicketInputSchema.parse(input);
+    return serializeTicket(close.ticketId, async () => {
+      const [ticket, audits, recommendations] = await Promise.all([
+        this.dependencies.tickets.get(close.ticketId),
+        this.dependencies.audit.list(close.ticketId),
+        this.dependencies.recommendations.list(),
+      ]);
+      const [{ closeBlockers }, { summarizeRecommendationsForTicket }] = await Promise.all([
+        import("./approval-desk/workflow-guidance.js"),
+        import("./approval-desk/workflow-read-model.js"),
+      ]);
+      const recommendation = summarizeRecommendationsForTicket(
+        ticket,
+        recommendations,
+        audits,
+      ).latest;
+      const [closeBlocker] = closeBlockers({
+        ticket,
+        recommendation,
+        audits,
+      });
+      if (closeBlocker !== undefined) {
+        throw new DomainError(closeBlocker, "INVALID_APPROVAL_FIELDS");
+      }
+      if (recommendation === undefined) {
+        throw new DomainError(
+          "Ticket must have a ready-to-close recommendation before it can be closed.",
+          "INVALID_APPROVAL_FIELDS",
+        );
+      }
+
+      const { ticket: updated, result: auditEvent } =
+        await this.dependencies.tickets.updateWithCommit(
+          close.ticketId,
+          ticket.revision,
+          (current) => ({
+            ...current,
+            status: "resolved",
+            updatedAt: close.closedAt,
+          }),
+          async (updatedTicket, previousTicket) => {
+            const event = AuditEventSchema.parse({
+              id: this.uuid(),
+              timestamp: close.closedAt,
+              actor: close.actor,
+              action: "ticket-updated",
+              ticketId: close.ticketId,
+              recommendationId: recommendation.id,
+              before: {
+                status: previousTicket.status,
+                revision: previousTicket.revision,
+              },
+              after: {
+                status: updatedTicket.status,
+                revision: updatedTicket.revision,
+                closedAt: close.closedAt,
+              },
+              rationale:
+                "Ticket closed after the customer confirmed resolution and the closing response was sent.",
+              knowledgeArticleIds: recommendation.knowledgeArticleIds,
+              result: "success",
+            });
+            await this.dependencies.audit.append(event);
+            return event;
+          },
+        );
+      return { ticket: updated, auditEvent };
+    });
   }
 
   async applyDiagnosisFix(input: ApplyDiagnosisFixInput): Promise<AuditEvent[]> {

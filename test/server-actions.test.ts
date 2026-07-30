@@ -649,6 +649,76 @@ afterEach(async () => {
 });
 
 describe("createTriageServer action protocol", () => {
+  it("rejects an MCP diagnosis when a reply arrives after the adapter preview", async () => {
+    const fixture = await createFixture();
+    const recommendation = await seedRecommendation(fixture, {
+      supportState: "known-cause",
+      knownCause: "sms-quiet-hours",
+    });
+    await approveAndSend(fixture, recommendation);
+    const original = fixture.service.recordDiagnosis.bind(fixture.service);
+    vi.spyOn(fixture.service, "recordDiagnosis").mockImplementation(async (input) => {
+      await fixture.service.addCustomerReply({
+        ticketId: input.ticketId,
+        actor: "Maya Chen",
+        body: "A new reply arrived after the MCP diagnosis preview.",
+        receivedAt: "2026-06-10T09:02:00.0001Z",
+        source: "race-regression",
+      });
+      return original(input);
+    });
+    const client = await connect(fixture);
+
+    const result = await callTool(client, "record_diagnosis", {
+      ticketId: "TKT-1001",
+      actor: "product-support",
+    });
+
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toBe(
+      "STALE_APPROVAL: Diagnosis customer reply snapshot is stale.",
+    );
+    expect(
+      (await fixture.audits.list("TKT-1001")).filter(
+        (event) => event.action === "diagnosis-completed",
+      ),
+    ).toEqual([]);
+  });
+
+  it("rejects an MCP close when a reply arrives after the adapter preview", async () => {
+    const fixture = await createFixture();
+    const recommendation = await seedRecommendation(fixture, {
+      supportState: "ready-for-close",
+      draftCustomerResponse: "Thanks for confirming that the issue is resolved.",
+    });
+    await approveAndSend(fixture, recommendation);
+    const original = fixture.service.closeTicket.bind(fixture.service);
+    vi.spyOn(fixture.service, "closeTicket").mockImplementation(async (input) => {
+      await fixture.service.addCustomerReply({
+        ticketId: input.ticketId,
+        actor: "Maya Chen",
+        body: "A new reply arrived after the MCP close preview.",
+        receivedAt: "2026-06-10T09:02:00.0001Z",
+        source: "race-regression",
+      });
+      return original(input);
+    });
+    const client = await connect(fixture);
+
+    const result = await callTool(client, "close_ticket", {
+      ticketId: "TKT-1001",
+      actor: "casey",
+    });
+
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toBe(
+      "INVALID_APPROVAL_FIELDS: Evaluate the latest customer reply before closing the ticket.",
+    );
+    await expect(fixture.tickets.get("TKT-1001")).resolves.toMatchObject({
+      status: "triage",
+    });
+  });
+
   it("discovers strict, explicit knowledge review actions", async () => {
     const client = await connect(await createFixture());
     const discovery = await client.listTools();

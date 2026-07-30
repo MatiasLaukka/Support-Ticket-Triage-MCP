@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import {
   McpServer,
   ResourceTemplate,
@@ -51,8 +50,6 @@ import {
 import {
   OperatorGuidanceSchema,
   buildOperatorGuidance,
-  closeBlockers,
-  diagnosisBlockers,
 } from "./approval-desk/workflow-guidance.js";
 import { automaticReplyForTicket } from "./approval-desk/automatic-customer-replies.js";
 import {
@@ -888,23 +885,26 @@ async function recordDiagnosis(
     recommendations,
     audits,
   ).latest;
-  const [diagnosisBlocker] = diagnosisBlockers({
-    recommendation: latest,
-    audits,
-  });
-  if (diagnosisBlocker !== undefined) {
-    throw new DomainError(diagnosisBlocker, "INVALID_APPROVAL_FIELDS");
+  if (latest === undefined) {
+    throw new DomainError(
+      "A completed evaluation is required before diagnosis.",
+      "INVALID_APPROVAL_FIELDS",
+    );
   }
-  const diagnosisRecommendation = latest as TriageRecommendation;
   return deps.service.recordDiagnosis({
     ticketId: input.ticketId,
     actor: input.actor,
     diagnosedAt: deps.now().toISOString(),
-    diagnosis: diagnosisContextForTicket(ticket, diagnosisRecommendation, audits),
+    diagnosis: diagnosisContextForTicket(ticket, latest, audits),
     knowledgeArticleIds:
-      diagnosisRecommendation.knowledgeArticleIds.length > 0
-        ? diagnosisRecommendation.knowledgeArticleIds
-        : [diagnosisRecommendation.knownCause ?? "known-cause"],
+      latest.knowledgeArticleIds.length > 0
+        ? latest.knowledgeArticleIds
+        : [latest.knownCause ?? "known-cause"],
+    sourceWorkflow: {
+      recommendationId: latest.id,
+      ticketRevision: ticket.revision,
+      customerReplyWatermark: customerReplyWatermarkFromAudits(audits),
+    },
   });
 }
 
@@ -938,63 +938,11 @@ async function closeTicket(
   deps: TriageServerDependencies,
   input: z.infer<typeof WorkflowActionInputSchema>,
 ): Promise<z.infer<typeof CloseTicketOutputSchema>> {
-  const [ticket, audits, recommendations] = await Promise.all([
-    deps.tickets.get(input.ticketId),
-    deps.audits.list(input.ticketId),
-    deps.recommendations.list(),
-  ]);
-  const latest = summarizeRecommendationsForTicket(
-    ticket,
-    recommendations,
-    audits,
-  ).latest;
-  const [closeBlocker] = closeBlockers({
-    ticket,
-    recommendation: latest,
-    audits,
+  return deps.service.closeTicket({
+    ticketId: input.ticketId,
+    actor: input.actor,
+    closedAt: deps.now().toISOString(),
   });
-  if (closeBlocker !== undefined) {
-    throw new DomainError(closeBlocker, "INVALID_APPROVAL_FIELDS");
-  }
-  const closingRecommendation = latest as TriageRecommendation;
-
-  const closedAt = deps.now().toISOString();
-  const { ticket: updated, result: auditEvent } =
-    await deps.tickets.updateWithCommit(
-      input.ticketId,
-      ticket.revision,
-      (current) => ({
-        ...current,
-        status: "resolved",
-        updatedAt: closedAt,
-      }),
-      async (updatedTicket, previousTicket) => {
-        const event = AuditEventSchema.parse({
-          id: randomUUID(),
-          timestamp: closedAt,
-          actor: input.actor,
-          action: "ticket-updated",
-          ticketId: input.ticketId,
-          recommendationId: closingRecommendation.id,
-          before: {
-            status: previousTicket.status,
-            revision: previousTicket.revision,
-          },
-          after: {
-            status: updatedTicket.status,
-            revision: updatedTicket.revision,
-            closedAt,
-          },
-          rationale:
-            "Ticket closed after the customer confirmed resolution and the closing response was sent.",
-          knowledgeArticleIds: closingRecommendation.knowledgeArticleIds,
-          result: "success",
-        });
-        await deps.audits.append(event);
-        return event;
-      },
-    );
-  return { ticket: updated, auditEvent };
 }
 
 async function maybeAddAutomaticCustomerReplyAfterSent(input: {

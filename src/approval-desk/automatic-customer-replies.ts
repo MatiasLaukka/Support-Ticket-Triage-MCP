@@ -6,6 +6,11 @@ import type {
 } from "../domain.js";
 import { compareIsoInstants } from "../iso-instant.js";
 import { selectPersistedDiagnosticWorkflowContext } from "./diagnostic-workflow.js";
+import {
+  compareAuditCausalOrder,
+  latestRecommendationSubmissionPosition,
+  type AuditCausalPosition,
+} from "./workflow-causal-context.js";
 
 export function automaticReplyForTicket(input: {
   ticket: Ticket;
@@ -18,7 +23,11 @@ export function automaticReplyForTicket(input: {
   const fix = persistedContext.fix;
   if (
     fix !== undefined &&
-    compareIsoInstants(input.recommendation.createdAt, fix.event.timestamp) >= 0
+    recommendationWasSubmittedAtOrAfter(
+      input.auditsBeforeSent,
+      input.recommendation,
+      fix.position,
+    )
   ) {
     if (
       persistedContext.latestCustomerReply !== undefined &&
@@ -62,7 +71,11 @@ function automaticDiagnosticFollowUpReply(input: {
   const diagnosis = persistedContext.diagnosis;
   if (
     diagnosis === undefined ||
-    compareIsoInstants(input.recommendation.createdAt, diagnosis.event.timestamp) < 0
+    !recommendationWasSubmittedAtOrAfter(
+      input.auditsBeforeSent,
+      input.recommendation,
+      diagnosis.position,
+    )
   ) {
     return undefined;
   }
@@ -90,6 +103,24 @@ function automaticDiagnosticFollowUpReply(input: {
   }
 
   return undefined;
+}
+
+/**
+ * Recommendation submission is causal workflow evidence. Creation time is
+ * only meaningful for legacy recommendations that do not have that audit.
+ */
+function recommendationWasSubmittedAtOrAfter(
+  audits: readonly AuditEvent[],
+  recommendation: TriageRecommendation,
+  context: AuditCausalPosition,
+): boolean {
+  const submission = latestRecommendationSubmissionPosition(
+    audits,
+    recommendation.id,
+  );
+  return submission === undefined
+    ? compareIsoInstants(recommendation.createdAt, context.event.timestamp) >= 0
+    : compareAuditCausalOrder(submission, context) >= 0;
 }
 
 function isCampaignEditorRecommendation(input: {

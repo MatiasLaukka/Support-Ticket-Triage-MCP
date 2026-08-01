@@ -76,8 +76,17 @@ describe("OpenAI knowledge candidate provider", () => {
     });
     expect(request?.url).toBe("https://api.openai.com/v1/responses");
     expect(request?.init.headers.authorization).toBe("Bearer test-key");
-    const body = JSON.parse(request!.init.body) as { model: string; store: boolean; text: { format: { type: string; strict: boolean } }; input: string };
+    const body = JSON.parse(request!.init.body) as {
+      model: string;
+      store: boolean;
+      text: { format: { type: string; strict: boolean; schema: { properties: { evidencePolicy: { anyOf?: Array<{ properties?: Record<string, unknown> }> } } } } };
+      input: string;
+    };
     expect(body).toMatchObject({ model: "gpt-test", store: false, text: { format: { type: "json_schema", strict: true } } });
+    expect(body.text.format.schema.properties.evidencePolicy.anyOf).toEqual([
+      { type: "object", additionalProperties: false, properties: { mode: { type: "string", enum: ["none-required"] } }, required: ["mode"] },
+      { type: "object", additionalProperties: false, properties: { mode: { type: "string", enum: ["required"] }, evidenceIds: { type: "array", items: { type: "string" }, minItems: 1 } }, required: ["mode", "evidenceIds"] },
+    ]);
     expect(JSON.parse(body.input)).toEqual(input);
   });
 

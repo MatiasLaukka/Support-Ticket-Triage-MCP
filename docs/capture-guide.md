@@ -5,15 +5,19 @@ personal local state.
 
 ## Before Capturing
 
-1. Start a clean demo:
+1. Start a clean deterministic demo:
 
 ```powershell
 npm ci
 npm run build
-$env:APPROVAL_DRAFT_PROVIDER = 'openai'
-$env:APPROVAL_RESPONSE_STYLE = 'balanced'
+Remove-Item Env:OPENAI_API_KEY -ErrorAction SilentlyContinue
+Remove-Item Env:APPROVAL_DRAFT_PROVIDER -ErrorAction SilentlyContinue
 npm run demo:showcase
 ```
+
+The optional OpenAI mode is useful for a separate experiment, but the primary
+portfolio recording should use deterministic local rules so every viewer can
+reproduce it without an API key or network access.
 
 2. Do not show terminals containing `OPENAI_API_KEY`.
 3. Keep the browser on the local Approval Desk URL.

@@ -26,4 +26,22 @@ describe("knowledge evolution showcase", () => {
     expect(report.auditActions).toEqual(expect.arrayContaining(["candidate-created", "approved"]));
     expect(report.output).toContain("Human approval required");
   });
+
+  it("prints sanitized evidence and audit detail in verbose mode", async () => {
+    const dataRoot = await mkdtemp(join(tmpdir(), "knowledge-showcase-verbose-"));
+    roots.push(dataRoot);
+    const report = await runKnowledgeEvolutionShowcase({
+      root: resolve("."),
+      dataRoot,
+      mode: "controlled",
+      verbose: true,
+    });
+
+    expect(report.output).toContain("Supporting diagnoses: diagnosis-001");
+    expect(report.output).toContain("Supporting tickets: TKT-1001");
+    expect(report.output).toContain("Evidence IDs: request-id");
+    expect(report.output).toContain("Deterministic scores:");
+    expect(report.output).toContain("GPT provenance: controlled-local-simulation");
+    expect(report.output).toContain("## Audit detail");
+  });
 });

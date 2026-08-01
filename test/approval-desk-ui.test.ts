@@ -1121,9 +1121,9 @@ describe("approvalDeskHtml", () => {
 
     expect(app.el("replyControls").hidden).toBe(false);
     expect(app.el("replyTestingMode").open).toBe(false);
-    expect(approvalDeskHtml).toContain("Generate automatic customer replies");
+    expect(approvalDeskHtml).toContain("Disable automatic replies?");
 
-    app.el("automaticRepliesEnabled").checked = false;
+    app.el("disableAutomaticReplies").checked = true;
     await app.createRecommendation();
     await app.approve();
 
@@ -3248,7 +3248,7 @@ function createElements(): Record<string, FakeElement> {
       "replyComposer",
       "replyControls",
       "replyTestingMode",
-      "automaticRepliesEnabled",
+      "disableAutomaticReplies",
       "resultPanel",
       "reviewDraftButton",
       "setupControls",
@@ -3282,7 +3282,7 @@ function createElements(): Record<string, FakeElement> {
   elements.rejectButton.disabled = true;
   elements.replyComposer.open = false;
   elements.replyTestingMode.open = false;
-  elements.automaticRepliesEnabled.checked = true;
+  elements.disableAutomaticReplies.checked = false;
   elements.fieldChoices.children = [
     "category",
     "priority",

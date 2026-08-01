@@ -1148,8 +1148,8 @@ export const approvalDeskHtml = `<!doctype html>
                   <summary>Testing mode</summary>
                   <p class="meta">Use this before evaluation to control automatic replies or manually inject a customer reply while testing edge cases. The normal showcase flow uses automatic replies.</p>
                   <label>
-                    <input id="automaticRepliesEnabled" type="checkbox" checked>
-                    Generate automatic customer replies after Done
+                    <input id="disableAutomaticReplies" type="checkbox">
+                    Disable automatic replies?
                   </label>
                   <details id="replyComposer">
                     <summary>Manual customer reply</summary>
@@ -1253,7 +1253,7 @@ export const approvalDeskHtml = `<!doctype html>
         fixButton: document.getElementById('fixButton'),
         guardrailsPanel: document.getElementById('guardrailsPanel'),
         activityPanel: document.getElementById('activityPanel'),
-        automaticRepliesEnabled: document.getElementById('automaticRepliesEnabled'),
+        disableAutomaticReplies: document.getElementById('disableAutomaticReplies'),
         markSentButton: document.getElementById('markSentButton'),
         queueFilters: document.getElementById('queueFilters'),
         queueStatus: document.getElementById('queueStatus'),
@@ -2792,7 +2792,7 @@ export const approvalDeskHtml = `<!doctype html>
             body: JSON.stringify({
               ticketId,
               actor,
-              automaticReplyEnabled: els.automaticRepliesEnabled.checked
+              automaticReplyEnabled: !els.disableAutomaticReplies.checked
             })
           });
           els.replyComposer.open = false;
@@ -2816,7 +2816,7 @@ export const approvalDeskHtml = `<!doctype html>
           body: JSON.stringify({
             ticketId: state.selectedTicket.id,
             actor: els.actor.value.trim() || 'approval-desk',
-            automaticReplyEnabled: els.automaticRepliesEnabled.checked
+            automaticReplyEnabled: !els.disableAutomaticReplies.checked
           })
         });
         setResult(data);

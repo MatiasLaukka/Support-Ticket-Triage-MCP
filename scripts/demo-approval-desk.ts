@@ -56,7 +56,7 @@ export function buildDemoWalkthrough(url: string): string {
     "3. Review the Customer Response Draft and workflow summary.",
     "4. Open Show technical evidence only when you want the audit trail.",
     "5. Mark Done from the floating action bar, or use Edit fields / Reject.",
-    "6. Add a customer reply in the action bar, then evaluate again.",
+    "6. After Done, review the automatic customer reply, then evaluate again.",
     "7. Confirm dashboard metrics, safety blocks, and audit trail.",
     "Press Ctrl+C to stop the local demo server.",
   ].join("\n");

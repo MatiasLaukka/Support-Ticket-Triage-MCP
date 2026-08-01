@@ -52,21 +52,21 @@ at that local Approval Desk page.
 
 ## 0:55–1:25 — Conversation and approval
 
-**Screen:** Type a new incoming customer reply in Conversation Context, then
-evaluate again.
-
-Use:
-
-```text
-I was trying to open the campaign editor, but the page stayed blank. The steps
-were: I opened the campaign, clicked Edit, and then the page stayed blank.
-```
+**Screen:** Review the generated customer-response draft, approve the named
+fields, and click **Done**. Show the automatic customer reply that appears in
+the conversation timeline, then click **Evaluate** again.
 
 **Narration:**
 
-> Customer replies become part of the diagnostic context. The workflow
-> recalculates evidence readiness instead of treating every evaluation as an
-> isolated snapshot.
+> The customer response draft is generated immediately from the current ticket
+> and conversation context. I do not type or select a customer reply here.
+> After the approved response is marked sent, the local demo adds a
+> ticket-specific customer reply automatically so the next evaluation has a
+> realistic lifecycle event to read.
+
+> The next evaluation consumes that reply, recalculates evidence readiness, and
+> produces the next governed recommendation instead of treating each evaluation
+> as an isolated snapshot.
 
 **Screen:** Show approval fields and the audit panel.
 
@@ -140,6 +140,8 @@ npm run demo:knowledge-evolution -- --verbose
 - Record in short sections; do not attempt one perfect take.
 - Use a large terminal font and hide unrelated windows.
 - Keep the deterministic mode visible in the narrative.
+- Manual customer replies are available under the action bar's Testing mode
+  for edge-case testing, but do not use that control in the primary recording.
 - Do not display environment variables containing secrets.
 - A face camera is optional; clear narration and readable screens are enough.
 - Keep the final edit under three minutes.

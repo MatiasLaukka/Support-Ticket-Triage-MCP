@@ -19,6 +19,10 @@ The optional OpenAI mode is useful for a separate experiment, but the primary
 portfolio recording should use deterministic local rules so every viewer can
 reproduce it without an API key or network access.
 
+The action bar also has a **Testing mode** with a manual customer-reply
+composer for edge-case testing. It is intentionally not part of the primary
+recording; use the automatic reply generated after **Done** instead.
+
 2. Do not show terminals containing `OPENAI_API_KEY`.
 3. Keep the browser on the local Approval Desk URL.
 4. Use synthetic tickets only. Do not paste real customer data into the demo.
@@ -30,8 +34,8 @@ Capture these in order:
 1. **Automation Evidence dashboard**
    - Shows guardrails, activity, estimated minutes saved, and audit counts.
 2. **Conversation workspace**
-   - Shows `TKT-1010`, the original vague ticket, the manual customer reply
-     box, and the conversation timeline.
+   - Shows `TKT-1010`, the original vague ticket, the generated customer
+     response draft, and the conversation timeline.
 3. **Adaptive recommendation panel**
    - Shows classifier evidence, lifecycle state, Draft Customer Response,
      **What changed**, and **Why this draft is safe**.
@@ -48,8 +52,10 @@ Keep the GIF under 45 seconds:
 2. Choose a draft style.
 3. Click **Create recommendation**.
 4. Briefly hover or pause on **Why this draft is safe**.
-5. Approve category and customer response with an actor.
-6. Show the refreshed dashboard/audit result.
+5. Approve category and customer response with an actor, then click **Done**.
+6. Show the automatic customer reply in the conversation timeline and evaluate
+   the next recommendation.
+7. Show the refreshed dashboard/audit result.
 
 ## Suggested README Placement
 

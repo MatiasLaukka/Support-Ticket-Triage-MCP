@@ -119,18 +119,20 @@ Open the printed local URL. A good portfolio walkthrough is:
 
 1. Select `TKT-1010`, the intentionally vague "Problem / It does not work"
    ticket.
-2. Add this customer reply in **Conversation Context**:
-
-```text
-I was trying to open the campaign editor, but the page stayed blank. The steps were: I opened the campaign, clicked Edit, and then the page stayed blank.
-```
-
-3. Create an updated recommendation.
-4. Point out that the system reclassifies the ticket from generic support to a
+2. Create the first recommendation and review the generated customer-response
+   draft.
+3. Approve the named fields and click **Done**. The deterministic demo adds a
+   ticket-specific customer reply automatically after the response is marked
+   sent.
+4. Evaluate the ticket again and point out that the system reclassifies it
+   from generic support to a
    product performance issue, recalculates the evidence checklist, avoids
    asking for a screenshot of a blank page, and drafts a response that matches
    the new lifecycle state.
-5. Continue to approval and approve only the fields you want applied.
+5. Use the conversation timeline and audit panel to show the ordered lifecycle.
+
+The action bar's **Testing mode** includes a manual customer-reply composer for
+edge cases, but it is not needed for the normal showcase flow.
 
 The alternate incident walkthrough still works well with `TKT-1001`, which
 shows correlated event-ingestion delay handling and incident-response routing.

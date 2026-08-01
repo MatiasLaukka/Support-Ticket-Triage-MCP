@@ -37,14 +37,14 @@ describe("knowledge evolution showcase", () => {
       verbose: true,
     });
 
-    expect(report.output).toContain("Supporting diagnoses: diagnosis-001");
-    expect(report.output).toContain("Supporting tickets: TKT-1001");
+    expect(report.output).toContain("Candidate-selected diagnosis: diagnosis-001");
+    expect(report.output).toContain("Candidate-selected ticket: TKT-1001");
     expect(report.output).toContain("Evidence IDs: request-id");
     expect(report.output).toContain("Deterministic scores:");
     expect(report.output).toContain("GPT provenance: controlled-local-simulation");
     expect(report.output).toContain("## Audit detail");
-    expect(report.output).toContain("Completed diagnosis support: 2");
-    expect(report.output).toContain("Open-ticket corroboration: 1");
+    expect(report.output).toContain("Discovery completed diagnosis support: 2");
+    expect(report.output).toContain("Discovery open-ticket corroboration: 1");
     expect(report.output).toContain("Similarity reasons:");
     expect(report.output).toContain("Contradictions: none");
   });

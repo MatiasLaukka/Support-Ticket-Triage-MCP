@@ -125,6 +125,15 @@ describe("knowledge candidate drafting", () => {
     });
   });
 
+  it("rejects evidence that belongs to a different supporting diagnosis", async () => {
+    const result = await draftKnowledgeCandidate({
+      ...baseInput(),
+      allowedEvidenceByDiagnosisId: { "diagnosis-001": ["other-evidence"] },
+    }, providerWith(draft()));
+
+    expect(result).toMatchObject({ used: false, status: "fallback", fallbackReason: "guardrail-rejected" });
+  });
+
   it("rejects executable-looking workflow instructions", async () => {
     const result = await draftKnowledgeCandidate(baseInput(), providerWith({
       ...draft(),

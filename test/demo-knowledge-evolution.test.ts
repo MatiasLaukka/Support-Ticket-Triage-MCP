@@ -43,5 +43,9 @@ describe("knowledge evolution showcase", () => {
     expect(report.output).toContain("Deterministic scores:");
     expect(report.output).toContain("GPT provenance: controlled-local-simulation");
     expect(report.output).toContain("## Audit detail");
+    expect(report.output).toContain("Completed diagnosis support: 2");
+    expect(report.output).toContain("Open-ticket corroboration: 1");
+    expect(report.output).toContain("Similarity reasons:");
+    expect(report.output).toContain("Contradictions: none");
   });
 });

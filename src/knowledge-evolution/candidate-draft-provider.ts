@@ -51,6 +51,7 @@ export async function draftKnowledgeCandidate(
   input: {
     discovery: KnowledgeDiscoveryResult;
     allowedEvidenceIds: readonly string[];
+    allowedEvidenceByDiagnosisId?: Readonly<Record<string, readonly string[]>>;
     allowedKnowledgeArticleIds: readonly string[];
     actorId: string;
   },
@@ -80,6 +81,7 @@ export async function draftKnowledgeCandidate(
       discovery,
       allowedEvidenceIds: allowlists.allowedEvidenceIds,
       allowedKnowledgeArticleIds: allowlists.allowedKnowledgeArticleIds,
+      allowedEvidenceByDiagnosisId: input.allowedEvidenceByDiagnosisId,
     });
     const provenance = sanitizeProvenance(execution.provenance);
     return {

@@ -40,6 +40,7 @@ export async function runKnowledgeEvolutionShowcase(
 
   await deps.knowledgeEvolution.diagnoses.save(diagnosis("diagnosis-001", "TKT-1001"));
   await deps.knowledgeEvolution.diagnoses.save(diagnosis("diagnosis-002", "TKT-1002"));
+  await deps.knowledgeEvolution.diagnoses.save(unrelatedDiagnosis("diagnosis-003", "TKT-1004"));
   const discovery = await deps.knowledgeEvolution.service.discover({
     actorId: "support-lead",
     includeGpt: true,
@@ -55,6 +56,9 @@ export async function runKnowledgeEvolutionShowcase(
   const auditActions = (await deps.knowledgeEvolution.audits.list({ candidateId }))
     .map((event) => event.action);
   const auditEvents = await deps.knowledgeEvolution.audits.list({ candidateId });
+  const discoveryCandidate = discovery.candidates.find(({ id }) => id === "diagnosis-001");
+  const completedSupport = discoveryCandidate?.support.filter(({ source }) => source === "completed-diagnosis") ?? [];
+  const openTicketSupport = discoveryCandidate?.support.filter(({ source }) => source === "open-ticket") ?? [];
   const output = [
     "# Knowledge Evolution Showcase",
     "",
@@ -73,6 +77,10 @@ export async function runKnowledgeEvolutionShowcase(
       `- Evidence IDs: ${candidate.evidencePolicy.mode === "required" ? candidate.evidencePolicy.evidenceIds.join(", ") : "none required"}.`,
       `- Deterministic scores: confidence=${candidate.deterministicScores.confidence}; support=${candidate.deterministicScores.support}.`,
       `- GPT provenance: ${candidate.gptProvenance?.model ?? "not applicable"}.`,
+      `- Completed diagnosis support: ${completedSupport.length}.`,
+      `- Open-ticket corroboration: ${openTicketSupport.length}.`,
+      `- Similarity reasons: ${discoveryCandidate?.reasons.join("; ") ?? "none"}.`,
+      `- Contradictions: ${discoveryCandidate?.contradictions.length === 0 ? "none" : discoveryCandidate?.contradictions.join("; ")}.`,
       "",
       "## Audit detail",
       "",
@@ -87,6 +95,20 @@ export async function runKnowledgeEvolutionShowcase(
     approval: { actor: "support-lead", status: "approved" },
     auditActions,
     output,
+  };
+}
+
+function unrelatedDiagnosis(id: string, ticketId: string): CompletedDiagnosis {
+  return {
+    id,
+    ticketId,
+    problem: "Invoice export is unavailable for the billing account.",
+    symptoms: ["The billing invoice export page returns an error."],
+    evidenceIds: ["invoice-id"],
+    ownerTeam: "billing",
+    fixSteps: ["Refresh the billing export job."],
+    verificationSteps: ["Confirm the invoice export downloads successfully."],
+    completedAt: "2026-07-31T12:00:00.000Z",
   };
 }
 

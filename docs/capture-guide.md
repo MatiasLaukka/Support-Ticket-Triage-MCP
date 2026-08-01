@@ -30,7 +30,8 @@ recording; use the automatic reply generated after **Done** instead.
 Conversation Context is a read-only timeline. If you need to simulate a
 customer providing new information, open the action bar's **Testing mode** and
 use its manual reply composer; do not look for an editor in Conversation
-Context.
+Context. The same section can disable automatic customer replies after **Done**
+for a controlled test run; leave that option enabled for the normal showcase.
 
 ## Suggested Still Screenshots
 

@@ -1146,7 +1146,11 @@ export const approvalDeskHtml = `<!doctype html>
                 <div id="pendingReplyPreview" class="bar-reply-preview"></div>
                 <details id="replyTestingMode" class="reply-composer">
                   <summary>Testing mode</summary>
-                  <p class="meta">Use this only to manually inject a customer reply while testing edge cases. The normal showcase flow uses automatic replies.</p>
+                  <p class="meta">Use this before evaluation to control automatic replies or manually inject a customer reply while testing edge cases. The normal showcase flow uses automatic replies.</p>
+                  <label>
+                    <input id="automaticRepliesEnabled" type="checkbox" checked>
+                    Generate automatic customer replies after Done
+                  </label>
                   <details id="replyComposer">
                     <summary>Manual customer reply</summary>
                     <label>
@@ -1249,6 +1253,7 @@ export const approvalDeskHtml = `<!doctype html>
         fixButton: document.getElementById('fixButton'),
         guardrailsPanel: document.getElementById('guardrailsPanel'),
         activityPanel: document.getElementById('activityPanel'),
+        automaticRepliesEnabled: document.getElementById('automaticRepliesEnabled'),
         markSentButton: document.getElementById('markSentButton'),
         queueFilters: document.getElementById('queueFilters'),
         queueStatus: document.getElementById('queueStatus'),
@@ -2186,6 +2191,9 @@ export const approvalDeskHtml = `<!doctype html>
         if (latestReply !== null) {
           return '';
         }
+        if (state.recommendation === null) {
+          return '<strong>Testing mode available</strong><span>Open Testing mode to disable automatic replies or simulate a customer reply before evaluation.</span>';
+        }
         const workflowEvent = latestUnevaluatedWorkflowEvent();
         if (workflowEvent !== null) {
           return '<strong>Workflow update waiting for evaluation</strong>' +
@@ -2210,8 +2218,7 @@ export const approvalDeskHtml = `<!doctype html>
         return state.selectedTicket !== null &&
           !shouldShowCloseTicketAction() &&
           state.operatorGuidance?.nextAction !== 'record-diagnosis' &&
-          state.operatorGuidance?.nextAction !== 'mark-fix-available' &&
-          (isTaskDoneWaitingForReply() || latestUnconsumedCustomerReply() !== null);
+          state.operatorGuidance?.nextAction !== 'mark-fix-available';
       }
 
       function latestCustomerReply() {
@@ -2784,7 +2791,8 @@ export const approvalDeskHtml = `<!doctype html>
             method: 'POST',
             body: JSON.stringify({
               ticketId,
-              actor
+              actor,
+              automaticReplyEnabled: els.automaticRepliesEnabled.checked
             })
           });
           els.replyComposer.open = false;
@@ -2807,7 +2815,8 @@ export const approvalDeskHtml = `<!doctype html>
           method: 'POST',
           body: JSON.stringify({
             ticketId: state.selectedTicket.id,
-            actor: els.actor.value.trim() || 'approval-desk'
+            actor: els.actor.value.trim() || 'approval-desk',
+            automaticReplyEnabled: els.automaticRepliesEnabled.checked
           })
         });
         setResult(data);

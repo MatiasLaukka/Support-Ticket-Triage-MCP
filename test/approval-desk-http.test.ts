@@ -2386,6 +2386,42 @@ describe("createApprovalDeskHttpServer", () => {
     );
   });
 
+  it("can disable automatic replies for an Approval Desk testing run", async () => {
+    const { json } = await startFixture();
+    const created = await json("/api/tickets/TKT-1008/recommendations", {
+      method: "POST",
+      body: JSON.stringify({ actor: "approval-desk" }),
+    });
+    const recommendation = created.body.recommendation;
+    await json(`/api/recommendations/${recommendation.id}/approve`, {
+      method: "POST",
+      body: JSON.stringify({
+        ticketId: "TKT-1008",
+        expectedRevision: await ticketRevision(json, "TKT-1008"),
+        approvedFields: ["customerResponse"],
+        editedCustomerResponse: recommendation.draftCustomerResponse,
+        actor: "matias-reviewer",
+        confirm: true,
+      }),
+    });
+
+    const sent = await json(`/api/recommendations/${recommendation.id}/mark-sent`, {
+      method: "POST",
+      body: JSON.stringify({
+        ticketId: "TKT-1008",
+        actor: "matias-reviewer",
+        automaticReplyEnabled: false,
+      }),
+    });
+    const detail = await json("/api/tickets/TKT-1008");
+
+    expect(sent.status).toBe(200);
+    expect(sent.body.automaticReply).toBeUndefined();
+    expect(detail.body.conversationTimeline).not.toContainEqual(
+      expect.objectContaining({ kind: "customer-reply" }),
+    );
+  });
+
   it("closes a ready-for-close ticket after the closing response is sent", async () => {
     let currentNow = new Date("2026-06-10T09:00:00.000Z");
     const { deps, json } = await startFixture({}, { now: () => currentNow });

@@ -133,8 +133,9 @@ Open the printed local URL. A good portfolio walkthrough is:
 
 The action bar's **Testing mode** includes a manual customer-reply composer for
 edge cases. **Conversation Context is read-only** and has no customer-reply
-editor. The manual composer is not needed for the normal showcase flow, which
-uses the automatic reply generated after **Done**.
+editor. It also lets a tester disable automatic customer replies after **Done**.
+The manual composer and disabled-reply option are not needed for the normal
+showcase flow, which uses the automatic reply generated after **Done**.
 
 The alternate incident walkthrough still works well with `TKT-1001`, which
 shows correlated event-ingestion delay handling and incident-response routing.

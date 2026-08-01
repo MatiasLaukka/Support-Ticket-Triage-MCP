@@ -1112,6 +1112,30 @@ describe("approvalDeskHtml", () => {
     expect(app.el("replyComposer").open).toBe(false);
   });
 
+  it("shows testing mode before evaluation and can suppress automatic replies", async () => {
+    const app = await startApprovalDeskApp({
+      markSentAutomaticReply:
+        "The customer supplied the next diagnostic details automatically.",
+    });
+    await app.selectFirstTicket();
+
+    expect(app.el("replyControls").hidden).toBe(false);
+    expect(app.el("replyTestingMode").open).toBe(false);
+    expect(approvalDeskHtml).toContain("Generate automatic customer replies");
+
+    app.el("automaticRepliesEnabled").checked = false;
+    await app.createRecommendation();
+    await app.approve();
+
+    const sentRequest = app.requests.find((request) =>
+      request.path.endsWith("/mark-sent"),
+    );
+    expect(JSON.parse(String(sentRequest?.init?.body))).toMatchObject({
+      automaticReplyEnabled: false,
+    });
+    expect(app.el("customerReplyFocus").hidden).toBe(true);
+  });
+
   it("allows updated recommendations after customer replies but blocks unsent approved drafts", async () => {
     const blockedApp = await startApprovalDeskApp({
       ticketDetailRecommendation: {
@@ -1655,11 +1679,11 @@ describe("approvalDeskHtml", () => {
     const app = await startApprovalDeskApp();
     await app.selectFirstTicket();
 
-    expect(app.el("replyControls").hidden).toBe(true);
+    expect(app.el("replyControls").hidden).toBe(false);
 
     await app.createRecommendation();
 
-    expect(app.el("replyControls").hidden).toBe(true);
+    expect(app.el("replyControls").hidden).toBe(false);
     expect(app.el("replyComposer").open).toBe(false);
 
     await app.approve();
@@ -3003,6 +3027,9 @@ async function startApprovalDeskApp(options: {
       });
     }
     if (path === "/api/recommendations/11111111-1111-4111-8111-111111111111/mark-sent") {
+      const requestBody = JSON.parse(String(init?.body ?? "{}")) as {
+        automaticReplyEnabled?: boolean;
+      };
       conversationTimeline.push({
         kind: "support-response-sent",
         timestamp: "2026-06-10T09:05:00.000Z",
@@ -3010,7 +3037,7 @@ async function startApprovalDeskApp(options: {
         recommendationId: fixtureRecommendation.id,
         body: fixtureRecommendation.draftCustomerResponse,
       });
-      if (options.markSentAutomaticReply !== undefined) {
+      if (options.markSentAutomaticReply !== undefined && requestBody.automaticReplyEnabled !== false) {
         conversationTimeline.push({
           kind: "customer-reply",
           timestamp: "2026-06-10T09:05:00.001Z",
@@ -3221,6 +3248,7 @@ function createElements(): Record<string, FakeElement> {
       "replyComposer",
       "replyControls",
       "replyTestingMode",
+      "automaticRepliesEnabled",
       "resultPanel",
       "reviewDraftButton",
       "setupControls",
@@ -3254,6 +3282,7 @@ function createElements(): Record<string, FakeElement> {
   elements.rejectButton.disabled = true;
   elements.replyComposer.open = false;
   elements.replyTestingMode.open = false;
+  elements.automaticRepliesEnabled.checked = true;
   elements.fieldChoices.children = [
     "category",
     "priority",

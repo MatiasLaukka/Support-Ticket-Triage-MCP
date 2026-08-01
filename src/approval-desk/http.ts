@@ -193,6 +193,7 @@ const MarkSentBodySchema = z
   .object({
     ticketId: TicketIdSchema,
     actor: z.string().trim().min(1),
+    automaticReplyEnabled: z.boolean().default(true),
   })
   .strict();
 const WorkflowActionBodySchema = z
@@ -926,7 +927,8 @@ async function markRecommendationSent(
     }
     const sentAt = deps.now().toISOString();
     const auditEvent = await deps.service.markResponseSent({
-      ...body,
+      ticketId: body.ticketId,
+      actor: body.actor,
       recommendationId,
       sentAt,
       customerResponse,
@@ -938,6 +940,7 @@ async function markRecommendationSent(
       recommendation,
       auditsBeforeSent: audits,
       sentAt,
+      automaticReplyEnabled: body.automaticReplyEnabled,
     });
     return {
       auditEvent,
@@ -952,7 +955,11 @@ async function maybeAddAutomaticCustomerReplyAfterSent(input: {
   recommendation: TriageRecommendation;
   auditsBeforeSent: readonly AuditEvent[];
   sentAt: string;
+  automaticReplyEnabled?: boolean;
 }): Promise<AuditEvent | undefined> {
+  if (input.automaticReplyEnabled === false) {
+    return undefined;
+  }
   if (
     hasCustomerReplyAfterRecommendation(
       input.auditsBeforeSent,

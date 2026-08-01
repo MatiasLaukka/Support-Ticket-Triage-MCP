@@ -877,7 +877,10 @@ It uses the controlled provider, so it requires no API key or network access.
 The output shows deterministic discovery, an advisory candidate draft, the
 explicit human approval boundary, the promoted version, and the corresponding
 audit actions. Add `--verbose` to show the sanitized supporting diagnoses,
-tickets, evidence IDs, scores, provenance, and per-action audit detail. This is
+tickets, evidence IDs, scores, provenance, similarity reasons, and per-action
+audit detail. The fixture includes two matching completed diagnoses, an
+unrelated completed diagnosis, and an open-ticket corroboration so the output
+shows the difference between confirmed support and an early signal. This is
 suitable for a repeatable recording or screenshot; a live OpenAI run remains
 an optional separate evaluation.
 

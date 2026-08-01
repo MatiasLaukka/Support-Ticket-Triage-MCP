@@ -79,9 +79,19 @@ export class KnowledgeEvolutionService {
       .filter((candidate): candidate is KnowledgeCandidate => candidate !== undefined);
 
     if (input.includeGpt && this.dependencies.draftProvider !== undefined) {
+      const draftSupportDiagnosisIds = new Set(
+        discovery.candidates[0]?.support
+          .filter(({ source }) => source === "completed-diagnosis")
+          .map(({ diagnosisId }) => diagnosisId)
+          .filter((id): id is string => id !== undefined) ?? [],
+      );
+      const draftDiagnoses = relevantDiagnoses.filter(({ id }) => draftSupportDiagnosisIds.has(id));
       const draft = await draftKnowledgeCandidate({
         discovery,
-        allowedEvidenceIds: unique(relevantDiagnoses.flatMap((diagnosis) => diagnosis.evidenceIds)),
+        allowedEvidenceIds: unique(draftDiagnoses.flatMap((diagnosis) => diagnosis.evidenceIds)),
+        allowedEvidenceByDiagnosisId: Object.fromEntries(
+          draftDiagnoses.map((diagnosis) => [diagnosis.id, diagnosis.evidenceIds]),
+        ),
         allowedKnowledgeArticleIds: articles.map((article) => article.id),
         actorId: input.actorId,
       }, this.dependencies.draftProvider);

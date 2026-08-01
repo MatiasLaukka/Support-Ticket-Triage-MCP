@@ -19,6 +19,7 @@ export interface SanitizedKnowledgeDiscoveryCandidate {
 
 export interface CandidateDraftValidationContext {
   allowedEvidenceIds: readonly string[];
+  allowedEvidenceByDiagnosisId?: Readonly<Record<string, readonly string[]>>;
   allowedKnowledgeArticleIds: readonly string[];
   discovery: readonly SanitizedKnowledgeDiscoveryCandidate[];
 }
@@ -70,8 +71,12 @@ export function validateCandidateDraft(
   );
   const supportingTicketIds = new Set(context.discovery.flatMap((item) => item.support).map((item) => item.ticketId));
   const evidenceIds = candidate.evidencePolicy.mode === "required" ? candidate.evidencePolicy.evidenceIds : [];
+  const selectedDiagnosisEvidence = new Set(
+    candidate.supportingDiagnosisIds.flatMap((id) => context.allowedEvidenceByDiagnosisId?.[id] ?? []),
+  );
   if (
     evidenceIds.some((id) => !allowedEvidence.has(id)) ||
+    (context.allowedEvidenceByDiagnosisId !== undefined && evidenceIds.some((id) => !selectedDiagnosisEvidence.has(id))) ||
     candidate.knowledgeArticleIds.some((id) => !allowedArticles.has(id)) ||
     candidate.supportingDiagnosisIds.some((id) => !supportingDiagnosisIds.has(id)) ||
     candidate.supportingTicketIds.some((id) => !supportingTicketIds.has(id))

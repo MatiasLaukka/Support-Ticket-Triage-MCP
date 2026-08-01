@@ -25,7 +25,6 @@ import {
   TriageRecommendationSchema,
   type Approval,
   type AuditEvent,
-  type Ticket,
   type TicketId,
   type TriageRecommendation,
 } from "./domain.js";
@@ -77,7 +76,6 @@ import { customerReplyWatermarkFromAudits } from "./triage-service.js";
 import type { KnowledgeEvolutionService } from "./knowledge-evolution/service.js";
 import {
   KnowledgeCandidateApprovalOutputSchema,
-  KnowledgeCandidateDefermentOutputSchema,
   KnowledgeCandidateEditsSchema,
   KnowledgeCandidateIdSchema,
   KnowledgeCandidateRejectionOutputSchema,
@@ -199,7 +197,6 @@ const RejectRecommendationInputSchema: z.ZodType<RejectRecommendationToolInput> 
     feedback: NonBlankStringSchema,
   })
   .strict();
-const RecommendationIdSchema = z.uuid();
 const AddCustomerReplyInputSchema = z
   .object({
     ticketId: TicketIdSchema,
@@ -1027,7 +1024,7 @@ async function markFixAvailable(
     ticketId: input.ticketId,
     actor: input.actor,
     fixedAt: deps.now().toISOString(),
-    fix: fixContextForTicket(ticket, persistedDiagnosticContext.diagnosis?.event),
+    fix: fixContextForTicket(persistedDiagnosticContext.diagnosis?.event),
     knowledgeArticleIds: latest?.knowledgeArticleIds ?? [],
   });
 }

@@ -1215,7 +1215,7 @@ export class TriageService {
         impactSet: input.impactSet,
         fix:
           legacy?.fix ??
-          fixContextForTicket(sourceTicket, diagnosis.reviewAudit),
+          fixContextForTicket(diagnosis.reviewAudit),
       });
       const events = input.impactSet.tickets.map((selectedTicket) =>
         AuditEventSchema.parse({

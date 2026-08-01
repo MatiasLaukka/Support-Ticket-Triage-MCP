@@ -4,9 +4,11 @@ import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   createRuntimeDependencies,
+  createKnowledgeCandidateDraftProviderFromEnv,
   environmentPath,
   minutesSaved,
 } from "../src/runtime.js";
+import { OpenAiKnowledgeCandidateDraftProvider, UnavailableOpenAiKnowledgeCandidateDraftProvider } from "../src/knowledge-evolution/openai-candidate-draft-provider.js";
 import { createControlledKnowledgeCandidateDraftProvider } from "../src/approval-desk/controlled-evaluation-providers.js";
 
 const temporaryRoots: string[] = [];
@@ -20,6 +22,17 @@ afterEach(async () => {
 });
 
 describe("runtime configuration", () => {
+  it("selects the explicit knowledge candidate provider", () => {
+    expect(createKnowledgeCandidateDraftProviderFromEnv({})).toBeUndefined();
+    expect(createKnowledgeCandidateDraftProviderFromEnv({ TRIAGE_KNOWLEDGE_CANDIDATE_PROVIDER: "controlled" })).toMatchObject({ enabled: true });
+    expect(createKnowledgeCandidateDraftProviderFromEnv({ TRIAGE_KNOWLEDGE_CANDIDATE_PROVIDER: "openai" })).toBeInstanceOf(UnavailableOpenAiKnowledgeCandidateDraftProvider);
+    expect(createKnowledgeCandidateDraftProviderFromEnv({ TRIAGE_KNOWLEDGE_CANDIDATE_PROVIDER: "openai", OPENAI_API_KEY: "key" })).toBeInstanceOf(OpenAiKnowledgeCandidateDraftProvider);
+  });
+
+  it("rejects unsupported knowledge candidate provider values", () => {
+    expect(() => createKnowledgeCandidateDraftProviderFromEnv({ TRIAGE_KNOWLEDGE_CANDIDATE_PROVIDER: "unknown" })).toThrow("TRIAGE_KNOWLEDGE_CANDIDATE_PROVIDER must be unset, controlled, or openai.");
+  });
+
   it("rejects blank path environment variables", () => {
     expect(() =>
       environmentPath("TRIAGE_DATA_ROOT", "data/runtime", {

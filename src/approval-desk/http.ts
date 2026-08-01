@@ -5,10 +5,8 @@ import { z } from "zod";
 import {
   ApprovedFieldSchema,
   AiPreferenceSchema,
-  AuditEventSchema,
   CategorySchema,
   DraftCustomerResponseStyleInputSchema,
-  DraftCustomerResponseStyleSchema,
   PrioritySchema,
   TeamSchema,
   TicketIdSchema,
@@ -854,7 +852,7 @@ async function recordFix(
       ticketId,
       actor: body.actor,
       fixedAt: deps.now().toISOString(),
-      fix: fixContextForTicket(ticket, persistedDiagnosticContext.diagnosis?.event),
+      fix: fixContextForTicket(persistedDiagnosticContext.diagnosis?.event),
       knowledgeArticleIds: latest?.knowledgeArticleIds ?? [],
     }),
   };

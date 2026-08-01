@@ -293,8 +293,19 @@ The stdio entry point is `dist/src/index.js`. Its defaults are:
 | `TRIAGE_MINUTES_SAVED` | `8` |
 | `TRIAGE_KNOWLEDGE_APPROVERS` | `support-lead,reviewer,approval-desk` |
 | `TRIAGE_KNOWLEDGE_CANDIDATE_PROVIDER` | unset (deterministic discovery only); use `controlled` for the local advisory demo |
+| `TRIAGE_KNOWLEDGE_CANDIDATE_MODEL` | unset (inherits `OPENAI_MODEL`, then `gpt-5.6-luna`) |
+| `TRIAGE_KNOWLEDGE_CANDIDATE_TIMEOUT_MS` | `20000` |
 
 All relative paths are resolved from the process working directory.
+
+Knowledge candidate drafting is explicitly opt-in. Set
+`TRIAGE_KNOWLEDGE_CANDIDATE_PROVIDER=openai` and provide `OPENAI_API_KEY` to
+enable the advisory Knowledge Engineer. It shares `OPENAI_MODEL` by default,
+with the knowledge-specific model override available above. Discovery remains
+deterministic, candidate output is contract- and guardrail-validated, and a
+human operator must still review and promote any candidate; GPT never changes a
+ticket or workflow directly. Without the selector, only deterministic discovery
+runs.
 
 ## Codex Operator Layer
 

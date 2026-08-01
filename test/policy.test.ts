@@ -338,6 +338,7 @@ describe("validateApprovedFields", () => {
   ] as const)(
     "rejects approval of %s when recommendation.%s is absent",
     (approvedField, proposalField) => {
+      void proposalField;
       expect(() =>
         validateApprovedFields(makeRecommendation(), [approvedField]),
       ).toThrow(

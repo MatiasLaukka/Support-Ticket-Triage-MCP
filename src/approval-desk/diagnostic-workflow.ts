@@ -329,7 +329,6 @@ function containsContradictoryEvidence(value: string): boolean {
 }
 
 export function fixContextForTicket(
-  ticket: Ticket,
   diagnosisEvent: AuditEvent | undefined,
 ): FixContext {
   if (diagnosisEvent === undefined) {

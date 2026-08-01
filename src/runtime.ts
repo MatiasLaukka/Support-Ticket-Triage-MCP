@@ -11,6 +11,7 @@ import { KnowledgeAuditRepository } from "./knowledge-evolution/knowledge-audit-
 import { KnowledgeEvolutionService } from "./knowledge-evolution/service.js";
 import type { CandidateDraftProvider } from "./knowledge-evolution/candidate-draft-provider.js";
 import { createControlledKnowledgeCandidateDraftProvider } from "./approval-desk/controlled-evaluation-providers.js";
+import { createOpenAiKnowledgeCandidateDraftProvider } from "./knowledge-evolution/openai-candidate-draft-provider.js";
 
 const DEFAULT_MINUTES_SAVED = 8;
 const STARTUP_PATH_MESSAGES = {
@@ -98,6 +99,24 @@ export function knowledgeApprovers(env: RuntimeEnvironment): ReadonlySet<string>
   return new Set(actors);
 }
 
+export function createKnowledgeCandidateDraftProviderFromEnv(
+  env: RuntimeEnvironment,
+): CandidateDraftProvider | undefined {
+  const configured = env.TRIAGE_KNOWLEDGE_CANDIDATE_PROVIDER?.trim();
+  if (configured === undefined || configured === "") return undefined;
+  if (configured === "controlled") return createControlledKnowledgeCandidateDraftProvider();
+  if (configured !== "openai") {
+    throw new StartupConfigError(
+      "TRIAGE_KNOWLEDGE_CANDIDATE_PROVIDER must be unset, controlled, or openai.",
+    );
+  }
+  return createOpenAiKnowledgeCandidateDraftProvider({
+    apiKey: env.OPENAI_API_KEY,
+    model: env.TRIAGE_KNOWLEDGE_CANDIDATE_MODEL?.trim() || env.OPENAI_MODEL?.trim(),
+    timeoutMs: parseKnowledgeCandidateTimeoutMs(env.TRIAGE_KNOWLEDGE_CANDIDATE_TIMEOUT_MS),
+  });
+}
+
 export async function createRuntimeDependencies(
   options: RuntimeOptions = {},
 ): Promise<RuntimeDependencies> {
@@ -123,9 +142,7 @@ export async function createRuntimeDependencies(
   const approvers = knowledgeApprovers(env);
   const now = options.now ?? (() => new Date());
   const knowledgeCandidateDraftProvider = options.knowledgeCandidateDraftProvider ??
-    (env.TRIAGE_KNOWLEDGE_CANDIDATE_PROVIDER === "controlled"
-      ? createControlledKnowledgeCandidateDraftProvider()
-      : undefined);
+    createKnowledgeCandidateDraftProviderFromEnv(env);
 
   const tickets = new TicketRepository(dataRoot, seedFile);
   await tickets.initialize();
@@ -178,6 +195,12 @@ export async function createRuntimeDependencies(
       knowledgeEvolution: knowledgeEvolutionPaths,
     },
   };
+}
+
+function parseKnowledgeCandidateTimeoutMs(value: string | undefined): number {
+  if (value === undefined || value.trim() === "") return 20_000;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.round(parsed) : 20_000;
 }
 
 function invalidMinutesSaved(): StartupConfigError {

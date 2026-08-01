@@ -591,7 +591,7 @@ describe("governed diagnosis review lifecycle", () => {
       };
 
       currentNow = "2026-06-10T09:01:00.000Z";
-      const evidenceReply = await service.addCustomerReply({
+      await service.addCustomerReply({
         ticketId: "TKT-1001",
         actor: "Maya Chen",
         body:

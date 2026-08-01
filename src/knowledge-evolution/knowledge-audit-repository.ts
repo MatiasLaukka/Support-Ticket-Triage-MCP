@@ -1,7 +1,7 @@
-import { lstat, open, type FileHandle } from "node:fs/promises";
+import { open, type FileHandle } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { z } from "zod";
-import { assertNoLinkedPath, assertSafeFile, initializeDirectory, isMissing, repositoryError, serialize } from "./repository-utils.js";
+import { assertSafeFile, initializeDirectory, isMissing, repositoryError, serialize } from "./repository-utils.js";
 
 const Text = z.string().trim().min(1).max(1_000);
 export const KnowledgeAuditEventSchema = z.object({

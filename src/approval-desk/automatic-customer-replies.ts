@@ -142,7 +142,7 @@ function automaticEvidenceReply(input: {
 }): string | undefined {
   const missingEvidence = input.recommendation.missingEvidence ?? [];
   if (missingEvidence.length === 0) {
-    return knownCauseConfirmationReply(input.ticket, input.recommendation);
+    return knownCauseConfirmationReply(input.recommendation);
   }
 
   const priorCustomerReplies = input.auditsBeforeSent.filter(
@@ -176,7 +176,6 @@ function automaticEvidenceReply(input: {
 }
 
 function knownCauseConfirmationReply(
-  ticket: Ticket,
   recommendation: TriageRecommendation,
 ): string | undefined {
   if (recommendation.knownCause === "sms-quiet-hours") {

@@ -10,6 +10,7 @@ export interface KnowledgeEvolutionShowcaseOptions {
   root: string;
   dataRoot: string;
   mode: "controlled";
+  verbose?: boolean;
 }
 
 export interface KnowledgeEvolutionShowcaseReport {
@@ -53,6 +54,7 @@ export async function runKnowledgeEvolutionShowcase(
   });
   const auditActions = (await deps.knowledgeEvolution.audits.list({ candidateId }))
     .map((event) => event.action);
+  const auditEvents = await deps.knowledgeEvolution.audits.list({ candidateId });
   const output = [
     "# Knowledge Evolution Showcase",
     "",
@@ -62,6 +64,20 @@ export async function runKnowledgeEvolutionShowcase(
     "- Human approval required: support-lead explicitly promoted the candidate.",
     `- Approved knowledge object: ${approved.id} v${approved.version}.`,
     `- Audit actions: ${auditActions.join(", ")}.`,
+    ...(options.verbose ? [
+      "",
+      "## Sanitized evidence",
+      "",
+      `- Supporting diagnoses: ${candidate.supportingDiagnosisIds.join(", ")}.`,
+      `- Supporting tickets: ${candidate.supportingTicketIds.join(", ")}.`,
+      `- Evidence IDs: ${candidate.evidencePolicy.mode === "required" ? candidate.evidencePolicy.evidenceIds.join(", ") : "none required"}.`,
+      `- Deterministic scores: confidence=${candidate.deterministicScores.confidence}; support=${candidate.deterministicScores.support}.`,
+      `- GPT provenance: ${candidate.gptProvenance?.model ?? "not applicable"}.`,
+      "",
+      "## Audit detail",
+      "",
+      ...auditEvents.map((event) => `- ${event.action}: actor=${event.actor}; result=${event.result}.`),
+    ] : []),
   ].join("\n");
   return {
     mode: "controlled",
@@ -92,7 +108,7 @@ async function main(): Promise<void> {
   const root = process.cwd();
   const dataRoot = await mkdtemp(join(tmpdir(), "knowledge-evolution-showcase-"));
   try {
-    const report = await runKnowledgeEvolutionShowcase({ root, dataRoot, mode: "controlled" });
+    const report = await runKnowledgeEvolutionShowcase({ root, dataRoot, mode: "controlled", verbose: process.argv.includes("--verbose") });
     process.stdout.write(`${report.output}\n`);
   } finally {
     await rm(dataRoot, { recursive: true, force: true });

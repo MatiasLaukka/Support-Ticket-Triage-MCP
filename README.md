@@ -132,7 +132,9 @@ Open the printed local URL. A good portfolio walkthrough is:
 5. Use the conversation timeline and audit panel to show the ordered lifecycle.
 
 The action bar's **Testing mode** includes a manual customer-reply composer for
-edge cases, but it is not needed for the normal showcase flow.
+edge cases. **Conversation Context is read-only** and has no customer-reply
+editor. The manual composer is not needed for the normal showcase flow, which
+uses the automatic reply generated after **Done**.
 
 The alternate incident walkthrough still works well with `TKT-1001`, which
 shows correlated event-ingestion delay handling and incident-response routing.

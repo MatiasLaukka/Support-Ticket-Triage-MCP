@@ -60,6 +60,8 @@ the conversation timeline, then click **Evaluate** again.
 
 > The customer response draft is generated immediately from the current ticket
 > and conversation context. I do not type or select a customer reply here.
+> Conversation Context is a read-only timeline; simulated incoming replies are
+> available only from the action bar's Testing mode.
 > After the approved response is marked sent, the local demo adds a
 > ticket-specific customer reply automatically so the next evaluation has a
 > realistic lifecycle event to read.

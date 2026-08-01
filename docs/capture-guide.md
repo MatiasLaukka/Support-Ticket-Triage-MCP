@@ -27,6 +27,11 @@ recording; use the automatic reply generated after **Done** instead.
 3. Keep the browser on the local Approval Desk URL.
 4. Use synthetic tickets only. Do not paste real customer data into the demo.
 
+Conversation Context is a read-only timeline. If you need to simulate a
+customer providing new information, open the action bar's **Testing mode** and
+use its manual reply composer; do not look for an editor in Conversation
+Context.
+
 ## Suggested Still Screenshots
 
 Capture these in order:

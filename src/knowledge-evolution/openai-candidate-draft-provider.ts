@@ -126,7 +126,25 @@ const candidateJsonSchema = {
     kind: { type: "string", enum: ["known-cause"] },
     name: { type: "string" }, summary: { type: "string" },
     triggerPatterns: { type: "array", items: { type: "string" }, minItems: 1 },
-    evidencePolicy: { type: "object", additionalProperties: false },
+    evidencePolicy: {
+      anyOf: [
+        {
+          type: "object",
+          additionalProperties: false,
+          properties: { mode: { type: "string", enum: ["none-required"] } },
+          required: ["mode"],
+        },
+        {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            mode: { type: "string", enum: ["required"] },
+            evidenceIds: { type: "array", items: { type: "string" }, minItems: 1 },
+          },
+          required: ["mode", "evidenceIds"],
+        },
+      ],
+    },
     knowledgeArticleIds: { type: "array", items: { type: "string" } },
     timeConstraints: { type: "array", items: { type: "string" }, minItems: 1 },
     diagnosticSteps: { type: "array", items: { type: "string" }, minItems: 1 },

@@ -866,6 +866,18 @@ step; candidate rationale, GPT advisory details, and internal detection stay
 in the operator review and audit surfaces. If a candidate is rejected, its
 reason remains audit provenance and future routing stays unchanged.
 
+Run the bounded portfolio showcase locally:
+
+```powershell
+npm run demo:knowledge-evolution
+```
+
+It uses the controlled provider, so it requires no API key or network access.
+The output shows deterministic discovery, an advisory candidate draft, the
+explicit human approval boundary, the promoted version, and the corresponding
+audit actions. This is suitable for a repeatable recording or screenshot; a
+live OpenAI run remains an optional separate evaluation.
+
 ### Lifecycle Replay Viewer
 
 The read-only Lifecycle Replay page makes evaluation output inspectable in the

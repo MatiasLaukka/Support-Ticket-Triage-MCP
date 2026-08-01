@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { OpenAiTimeoutError } from "../src/approval-desk/draft-response-provider.js";
 import { createControlledKnowledgeCandidateDraftProvider } from "../src/approval-desk/controlled-evaluation-providers.js";
+import { OpenAiKnowledgeCandidateDraftProvider } from "../src/knowledge-evolution/openai-candidate-draft-provider.js";
 import {
   draftKnowledgeCandidate,
   type CandidateDraftProvider,
@@ -77,6 +78,26 @@ describe("knowledge candidate drafting", () => {
       },
     });
     expect(result.candidate?.operatorRationale).toMatch(/advisory/i);
+  });
+
+  it("validates a real-provider-shaped draft through the same allowlist boundary", async () => {
+    const provider = new OpenAiKnowledgeCandidateDraftProvider({
+      apiKey: "test-key",
+      fetch: async () => ({
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({
+          output: [{ content: [{ type: "output_text", text: JSON.stringify(draft()) }] }],
+        }),
+      }),
+    });
+
+    await expect(draftKnowledgeCandidate(baseInput(), provider)).resolves.toMatchObject({
+      used: true,
+      status: "used",
+      candidate: { supportingDiagnosisIds: ["diagnosis-001"], knowledgeArticleIds: ["webhook-signature-validation"] },
+      provenance: { provider: "openai" },
+    });
   });
 
   it("falls back without exposing malformed provider text", async () => {

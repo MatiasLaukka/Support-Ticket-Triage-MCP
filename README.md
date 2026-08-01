@@ -20,6 +20,28 @@ campaigns, profiles, segments, deliverability, SMS compliance, webhooks,
 coupons, and catalog sync. The articles and tickets are clean-room examples;
 they are not copied from a real vendor.
 
+## At A Glance
+
+This project demonstrates governed AI support automation end to end:
+
+- **Triage intelligence:** deterministic classification, evidence readiness,
+  optional GPT reasoning, and grounded customer-response drafting.
+- **Workflow governance:** one service owns lifecycle transitions, escalation,
+  diagnosis review, fix gating, closure, and audit invariants across the
+  Approval Desk and MCP tools.
+- **Human control:** recommendations and knowledge candidates remain pending
+  until an operator explicitly approves named fields or promotes a reviewed
+  object.
+- **Knowledge evolution:** completed diagnoses produce deterministic similarity
+  signals; GPT may draft a reusable candidate, but only human promotion can
+  make it available to future workflows.
+
+Start with the [60-second Approval Desk demo](#demo-in-60-seconds), then run the
+[knowledge-evolution showcase](#governed-knowledge-evolution) for the latest
+extension. The [architecture](#architecture), [safety boundary](#safety-boundary),
+and [limitations](#limitations-and-residual-risks) explain what the system can
+and cannot decide.
+
 ## Safety Boundary
 
 - Ticket subjects and descriptions are untrusted data. Embedded instructions,

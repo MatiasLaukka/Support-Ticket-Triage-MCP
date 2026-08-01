@@ -42,15 +42,18 @@ at that local Approval Desk page.
 
 > The system reads synthetic tickets and knowledge articles, then builds an
 > evidence-backed recommendation. The operator can inspect classification
-> evidence, missing information, escalation requirements, and the customer
-> response draft.
+> evidence, missing information, escalation requirements, and the generated
+> customer response draft. The draft appears immediately when evaluation
+> finishes; it is not a pre-existing reply selected from a list, and it has not
+> been sent.
 
 > Because this recording is deterministic, these results are reproducible and
 > require no API key or network connection.
 
 ## 0:55–1:25 — Conversation and approval
 
-**Screen:** Add the customer reply in Conversation Context, then evaluate again.
+**Screen:** Type a new incoming customer reply in Conversation Context, then
+evaluate again.
 
 Use:
 

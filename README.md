@@ -987,6 +987,7 @@ webhook payloads, provider comments, and imported macros remain untrusted.
 - [Case study](docs/case-study.md)
 - [Demo script](docs/demo-script.md)
 - [Demo results and examples](docs/demo-results.md)
+- [Portfolio video script](docs/video-script.md)
 - [AI comparison evaluation example](docs/ai-comparison-example.md)
 - [Screenshot and demo capture guide](docs/capture-guide.md)
 - [Project roadmap](docs/roadmap.md)

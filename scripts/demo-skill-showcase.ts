@@ -30,7 +30,10 @@ import {
   OperatorGuidanceSchema,
   type OperatorGuidance,
 } from "../src/approval-desk/workflow-guidance.js";
+import { diagnosisContextFromAudit } from "../src/approval-desk/diagnostic-workflow.js";
+import { latestDiagnosisReviewRecord } from "../src/approval-desk/diagnosis-review.js";
 import { createRuntimeDependencies } from "../src/runtime.js";
+import { customerReplyWatermarkFromAudits } from "../src/triage-service.js";
 import {
   createTriageServer,
   type TriageServerDependencies,
@@ -264,6 +267,13 @@ async function replayTkt1010(input: {
           actor: "product-support",
         });
         break;
+      case "review-diagnosis":
+        await reviewLatestDiagnosisForShowcase({
+          deps: input.deps,
+          workflow,
+          approvals,
+        });
+        break;
       case "mark-fix-available":
         await callTool(input.client, toolCalls, "mark_fix_available", {
           ticketId: TICKET_ID,
@@ -287,6 +297,41 @@ async function replayTkt1010(input: {
   }
 
   throw new Error("Showcase exceeded the bounded transition limit.");
+}
+
+async function reviewLatestDiagnosisForShowcase(input: {
+  deps: Awaited<ReturnType<typeof createRuntimeDependencies>>;
+  workflow: WorkflowSnapshot;
+  approvals: SkillShowcaseReport["approvals"];
+}): Promise<void> {
+  const audits = await input.deps.audits.list(TICKET_ID);
+  const originalDiagnosis = audits
+    .filter((event) => event.action === "diagnosis-completed")
+    .at(-1);
+  const diagnosis = diagnosisContextFromAudit(originalDiagnosis);
+  if (originalDiagnosis === undefined || diagnosis === undefined) {
+    throw new Error("Diagnosis-review guidance did not have a current diagnosis.");
+  }
+  const previousReview = latestDiagnosisReviewRecord(audits, originalDiagnosis.id);
+  const reviewDecision = previousReview === undefined ? "approve" : "revalidate";
+  const reviewedAt = new Date(
+    Math.max(...audits.map((event) => Date.parse(event.timestamp))) + 1,
+  ).toISOString();
+
+  await input.deps.service.reviewDiagnosis({
+    decision: reviewDecision,
+    diagnosisId: originalDiagnosis.id,
+    ticketId: TICKET_ID,
+    sourceTicketRevision: input.workflow.ticket.revision,
+    sourceConversationWatermark: customerReplyWatermarkFromAudits(audits),
+    editedDiagnosis: previousReview?.review.editedDiagnosis ?? diagnosis,
+    actor: ACTOR,
+    rationale: reviewDecision === "approve"
+      ? "Scripted portfolio reviewer approved the current diagnosis."
+      : "Scripted portfolio reviewer revalidated the unchanged diagnosis after the ticket revision changed.",
+    reviewedAt,
+  });
+  input.approvals.push({ required: true, fields: [], actor: ACTOR });
 }
 
 function controlledProviders(): {

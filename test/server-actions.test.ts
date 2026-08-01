@@ -22,6 +22,7 @@ import { createTriageServer } from "../src/server.js";
 import { TicketRepository } from "../src/ticket-repository.js";
 import {
   TriageService,
+  customerReplyWatermarkFromAudits,
   type DiagnosisContext,
   type FixContext,
   type RejectRecommendationInput,
@@ -423,6 +424,49 @@ async function approveAndSend(
   });
 }
 
+async function approveLatestDiagnosis(
+  fixture: Fixture,
+  ticketId: Ticket["id"] = "TKT-1001",
+): Promise<void> {
+  const [ticket, audits] = await Promise.all([
+    fixture.tickets.get(ticketId),
+    fixture.audits.list(ticketId),
+  ]);
+  const original = audits.filter(
+    (event) =>
+      event.action === "diagnosis-completed" ||
+      event.action === "diagnostic-escalated",
+  ).at(-1)!;
+  await fixture.service.reviewDiagnosis({
+    decision: "approve",
+    diagnosisId: original.id,
+    ticketId,
+    sourceTicketRevision: ticket.revision,
+    sourceConversationWatermark: customerReplyWatermarkFromAudits(audits),
+    editedDiagnosis: original.after.diagnosis as DiagnosisContext,
+    actor: "casey",
+    reviewedAt: now.toISOString(),
+  });
+}
+
+async function appendDiagnosisResponseSent(
+  fixture: Fixture,
+  ticketId: Ticket["id"] = "TKT-1001",
+): Promise<void> {
+  await fixture.audits.append(AuditEventSchema.parse({
+    id: "99999999-9999-4999-8999-999999999999",
+    timestamp: now.toISOString(),
+    actor: "casey",
+    action: "customer-response-sent",
+    ticketId,
+    before: {},
+    after: { sentAt: now.toISOString() },
+    rationale: "The approved diagnosis response was sent.",
+    knowledgeArticleIds: [],
+    result: "success",
+  }));
+}
+
 const lifecycleBlockerCases: Array<{
   name: string;
   tool: "record_diagnosis" | "mark_fix_available" | "close_ticket";
@@ -516,6 +560,7 @@ const lifecycleBlockerCases: Array<{
         diagnosis: diagnosisContext({ confidence: "likely" }),
         knowledgeArticleIds: [],
       });
+      await approveLatestDiagnosis(fixture);
     },
   },
   {
@@ -530,12 +575,13 @@ const lifecycleBlockerCases: Array<{
         diagnosis: diagnosisContext({ owner: "support" }),
         knowledgeArticleIds: [],
       });
+      await approveLatestDiagnosis(fixture);
     },
   },
   {
-    name: "fix rejects a newer existing fix",
+    name: "fix rejects a diagnosis made stale by an existing fix",
     tool: "mark_fix_available",
-    message: "A fix has already been recorded for the latest diagnosis.",
+    message: "An approved current diagnosis is required before marking a fix available.",
     setup: async (fixture) => {
       await fixture.service.recordDiagnosis({
         ticketId: "TKT-1001",
@@ -544,10 +590,12 @@ const lifecycleBlockerCases: Array<{
         diagnosis: diagnosisContext(),
         knowledgeArticleIds: [],
       });
+      await approveLatestDiagnosis(fixture);
+      await appendDiagnosisResponseSent(fixture);
       await fixture.service.recordFix({
         ticketId: "TKT-1001",
         actor: "product-support",
-        fixedAt: "2026-06-10T09:04:00.000Z",
+        fixedAt: "2026-06-10T10:01:00.000Z",
         fix: availableFix,
         knowledgeArticleIds: [],
       });
@@ -601,6 +649,76 @@ afterEach(async () => {
 });
 
 describe("createTriageServer action protocol", () => {
+  it("rejects an MCP diagnosis when a reply arrives after the adapter preview", async () => {
+    const fixture = await createFixture();
+    const recommendation = await seedRecommendation(fixture, {
+      supportState: "known-cause",
+      knownCause: "sms-quiet-hours",
+    });
+    await approveAndSend(fixture, recommendation);
+    const original = fixture.service.recordDiagnosis.bind(fixture.service);
+    vi.spyOn(fixture.service, "recordDiagnosis").mockImplementation(async (input) => {
+      await fixture.service.addCustomerReply({
+        ticketId: input.ticketId,
+        actor: "Maya Chen",
+        body: "A new reply arrived after the MCP diagnosis preview.",
+        receivedAt: "2026-06-10T09:02:00.0001Z",
+        source: "race-regression",
+      });
+      return original(input);
+    });
+    const client = await connect(fixture);
+
+    const result = await callTool(client, "record_diagnosis", {
+      ticketId: "TKT-1001",
+      actor: "product-support",
+    });
+
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toBe(
+      "STALE_APPROVAL: Diagnosis customer reply snapshot is stale.",
+    );
+    expect(
+      (await fixture.audits.list("TKT-1001")).filter(
+        (event) => event.action === "diagnosis-completed",
+      ),
+    ).toEqual([]);
+  });
+
+  it("rejects an MCP close when a reply arrives after the adapter preview", async () => {
+    const fixture = await createFixture();
+    const recommendation = await seedRecommendation(fixture, {
+      supportState: "ready-for-close",
+      draftCustomerResponse: "Thanks for confirming that the issue is resolved.",
+    });
+    await approveAndSend(fixture, recommendation);
+    const original = fixture.service.closeTicket.bind(fixture.service);
+    vi.spyOn(fixture.service, "closeTicket").mockImplementation(async (input) => {
+      await fixture.service.addCustomerReply({
+        ticketId: input.ticketId,
+        actor: "Maya Chen",
+        body: "A new reply arrived after the MCP close preview.",
+        receivedAt: "2026-06-10T09:02:00.0001Z",
+        source: "race-regression",
+      });
+      return original(input);
+    });
+    const client = await connect(fixture);
+
+    const result = await callTool(client, "close_ticket", {
+      ticketId: "TKT-1001",
+      actor: "casey",
+    });
+
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toBe(
+      "INVALID_APPROVAL_FIELDS: Evaluate the latest customer reply before closing the ticket.",
+    );
+    await expect(fixture.tickets.get("TKT-1001")).resolves.toMatchObject({
+      status: "triage",
+    });
+  });
+
   it("discovers strict, explicit knowledge review actions", async () => {
     const client = await connect(await createFixture());
     const discovery = await client.listTools();
@@ -709,6 +827,8 @@ describe("createTriageServer action protocol", () => {
         "add_customer_reply",
         "evaluate_ticket",
         "record_diagnosis",
+        "review_diagnosis",
+        "apply_diagnosis_fix",
         "mark_fix_available",
         "mark_response_done",
         "close_ticket",
@@ -716,11 +836,13 @@ describe("createTriageServer action protocol", () => {
     );
     expect(operatorActions.map(({ name }) => name).sort()).toEqual([
       "add_customer_reply",
+      "apply_diagnosis_fix",
       "close_ticket",
       "evaluate_ticket",
       "mark_fix_available",
       "mark_response_done",
       "record_diagnosis",
+      "review_diagnosis",
     ]);
     expect(
       operatorActions.find(({ name }) => name === "add_customer_reply")
@@ -758,6 +880,45 @@ describe("createTriageServer action protocol", () => {
       idempotentHint: false,
       openWorldHint: false,
     });
+    for (const actionName of ["review_diagnosis", "apply_diagnosis_fix"]) {
+      expect(
+        operatorActions.find(({ name }) => name === actionName)?.annotations,
+      ).toEqual({
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: false,
+        openWorldHint: false,
+      });
+    }
+    const reviewDiagnosis = operatorActions.find(
+      ({ name }) => name === "review_diagnosis",
+    )!;
+    expect(reviewDiagnosis.inputSchema.required).toEqual(
+      expect.arrayContaining([
+        "decision",
+        "diagnosisId",
+        "ticketId",
+        "sourceTicketRevision",
+        "sourceConversationWatermark",
+        "editedDiagnosis",
+        "actor",
+      ]),
+    );
+    expect(reviewDiagnosis.inputSchema.properties).not.toHaveProperty("reviewedAt");
+    expect(reviewDiagnosis.inputSchema.additionalProperties).toBe(false);
+    const applyDiagnosisFix = operatorActions.find(
+      ({ name }) => name === "apply_diagnosis_fix",
+    )!;
+    expect(applyDiagnosisFix.inputSchema.required).toEqual(
+      expect.arrayContaining([
+        "diagnosisId",
+        "sourceTicketId",
+        "impactSet",
+        "actor",
+      ]),
+    );
+    expect(applyDiagnosisFix.inputSchema.properties).not.toHaveProperty("fixedAt");
+    expect(applyDiagnosisFix.inputSchema.additionalProperties).toBe(false);
     expect(
       operatorActions.find(({ name }) => name === "mark_fix_available")
         ?.annotations,
@@ -1103,6 +1264,29 @@ describe("createTriageServer action protocol", () => {
     });
   });
 
+  it("blocks MCP diagnosis after a causally later backdated customer reply", async () => {
+    const fixture = await createFixture();
+    const recommendation = await seedRecommendation(fixture);
+    await approveAndSend(fixture, recommendation);
+    await fixture.service.addCustomerReply({
+      ticketId: "TKT-1001",
+      actor: "Maya Chen",
+      body: "The issue still occurs after the last response.",
+      receivedAt: "2026-06-10T08:59:59.9999Z",
+    });
+    const client = await connect(fixture);
+
+    const diagnosis = await callTool(client, "record_diagnosis", {
+      ticketId: "TKT-1001",
+      actor: "product-support",
+    });
+
+    expect(diagnosis.isError).toBe(true);
+    expect(textOf(diagnosis)).toBe(
+      "INVALID_APPROVAL_FIELDS: Evaluate the latest customer reply before diagnosis.",
+    );
+  });
+
   it("evaluates the current ticket timeline without caller-built recommendation objects", async () => {
     const fixture = await createFixture();
     const client = await connect(fixture);
@@ -1226,6 +1410,62 @@ describe("createTriageServer action protocol", () => {
         },
       },
     });
+  });
+
+  it("does not pass stale fix context into MCP evaluation after a causally later backdated reply", async () => {
+    const fixture = await createFixture(ordinaryEvaluationTicket());
+    const observedFixContexts: Array<FixContext | undefined> = [];
+    await fixture.audits.append(AuditEventSchema.parse({
+      id: "60000000-0000-4000-8000-000000000021",
+      timestamp: "2026-06-10T10:00:00.0008+02:00",
+      actor: "product-support",
+      action: "fix-available",
+      ticketId: "TKT-1001",
+      before: {},
+      after: {
+        fix: {
+          status: "available",
+          customerSafeSummary: "The mitigation is available.",
+          customerAction: "Retry the affected workflow.",
+          verificationRequest: "Confirm whether the issue remains.",
+        },
+      },
+      rationale: "The confirmed mitigation is available.",
+      knowledgeArticleIds: [],
+      result: "success",
+    }));
+    await fixture.audits.append(AuditEventSchema.parse({
+      id: "60000000-0000-4000-8000-000000000022",
+      timestamp: "2026-06-10T07:59:59.9999Z",
+      actor: "Northstar Labs",
+      action: "customer-reply-received",
+      ticketId: "TKT-1001",
+      before: {},
+      after: {
+        body: "The issue is still failing after the mitigation.",
+        source: "manual",
+      },
+      rationale: "Customer supplied a later follow-up.",
+      knowledgeArticleIds: [],
+      result: "success",
+    }));
+    const client = await connect(fixture, {
+      draftProvider: {
+        async draft(input) {
+          observedFixContexts.push(input.fixContext);
+          return acceptedDraftProvider.draft(input);
+        },
+      },
+    });
+
+    const evaluation = await callTool(client, "evaluate_ticket", {
+      ticketId: "TKT-1001",
+      actor: "approval-desk",
+      aiPreference: "gpt-preferred",
+    });
+
+    expect(evaluation.isError, textOf(evaluation)).not.toBe(true);
+    expect(observedFixContexts).toEqual([undefined]);
   });
 
   it("rejects evaluate_ticket when a customer reply arrives during provider work", async () => {
@@ -1590,9 +1830,9 @@ describe("createTriageServer action protocol", () => {
     expect(workflow.structuredContent).toMatchObject({
       operatorGuidance: {
         stage: "diagnosis-recorded",
-        nextAction: "evaluate-ticket",
-        approval: { required: false, fields: [] },
-        unlocksTool: "evaluate_ticket",
+        nextAction: "review-diagnosis",
+        approval: { required: true, fields: [] },
+        unlocksTool: "review_diagnosis",
       },
     });
     await expect(fixture.tickets.get("TKT-1001")).resolves.toEqual(
@@ -1665,6 +1905,8 @@ describe("createTriageServer action protocol", () => {
       "record_diagnosis",
       { ticketId: "TKT-2010", actor: "product-support" },
     );
+    await approveLatestDiagnosis(fixture, "TKT-2010");
+    await appendDiagnosisResponseSent(fixture, "TKT-2010");
     const fix = await callTool(await connect(fixture), "mark_fix_available", {
       ticketId: "TKT-2010",
       actor: "product-support",
@@ -1702,7 +1944,7 @@ describe("createTriageServer action protocol", () => {
   it("records diagnosis and fix lifecycle events through operator tools", async () => {
     const fixture = await createFixture();
     const client = await connect(fixture);
-    const recommendation = await fixture.service.submit(
+    await fixture.service.submit(
       {
         ...makeSubmitInput({
           supportState: "waiting-on-platform-fix",
@@ -1721,6 +1963,18 @@ describe("createTriageServer action protocol", () => {
         "This affects multiple EU stores. The tracking calls were accepted successfully by the API, but the checkout events are still missing from the profile timelines.",
       receivedAt: "2026-06-10T09:59:00.000Z",
     });
+    const recommendation = await fixture.service.submit(
+      {
+        ...makeSubmitInput({
+          supportState: "waiting-on-platform-fix",
+          missingInformation: [],
+          actor: "approval-desk",
+          draftCustomerResponse: "We are checking the platform delay.",
+          knowledgeArticleIds: ["incident-response"],
+        }),
+        submittedAt: now.toISOString(),
+      },
+    );
     await fixture.service.approve({
       recommendationId: recommendation.id,
       ticketId: "TKT-1001",
@@ -1743,6 +1997,8 @@ describe("createTriageServer action protocol", () => {
       ticketId: "TKT-1001",
       actor: "product-support",
     });
+    await approveLatestDiagnosis(fixture);
+    await appendDiagnosisResponseSent(fixture);
     const fix = await callTool(client, "mark_fix_available", {
       ticketId: "TKT-1001",
       actor: "product-support",
@@ -1783,6 +2039,99 @@ describe("createTriageServer action protocol", () => {
         unlocksTool: "evaluate_ticket",
       },
     });
+  });
+
+  it("reviews an original diagnosis and applies its scoped fix through MCP tools", async () => {
+    const fixture = await createFixture();
+    const original = await fixture.service.recordDiagnosis({
+      ticketId: "TKT-1001",
+      actor: "casey",
+      diagnosedAt: now.toISOString(),
+      diagnosis: diagnosisContext(),
+      knowledgeArticleIds: ["api-reference"],
+    });
+    const client = await connect(fixture);
+
+    const review = await callTool(client, "review_diagnosis", {
+      decision: "approve",
+      diagnosisId: original.id,
+      ticketId: "TKT-1001",
+      sourceTicketRevision: 2,
+      sourceConversationWatermark: { state: "none" },
+      editedDiagnosis: original.after.diagnosis,
+      actor: "casey",
+    });
+    await appendDiagnosisResponseSent(fixture);
+    const fix = await callTool(client, "apply_diagnosis_fix", {
+      diagnosisId: original.id,
+      sourceTicketId: "TKT-1001",
+      actor: "casey",
+      impactSet: {
+        actor: "casey",
+        rationale: "The confirmed diagnosis applies to the selected ticket.",
+        tickets: [
+          {
+            ticketId: "TKT-1001",
+            reason: "The source ticket reproduced the reviewed diagnosis.",
+          },
+        ],
+      },
+    });
+
+    expect(review.isError, textOf(review)).not.toBe(true);
+    expect(expectStableStructured(review)).toMatchObject({
+      auditEvent: {
+        action: "diagnosis-reviewed",
+        before: { diagnosisId: original.id },
+      },
+      diagnoses: [
+        expect.objectContaining({
+          originalDiagnosis: expect.objectContaining({ id: original.id }),
+          latestReview: expect.objectContaining({ decision: "approve" }),
+        }),
+      ],
+    });
+    expect(fix.isError, textOf(fix)).not.toBe(true);
+    expect(expectStableStructured(fix)).toMatchObject({
+      auditEvents: [
+        expect.objectContaining({
+          action: "fix-available",
+          ticketId: "TKT-1001",
+          after: expect.objectContaining({ diagnosisId: original.id }),
+        }),
+      ],
+    });
+    await expect(fixture.tickets.get("TKT-1001")).resolves.toMatchObject({
+      status: "triage",
+    });
+  });
+
+  it("requires an operator actor for diagnosis review without appending an audit", async () => {
+    const fixture = await createFixture();
+    const original = await fixture.service.recordDiagnosis({
+      ticketId: "TKT-1001",
+      actor: "casey",
+      diagnosedAt: now.toISOString(),
+      diagnosis: diagnosisContext(),
+      knowledgeArticleIds: ["api-reference"],
+    });
+    const client = await connect(fixture);
+
+    const result = await callTool(client, "review_diagnosis", {
+      decision: "approve",
+      diagnosisId: original.id,
+      ticketId: "TKT-1001",
+      sourceTicketRevision: 2,
+      sourceConversationWatermark: { state: "none" },
+      editedDiagnosis: original.after.diagnosis,
+    });
+
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toContain("Input validation error");
+    expect(textOf(result)).toContain("actor");
+    await expect(fixture.audits.list("TKT-1001")).resolves.toEqual([
+      original,
+    ]);
   });
 
   it("closes a ticket through the operator tool after a ready-for-close response is sent", async () => {

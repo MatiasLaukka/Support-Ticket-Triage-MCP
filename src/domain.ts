@@ -5,6 +5,63 @@ const SlugSchema = z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/);
 
 export const IsoTimestampSchema = z.iso.datetime({ offset: true });
 export const TicketIdSchema = z.string().regex(/^TKT-\d{4}$/);
+export const DiagnosisIdSchema = z.uuid();
+export const CustomerReplyWatermarkSchema = z.discriminatedUnion("state", [
+  z.object({ state: z.literal("none") }).strict(),
+  z
+    .object({
+      state: z.literal("reply"),
+      timestamp: IsoTimestampSchema,
+      id: z.uuid(),
+    })
+    .strict(),
+]);
+
+export const DiagnosisImpactSetTicketSchema = z
+  .object({
+    ticketId: TicketIdSchema,
+    reason: NonBlankStringSchema,
+  })
+  .strict();
+
+export const DiagnosisImpactSetSchema = z
+  .object({
+    tickets: z.array(DiagnosisImpactSetTicketSchema).min(1),
+    actor: NonBlankStringSchema,
+    rationale: NonBlankStringSchema,
+  })
+  .strict()
+  .superRefine((impactSet, context) => {
+    const ticketIds = new Set<string>();
+    impactSet.tickets.forEach((ticket, index) => {
+      if (ticketIds.has(ticket.ticketId)) {
+        context.addIssue({
+          code: "custom",
+          path: ["tickets", index, "ticketId"],
+          message: "Impact-set ticket IDs must be unique.",
+        });
+      }
+      ticketIds.add(ticket.ticketId);
+    });
+  });
+
+export const DiagnosisFixContextSchema = z
+  .object({
+    status: z.literal("available"),
+    customerSafeSummary: NonBlankStringSchema,
+    customerAction: NonBlankStringSchema,
+    verificationRequest: NonBlankStringSchema,
+  })
+  .strict();
+
+export const DiagnosisScopedFixAuditPayloadSchema = z
+  .object({
+    diagnosisId: DiagnosisIdSchema,
+    sourceTicketId: TicketIdSchema,
+    impactSet: DiagnosisImpactSetSchema,
+    fix: DiagnosisFixContextSchema,
+  })
+  .strict();
 export const KnownEventIdSchema = z.string().regex(/^[A-Z0-9]+(?:-[A-Z0-9]+)*$/);
 
 export const CategorySchema = z.enum([
@@ -524,6 +581,7 @@ export const AuditActionSchema = z.enum([
     "customer-response-sent",
     "customer-reply-received",
     "diagnosis-completed",
+    "diagnosis-reviewed",
     "diagnostic-escalated",
     "fix-available",
   "ticket-updated",
@@ -588,6 +646,15 @@ export const ExpectedOutcomeSchema = z
 
 export type IsoTimestamp = z.infer<typeof IsoTimestampSchema>;
 export type TicketId = z.infer<typeof TicketIdSchema>;
+export type DiagnosisId = z.infer<typeof DiagnosisIdSchema>;
+export type CustomerReplyWatermark = z.infer<
+  typeof CustomerReplyWatermarkSchema
+>;
+export type DiagnosisImpactSet = z.infer<typeof DiagnosisImpactSetSchema>;
+export type DiagnosisFixContext = z.infer<typeof DiagnosisFixContextSchema>;
+export type DiagnosisScopedFixAuditPayload = z.infer<
+  typeof DiagnosisScopedFixAuditPayloadSchema
+>;
 export type Category = z.infer<typeof CategorySchema>;
 export type Priority = z.infer<typeof PrioritySchema>;
 export type Team = z.infer<typeof TeamSchema>;

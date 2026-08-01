@@ -289,6 +289,7 @@ describe("createTriageServer read protocol", () => {
       "get_knowledge_candidate",
       "get_queue_metrics",
       "get_ticket",
+      "get_ticket_diagnoses",
       "get_ticket_workflow",
       "list_tickets",
       "search_knowledge",
@@ -345,7 +346,7 @@ describe("createTriageServer read protocol", () => {
     expect(instructions).toMatch(/cite ticket and knowledge IDs/i);
   });
 
-  it("returns schema-valid structured output for all six read tools", async () => {
+  it("returns schema-valid structured output for all seven read tools", async () => {
     const fixture = await createFixture();
     const client = await connect(fixture);
 
@@ -422,12 +423,12 @@ describe("createTriageServer read protocol", () => {
     });
     expectStableJson(textOf(audits));
     expect(audits.structuredContent).toMatchObject({
-      events: [
+      events: expect.arrayContaining([
         expect.objectContaining({
           ticketId: "TKT-1001",
           action: "recommendation-submitted",
         }),
-      ],
+      ]),
       total: 1,
       offset: 0,
       limit: 10,
@@ -474,7 +475,45 @@ describe("createTriageServer read protocol", () => {
       ],
     });
 
-    for (const result of [listed, ticket, knowledge, similar, metrics, audits, workflow]) {
+    const originalDiagnosis = await fixture.service.recordDiagnosis({
+      ticketId: "TKT-1001",
+      actor: "casey",
+      diagnosedAt: now.toISOString(),
+      diagnosis: {
+        status: "completed",
+        causeType: "configuration",
+        customerSafeSummary: "The reviewed configuration diagnosis is ready.",
+        evidenceUsed: ["request trace"],
+        confidence: "confirmed",
+        owner: "engineering",
+        recommendedNextAction: "Apply the governed configuration change.",
+        doNotSay: ["Do not expose internal diagnostic notes."],
+      },
+      knowledgeArticleIds: ["integration-webhooks"],
+    });
+    const auditsBeforeDiagnosisRead = await fixture.audits.list("TKT-1001");
+    const diagnoses = await callTool(client, {
+      name: "get_ticket_diagnoses",
+      arguments: { ticketId: "TKT-1001" },
+    });
+    expect(diagnoses.isError).not.toBe(true);
+    expectStableJson(textOf(diagnoses));
+    expect(structured(diagnoses)).toMatchObject({
+      diagnoses: [
+        {
+          originalDiagnosis: { id: originalDiagnosis.id },
+          reviews: [],
+          latestReview: null,
+          stale: false,
+          staleReasons: [],
+        },
+      ],
+    });
+    await expect(fixture.audits.list("TKT-1001")).resolves.toEqual(
+      auditsBeforeDiagnosisRead,
+    );
+
+    for (const result of [listed, ticket, diagnoses, knowledge, similar, metrics, audits, workflow]) {
       expect(JSON.stringify(result)).not.toContain(fixture.root);
     }
   });
@@ -519,11 +558,57 @@ describe("createTriageServer read protocol", () => {
         after: {
           diagnosis: {
             status: "completed",
+            causeType: "integration",
+            customerSafeSummary:
+              "The webhook delivery issue is confirmed as an integration-owned failure.",
+            evidenceUsed: ["request ID", "timestamp"],
             confidence: "confirmed",
             owner: "integration-partner",
+            recommendedNextAction:
+              "Apply the reviewed integration mitigation and request verification.",
+            doNotSay: [],
           },
         },
         rationale: "Confirmed an integration-owned diagnosis.",
+        knowledgeArticleIds: ["integration-webhooks"],
+        result: "success",
+      }),
+    );
+    await diagnosisFixture.audits.append(
+      AuditEventSchema.parse({
+        id: "30000000-0000-4000-8000-000000000008",
+        timestamp: "2026-06-10T09:06:30.000Z",
+        actor: "product-support",
+        action: "diagnosis-reviewed",
+        ticketId: "TKT-1001",
+        before: {
+          diagnosisId: "30000000-0000-4000-8000-000000000002",
+          previousReview: null,
+        },
+        after: {
+          diagnosisReview: {
+            decision: "approve",
+            diagnosisId: "30000000-0000-4000-8000-000000000002",
+            ticketId: "TKT-1001",
+            sourceTicketRevision: 2,
+            sourceConversationWatermark: { state: "none" },
+            editedDiagnosis: {
+              status: "completed",
+              causeType: "integration",
+              customerSafeSummary:
+                "The webhook delivery issue is confirmed as an integration-owned failure.",
+              evidenceUsed: ["request ID", "timestamp"],
+              confidence: "confirmed",
+              owner: "integration-partner",
+              recommendedNextAction:
+                "Apply the reviewed integration mitigation and request verification.",
+              doNotSay: [],
+            },
+            actor: "product-support",
+            reviewedAt: "2026-06-10T09:06:30.000Z",
+          },
+        },
+        rationale: "A human operator approved the current diagnosis before fix work.",
         knowledgeArticleIds: ["integration-webhooks"],
         result: "success",
       }),
@@ -590,10 +675,9 @@ describe("createTriageServer read protocol", () => {
     expect(diagnosisRecorded.structuredContent).toMatchObject({
       operatorGuidance: {
         stage: "diagnosis-recorded",
-        nextAction: "evaluate-ticket",
-        approval: { required: false, fields: [] },
-        unlocksTool: "evaluate_ticket",
-        customerNextStep: expect.any(String),
+        nextAction: "review-diagnosis",
+        approval: { required: true, fields: [] },
+        unlocksTool: "review_diagnosis",
       },
     });
     await expect(

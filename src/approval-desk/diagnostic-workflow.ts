@@ -8,6 +8,17 @@ import {
   DiagnosticStateSnapshotSchema,
   type DiagnosticStateSnapshot,
 } from "./diagnostic-state.js";
+import {
+  DiagnosisReviewDecisionSchema,
+  latestStrictDiagnosisReviewRecord,
+  strictDiagnosisReviewRecord,
+} from "./diagnosis-review.js";
+import {
+  compareAuditCausalOrder,
+  latestAuditPosition,
+  type AuditCausalPosition,
+} from "./workflow-causal-context.js";
+export { hasCustomerReplyAfterRecommendation } from "./workflow-causal-context.js";
 
 export function diagnosisContextForTicket(
   ticket: Ticket,
@@ -179,14 +190,12 @@ export function diagnosisContextForTicket(
 export function diagnosisContextFromAudit(
   event: AuditEvent | undefined,
 ): DiagnosisContext | undefined {
-  if (
-    event === undefined ||
-    typeof event.after.diagnosis !== "object" ||
-    event.after.diagnosis === null
-  ) {
+  if (event === undefined) {
     return undefined;
   }
-  const value = event.after.diagnosis as Partial<DiagnosisContext>;
+  const diagnosisValue = diagnosisValueFromAudit(event);
+  if (diagnosisValue === undefined) return undefined;
+  const value = diagnosisValue as Partial<DiagnosisContext>;
   if (
     value.status !== "completed" ||
     typeof value.causeType !== "string" ||
@@ -241,7 +250,7 @@ function applyPersistedDiagnosticState(
   const replyText = customerReplyTextAfter(
     ticketId,
     audits,
-    latest.timestamp,
+    latest.position,
   );
   if (replyText.trim() === "") {
     return { ...diagnosis, diagnosticState: latest.snapshot };
@@ -266,51 +275,51 @@ function applyPersistedDiagnosticState(
 function latestDiagnosticSnapshot(
   audits: readonly AuditEvent[],
   ticketId: string,
-): { snapshot: DiagnosticStateSnapshot; timestamp: string } | undefined {
+): { snapshot: DiagnosticStateSnapshot; position: AuditCausalPosition } | undefined {
   return audits
     .map((event, index) => ({ event, index }))
     .filter(
-      ({ event }) =>
+      ({ event, index }) =>
         event.ticketId === ticketId &&
         (event.action === "diagnosis-completed" ||
-          event.action === "diagnostic-escalated") &&
-        typeof event.after.diagnosis === "object" &&
-        event.after.diagnosis !== null,
+          event.action === "diagnostic-escalated" ||
+          (event.action === "diagnosis-reviewed" &&
+            strictDiagnosisReviewRecord(audits, { event, index }) !== undefined)) &&
+        diagnosisValueFromAudit(event) !== undefined,
     )
     .sort(
       (left, right) =>
-        right.event.timestamp.localeCompare(left.event.timestamp) ||
-        right.index - left.index,
+        compareAuditCausalOrder(right, left),
     )
-    .map(({ event }) => {
-      const diagnosis = event.after.diagnosis;
-      if (typeof diagnosis !== "object" || diagnosis === null) {
-        return undefined;
-      }
+    .map(({ event, index }) => {
+      const diagnosis = diagnosisValueFromAudit(event);
+      if (diagnosis === undefined) return undefined;
       const parsed = DiagnosticStateSnapshotSchema.safeParse(
         (diagnosis as { diagnosticState?: unknown }).diagnosticState,
       );
       return parsed.success
-        ? { snapshot: parsed.data, timestamp: event.timestamp }
+        ? { snapshot: parsed.data, position: { event, index } }
         : undefined;
     })
-    .find((value): value is { snapshot: DiagnosticStateSnapshot; timestamp: string } => value !== undefined);
+    .find((value): value is { snapshot: DiagnosticStateSnapshot; position: AuditCausalPosition } => value !== undefined);
 }
 
 function customerReplyTextAfter(
   ticketId: string,
   audits: readonly AuditEvent[],
-  timestamp: string,
+  diagnosisPosition: AuditCausalPosition,
 ): string {
   return audits
+    .map((event, index) => ({ event, index }))
     .filter(
-      (event) =>
+      ({ event, index }) =>
         event.ticketId === ticketId &&
         event.action === "customer-reply-received" &&
-        event.timestamp > timestamp &&
+        compareAuditCausalOrder({ event, index }, diagnosisPosition) > 0 &&
         typeof event.after.body === "string",
     )
-    .map((event) => event.after.body as string)
+    .sort(compareAuditCausalOrder)
+    .map(({ event }) => event.after.body as string)
     .join("\n\n");
 }
 
@@ -320,9 +329,18 @@ function containsContradictoryEvidence(value: string): boolean {
 }
 
 export function fixContextForTicket(
-  ticket: Ticket,
-  diagnosisEvent: AuditEvent,
+  diagnosisEvent: AuditEvent | undefined,
 ): FixContext {
+  if (diagnosisEvent === undefined) {
+    return {
+      status: "available",
+      customerSafeSummary:
+        "A reviewed mitigation will be shared after the diagnosis is approved.",
+      customerAction: "Please wait for the reviewed support update.",
+      verificationRequest:
+        "No verification is requested until the diagnosis and mitigation are approved.",
+    };
+  }
   const diagnosis = diagnosisFromAudit(diagnosisEvent);
   if (isCampaignEditorDiagnosis(diagnosis)) {
     return {
@@ -336,12 +354,7 @@ export function fixContextForTicket(
     };
   }
 
-  if (
-    typeof diagnosisEvent.after.diagnosis === "object" &&
-    diagnosisEvent.after.diagnosis !== null &&
-    "causeType" in diagnosisEvent.after.diagnosis &&
-    diagnosisEvent.after.diagnosis.causeType === "platform-delay"
-  ) {
+  if (diagnosis?.causeType === "platform-delay") {
     return {
       status: "available",
       customerSafeSummary:
@@ -396,30 +409,118 @@ export function fixContextFromAudit(
   };
 }
 
+export interface PersistedDiagnosticContext<T> {
+  event: AuditEvent;
+  position: AuditCausalPosition;
+  context: T;
+}
+
+export interface PersistedDiagnosticWorkflowContext {
+  diagnosis?: PersistedDiagnosticContext<DiagnosisContext>;
+  fix?: PersistedDiagnosticContext<FixContext>;
+  latestCustomerReply?: AuditCausalPosition;
+}
+
+/**
+ * Select the current persisted diagnostic context from causal audit order.
+ *
+ * A customer reply that is appended after a diagnosis or fix invalidates that
+ * context unless it is a status or explanation question that can safely reuse
+ * the current context. This is the shared read boundary for transports and
+ * customer-drafting code; timestamps never decide lifecycle freshness alone.
+ */
+export function selectPersistedDiagnosticWorkflowContext(
+  audits: readonly AuditEvent[],
+): PersistedDiagnosticWorkflowContext {
+  const latestCustomerReply = latestAuditPosition(
+    audits,
+    (event) => event.action === "customer-reply-received",
+  );
+  const diagnosis = currentPersistedContext(
+    audits,
+    (event) =>
+      isPersistedDiagnosisContextEvent(event, audits),
+    diagnosisContextFromAudit,
+  );
+  const fix = currentPersistedContext(
+    audits,
+    (event) => event.action === "fix-available",
+    fixContextFromAudit,
+  );
+  return {
+    ...(diagnosis === undefined ? {} : { diagnosis }),
+    ...(fix === undefined ? {} : { fix }),
+    ...(latestCustomerReply === undefined ? {} : { latestCustomerReply }),
+  };
+}
+
+function isPersistedDiagnosisContextEvent(
+  event: AuditEvent,
+  audits: readonly AuditEvent[],
+): boolean {
+  if (
+    (event.action === "diagnosis-completed" ||
+      event.action === "diagnostic-escalated") &&
+    typeof event.after.diagnosis === "object" &&
+    event.after.diagnosis !== null
+  ) {
+    const latestReview = latestStrictDiagnosisReviewRecord(audits, event.id);
+    return latestReview?.review.decision !== "reject" &&
+      diagnosisContextFromAudit(event) !== undefined;
+  }
+  const position = audits.findIndex((candidate) => candidate.id === event.id);
+  const review = position < 0
+    ? undefined
+    : strictDiagnosisReviewRecord(audits, { event, index: position });
+  if (
+    review === undefined ||
+    (review.review.decision !== "approve" && review.review.decision !== "revalidate") ||
+    diagnosisContextFromAudit(event) === undefined
+  ) {
+    return false;
+  }
+  return true;
+}
+
 /** Return the latest fix that is still current for the conversation. */
 export function latestFixContextFromAudits(
   audits: readonly AuditEvent[],
 ): FixContext | undefined {
-  const latest = audits
-    .map((event, index) => ({ event, index }))
-    .filter(({ event }) => event.action === "fix-available")
-    .sort(
-      (left, right) =>
-        right.event.timestamp.localeCompare(left.event.timestamp) ||
-        right.index - left.index,
-    )[0];
-  if (latest === undefined) return undefined;
-  const superseded = audits.some((candidate, index) => {
+  return selectPersistedDiagnosticWorkflowContext(audits).fix?.context;
+}
+
+function currentPersistedContext<T>(
+  audits: readonly AuditEvent[],
+  matches: (event: AuditEvent) => boolean,
+  parse: (event: AuditEvent | undefined) => T | undefined,
+): PersistedDiagnosticContext<T> | undefined {
+  const latest = latestAuditPosition(audits, matches);
+  if (latest === undefined || hasSupersedingCustomerReply(audits, latest)) {
+    return undefined;
+  }
+  const context = parse(latest.event);
+  return context === undefined
+    ? undefined
+    : { event: latest.event, position: latest, context };
+}
+
+function hasSupersedingCustomerReply(
+  audits: readonly AuditEvent[],
+  context: AuditCausalPosition,
+): boolean {
+  return audits.some((candidate, index) => {
     if (candidate.action !== "customer-reply-received") return false;
-    const newer = candidate.timestamp > latest.event.timestamp ||
-      (candidate.timestamp === latest.event.timestamp && index > latest.index);
-    if (!newer) return false;
+    if (
+      compareAuditCausalOrder(
+        { event: candidate, index },
+        context,
+      ) <= 0
+    ) return false;
     const body = typeof candidate.after.body === "string"
       ? candidate.after.body
       : "";
     return !customerReplyCanUseExistingContext(body);
   });
-  return superseded ? undefined : fixContextFromAudit(latest.event);
 }
 
 function customerReplyCanUseExistingContext(value: string): boolean {
@@ -428,8 +529,28 @@ function customerReplyCanUseExistingContext(value: string): boolean {
 }
 
 function diagnosisFromAudit(event: AuditEvent): Record<string, unknown> | undefined {
-  return typeof event.after.diagnosis === "object" && event.after.diagnosis !== null
-    ? event.after.diagnosis as Record<string, unknown>
+  return diagnosisValueFromAudit(event);
+}
+
+function diagnosisValueFromAudit(
+  event: AuditEvent,
+): Record<string, unknown> | undefined {
+  if (typeof event.after.diagnosis === "object" && event.after.diagnosis !== null) {
+    return event.after.diagnosis as Record<string, unknown>;
+  }
+  const review = event.after.diagnosisReview;
+  if (typeof review !== "object" || review === null) return undefined;
+  const parsedReview = DiagnosisReviewDecisionSchema.safeParse(review);
+  if (
+    !parsedReview.success ||
+    (parsedReview.data.decision !== "approve" &&
+      parsedReview.data.decision !== "revalidate")
+  ) {
+    return undefined;
+  }
+  const editedDiagnosis = parsedReview.data.editedDiagnosis;
+  return typeof editedDiagnosis === "object" && editedDiagnosis !== null
+    ? editedDiagnosis as Record<string, unknown>
     : undefined;
 }
 
@@ -457,12 +578,14 @@ function customerReplyTextFromAudits(
   audits: readonly AuditEvent[],
 ): string {
   return audits
+    .map((event, index) => ({ event, index }))
     .filter(
-      (event) =>
+      ({ event }) =>
         event.ticketId === ticketId &&
         event.action === "customer-reply-received" &&
         typeof event.after.body === "string",
     )
-    .map((event) => event.after.body as string)
+    .sort(compareAuditCausalOrder)
+    .map(({ event }) => event.after.body as string)
     .join("\n\n");
 }

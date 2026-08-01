@@ -34,7 +34,6 @@ import {
   type EvidenceReadiness,
 } from "./evidence-readiness.js";
 import {
-  classifyTicket,
   classifyTicketFromContext,
   type TicketClassification,
 } from "./classifier.js";

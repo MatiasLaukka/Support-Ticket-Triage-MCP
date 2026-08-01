@@ -1,8 +1,15 @@
 import type { AuditEvent, Ticket, TriageRecommendation } from "../domain.js";
+import { compareIsoInstants } from "../iso-instant.js";
 import {
   buildConversationHistory,
   buildConversationTimeline,
 } from "./conversation-history.js";
+import {
+  auditCausalPositions,
+  compareAuditCausalOrder,
+  latestAuditPosition,
+  type AuditCausalPosition,
+} from "./workflow-causal-context.js";
 import { buildOperatorGuidance } from "./workflow-guidance.js";
 
 export type RecommendationWorkflowState =
@@ -80,14 +87,17 @@ export function summarizeRecommendationsForTicket(
   );
   const latest = currentRelated[0];
   const ticketAudits = audits.filter((event) => event.ticketId === ticket.id);
-  const latestSentAt = latestAuditTimestamp(
+  const latestSent = latestAuditPosition(
     ticketAudits,
-    "customer-response-sent",
+    (event) => event.action === "customer-response-sent",
   );
-  const latestCustomerReplyAt = latestAuditTimestamp(
+  const latestCustomerReply = latestAuditPosition(
     ticketAudits,
-    "customer-reply-received",
+    (event) => event.action === "customer-reply-received",
   );
+  const latestSentAt = auditOccurredAt(latestSent);
+  const latestCustomerReplyAt = auditOccurredAt(latestCustomerReply);
+  const submissionPositions = submittedAuditPositionsByRecommendation(audits);
 
   return {
     summary: {
@@ -102,8 +112,11 @@ export function summarizeRecommendationsForTicket(
       workflowState: conversationWorkflowState({
         ticket,
         latest,
-        latestSentAt,
-        latestCustomerReplyAt,
+        latestSent,
+        latestCustomerReply,
+        latestRecommendationSubmission: latest === undefined
+          ? undefined
+          : submissionPositions.get(latest.id),
       }),
       outageRisk: latest?.outageRisk,
       securityRisk: latest?.securityRisk,
@@ -124,13 +137,15 @@ export function customerRepliesFromAudits(
   audits: readonly AuditEvent[],
 ): CustomerReplyContext[] {
   return audits
+    .map((event, index) => ({ event, index }))
     .filter(
-      (event) =>
+      ({ event }) =>
         event.ticketId === ticketId &&
         event.action === "customer-reply-received" &&
         typeof event.after.body === "string",
     )
-    .map((event) => ({
+    .sort(compareAuditCausalOrder)
+    .map(({ event }) => ({
       id: event.id,
       ticketId,
       createdAt: event.timestamp,
@@ -142,83 +157,89 @@ export function latestSupportResponseFromAudits(
   ticketId: string,
   audits: readonly AuditEvent[],
 ): PreviousSupportResponseContext | undefined {
-  return audits
-    .filter(
-      (event) =>
-        event.ticketId === ticketId &&
-        event.action === "customer-response-sent" &&
-        typeof event.after.customerResponse === "string",
-    )
-    .map((event) => ({
-      sentAt:
-        typeof event.after.sentAt === "string"
-          ? event.after.sentAt
-          : event.timestamp,
-      body: event.after.customerResponse as string,
-    }))
-    .sort((left, right) => right.sentAt.localeCompare(left.sentAt))[0];
+  const latest = latestAuditPosition(
+    audits,
+    (event) =>
+      event.ticketId === ticketId &&
+      event.action === "customer-response-sent" &&
+      typeof event.after.customerResponse === "string",
+  );
+  if (latest === undefined) return undefined;
+  return {
+    sentAt: auditOccurredAt(latest) ?? latest.event.timestamp,
+    body: latest.event.after.customerResponse as string,
+  };
 }
 
 export function latestSentAtForRecommendation(
   audits: readonly AuditEvent[],
   recommendationId: string,
 ): string | undefined {
-  return audits
-    .filter(
-      (event) =>
-        event.action === "customer-response-sent" &&
-        event.recommendationId === recommendationId,
-    )
-    .map((event) =>
-      typeof event.after.sentAt === "string" ? event.after.sentAt : event.timestamp,
-    )
-    .sort((left, right) => right.localeCompare(left))[0];
+  return auditOccurredAt(latestAuditPosition(
+    audits,
+    (event) =>
+      event.action === "customer-response-sent" &&
+      event.recommendationId === recommendationId,
+  ));
 }
 
-function latestAuditTimestamp(
+/** Select the latest persisted approval for a recommendation by causal audit order. */
+export function latestRecommendationApprovalAudit(
   audits: readonly AuditEvent[],
-  action: AuditEvent["action"],
-): string | undefined {
-  return audits
-    .filter((event) => event.action === action)
-    .map((event) =>
-      action === "customer-response-sent" && typeof event.after.sentAt === "string"
-        ? event.after.sentAt
-        : event.timestamp,
-    )
-    .sort((left, right) => right.localeCompare(left))[0];
+  recommendationId: string,
+): AuditEvent | undefined {
+  return latestAuditPosition(
+    audits,
+    (event) =>
+      event.action === "recommendation-approved" &&
+      event.recommendationId === recommendationId,
+  )?.event;
 }
 
 function compareRecommendationsNewestFirst(
   audits: readonly AuditEvent[],
 ): (left: TriageRecommendation, right: TriageRecommendation) => number {
-  const submittedOrder = submittedAuditIndexByRecommendation(audits);
-  return (left, right) =>
-    right.createdAt.localeCompare(left.createdAt) ||
-    (submittedOrder.get(right.id) ?? -1) - (submittedOrder.get(left.id) ?? -1) ||
-    right.id.localeCompare(left.id);
+  const submittedPositions = submittedAuditPositionsByRecommendation(audits);
+  return (left, right) => {
+    const leftSubmission = submittedPositions.get(left.id);
+    const rightSubmission = submittedPositions.get(right.id);
+    if (leftSubmission !== undefined && rightSubmission !== undefined) {
+      const causalOrder = compareAuditCausalOrder(rightSubmission, leftSubmission);
+      if (causalOrder !== 0) return causalOrder;
+    }
+    return compareIsoInstants(right.createdAt, left.createdAt) ||
+      right.id.localeCompare(left.id);
+  };
 }
 
-function submittedAuditIndexByRecommendation(
+function submittedAuditPositionsByRecommendation(
   audits: readonly AuditEvent[],
-): Map<string, number> {
-  const indexes = new Map<string, number>();
-  audits.forEach((event, index) => {
+): Map<string, AuditCausalPosition> {
+  const positions = new Map<string, AuditCausalPosition>();
+  auditCausalPositions(audits).forEach(({ event, index }) => {
     if (
       event.action === "recommendation-submitted" &&
       event.recommendationId !== undefined
     ) {
-      indexes.set(event.recommendationId, index);
+      const current = positions.get(event.recommendationId);
+      const candidate = { event, index };
+      if (
+        current === undefined ||
+        compareAuditCausalOrder(candidate, current) > 0
+      ) {
+        positions.set(event.recommendationId, candidate);
+      }
     }
   });
-  return indexes;
+  return positions;
 }
 
 function conversationWorkflowState(input: {
   ticket: Ticket;
   latest?: TriageRecommendation;
-  latestSentAt?: string;
-  latestCustomerReplyAt?: string;
+  latestSent?: AuditCausalPosition;
+  latestCustomerReply?: AuditCausalPosition;
+  latestRecommendationSubmission?: AuditCausalPosition;
 }): RecommendationWorkflowState {
   if (input.ticket.status === "resolved") {
     return "resolved";
@@ -226,29 +247,65 @@ function conversationWorkflowState(input: {
 
   if (
     input.latest?.resolution === "approved" &&
-    input.latestSentAt !== undefined &&
-    input.latestSentAt >= input.latest.createdAt
+    input.latestSent !== undefined &&
+    isAuditAtOrAfterRecommendation(
+      input.latestSent,
+      input.latest,
+      input.latestRecommendationSubmission,
+    )
   ) {
-    return input.latestCustomerReplyAt !== undefined &&
-      input.latestCustomerReplyAt > input.latestSentAt
+    return input.latestCustomerReply !== undefined &&
+      compareAuditCausalOrder(input.latestCustomerReply, input.latestSent) > 0
       ? "customer-replied"
       : "waiting";
   }
 
   if (input.latest !== undefined) {
-    return input.latestCustomerReplyAt !== undefined &&
-      input.latestCustomerReplyAt > input.latest.createdAt
+    return input.latestCustomerReply !== undefined &&
+      isAuditAfterRecommendation(
+        input.latestCustomerReply,
+        input.latest,
+        input.latestRecommendationSubmission,
+      )
       ? "customer-replied"
       : "draft-ready";
   }
 
   if (
-    input.latestCustomerReplyAt !== undefined &&
-    (input.latestSentAt === undefined ||
-      input.latestCustomerReplyAt > input.latestSentAt)
+    input.latestCustomerReply !== undefined &&
+    (input.latestSent === undefined ||
+      compareAuditCausalOrder(input.latestCustomerReply, input.latestSent) > 0)
   ) {
     return "customer-replied";
   }
 
-  return input.latestSentAt === undefined ? "active" : "waiting";
+  return input.latestSent === undefined ? "active" : "waiting";
+}
+
+function auditOccurredAt(position: AuditCausalPosition | undefined): string | undefined {
+  if (position === undefined) return undefined;
+  return position.event.action === "customer-response-sent" &&
+    typeof position.event.after.sentAt === "string"
+    ? position.event.after.sentAt
+    : position.event.timestamp;
+}
+
+function isAuditAtOrAfterRecommendation(
+  audit: AuditCausalPosition,
+  recommendation: TriageRecommendation,
+  submission: AuditCausalPosition | undefined,
+): boolean {
+  return submission === undefined
+    ? compareIsoInstants(audit.event.timestamp, recommendation.createdAt) >= 0
+    : compareAuditCausalOrder(audit, submission) >= 0;
+}
+
+function isAuditAfterRecommendation(
+  audit: AuditCausalPosition,
+  recommendation: TriageRecommendation,
+  submission: AuditCausalPosition | undefined,
+): boolean {
+  return submission === undefined
+    ? compareIsoInstants(audit.event.timestamp, recommendation.createdAt) > 0
+    : compareAuditCausalOrder(audit, submission) > 0;
 }

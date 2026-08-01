@@ -5,7 +5,6 @@ import {
   type ExpectedOutcome,
   type SupportState,
   type Ticket,
-  type TriageRecommendation,
 } from "../domain.js";
 import type { KnowledgeObject } from "../knowledge-evolution/domain.js";
 import { assessPromptInjection } from "./prompt-injection-safety.js";

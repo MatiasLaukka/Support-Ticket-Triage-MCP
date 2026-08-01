@@ -12,6 +12,8 @@ import {
   closeBlockers,
   diagnosisBlockers,
   fixBlockers,
+  latestAuthoritativeDiagnosis,
+  latestDiagnosisAudit,
 } from "../src/approval-desk/workflow-guidance.js";
 
 const ticketId = "TKT-1001" as const;
@@ -157,6 +159,7 @@ function confirmedEngineeringDiagnosisWorkflow(): WorkflowInput {
     audits: [
       ...input.audits,
       diagnosis,
+      diagnosisReviewAudit(diagnosis, "2026-06-10T09:02:30.000Z"),
       sentAudit("2026-06-10T09:03:00.000Z"),
     ],
   };
@@ -279,13 +282,52 @@ function diagnosisAudit(input: {
   timestamp: string;
   confidence: "confirmed" | "likely";
   owner: "engineering" | "integration-partner" | "support";
+  diagnosticState?: unknown;
 }): AuditEvent {
   return audit("diagnosis-completed", input.timestamp, {
     after: {
       diagnosis: {
         status: "completed",
+        causeType: "platform-delay",
+        customerSafeSummary: "A platform processing delay caused the reported issue.",
+        evidenceUsed: ["request trace"],
         confidence: input.confidence,
         owner: input.owner,
+        recommendedNextAction: "Apply the governed mitigation.",
+        doNotSay: [],
+        ...(input.diagnosticState === undefined
+          ? {}
+          : { diagnosticState: input.diagnosticState }),
+      },
+    },
+  });
+}
+
+function diagnosisReviewAudit(
+  diagnosis: AuditEvent,
+  reviewedAt: string,
+  decision: "approve" | "reject" | "revalidate" = "approve",
+  sourceConversationWatermark:
+    | { state: "none" }
+    | { state: "reply"; timestamp: string; id: string } = { state: "none" },
+  sourceTicketRevision = 2,
+): AuditEvent {
+  return audit("diagnosis-reviewed", reviewedAt, {
+    actor: "casey",
+    before: { diagnosisId: diagnosis.id },
+    after: {
+      diagnosisReview: {
+        decision,
+        diagnosisId: diagnosis.id,
+        ticketId,
+        sourceTicketRevision,
+        sourceConversationWatermark,
+        editedDiagnosis: diagnosis.after.diagnosis,
+        actor: "casey",
+        ...(decision === "approve"
+          ? {}
+          : { rationale: "The reviewed context supports this decision." }),
+        reviewedAt,
       },
     },
   });
@@ -377,9 +419,9 @@ describe("buildOperatorGuidance", () => {
       name: "diagnosis-recorded",
       input: diagnosisRecordedWorkflow(),
       stage: "diagnosis-recorded",
-      nextAction: "evaluate-ticket",
-      unlocksTool: "evaluate_ticket",
-      approval: { required: false, fields: [] },
+      nextAction: "review-diagnosis",
+      unlocksTool: "review_diagnosis",
+      approval: { required: true, fields: [] },
     },
     {
       name: "diagnosis-ready",
@@ -456,12 +498,156 @@ describe("buildOperatorGuidance", () => {
     });
   });
 
-  it.each([
-    ["diagnosis-recorded", diagnosisRecordedWorkflow()],
-    ["verification", verificationWorkflow()],
-  ] as const)("returns safe backend-owned %s transition copy", (stage, input) => {
-    const guidance = buildOperatorGuidance(input);
-    expect(guidance.stage).toBe(stage);
+  it("requires governed review after a diagnosis is recorded", () => {
+    const guidance = buildOperatorGuidance(diagnosisRecordedWorkflow());
+    expect(guidance.stage).toBe("diagnosis-recorded");
+    expect(guidance.changed).not.toBe("");
+    expect(guidance.reason).not.toBe("");
+    expect(guidance.nextAction).toBe("review-diagnosis");
+    expect(guidance.approval).toEqual({ required: true, fields: [] });
+    expect(guidance.unlocksTool).toBe("review_diagnosis");
+    expect(guidance.blockers).toEqual([]);
+  });
+
+  it("continues evidence evaluation instead of offering ambiguous diagnoses for review", () => {
+    const input = diagnosisRecordedWorkflow();
+    input.audits = [
+      ...input.audits.slice(0, -1),
+      diagnosisAudit({
+        timestamp: "2026-06-10T09:02:00.000Z",
+        confidence: "likely",
+        owner: "support",
+        diagnosticState: {
+          state: "ambiguous",
+          diagnosticAttempts: 1,
+          hypotheses: [
+            {
+              id: "browser-session",
+              label: "Browser session issue",
+              status: "plausible",
+              evidenceUsed: ["Blank campaign editor"],
+              evidenceToConfirm: ["Private window result"],
+            },
+          ],
+          evidenceToRequest: ["Private window result"],
+        },
+      }),
+    ];
+
+    expect(buildOperatorGuidance(input)).toMatchObject({
+      stage: "diagnosis-recorded",
+      nextAction: "evaluate-ticket",
+      approval: { required: false, fields: [] },
+      unlocksTool: "evaluate_ticket",
+      customerNextStep:
+        "Reply with the targeted diagnostic details: Private window result",
+    });
+  });
+
+  it("requires revalidation when a reviewed diagnosis is stale after a ticket revision change", () => {
+    const diagnosis = diagnosisAudit({
+      timestamp: "2026-06-10T09:02:00.000Z",
+      confidence: "confirmed",
+      owner: "engineering",
+    });
+    const input: WorkflowInput = {
+      ticket: ticket({ revision: 3 }),
+      recommendations: [
+        recommendation({ createdAt: "2026-06-10T09:04:00.000Z" }),
+      ],
+      audits: [
+        sentAudit("2026-06-10T09:01:00.000Z"),
+        diagnosis,
+        diagnosisReviewAudit(
+          diagnosis,
+          "2026-06-10T09:03:00.000Z",
+          "approve",
+          { state: "none" },
+          2,
+        ),
+        sentAudit("2026-06-10T09:05:00.000Z"),
+      ],
+    };
+
+    expect(buildOperatorGuidance(input)).toMatchObject({
+      stage: "diagnosis-recorded",
+      nextAction: "review-diagnosis",
+      approval: { required: true, fields: [] },
+      unlocksTool: "review_diagnosis",
+    });
+  });
+
+  it("requires revalidation when a customer reply made a review stale without changing ticket fields", () => {
+    const diagnosis = diagnosisAudit({
+      timestamp: "2026-06-10T09:02:00.000Z",
+      confidence: "confirmed",
+      owner: "engineering",
+    });
+    const customerReply = audit(
+      "customer-reply-received",
+      "2026-06-10T09:04:00.000Z",
+      { actor: "Maya Chen", after: { body: "The mitigation worked." } },
+    );
+    const readyToClose = recommendation({
+      supportState: "ready-for-close",
+      createdAt: "2026-06-10T09:05:00.000Z",
+    });
+    const input: WorkflowInput = {
+      ticket: ticket({ revision: 2 }),
+      recommendations: [readyToClose],
+      audits: [
+        diagnosis,
+        diagnosisReviewAudit(diagnosis, "2026-06-10T09:03:00.000Z"),
+        customerReply,
+        audit("recommendation-submitted", "2026-06-10T09:05:00.000Z", {
+          recommendationId: readyToClose.id,
+        }),
+        sentAudit("2026-06-10T09:06:00.000Z", readyToClose.id),
+      ],
+    };
+
+    expect(buildOperatorGuidance(input)).toMatchObject({
+      stage: "diagnosis-recorded",
+      nextAction: "review-diagnosis",
+      approval: { required: true, fields: [] },
+      unlocksTool: "review_diagnosis",
+    });
+  });
+
+  it("allows a revalidated diagnosis to unlock a fix after its diagnosis response was already sent", () => {
+    const original = diagnosisAudit({
+      timestamp: "2026-06-10T09:02:00.000Z",
+      confidence: "confirmed",
+      owner: "engineering",
+    });
+    const initialReview = diagnosisReviewAudit(
+      original,
+      "2026-06-10T09:03:00.000Z",
+    );
+    const revalidation = diagnosisReviewAudit(
+      original,
+      "2026-06-10T09:06:00.000Z",
+      "revalidate",
+      { state: "none" },
+      3,
+    );
+
+    expect(
+      fixBlockers({
+        ticket: ticket({ revision: 3 }),
+        audits: [
+          original,
+          initialReview,
+          sentAudit("2026-06-10T09:05:00.000Z"),
+          revalidation,
+        ],
+      }),
+    ).toEqual([]);
+  });
+
+  it("returns safe backend-owned verification transition copy", () => {
+    const guidance = buildOperatorGuidance(verificationWorkflow());
+    expect(guidance.stage).toBe("verification");
     expect(guidance.changed).not.toBe("");
     expect(guidance.reason).not.toBe("");
     expect(guidance.customerNextStep).not.toBe("");
@@ -490,6 +676,26 @@ describe("buildOperatorGuidance", () => {
     expect(buildOperatorGuidance(input).stage).toBe("diagnosis-recorded");
 
     input.audits = [sentAudit("2026-06-10T09:01:00.000Z"), diagnosis, submitted];
+    expect(buildOperatorGuidance(input).stage).toBe("waiting-customer");
+  });
+
+  it("orders workflow transitions chronologically when valid offsets differ", () => {
+    const input = diagnosisRecordedWorkflow();
+    const submitted = audit(
+      "recommendation-submitted",
+      "2026-06-10T08:00:00.500Z",
+      { recommendationId },
+    );
+    const diagnosis = diagnosisAudit({
+      timestamp: "2026-06-10T09:00:00.000+02:00",
+      confidence: "likely",
+      owner: "support",
+    });
+    input.recommendations = [
+      recommendation({ createdAt: "2026-06-10T08:00:00.500Z" }),
+    ];
+    input.audits = [sentAudit("2026-06-10T06:00:00.000Z"), diagnosis, submitted];
+
     expect(buildOperatorGuidance(input).stage).toBe("waiting-customer");
   });
 
@@ -705,18 +911,21 @@ describe("buildOperatorGuidance", () => {
 
   it("resolves equal diagnosis timestamps by later audit index", () => {
     const input = diagnosisReadyWorkflow();
+    const likely = diagnosisAudit({
+      timestamp: "2026-06-10T09:02:00.000Z",
+      confidence: "likely",
+      owner: "support",
+    });
+    const confirmed = diagnosisAudit({
+      timestamp: "2026-06-10T09:02:00.000Z",
+      confidence: "confirmed",
+      owner: "engineering",
+    });
     input.audits = [
       ...input.audits,
-      diagnosisAudit({
-        timestamp: "2026-06-10T09:02:00.000Z",
-        confidence: "likely",
-        owner: "support",
-      }),
-      diagnosisAudit({
-        timestamp: "2026-06-10T09:02:00.000Z",
-        confidence: "confirmed",
-        owner: "engineering",
-      }),
+      likely,
+      confirmed,
+      diagnosisReviewAudit(confirmed, "2026-06-10T09:02:30.000Z"),
       sentAudit("2026-06-10T09:03:00.000Z"),
     ];
 
@@ -734,13 +943,15 @@ describe("buildOperatorGuidance", () => {
     expect(buildOperatorGuidance(replyEqual).stage).toBe("active");
 
     const diagnosisEqual = diagnosisReadyWorkflow();
+    const equalDiagnosis = diagnosisAudit({
+      timestamp: "2026-06-10T09:01:00.000Z",
+      confidence: "confirmed",
+      owner: "engineering",
+    });
     diagnosisEqual.audits = [
+      equalDiagnosis,
+      diagnosisReviewAudit(equalDiagnosis, "2026-06-10T09:01:00.000Z"),
       sentAudit("2026-06-10T09:01:00.000Z"),
-      diagnosisAudit({
-        timestamp: "2026-06-10T09:01:00.000Z",
-        confidence: "confirmed",
-        owner: "engineering",
-      }),
     ];
     expect(buildOperatorGuidance(diagnosisEqual).stage).toBe("fix-ready");
 
@@ -787,6 +998,305 @@ describe("buildOperatorGuidance", () => {
 });
 
 describe("shared lifecycle blockers", () => {
+  it("selects only an approved current diagnosis as authoritative", () => {
+    const original = diagnosisAudit({
+      timestamp: "2026-06-10T09:02:00.000Z",
+      confidence: "confirmed",
+      owner: "engineering",
+    });
+    expect(latestAuthoritativeDiagnosis(ticketId, [original])).toBeUndefined();
+
+    const review = diagnosisReviewAudit(original, "2026-06-10T09:03:00.000Z");
+    expect(latestAuthoritativeDiagnosis(ticketId, [original, review])).toMatchObject({
+      diagnosisId: original.id,
+      diagnosis: { confidence: "confirmed", owner: "engineering" },
+      review: { decision: "approve" },
+    });
+  });
+
+  it("uses only the strictly associated review audit as the authority position", () => {
+    const original = diagnosisAudit({
+      timestamp: "2026-06-10T09:02:00.000Z",
+      confidence: "confirmed",
+      owner: "engineering",
+    });
+    const validReview = diagnosisReviewAudit(
+      original,
+      "2026-06-10T09:03:00.000Z",
+    );
+    const mismatchedOuterAudit = AuditEventSchema.parse({
+      ...validReview,
+      id: "29999999-9999-4999-8999-999999999999",
+      actor: "different-actor",
+    });
+
+    expect(
+      latestAuthoritativeDiagnosis(ticketId, [
+        original,
+        validReview,
+        mismatchedOuterAudit,
+      ])?.reviewAudit.id,
+    ).toBe(validReview.id);
+  });
+
+  it("does not let a review linked to another diagnosis unlock fix or closure", () => {
+    const original = diagnosisAudit({
+      timestamp: "2026-06-10T09:02:00.000Z",
+      confidence: "confirmed",
+      owner: "engineering",
+    });
+    const mislinkedReview = AuditEventSchema.parse({
+      ...diagnosisReviewAudit(original, "2026-06-10T09:03:00.000Z"),
+      before: { diagnosisId: "29999999-9999-4999-8999-999999999999" },
+    });
+    const audits = [
+      original,
+      mislinkedReview,
+      sentAudit("2026-06-10T09:04:00.000Z"),
+    ];
+
+    expect(latestAuthoritativeDiagnosis(ticketId, audits)).toBeUndefined();
+    expect(fixBlockers({ ticket: ticket(), audits })).toContain(
+      "An approved current diagnosis is required before marking a fix available.",
+    );
+    expect(
+      closeBlockers({
+        ticket: ticket(),
+        recommendation: recommendation({ supportState: "ready-for-close" }),
+        audits,
+      }),
+    ).toContain("A current approved diagnosis is required before ticket closure.");
+  });
+
+  it("invalidates an older review when a causally later diagnosis is backdated", () => {
+    const original = diagnosisAudit({
+      timestamp: "2026-06-10T09:02:00.000Z",
+      confidence: "confirmed",
+      owner: "engineering",
+    });
+    const review = diagnosisReviewAudit(original, "2026-06-10T09:03:00.000Z");
+    const replacement = diagnosisAudit({
+      timestamp: "2026-06-10T09:01:00.000Z",
+      confidence: "likely",
+      owner: "support",
+    });
+
+    expect(latestDiagnosisAudit([original, review, replacement])?.id).toBe(
+      replacement.id,
+    );
+    expect(
+      latestAuthoritativeDiagnosis(ticketId, [original, review, replacement]),
+    ).toBeUndefined();
+  });
+
+  it("does not let an older fix bypass a causally later unreviewed diagnosis at closure", () => {
+    const original = diagnosisAudit({
+      timestamp: "2026-06-10T09:02:00.000Z",
+      confidence: "confirmed",
+      owner: "engineering",
+    });
+    const review = diagnosisReviewAudit(original, "2026-06-10T09:03:00.000Z");
+    const fix = audit("fix-available", "2026-06-10T09:04:00.000Z", {
+      after: { fix: { status: "available" } },
+    });
+    const replacement = diagnosisAudit({
+      timestamp: "2026-06-10T09:01:00.000Z",
+      confidence: "confirmed",
+      owner: "engineering",
+    });
+
+    expect(
+      closeBlockers({
+        ticket: ticket(),
+        recommendation: recommendation({ supportState: "ready-for-close" }),
+        audits: [
+          original,
+          review,
+          fix,
+          replacement,
+          sentAudit("2026-06-10T09:05:00.000Z"),
+        ],
+      }),
+    ).toContain("A current approved diagnosis is required before ticket closure.");
+  });
+
+  it("invalidates a review when a causally later customer reply is backdated", () => {
+    const firstReply = audit("customer-reply-received", "2026-06-10T09:00:00.000Z", {
+      actor: "Maya Chen",
+      after: { body: "The original trace still reproduces the issue." },
+    });
+    const original = diagnosisAudit({
+      timestamp: "2026-06-10T09:02:00.000Z",
+      confidence: "confirmed",
+      owner: "engineering",
+    });
+    const review = diagnosisReviewAudit(
+      original,
+      "2026-06-10T09:03:00.000Z",
+      "approve",
+      { state: "reply", timestamp: firstReply.timestamp, id: firstReply.id },
+    );
+    const sent = sentAudit("2026-06-10T09:04:00.000Z");
+    const backdatedReply = audit(
+      "customer-reply-received",
+      "2026-06-10T08:59:00.000Z",
+      {
+        actor: "Maya Chen",
+        after: { body: "A causally newer reply reports different behavior." },
+      },
+    );
+    const audits = [firstReply, original, review, sent, backdatedReply];
+
+    expect(latestAuthoritativeDiagnosis(ticketId, audits)).toBeUndefined();
+    expect(fixBlockers({ ticket: ticket(), audits })).toContain(
+      "An approved current diagnosis is required before marking a fix available.",
+    );
+    expect(
+      closeBlockers({
+        ticket: ticket(),
+        recommendation: recommendation({ supportState: "ready-for-close" }),
+        audits,
+      }),
+    ).toContain("A current approved diagnosis is required before ticket closure.");
+  });
+
+  it("requires evaluation after a causally later backdated reply", () => {
+    const sent = sentAudit("2026-06-10T10:00:00.0008+02:00");
+    const laterPersistedReply = audit(
+      "customer-reply-received",
+      "2026-06-10T07:59:59.9999Z",
+      {
+        actor: "Maya Chen",
+        after: { body: "The issue still occurs after the last response." },
+      },
+    );
+
+    expect(
+      diagnosisBlockers({
+        recommendation: recommendation(),
+        audits: [sent, laterPersistedReply],
+      }),
+    ).toContain("Evaluate the latest customer reply before diagnosis.");
+  });
+
+  it("does not let an earlier fix bypass closure after a causally later customer reply", () => {
+    const firstReply = audit("customer-reply-received", "2026-06-10T09:00:00.000Z", {
+      actor: "Maya Chen",
+      after: { body: "The original trace still reproduces the issue." },
+    });
+    const original = diagnosisAudit({
+      timestamp: "2026-06-10T09:02:00.000Z",
+      confidence: "confirmed",
+      owner: "engineering",
+    });
+    const review = diagnosisReviewAudit(
+      original,
+      "2026-06-10T09:03:00.000Z",
+      "approve",
+      { state: "reply", timestamp: firstReply.timestamp, id: firstReply.id },
+    );
+    const diagnosisSent = sentAudit("2026-06-10T09:04:00.000Z");
+    const fix = audit("fix-available", "2026-06-10T09:05:00.000Z", {
+      after: { fix: { status: "available" } },
+    });
+    const backdatedReply = audit(
+      "customer-reply-received",
+      "2026-06-10T08:59:00.000Z",
+      {
+        actor: "Maya Chen",
+        after: { body: "The issue changed after the recorded fix." },
+      },
+    );
+    const readyResponse = sentAudit("2026-06-10T09:06:00.000Z");
+
+    expect(
+      closeBlockers({
+        ticket: ticket(),
+        recommendation: recommendation({ supportState: "ready-for-close" }),
+        audits: [
+          firstReply,
+          original,
+          review,
+          diagnosisSent,
+          fix,
+          backdatedReply,
+          readyResponse,
+        ],
+      }),
+    ).toContain("A current approved diagnosis is required before ticket closure.");
+  });
+
+  it("does not let an ungoverned fix after a newer reply bypass closure", () => {
+    const firstReply = audit("customer-reply-received", "2026-06-10T09:00:00.000Z");
+    const original = diagnosisAudit({
+      timestamp: "2026-06-10T09:02:00.000Z",
+      confidence: "confirmed",
+      owner: "engineering",
+    });
+    const review = diagnosisReviewAudit(
+      original,
+      "2026-06-10T09:03:00.000Z",
+      "approve",
+      { state: "reply", timestamp: firstReply.timestamp, id: firstReply.id },
+    );
+    const newerReply = audit("customer-reply-received", "2026-06-10T09:04:00.000Z");
+    const ungovernedFix = audit("fix-available", "2026-06-10T09:05:00.000Z", {
+      after: { fix: { status: "available" } },
+    });
+
+    expect(
+      closeBlockers({
+        ticket: ticket(),
+        recommendation: recommendation({ supportState: "ready-for-close" }),
+        audits: [
+          firstReply,
+          original,
+          review,
+          sentAudit("2026-06-10T09:03:30.000Z"),
+          newerReply,
+          ungovernedFix,
+          sentAudit("2026-06-10T09:06:00.000Z"),
+        ],
+      }),
+    ).toContain("A current approved diagnosis is required before ticket closure.");
+  });
+
+  it("blocks a fix when the diagnosis is unreviewed or its review is stale", () => {
+    const original = diagnosisAudit({
+      timestamp: "2026-06-10T09:02:00.000Z",
+      confidence: "confirmed",
+      owner: "engineering",
+    });
+    expect(fixBlockers({ ticket: ticket(), audits: [original] })).toContain(
+      "An approved current diagnosis is required before marking a fix available.",
+    );
+
+    const review = diagnosisReviewAudit(original, "2026-06-10T09:03:00.000Z");
+    const newerReply = audit("customer-reply-received", "2026-06-10T09:04:00.000Z", {
+      actor: "Maya Chen",
+      after: { body: "The symptoms changed after the review." },
+    });
+    expect(fixBlockers({ ticket: ticket(), audits: [original, review, newerReply] })).toContain(
+      "An approved current diagnosis is required before marking a fix available.",
+    );
+  });
+
+  it("blocks fix and closure gates after the reviewed ticket revision changes", () => {
+    const input = confirmedEngineeringDiagnosisWorkflow();
+    const revisedTicket = ticket({ revision: 3 });
+
+    expect(fixBlockers({ ticket: revisedTicket, audits: input.audits })).toContain(
+      "An approved current diagnosis is required before marking a fix available.",
+    );
+    expect(
+      closeBlockers({
+        ticket: revisedTicket,
+        recommendation: recommendation({ supportState: "ready-for-close" }),
+        audits: input.audits,
+      }),
+    ).toContain("A current approved diagnosis is required before ticket closure.");
+  });
+
   it("returns exact diagnosis blocker arrays in enforced order", () => {
     expect(diagnosisBlockers({ recommendation: undefined, audits: [] })).toEqual([
       "A completed evaluation is required before diagnosis.",
@@ -842,12 +1352,13 @@ describe("shared lifecycle blockers", () => {
   });
 
   it("returns exact fix blocker arrays in enforced order", () => {
-    expect(fixBlockers({ audits: [] })).toEqual([
+    expect(fixBlockers({ ticket: ticket(), audits: [] })).toEqual([
       "A completed diagnosis is required before marking a fix available.",
     ]);
 
     expect(
       fixBlockers({
+        ticket: ticket(),
         audits: [
           diagnosisAudit({
             timestamp: "2026-06-10T09:02:00.000Z",
@@ -860,6 +1371,7 @@ describe("shared lifecycle blockers", () => {
         ],
       }),
     ).toEqual([
+      "An approved current diagnosis is required before marking a fix available.",
       "A confirmed diagnosis is required before marking a fix available.",
       "This confirmed diagnosis does not require a platform fix.",
       "A fix has already been recorded for the latest diagnosis.",
@@ -867,13 +1379,13 @@ describe("shared lifecycle blockers", () => {
     ]);
 
     const input = confirmedEngineeringDiagnosisWorkflow();
-    expect(fixBlockers({ audits: input.audits })).toEqual([]);
+    expect(fixBlockers({ ticket: input.ticket, audits: input.audits })).toEqual([]);
   });
 
   it("blocks fixes when a diagnosis still has unresolved plausible causes", () => {
     const input = confirmedEngineeringDiagnosisWorkflow();
     const sent = input.audits[0];
-    const diagnosisResponse = input.audits[2];
+    const diagnosisResponse = input.audits.at(-1)!;
     expect(sent).toBeDefined();
     expect(diagnosisResponse).toBeDefined();
     input.audits = [
@@ -911,7 +1423,8 @@ describe("shared lifecycle blockers", () => {
       diagnosisResponse,
     ];
 
-    expect(fixBlockers({ audits: input.audits })).toEqual([
+    expect(fixBlockers({ ticket: input.ticket, audits: input.audits })).toEqual([
+      "An approved current diagnosis is required before marking a fix available.",
       "A diagnosis with unresolved plausible causes cannot unlock a fix.",
     ]);
   });
@@ -920,6 +1433,7 @@ describe("shared lifecycle blockers", () => {
     const diagnosis = escalatedDiagnosisAudit();
     expect(
       fixBlockers({
+        ticket: ticket(),
         audits: [
           diagnosis,
           sentAudit("2026-06-10T09:03:00.000Z"),

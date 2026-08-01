@@ -244,6 +244,81 @@ export const approvalDeskHtml = `<!doctype html>
         margin-top: 0.65rem;
       }
 
+      .queue-status-line {
+        align-items: center;
+        display: flex;
+        gap: 0.35rem;
+        margin-top: 0.65rem;
+      }
+
+      .queue-status-indicator {
+        align-items: center;
+        background: var(--panel-soft);
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        color: var(--accent-dark);
+        display: inline-flex;
+        font-size: 0.82rem;
+        font-weight: 700;
+        gap: 0.32rem;
+        padding: 0.24rem 0.5rem;
+      }
+
+      .queue-status-indicator.ready-for-close {
+        background: #ecfdf3;
+        border-color: #23a06b;
+        color: #087443;
+      }
+
+      .queue-status-info {
+        align-items: center;
+        background: white;
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        color: var(--muted);
+        cursor: help;
+        display: inline-flex;
+        font-size: 0.74rem;
+        font-weight: 800;
+        height: 1.3rem;
+        justify-content: center;
+        width: 1.3rem;
+      }
+
+      .diagnosis-panel {
+        margin-top: 0.75rem;
+      }
+
+      .diagnosis-panel textarea {
+        min-height: 4.5rem;
+      }
+
+      .diagnosis-review-grid,
+      .diagnosis-impact-list,
+      .diagnosis-results {
+        display: grid;
+        gap: 0.65rem;
+      }
+
+      .diagnosis-impact-candidate {
+        background: #fbfcff;
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        padding: 0.7rem;
+      }
+
+      .diagnosis-impact-candidate label {
+        align-items: center;
+        display: flex;
+        font-weight: 700;
+        gap: 0.5rem;
+      }
+
+      .diagnosis-impact-candidate input[type="checkbox"] {
+        height: 1rem;
+        width: 1rem;
+      }
+
       .workflow-action-stack {
         bottom: 1rem;
         display: grid;
@@ -956,6 +1031,12 @@ export const approvalDeskHtml = `<!doctype html>
           <div id="ticketPanel">
             <p class="hint">No ticket selected.</p>
           </div>
+          <section class="card diagnosis-panel" aria-label="Diagnosis review">
+            <h3>Diagnosis review</h3>
+            <div id="diagnosisPanel">
+              <p class="hint">Select a ticket to review recorded diagnoses.</p>
+            </div>
+          </section>
           <section class="card conversation-context" aria-label="Conversation Context">
             <h3>Conversation context</h3>
             <div id="conversationContextPanel">
@@ -1121,7 +1202,17 @@ export const approvalDeskHtml = `<!doctype html>
         consumedCustomerReplyTimestamp: null,
         knowledgeCandidate: null,
         knowledgeAdvisory: null,
-        knowledgeRequestId: 0
+        knowledgeRequestId: 0,
+        ticketRequestId: 0,
+        operatorGuidance: null,
+        diagnoses: [],
+        diagnosisLoading: false,
+        selectedDiagnosisId: null,
+        diagnosisDraft: null,
+        diagnosisReviewRationale: '',
+        diagnosisImpact: { rationale: '', selectedTicketIds: [], ticketReasons: {} },
+        diagnosisFixResults: [],
+        diagnosisMutationTokens: {}
       };
 
       const els = {
@@ -1147,6 +1238,7 @@ export const approvalDeskHtml = `<!doctype html>
         decisionChips: document.getElementById('decisionChips'),
         decisionControls: document.getElementById('decisionControls'),
         decisionSummary: document.getElementById('decisionSummary'),
+        diagnosisPanel: document.getElementById('diagnosisPanel'),
         diagnoseButton: document.getElementById('diagnoseButton'),
         draftStyle: document.getElementById('draftStyle'),
         editApprovalControls: document.getElementById('editApprovalControls'),
@@ -1301,6 +1393,7 @@ export const approvalDeskHtml = `<!doctype html>
               '<p class="hint">Select a ticket to inspect technical fields.</p>' +
             '</section>';
           els.createRecommendation.disabled = true;
+          renderDiagnosisPanel();
           return;
         }
         els.createRecommendation.disabled = !canCreateRecommendation();
@@ -1331,6 +1424,286 @@ export const approvalDeskHtml = `<!doctype html>
               card('Tags', ticket.tags.join(', ')) +
             '</div>' +
           '</section>';
+        renderDiagnosisPanel();
+      }
+
+      function resetDiagnosisInteraction() {
+        state.selectedDiagnosisId = null;
+        state.diagnosisDraft = null;
+        state.diagnosisReviewRationale = '';
+        state.diagnosisImpact = { rationale: '', selectedTicketIds: [], ticketReasons: {} };
+        state.diagnosisFixResults = [];
+      }
+
+      function selectedDiagnosisView() {
+        if (!Array.isArray(state.diagnoses) || state.diagnoses.length === 0) {
+          return null;
+        }
+        return state.diagnoses.find(function (view) {
+          return view.originalDiagnosis?.id === state.selectedDiagnosisId;
+        }) ?? state.diagnoses.at(-1) ?? null;
+      }
+
+      function diagnosisContextForView(view) {
+        const review = view?.latestReview;
+        return review?.decision === 'approve' || review?.decision === 'revalidate'
+          ? review.editedDiagnosis
+          : view?.originalDiagnosis?.after?.diagnosis ?? null;
+      }
+
+      function isCurrentTicketRequest(ticketId, requestId) {
+        return state.ticketRequestId === requestId && state.selectedTicket?.id === ticketId;
+      }
+
+      function isCurrentDiagnosisRequest(ticketId, diagnosisId, requestId) {
+        return isCurrentTicketRequest(ticketId, requestId) &&
+          selectedDiagnosisView()?.originalDiagnosis?.id === diagnosisId;
+      }
+
+      function diagnosisMutationKey(ticketId, diagnosisId) {
+        return ticketId + ':' + diagnosisId;
+      }
+
+      function beginDiagnosisMutation(ticketId, diagnosisId) {
+        const key = diagnosisMutationKey(ticketId, diagnosisId);
+        const nextToken = (state.diagnosisMutationTokens[key] ?? 0) + 1;
+        state.diagnosisMutationTokens[key] = nextToken;
+        return nextToken;
+      }
+
+      function isCurrentDiagnosisMutation(ticketId, diagnosisId, requestId, mutationToken) {
+        return isCurrentDiagnosisRequest(ticketId, diagnosisId, requestId) &&
+          state.diagnosisMutationTokens[diagnosisMutationKey(ticketId, diagnosisId)] === mutationToken;
+      }
+
+      function diagnosisDraftForView(view) {
+        if (state.diagnosisDraft !== null) {
+          return state.diagnosisDraft;
+        }
+        const source = diagnosisContextForView(view);
+        if (source === null) {
+          return null;
+        }
+        state.diagnosisDraft = JSON.parse(JSON.stringify(source));
+        return state.diagnosisDraft;
+      }
+
+      function safeStaleReason(reason) {
+        const labels = {
+          'newer-customer-reply': 'A newer customer reply needs re-evaluation.',
+          'newer-ticket-revision': 'The ticket changed after this diagnosis was recorded.',
+          'contradictory-evidence': 'New evidence conflicts with this diagnosis.',
+          'newer-diagnosis': 'A newer diagnosis is available for this ticket.',
+          'newer-diagnosis-review': 'A newer diagnosis review is available for this ticket.',
+          'invalidating-fix-signal': 'A later fix signal may have changed the diagnostic context.',
+          'invalidating-event-signal': 'A later event signal may have changed the diagnostic context.',
+          'knowledge-workflow-changed': 'The linked workflow changed and needs review.'
+        };
+        return labels[reason] ?? 'This diagnosis needs review before it can be used.';
+      }
+
+      function customerReplyWatermarkLabel(watermark) {
+        if (watermark?.state !== 'reply') {
+          return 'No customer reply was captured at review time.';
+        }
+        return 'Customer reply captured at ' + String(watermark.timestamp ?? 'an unknown time') + '.';
+      }
+
+      function renderDiagnosisPanel() {
+        if (state.selectedTicket === null) {
+          els.diagnosisPanel.innerHTML = '<p class="hint">Select a ticket to review recorded diagnoses.</p>';
+          return;
+        }
+        if (state.diagnosisLoading === true) {
+          els.diagnosisPanel.innerHTML = '<p class="hint">Loading diagnosis review...</p>';
+          return;
+        }
+        const view = selectedDiagnosisView();
+        if (view === null) {
+          els.diagnosisPanel.innerHTML = '<p class="hint">No recorded diagnoses are available for this ticket yet.</p>';
+          return;
+        }
+        const original = view.originalDiagnosis?.after?.diagnosis ?? {};
+        const current = diagnosisContextForView(view) ?? {};
+        const draft = diagnosisDraftForView(view) ?? {};
+        const reviews = Array.isArray(view.reviews) ? view.reviews : [];
+        const staleReasons = Array.isArray(view.staleReasons) ? view.staleReasons : [];
+        const ticketId = state.selectedTicket.id;
+        const selected = new Set(state.diagnosisImpact.selectedTicketIds ?? []);
+        const sourceReason = state.diagnosisImpact.ticketReasons?.[ticketId] ?? '';
+        const selector = state.diagnoses.length > 1
+          ? '<div class="quick-reasons" aria-label="Recorded diagnoses">' + state.diagnoses.map(function (candidate) {
+              const candidateId = candidate.originalDiagnosis?.id ?? '';
+              return '<button type="button" class="secondary" data-action="select-diagnosis" data-diagnosis-id="' + escapeHtml(candidateId) + '">' +
+                escapeHtml(candidate.originalDiagnosis?.timestamp ?? 'Recorded diagnosis') +
+              '</button>';
+            }).join('') + '</div>'
+          : '';
+        const reviewHistory = reviews.length === 0
+          ? '<p class="hint">No review decisions recorded yet.</p>'
+          : '<ul>' + reviews.map(function (review) {
+              return '<li><strong>' + escapeHtml(review.decision) + '</strong> · ' +
+                escapeHtml(review.actor) + ' · ' + escapeHtml(review.reviewedAt) +
+                (review.rationale === undefined ? '' : '<br>' + escapeHtml(review.rationale)) +
+              '</li>';
+            }).join('') + '</ul>';
+        const stale = view.stale === true
+          ? '<div class="warning" role="status"><strong>Review required</strong><ul>' +
+            staleReasons.map(function (reason) { return '<li>' + escapeHtml(safeStaleReason(reason)) + '</li>'; }).join('') +
+          '</ul></div>'
+          : '<p class="meta">Current against the server-provided review watermark.</p>';
+        const results = Array.isArray(state.diagnosisFixResults) && state.diagnosisFixResults.length > 0
+          ? '<section class="diagnosis-results" aria-label="Scoped fix results"><h4>Scoped fix results</h4>' +
+            state.diagnosisFixResults.map(function (result) {
+              return '<div class="card"><strong>' + escapeHtml(result.ticketId ?? 'Ticket') + ' · ' +
+                escapeHtml(result.action ?? 'fix') + ' · ' + escapeHtml(result.result ?? 'recorded') + '</strong>' +
+                '<p class="meta">Verification remains governed by the ticket workflow.</p></div>';
+            }).join('') +
+          '</section>'
+          : '';
+        els.diagnosisPanel.innerHTML =
+          selector +
+          '<div class="diagnosis-review-grid">' +
+            stale +
+            '<section class="card"><h4>Original diagnosis</h4>' +
+              '<p>' + escapeHtml(original.customerSafeSummary ?? 'No customer-safe summary was recorded.') + '</p>' +
+              '<p class="meta">Recorded by ' + escapeHtml(view.originalDiagnosis?.actor ?? 'unknown') + ' · ' +
+                escapeHtml(view.originalDiagnosis?.timestamp ?? 'unknown time') + '</p>' +
+            '</section>' +
+            '<section class="card"><h4>Current reviewed diagnosis</h4>' +
+              '<p>' + escapeHtml(current.customerSafeSummary ?? 'No current reviewed diagnosis is available.') + '</p>' +
+              '<p class="meta">' + escapeHtml(current.causeType ?? 'unknown cause') + ' · ' +
+                escapeHtml(current.confidence ?? 'unknown confidence') + ' · ' + escapeHtml(current.owner ?? 'unknown owner') + '</p>' +
+              '<p class="meta">Evidence: ' + escapeHtml(Array.isArray(current.evidenceUsed) ? current.evidenceUsed.join(', ') : 'none recorded') + '</p>' +
+              '<p class="meta">Workflow context: ' + escapeHtml(current.recommendedNextAction ?? 'No next action recorded.') + '</p>' +
+              '<p class="meta">' + escapeHtml(customerReplyWatermarkLabel(view.sourceConversationWatermark)) + '</p>' +
+            '</section>' +
+            '<details><summary>Review history</summary>' + reviewHistory + '</details>' +
+            '<section class="card"><h4>Review draft</h4>' +
+              '<p class="hint">Edits remain local until an explicit review action succeeds. The original diagnosis is preserved in history.</p>' +
+              '<label>Customer-safe summary<textarea data-diagnosis-draft-field="customerSafeSummary">' + escapeHtml(draft.customerSafeSummary ?? '') + '</textarea></label>' +
+              '<label>Recommended next action<textarea data-diagnosis-draft-field="recommendedNextAction">' + escapeHtml(draft.recommendedNextAction ?? '') + '</textarea></label>' +
+              '<label>Review rationale<textarea data-diagnosis-review-rationale="true" placeholder="Required for reject or revalidate.">' + escapeHtml(state.diagnosisReviewRationale) + '</textarea></label>' +
+              '<div class="bar-actions">' +
+                '<button type="button" class="secondary" data-action="review-diagnosis" data-decision="approve">Approve diagnosis</button>' +
+                '<button type="button" class="secondary" data-action="review-diagnosis" data-decision="revalidate">Revalidate</button>' +
+                '<button type="button" class="danger" data-action="review-diagnosis" data-decision="reject">Reject diagnosis</button>' +
+              '</div>' +
+            '</section>' +
+            '<section class="card"><h4>Diagnosis-specific fix</h4>' +
+              '<p>' + escapeHtml(current.recommendedNextAction ?? 'The service will determine whether a fix is available.') + '</p>' +
+              '<p class="hint">Suggested impact candidates are never preselected. Related-ticket discovery is added in a later governed analysis slice; this route currently provides the source ticket only.</p>' +
+              '<div class="diagnosis-impact-list"><div class="diagnosis-impact-candidate">' +
+                '<label><input type="checkbox" data-impact-ticket="' + escapeHtml(ticketId) + '"' + (selected.has(ticketId) ? ' checked' : '') + '> ' +
+                '<span>Suggested impact candidate: ' + escapeHtml(ticketId) + ' ' + (selected.has(ticketId) ? '(selected)' : '(not selected)') + '</span></label>' +
+                '<label>Ticket rationale<input data-impact-ticket-reason="' + escapeHtml(ticketId) + '" value="' + escapeHtml(sourceReason) + '" placeholder="Why does this diagnosis apply?"></label>' +
+              '</div></div>' +
+              '<label>Operator impact-set rationale<textarea data-impact-field="rationale" placeholder="Explain why the explicitly selected tickets share this diagnosis.">' + escapeHtml(state.diagnosisImpact.rationale) + '</textarea></label>' +
+              '<div class="bar-actions"><button type="button" class="accent-action" data-action="apply-diagnosis-fix">Apply scoped fix</button></div>' +
+            '</section>' +
+            results +
+          '</div>';
+      }
+
+      async function loadDiagnoses(ticketId, ticketRequestId) {
+        const data = await requestJson('/api/tickets/' + encodeURIComponent(ticketId) + '/diagnoses', undefined, {
+          writeErrorToResult: false
+        });
+        if (!isCurrentTicketRequest(ticketId, ticketRequestId)) {
+          return;
+        }
+        state.diagnoses = Array.isArray(data.diagnoses) ? data.diagnoses : [];
+        state.diagnosisLoading = false;
+        renderDiagnosisPanel();
+      }
+
+      async function reviewSelectedDiagnosis(decision) {
+        const view = selectedDiagnosisView();
+        const draft = diagnosisDraftForView(view);
+        if (state.selectedTicket === null || view === null || draft === null) {
+          return;
+        }
+        const ticketId = state.selectedTicket.id;
+        const diagnosisId = view.originalDiagnosis.id;
+        const ticketRequestId = state.ticketRequestId;
+        const mutationToken = beginDiagnosisMutation(ticketId, diagnosisId);
+        const body = {
+          decision,
+          sourceTicketRevision: view.sourceTicketRevision,
+          sourceConversationWatermark: view.sourceConversationWatermark,
+          editedDiagnosis: draft,
+          actor: els.actor.value.trim() || 'approval-desk'
+        };
+        if (state.diagnosisReviewRationale.trim() !== '') {
+          body.rationale = state.diagnosisReviewRationale.trim();
+        }
+        let data;
+        try {
+          data = await requestJson('/api/tickets/' + encodeURIComponent(ticketId) + '/diagnoses/' + encodeURIComponent(diagnosisId) + '/review', {
+            method: 'POST',
+            body: JSON.stringify(body)
+          }, { writeErrorToResult: false });
+        } catch (error) {
+          if (isCurrentDiagnosisMutation(ticketId, diagnosisId, ticketRequestId, mutationToken)) {
+            setResult({ error: error instanceof Error ? error.message : 'Request failed.' });
+          }
+          return;
+        }
+        if (!isCurrentDiagnosisMutation(ticketId, diagnosisId, ticketRequestId, mutationToken)) {
+          return;
+        }
+        state.diagnoses = Array.isArray(data.diagnoses) ? data.diagnoses : state.diagnoses;
+        state.diagnosisDraft = null;
+        state.diagnosisReviewRationale = '';
+        state.diagnosisImpact = { rationale: '', selectedTicketIds: [], ticketReasons: {} };
+        state.diagnosisFixResults = [];
+        renderDiagnosisPanel();
+        setResult(data);
+      }
+
+      async function applySelectedDiagnosisFix() {
+        const view = selectedDiagnosisView();
+        if (state.selectedTicket === null || view === null) {
+          return;
+        }
+        const ticketId = state.selectedTicket.id;
+        const diagnosisId = view.originalDiagnosis.id;
+        const ticketRequestId = state.ticketRequestId;
+        const mutationToken = beginDiagnosisMutation(ticketId, diagnosisId);
+        const actor = els.actor.value.trim() || 'approval-desk';
+        const selectedTicketIds = Array.isArray(state.diagnosisImpact.selectedTicketIds)
+          ? state.diagnosisImpact.selectedTicketIds
+          : [];
+        let data;
+        try {
+          data = await requestJson('/api/tickets/' + encodeURIComponent(ticketId) + '/diagnoses/' + encodeURIComponent(diagnosisId) + '/fix', {
+            method: 'POST',
+            body: JSON.stringify({
+              actor,
+              impactSet: {
+                actor,
+                rationale: state.diagnosisImpact.rationale,
+                tickets: selectedTicketIds.map(function (ticketId) {
+                  return { ticketId, reason: state.diagnosisImpact.ticketReasons?.[ticketId] ?? '' };
+                })
+              }
+            })
+          }, { writeErrorToResult: false });
+        } catch (error) {
+          if (isCurrentDiagnosisMutation(ticketId, diagnosisId, ticketRequestId, mutationToken)) {
+            setResult({ error: error instanceof Error ? error.message : 'Request failed.' });
+          }
+          return;
+        }
+        if (!isCurrentDiagnosisMutation(ticketId, diagnosisId, ticketRequestId, mutationToken)) {
+          return;
+        }
+        state.diagnosisFixResults = Array.isArray(data.auditEvents) ? data.auditEvents : [];
+        state.diagnosisImpact = { rationale: '', selectedTicketIds: [], ticketReasons: {} };
+        state.diagnosisDraft = null;
+        state.diagnosisReviewRationale = '';
+        renderDiagnosisPanel();
+        setResult(data);
       }
 
       function createRecommendationLabel() {
@@ -1441,16 +1814,20 @@ export const approvalDeskHtml = `<!doctype html>
 
       function renderQueueBadges(ticket) {
         const summary = ticket.recommendationSummary ?? {};
-        const badges = [
-          summary.priority ?? ticket.priority,
-          summary.slaRisk === 'likely' || ticket.sla?.breached ? 'SLA risk' : null,
-          summary.outageRisk === 'likely' ? 'Outage risk' : null,
-          summary.securityRisk === 'possible' || summary.securityRisk === 'likely' ? 'Security risk' : null
-        ].filter(Boolean);
-        if (badges.length === 0) {
-          return '';
-        }
-        return '<span class="queue-badges">' + badges.map(chip).join('') + '</span>';
+        const priority = summary.priority ?? ticket.priority ?? 'Priority unset';
+        const supportState = summary.supportState;
+        const readyForClose = supportState === 'ready-for-close';
+        const workflow = readyForClose ? 'Ready to close' : workflowStateLabel(ticketWorkflowState(ticket));
+        const label = priority + ' · ' + workflow;
+        const detail = readyForClose
+          ? 'The server marked the latest workflow response ready for an explicit closure action.'
+          : 'Current queue status from the server workflow read model.';
+        return '<span class="queue-status-line">' +
+          '<span class="queue-status-indicator' + (readyForClose ? ' ready-for-close' : '') + '" role="status" aria-label="' + escapeHtml(label) + '">' +
+            '<span aria-hidden="true">' + (readyForClose ? '✓' : '•') + '</span>' + escapeHtml(label) +
+          '</span>' +
+          '<span class="queue-status-info" role="img" aria-label="Queue status details" title="' + escapeHtml(detail) + '">i</span>' +
+        '</span>';
       }
 
       function renderRequesterCard(ticket) {
@@ -1593,9 +1970,11 @@ export const approvalDeskHtml = `<!doctype html>
         const waitingForReply = isTaskDoneWaitingForReply();
         const customerReplyReady = latestUnconsumedCustomerReply() !== null;
         const closeReady = shouldShowCloseTicketAction();
-        const workflowActionReady = shouldShowCreateUpdatedRecommendation() || shouldShowDiagnoseAction() || shouldShowFixAction() || closeReady;
+        const diagnosisActionReady = shouldShowDiagnoseAction();
+        const fixActionReady = shouldShowFixAction();
+        const workflowActionReady = shouldShowCreateUpdatedRecommendation() || diagnosisActionReady || fixActionReady || closeReady;
         els.setupControls.hidden = hasRecommendation;
-        els.decisionControls.hidden = !hasRecommendation || (waitingForReply && !workflowActionReady) || state.stage === 'approval' || state.stage === 'reject';
+        els.decisionControls.hidden = (!hasRecommendation && !diagnosisActionReady && !fixActionReady) || (waitingForReply && !workflowActionReady) || state.stage === 'approval' || state.stage === 'reject';
         els.editApprovalControls.hidden = !(hasRecommendation && state.stage === 'approval');
         els.rejectControls.hidden = !(hasRecommendation && state.stage === 'reject');
         els.replyControls.hidden = !shouldShowReplyControls();
@@ -1611,11 +1990,11 @@ export const approvalDeskHtml = `<!doctype html>
         els.continueApproval.hidden = !hasRecommendation || approvedWorkflow || shouldShowCreateUpdatedRecommendation();
         els.markSentButton.hidden = true;
         els.createUpdatedRecommendation.hidden = !shouldShowCreateUpdatedRecommendation();
-        els.diagnoseButton.hidden = !shouldShowDiagnoseAction();
-        els.fixButton.hidden = !shouldShowFixAction();
+        els.diagnoseButton.hidden = !diagnosisActionReady;
+        els.fixButton.hidden = !fixActionReady;
         els.closeTicketButton.hidden = !closeReady;
-        els.approveButton.hidden = shouldShowCreateUpdatedRecommendation() || closeReady;
-        els.startRejectButton.hidden = approvedWorkflow || closeReady;
+        els.approveButton.hidden = !hasRecommendation || shouldShowCreateUpdatedRecommendation() || closeReady;
+        els.startRejectButton.hidden = !hasRecommendation || approvedWorkflow || closeReady;
         els.backToRecommendation.hidden = !(hasRecommendation && state.stage === 'approval');
         els.decisionChips.innerHTML = hasRecommendation ? renderDecisionChips(state.recommendation) : '';
         els.decisionSummary.textContent = hasRecommendation ? decisionSummaryText(state.recommendation) : 'Review the draft and evidence, then approve or edit.';
@@ -1785,44 +2164,13 @@ export const approvalDeskHtml = `<!doctype html>
       }
 
       function shouldShowDiagnoseAction() {
-        if (state.selectedTicket === null || state.recommendation === null) {
-          return false;
-        }
-        const missing = Array.isArray(state.recommendation.missingEvidence) ? state.recommendation.missingEvidence : [];
-        const supportState = state.recommendation.supportState ?? '';
-        return isTaskDoneWaitingForReply() &&
-          latestUnconsumedCustomerReply() === null &&
-          missing.length === 0 &&
-          (supportState === 'diagnosing' || supportState === 'waiting-on-platform-fix') &&
-          !hasDiagnosisForCurrentContext();
-      }
-
-      function hasDiagnosisForCurrentContext() {
-        const diagnosis = latestTimelineItem('diagnosis');
-        if (diagnosis === null) {
-          return false;
-        }
-        const latestReply = latestCustomerReply();
-        return latestReply === null ||
-          String(diagnosis.timestamp ?? '') >= String(latestReply.timestamp ?? '');
+        return state.selectedTicket !== null &&
+          (state.operatorGuidance === null || state.operatorGuidance.nextAction === 'record-diagnosis');
       }
 
       function shouldShowFixAction() {
-        if (state.selectedTicket === null || state.recommendation === null) {
-          return false;
-        }
-        const diagnosis = latestTimelineItem('diagnosis');
-        if (diagnosis === null || latestTimelineItem('fix') !== null) {
-          return false;
-        }
-        if (!diagnosisAllowsPlatformFix(diagnosis)) {
-          return false;
-        }
-        const supportAfterDiagnosis = latestTimelineItem('support-response-sent');
-        return isTaskDoneWaitingForReply() &&
-          latestUnconsumedCustomerReply() === null &&
-          supportAfterDiagnosis !== null &&
-          String(supportAfterDiagnosis.timestamp ?? '') >= String(diagnosis.timestamp ?? '');
+        return state.selectedTicket !== null &&
+          (state.operatorGuidance === null || state.operatorGuidance.nextAction === 'mark-fix-available');
       }
 
       function shouldShowCloseTicketAction() {
@@ -1831,11 +2179,6 @@ export const approvalDeskHtml = `<!doctype html>
           ticketWorkflowState(state.selectedTicket) !== 'resolved' &&
           state.recommendation.supportState === 'ready-for-close' &&
           isTaskDoneWaitingForReply();
-      }
-
-      function diagnosisAllowsPlatformFix(diagnosis) {
-        return diagnosis.confidence === 'confirmed' &&
-          (diagnosis.owner === 'engineering' || diagnosis.owner === 'integration-partner');
       }
 
       function renderPendingReplyPreview() {
@@ -1866,8 +2209,8 @@ export const approvalDeskHtml = `<!doctype html>
       function shouldShowReplyControls() {
         return state.selectedTicket !== null &&
           !shouldShowCloseTicketAction() &&
-          !shouldShowDiagnoseAction() &&
-          !shouldShowFixAction() &&
+          state.operatorGuidance?.nextAction !== 'record-diagnosis' &&
+          state.operatorGuidance?.nextAction !== 'mark-fix-available' &&
           (isTaskDoneWaitingForReply() || latestUnconsumedCustomerReply() !== null);
       }
 
@@ -2121,7 +2464,23 @@ export const approvalDeskHtml = `<!doctype html>
 
       async function selectTicket(id) {
         const previousTicketId = state.selectedTicket?.id;
+        const newSelection = previousTicketId !== id;
         const switchingTickets = previousTicketId !== undefined && previousTicketId !== id;
+        const ticketRequestId = ++state.ticketRequestId;
+        if (newSelection) {
+          resetDiagnosisInteraction();
+          state.diagnoses = [];
+          state.diagnosisLoading = true;
+          state.operatorGuidance = null;
+          state.selectedTicket = null;
+          state.recommendation = null;
+          state.stage = 'empty';
+          renderTicketList();
+          renderTicket();
+          renderConversationContext();
+          renderRecommendation();
+          els.diagnosisPanel.innerHTML = '<p class="hint">Loading diagnosis review...</p>';
+        }
         if (switchingTickets) {
           state.consumedCustomerReplyTimestamp = null;
         }
@@ -2129,17 +2488,39 @@ export const approvalDeskHtml = `<!doctype html>
         state.knowledgeCandidate = null;
         state.knowledgeAdvisory = null;
         if (switchingTickets) {
-          state.recommendation = null;
-          state.stage = 'empty';
-          renderRecommendation();
           els.recommendationPanel.innerHTML =
             '<section class="hero-card description"><strong>Loading ticket...</strong>' +
             '<p>Refreshing the ticket and knowledge review state.</p></section>';
         }
-        const data = await requestJson('/api/tickets/' + encodeURIComponent(id));
+        let data;
+        try {
+          data = await requestJson('/api/tickets/' + encodeURIComponent(id), undefined, {
+            writeErrorToResult: false
+          });
+        } catch (error) {
+          if (state.ticketRequestId === ticketRequestId) {
+            state.diagnosisLoading = false;
+            els.diagnosisPanel.innerHTML = '<p class="warning">Ticket could not be loaded: ' +
+              escapeHtml(error instanceof Error ? error.message : 'Request failed.') + '</p>';
+            setResult({ error: error instanceof Error ? error.message : 'Request failed.' });
+          }
+          return;
+        }
+        if (state.ticketRequestId !== ticketRequestId) {
+          return;
+        }
         state.selectedTicket = data.recommendationSummary === undefined
           ? data.ticket
           : { ...data.ticket, recommendationSummary: data.recommendationSummary };
+        state.operatorGuidance = data.operatorGuidance ?? null;
+        void loadDiagnoses(id, ticketRequestId).catch(function (error) {
+          if (isCurrentTicketRequest(id, ticketRequestId)) {
+            state.diagnosisLoading = false;
+            els.diagnosisPanel.innerHTML = '<p class="warning">Diagnosis review could not be loaded: ' +
+              escapeHtml(error instanceof Error ? error.message : 'Request failed.') + '</p>';
+            setResult({ error: error instanceof Error ? error.message : 'Request failed.' });
+          }
+        });
         state.conversationTimeline = Array.isArray(data.conversationTimeline) ? data.conversationTimeline : [];
         state.recommendationHistory = Array.isArray(data.recommendationHistory) ? data.recommendationHistory : [];
         state.recommendation = data.latestRecommendation ?? null;
@@ -3457,6 +3838,60 @@ export const approvalDeskHtml = `<!doctype html>
         }
         if (event.target?.dataset?.action === 'reject-knowledge') {
           void reviewKnowledgeCandidate('reject').catch(function (error) { setResult({ error: error.message }); });
+        }
+      });
+      els.diagnosisPanel.addEventListener('input', function (event) {
+        const target = event.target;
+        const draftField = target?.dataset?.diagnosisDraftField;
+        if (draftField === 'customerSafeSummary' || draftField === 'recommendedNextAction') {
+          const draft = diagnosisDraftForView(selectedDiagnosisView());
+          if (draft !== null) {
+            draft[draftField] = target.value;
+          }
+        }
+        if (target?.dataset?.diagnosisReviewRationale === 'true') {
+          state.diagnosisReviewRationale = target.value;
+        }
+        if (target?.dataset?.impactField === 'rationale') {
+          state.diagnosisImpact.rationale = target.value;
+        }
+        const impactTicketId = target?.dataset?.impactTicketReason;
+        if (impactTicketId !== undefined) {
+          state.diagnosisImpact.ticketReasons = {
+            ...state.diagnosisImpact.ticketReasons,
+            [impactTicketId]: target.value
+          };
+        }
+      });
+      els.diagnosisPanel.addEventListener('change', function (event) {
+        const target = event.target;
+        const ticketId = target?.dataset?.impactTicket;
+        if (ticketId === undefined) {
+          return;
+        }
+        const selected = new Set(state.diagnosisImpact.selectedTicketIds);
+        if (target.checked === true) {
+          selected.add(ticketId);
+        } else {
+          selected.delete(ticketId);
+        }
+        state.diagnosisImpact.selectedTicketIds = Array.from(selected);
+      });
+      els.diagnosisPanel.addEventListener('click', function (event) {
+        const action = event.target?.dataset?.action;
+        if (action === 'select-diagnosis') {
+          state.selectedDiagnosisId = event.target.dataset.diagnosisId;
+          state.diagnosisDraft = null;
+          state.diagnosisReviewRationale = '';
+          state.diagnosisImpact = { rationale: '', selectedTicketIds: [], ticketReasons: {} };
+          state.diagnosisFixResults = [];
+          renderDiagnosisPanel();
+        }
+        if (action === 'review-diagnosis') {
+          void reviewSelectedDiagnosis(event.target.dataset.decision).catch(function (error) { setResult({ error: error.message }); });
+        }
+        if (action === 'apply-diagnosis-fix') {
+          void applySelectedDiagnosisFix().catch(function (error) { setResult({ error: error.message }); });
         }
       });
       els.conversationContextPanel.addEventListener('click', function (event) {

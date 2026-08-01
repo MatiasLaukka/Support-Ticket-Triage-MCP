@@ -1,7 +1,10 @@
+import { randomUUID } from "node:crypto";
 import {
   lstat,
   mkdir,
   open,
+  rename,
+  rm,
   type FileHandle,
 } from "node:fs/promises";
 import { dirname, parse, resolve } from "node:path";
@@ -13,7 +16,7 @@ import {
 } from "./domain.js";
 import { DomainError } from "./errors.js";
 
-const defaultFileSystem = { open };
+const defaultFileSystem = { open, rename, rm };
 type AuditFileSystem = typeof defaultFileSystem;
 const auditOperations = new Map<string, Promise<void>>();
 const DEFAULT_PAGE_LIMIT = 20;
@@ -122,6 +125,15 @@ async function closeQuietly(handle: Closable | undefined): Promise<void> {
   }
 }
 
+function isAlreadyExists(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    error.code === "EEXIST"
+  );
+}
+
 async function serializeByPath<T>(
   path: string,
   operation: () => Promise<T>,
@@ -207,49 +219,145 @@ export class AuditRepository {
       throw repositoryError("Repository data is invalid.");
     }
 
+    return this.appendParsed([parsed.data]);
+  }
+
+  async appendBatch(events: readonly AuditEvent[]): Promise<void> {
+    const parsedEvents: AuditEvent[] = [];
+    for (const event of events) {
+      const parsed = AuditEventSchema.safeParse(event);
+      if (!parsed.success) {
+        throw repositoryError("Repository data is invalid.");
+      }
+      parsedEvents.push(parsed.data);
+    }
+
+    return this.appendParsed(parsedEvents);
+  }
+
+  private async appendParsed(events: readonly AuditEvent[]): Promise<void> {
+    if (events.length === 0) return;
+
     return serializeByPath(this.file, async () => {
       const root = dirname(this.file);
       await initializeDirectory(root);
-      try {
-        await assertSafeFile(this.file);
-      } catch (error) {
-        if (!isMissing(error)) {
-          throw error;
-        }
-      }
 
-      let handle;
-      let originalSize = 0;
-      let appendStarted = false;
+      let sourceHandle;
+      let stagingHandle;
+      let lockHandle;
+      const temporaryFile = resolve(root, `.${randomUUID()}.tmp`);
+      const lockFile = resolve(root, `.${parse(this.file).base}.lock`);
+      let temporaryFileCreated = false;
+      let lockCreated = false;
+      let committed = false;
+      let operationError: unknown;
+      let stagingCleanupFailed = false;
+      let lockCleanupFailed = false;
       try {
-        handle = await this.fileSystem.open(this.file, "a+");
-        await assertSafeOpenedFile(handle);
-        originalSize = (await handle.stat()).size;
-        appendStarted = true;
-        await handle.writeFile(`${JSON.stringify(parsed.data)}\n`, "utf8");
-        await handle.sync();
-      } catch (error) {
-        if (appendStarted) {
-          await closeQuietly(handle);
-          handle = undefined;
-          let rollbackHandle;
-          try {
-            rollbackHandle = await this.fileSystem.open(this.file, "r+");
-            await assertSafeOpenedFile(rollbackHandle);
-            await rollbackHandle.truncate(originalSize);
-            await rollbackHandle.sync();
-          } catch {
-            // Preserve the safe append error even if rollback cannot complete.
-          } finally {
-            await closeQuietly(rollbackHandle);
+        try {
+          lockHandle = await this.fileSystem.open(lockFile, "wx");
+          lockCreated = true;
+          await assertSafeOpenedFile(lockHandle);
+        } catch (error) {
+          if (!lockCreated && isAlreadyExists(error)) {
+            throw repositoryError("Audit log is busy; retry the operation.");
+          }
+          throw error;
+        } finally {
+          await closeQuietly(lockHandle);
+          lockHandle = undefined;
+        }
+
+        try {
+          await assertSafeFile(this.file);
+        } catch (error) {
+          if (!isMissing(error)) {
+            throw error;
           }
         }
-        if (error instanceof DomainError) {
-          throw error;
+
+        let originalContent = "";
+        try {
+          sourceHandle = await this.fileSystem.open(this.file, "r");
+          await assertSafeOpenedFile(sourceHandle);
+          originalContent = await sourceHandle.readFile("utf8");
+        } catch (error) {
+          if (!isMissing(error)) {
+            throw error;
+          }
+        } finally {
+          await closeQuietly(sourceHandle);
+          sourceHandle = undefined;
+        }
+
+        stagingHandle = await this.fileSystem.open(temporaryFile, "wx");
+        temporaryFileCreated = true;
+        await assertSafeOpenedFile(stagingHandle);
+        const separator =
+          originalContent === "" || originalContent.endsWith("\n") ? "" : "\n";
+        await stagingHandle.writeFile(
+          `${originalContent}${separator}${events.map((event) => JSON.stringify(event)).join("\n")}\n`,
+          "utf8",
+        );
+        await stagingHandle.sync();
+        await closeQuietly(stagingHandle);
+        stagingHandle = undefined;
+        await this.fileSystem.rename(temporaryFile, this.file);
+        committed = true;
+      } catch (error) {
+        operationError = error;
+      } finally {
+        await closeQuietly(sourceHandle);
+        await closeQuietly(stagingHandle);
+        await closeQuietly(lockHandle);
+        if (temporaryFileCreated && !committed) {
+          try {
+            await this.fileSystem.rm(temporaryFile, { force: true });
+          } catch {
+            stagingCleanupFailed = true;
+          }
+        }
+        if (lockCreated) {
+          try {
+            await this.fileSystem.rm(lockFile, { force: true });
+          } catch {
+            lockCleanupFailed = true;
+          }
+        }
+      }
+      if (operationError !== undefined) {
+        if (operationError instanceof DomainError) {
+          if (!stagingCleanupFailed && !lockCleanupFailed) {
+            throw operationError;
+          }
+          const cleanupMessage = stagingCleanupFailed && lockCleanupFailed
+            ? "Temporary staging and repository lock cleanup also failed."
+            : stagingCleanupFailed
+              ? "Temporary staging cleanup also failed."
+              : "Repository lock cleanup also failed.";
+          throw repositoryError(`${operationError.message} ${cleanupMessage}`);
+        }
+        if (stagingCleanupFailed && lockCleanupFailed) {
+          throw repositoryError(
+            "Audit event could not be persisted; temporary staging and repository lock cleanup failed.",
+          );
+        }
+        if (stagingCleanupFailed) {
+          throw repositoryError(
+            "Audit event could not be persisted; temporary staging cleanup failed.",
+          );
+        }
+        if (lockCleanupFailed) {
+          throw repositoryError(
+            "Audit event could not be persisted; repository lock cleanup failed after the audit operation failed.",
+          );
         }
         throw repositoryError("Audit event could not be persisted.");
-      } finally {
-        await closeQuietly(handle);
+      }
+      if (lockCleanupFailed) {
+        throw repositoryError(
+          "Audit event was committed but repository lock cleanup failed.",
+        );
       }
     });
   }

@@ -6,7 +6,10 @@ import {
   type Ticket,
   type TriageRecommendation,
 } from "../src/domain.js";
-import { buildConversationTimeline } from "../src/approval-desk/conversation-history.js";
+import {
+  buildConversationHistory,
+  buildConversationTimeline,
+} from "../src/approval-desk/conversation-history.js";
 
 const ticket = {
   id: "TKT-1001",
@@ -64,6 +67,52 @@ const recommendation = {
 } satisfies TriageRecommendation;
 
 describe("conversation timeline", () => {
+  it("preserves persisted audit append order when timestamps are backdated", () => {
+    const sent = AuditEventSchema.parse({
+      id: "11111111-aaaa-4111-8111-111111111111",
+      timestamp: "2026-06-10T10:00:00.0008+02:00",
+      actor: "approval-desk",
+      action: "customer-response-sent",
+      ticketId: ticket.id,
+      recommendationId: recommendation.id,
+      before: {},
+      after: {
+        sentAt: "2026-06-10T10:00:00.0008+02:00",
+        customerResponse: recommendation.draftCustomerResponse,
+      },
+      rationale: "Approved response was sent.",
+      knowledgeArticleIds: [],
+      result: "success",
+    });
+    const backdatedReply = AuditEventSchema.parse({
+      id: "22222222-bbbb-4222-8222-222222222222",
+      timestamp: "2026-06-10T07:59:59.9999Z",
+      actor: "Maya Chen",
+      action: "customer-reply-received",
+      ticketId: ticket.id,
+      before: {},
+      after: { body: "This was appended after the support response." },
+      rationale: "Customer reply was added to the ticket conversation.",
+      knowledgeArticleIds: [],
+      result: "success",
+    });
+    const audits = [sent, backdatedReply];
+
+    expect(buildConversationHistory(audits).map(({ action }) => action)).toEqual([
+      "customer-response-sent",
+      "customer-reply-received",
+    ]);
+    expect(
+      buildConversationTimeline({ ticket, audits, recommendations: [recommendation] })
+        .map(({ kind }) => kind),
+    ).toEqual([
+      "original-ticket",
+      "support-response-sent",
+      "customer-reply",
+      "recommendation-event",
+    ]);
+  });
+
   it("supports sent, reply, and superseded audit actions", () => {
     expect(
       AuditEventSchema.parse({

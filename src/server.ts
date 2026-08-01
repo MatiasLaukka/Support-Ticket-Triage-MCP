@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import {
   McpServer,
   ResourceTemplate,
@@ -13,6 +12,8 @@ import {
   CategorySchema,
   DuplicateCandidateSchema,
   DraftCustomerResponseStyleInputSchema,
+  DiagnosisIdSchema,
+  DiagnosisImpactSetSchema,
   IsoTimestampSchema,
   KnowledgeArticleSchema,
   PrioritySchema,
@@ -24,7 +25,6 @@ import {
   TriageRecommendationSchema,
   type Approval,
   type AuditEvent,
-  type Ticket,
   type TicketId,
   type TriageRecommendation,
 } from "./domain.js";
@@ -51,21 +51,23 @@ import {
 import {
   OperatorGuidanceSchema,
   buildOperatorGuidance,
-  closeBlockers,
-  diagnosisBlockers,
-  fixBlockers,
-  latestDiagnosisAudit,
 } from "./approval-desk/workflow-guidance.js";
 import { automaticReplyForTicket } from "./approval-desk/automatic-customer-replies.js";
 import {
   diagnosisContextForTicket,
   fixContextForTicket,
+  hasCustomerReplyAfterRecommendation,
+  selectPersistedDiagnosticWorkflowContext,
 } from "./approval-desk/diagnostic-workflow.js";
-import { DiagnosticStateSnapshotSchema } from "./approval-desk/diagnostic-state.js";
+import {
+  DiagnosisFixActionOutputSchema,
+  DiagnosisReviewActionOutputSchema,
+  DiagnosisReviewDraftSchema,
+  DiagnosisReviewListOutputSchema,
+  diagnosisReviewViews,
+} from "./approval-desk/diagnosis-review.js";
 import type { TicketRepository } from "./ticket-repository.js";
 import type {
-  DiagnosisContext,
-  FixContext,
   RejectRecommendationInput,
   SubmitRecommendationInput,
   TriageService,
@@ -74,7 +76,6 @@ import { customerReplyWatermarkFromAudits } from "./triage-service.js";
 import type { KnowledgeEvolutionService } from "./knowledge-evolution/service.js";
 import {
   KnowledgeCandidateApprovalOutputSchema,
-  KnowledgeCandidateDefermentOutputSchema,
   KnowledgeCandidateEditsSchema,
   KnowledgeCandidateIdSchema,
   KnowledgeCandidateRejectionOutputSchema,
@@ -196,7 +197,6 @@ const RejectRecommendationInputSchema: z.ZodType<RejectRecommendationToolInput> 
     feedback: NonBlankStringSchema,
   })
   .strict();
-const RecommendationIdSchema = z.uuid();
 const AddCustomerReplyInputSchema = z
   .object({
     ticketId: TicketIdSchema,
@@ -224,6 +224,17 @@ const WorkflowActionInputSchema = z
   .object({
     ticketId: TicketIdSchema,
     actor: NonBlankStringSchema.default("approval-desk"),
+  })
+  .strict();
+const ReviewDiagnosisToolInputSchema = DiagnosisReviewDraftSchema.omit({
+  reviewedAt: true,
+});
+const ApplyDiagnosisFixToolInputSchema = z
+  .object({
+    diagnosisId: DiagnosisIdSchema,
+    sourceTicketId: TicketIdSchema,
+    impactSet: DiagnosisImpactSetSchema,
+    actor: NonBlankStringSchema,
   })
   .strict();
 const DiscoverKnowledgeCandidatesInputSchema = z.object({
@@ -444,6 +455,18 @@ export function createTriageServer(
   );
 
   server.registerTool(
+    "get_ticket_diagnoses",
+    {
+      description:
+        "Read immutable diagnosis history, review decisions, and current freshness for one ticket.",
+      inputSchema: z.object({ ticketId: TicketIdSchema }).strict(),
+      outputSchema: DiagnosisReviewListOutputSchema,
+      annotations: ReadOnlyAnnotations,
+    },
+    async ({ ticketId }) => toolResult(() => getTicketDiagnoses(deps, ticketId)),
+  );
+
+  server.registerTool(
     "discover_knowledge_candidates",
     {
       description: "Discover deterministic, evidence-backed knowledge candidates without changing customer responses.",
@@ -650,6 +673,30 @@ export function createTriageServer(
   );
 
   server.registerTool(
+    "review_diagnosis",
+    {
+      description:
+        "Record an immutable operator review of one original diagnosis audit.",
+      inputSchema: ReviewDiagnosisToolInputSchema,
+      outputSchema: DiagnosisReviewActionOutputSchema,
+      annotations: SubmissionAnnotations,
+    },
+    async (input) => toolResult(() => reviewDiagnosis(deps, input)),
+  );
+
+  server.registerTool(
+    "apply_diagnosis_fix",
+    {
+      description:
+        "Apply a reviewed diagnosis fix to an explicitly selected impact set without closing tickets.",
+      inputSchema: ApplyDiagnosisFixToolInputSchema,
+      outputSchema: DiagnosisFixActionOutputSchema,
+      annotations: SubmissionAnnotations,
+    },
+    async (input) => toolResult(() => applyDiagnosisFix(deps, input)),
+  );
+
+  server.registerTool(
     "mark_fix_available",
     {
       description:
@@ -771,6 +818,48 @@ async function getTicketWorkflow(
   );
 }
 
+async function getTicketDiagnoses(
+  deps: TriageServerDependencies,
+  ticketId: TicketId,
+): Promise<z.infer<typeof DiagnosisReviewListOutputSchema>> {
+  const [ticket, audits] = await Promise.all([
+    deps.tickets.get(ticketId),
+    deps.audits.list(ticketId),
+  ]);
+  return DiagnosisReviewListOutputSchema.parse({
+    diagnoses: diagnosisReviewViews({ ticket, audits }),
+  });
+}
+
+async function reviewDiagnosis(
+  deps: TriageServerDependencies,
+  input: z.infer<typeof ReviewDiagnosisToolInputSchema>,
+): Promise<z.infer<typeof DiagnosisReviewActionOutputSchema>> {
+  const auditEvent = await deps.service.reviewDiagnosis({
+    ...input,
+    reviewedAt: deps.now().toISOString(),
+  });
+  const [ticket, audits] = await Promise.all([
+    deps.tickets.get(input.ticketId),
+    deps.audits.list(input.ticketId),
+  ]);
+  return DiagnosisReviewActionOutputSchema.parse({
+    auditEvent,
+    diagnoses: diagnosisReviewViews({ ticket, audits }),
+  });
+}
+
+async function applyDiagnosisFix(
+  deps: TriageServerDependencies,
+  input: z.infer<typeof ApplyDiagnosisFixToolInputSchema>,
+): Promise<z.infer<typeof DiagnosisFixActionOutputSchema>> {
+  const auditEvents = await deps.service.applyDiagnosisFix({
+    ...input,
+    fixedAt: deps.now().toISOString(),
+  });
+  return DiagnosisFixActionOutputSchema.parse({ auditEvents });
+}
+
 async function evaluateTicket(
   deps: TriageServerDependencies,
   input: z.infer<typeof EvaluateTicketInputSchema>,
@@ -788,6 +877,9 @@ async function evaluateTicket(
     ticket.id,
     audits,
   );
+  const persistedDiagnosticContext = selectPersistedDiagnosticWorkflowContext(
+    audits,
+  );
   const recommendationInput = await evaluateTicketWithAi({
     ticket,
     actor: input.actor,
@@ -795,8 +887,8 @@ async function evaluateTicket(
     approvedObjects,
     customerReplies,
     previousSupportResponse,
-    diagnosisContext: latestDiagnosisContext(audits),
-    fixContext: latestFixContext(audits),
+    diagnosisContext: persistedDiagnosticContext.diagnosis?.context,
+    fixContext: persistedDiagnosticContext.fix?.context,
     aiPreference: input.aiPreference,
     responseStyle: input.responseStyle,
     classificationProvider:
@@ -888,23 +980,26 @@ async function recordDiagnosis(
     recommendations,
     audits,
   ).latest;
-  const [diagnosisBlocker] = diagnosisBlockers({
-    recommendation: latest,
-    audits,
-  });
-  if (diagnosisBlocker !== undefined) {
-    throw new DomainError(diagnosisBlocker, "INVALID_APPROVAL_FIELDS");
+  if (latest === undefined) {
+    throw new DomainError(
+      "A completed evaluation is required before diagnosis.",
+      "INVALID_APPROVAL_FIELDS",
+    );
   }
-  const diagnosisRecommendation = latest as TriageRecommendation;
   return deps.service.recordDiagnosis({
     ticketId: input.ticketId,
     actor: input.actor,
     diagnosedAt: deps.now().toISOString(),
-    diagnosis: diagnosisContextForTicket(ticket, diagnosisRecommendation, audits),
+    diagnosis: diagnosisContextForTicket(ticket, latest, audits),
     knowledgeArticleIds:
-      diagnosisRecommendation.knowledgeArticleIds.length > 0
-        ? diagnosisRecommendation.knowledgeArticleIds
-        : [diagnosisRecommendation.knownCause ?? "known-cause"],
+      latest.knowledgeArticleIds.length > 0
+        ? latest.knowledgeArticleIds
+        : [latest.knownCause ?? "known-cause"],
+    sourceWorkflow: {
+      recommendationId: latest.id,
+      ticketRevision: ticket.revision,
+      customerReplyWatermark: customerReplyWatermarkFromAudits(audits),
+    },
   });
 }
 
@@ -917,11 +1012,9 @@ async function markFixAvailable(
     deps.audits.list(input.ticketId),
     deps.recommendations.list(),
   ]);
-  const [fixBlocker] = fixBlockers({ audits });
-  if (fixBlocker !== undefined) {
-    throw new DomainError(fixBlocker, "INVALID_APPROVAL_FIELDS");
-  }
-  const latestDiagnosis = latestDiagnosisAudit(audits) as AuditEvent;
+  const persistedDiagnosticContext = selectPersistedDiagnosticWorkflowContext(
+    audits,
+  );
   const latest = summarizeRecommendationsForTicket(
     ticket,
     recommendations,
@@ -931,7 +1024,7 @@ async function markFixAvailable(
     ticketId: input.ticketId,
     actor: input.actor,
     fixedAt: deps.now().toISOString(),
-    fix: fixContextForTicket(ticket, latestDiagnosis),
+    fix: fixContextForTicket(persistedDiagnosticContext.diagnosis?.event),
     knowledgeArticleIds: latest?.knowledgeArticleIds ?? [],
   });
 }
@@ -940,63 +1033,11 @@ async function closeTicket(
   deps: TriageServerDependencies,
   input: z.infer<typeof WorkflowActionInputSchema>,
 ): Promise<z.infer<typeof CloseTicketOutputSchema>> {
-  const [ticket, audits, recommendations] = await Promise.all([
-    deps.tickets.get(input.ticketId),
-    deps.audits.list(input.ticketId),
-    deps.recommendations.list(),
-  ]);
-  const latest = summarizeRecommendationsForTicket(
-    ticket,
-    recommendations,
-    audits,
-  ).latest;
-  const [closeBlocker] = closeBlockers({
-    ticket,
-    recommendation: latest,
-    audits,
+  return deps.service.closeTicket({
+    ticketId: input.ticketId,
+    actor: input.actor,
+    closedAt: deps.now().toISOString(),
   });
-  if (closeBlocker !== undefined) {
-    throw new DomainError(closeBlocker, "INVALID_APPROVAL_FIELDS");
-  }
-  const closingRecommendation = latest as TriageRecommendation;
-
-  const closedAt = deps.now().toISOString();
-  const { ticket: updated, result: auditEvent } =
-    await deps.tickets.updateWithCommit(
-      input.ticketId,
-      ticket.revision,
-      (current) => ({
-        ...current,
-        status: "resolved",
-        updatedAt: closedAt,
-      }),
-      async (updatedTicket, previousTicket) => {
-        const event = AuditEventSchema.parse({
-          id: randomUUID(),
-          timestamp: closedAt,
-          actor: input.actor,
-          action: "ticket-updated",
-          ticketId: input.ticketId,
-          recommendationId: closingRecommendation.id,
-          before: {
-            status: previousTicket.status,
-            revision: previousTicket.revision,
-          },
-          after: {
-            status: updatedTicket.status,
-            revision: updatedTicket.revision,
-            closedAt,
-          },
-          rationale:
-            "Ticket closed after the customer confirmed resolution and the closing response was sent.",
-          knowledgeArticleIds: closingRecommendation.knowledgeArticleIds,
-          result: "success",
-        });
-        await deps.audits.append(event);
-        return event;
-      },
-    );
-  return { ticket: updated, auditEvent };
 }
 
 async function maybeAddAutomaticCustomerReplyAfterSent(input: {
@@ -1006,13 +1047,12 @@ async function maybeAddAutomaticCustomerReplyAfterSent(input: {
   auditsBeforeSent: readonly AuditEvent[];
   sentAt: string;
 }): Promise<AuditEvent | undefined> {
-  const latestReplyAfterRecommendation = latestAuditTimestamp(
-    input.auditsBeforeSent.filter(
-      (event) => event.timestamp > input.recommendation.createdAt,
-    ),
-    "customer-reply-received",
-  );
-  if (latestReplyAfterRecommendation !== undefined) {
+  if (
+    hasCustomerReplyAfterRecommendation(
+      input.auditsBeforeSent,
+      input.recommendation,
+    )
+  ) {
     return undefined;
   }
   const ticket = await input.deps.tickets.get(input.ticketId);
@@ -1031,178 +1071,6 @@ async function maybeAddAutomaticCustomerReplyAfterSent(input: {
     receivedAt: plusMilliseconds(input.sentAt, 1),
     source: "demo-auto-reply",
   });
-}
-
-function latestDiagnosisContext(
-  audits: readonly AuditEvent[],
-): DiagnosisContext | undefined {
-  const event = latestDiagnosisAudit(audits);
-  if (
-    event === undefined ||
-    isSupersededByCustomerReply(audits, event, {
-      preserveForQuestionReplies: true,
-    })
-  ) {
-    return undefined;
-  }
-  return parseDiagnosisContext(event.after.diagnosis);
-}
-
-function latestFixContext(audits: readonly AuditEvent[]): FixContext | undefined {
-  const event = latestFixAudit(audits);
-  if (
-    event === undefined ||
-    isSupersededByCustomerReply(audits, event, {
-      preserveForQuestionReplies: true,
-    })
-  ) {
-    return undefined;
-  }
-  return parseFixContext(event.after.fix);
-}
-
-function latestFixAudit(audits: readonly AuditEvent[]): AuditEvent | undefined {
-  return audits
-    .map((event, index) => ({ event, index }))
-    .filter(
-      ({ event }) =>
-        event.action === "fix-available" &&
-        typeof event.after.fix === "object" &&
-        event.after.fix !== null,
-    )
-    .sort(
-      (left, right) =>
-        right.event.timestamp.localeCompare(left.event.timestamp) ||
-        right.index - left.index,
-    )[0]?.event;
-}
-
-function isSupersededByCustomerReply(
-  audits: readonly AuditEvent[],
-  event: AuditEvent,
-  options: { preserveForQuestionReplies?: boolean } = {},
-): boolean {
-  const eventIndex = audits.indexOf(event);
-  return audits.some((candidate, index) => {
-    if (candidate.action !== "customer-reply-received") {
-      return false;
-    }
-    const isNewer =
-      candidate.timestamp > event.timestamp ||
-      (candidate.timestamp === event.timestamp && index > eventIndex);
-    if (!isNewer) {
-      return false;
-    }
-    if (
-      options.preserveForQuestionReplies === true &&
-      customerReplyCanUseExistingDiagnosis(candidate)
-    ) {
-      return false;
-    }
-    return true;
-  });
-}
-
-function customerReplyCanUseExistingDiagnosis(event: AuditEvent): boolean {
-  const body = typeof event.after.body === "string" ? event.after.body : "";
-  return isCustomerStatusFollowUp(body) || isCustomerExplanationRequest(body);
-}
-
-function isCustomerStatusFollowUp(value: string): boolean {
-  return /\b(?:how long|eta|estimated time|when (?:will|can|should)|any update|status update|what'?s (?:the )?(?:current )?status|current status(?: of (?:the )?ticket)?|wait for (?:a )?fix|fix be ready|fixed|resolved)\b/i.test(
-    value,
-  );
-}
-
-function isCustomerExplanationRequest(value: string): boolean {
-  return /\b(?:what'?s|what is|whats)\s+(?:the\s+)?(?:problem|issue|wrong|happening|going on|cause)|\bwhy\s+(?:is|are|did|does|do)\b.{0,80}\b(?:happening|broken|failing|delayed|missing|not working|not showing)|\bwhat happened\b|\bwhat caused\b|\broot cause\b/i.test(
-    value,
-  );
-}
-
-function parseDiagnosisContext(value: unknown): DiagnosisContext | undefined {
-  if (typeof value !== "object" || value === null) {
-    return undefined;
-  }
-  const context = value as Partial<DiagnosisContext>;
-  if (
-    context.status !== "completed" ||
-    typeof context.causeType !== "string" ||
-    typeof context.customerSafeSummary !== "string" ||
-    !Array.isArray(context.evidenceUsed) ||
-    typeof context.confidence !== "string" ||
-    typeof context.owner !== "string" ||
-    typeof context.recommendedNextAction !== "string" ||
-    !Array.isArray(context.doNotSay)
-  ) {
-    return undefined;
-  }
-  return {
-    status: "completed",
-    causeType: context.causeType as DiagnosisContext["causeType"],
-    customerSafeSummary: context.customerSafeSummary,
-    evidenceUsed: context.evidenceUsed.filter(
-      (item): item is string => typeof item === "string",
-    ),
-    confidence: context.confidence as DiagnosisContext["confidence"],
-    owner: context.owner as DiagnosisContext["owner"],
-    recommendedNextAction: context.recommendedNextAction,
-    doNotSay: context.doNotSay.filter(
-      (item): item is string => typeof item === "string",
-    ),
-    ...(typeof context.knownEventId === "string"
-      ? { knownEventId: context.knownEventId }
-      : {}),
-    ...(Array.isArray(context.knownEventMatchReasons)
-      ? {
-          knownEventMatchReasons: context.knownEventMatchReasons.filter(
-            (item): item is string => typeof item === "string",
-          ),
-        }
-      : {}),
-    ...(DiagnosticStateSnapshotSchema.safeParse(context.diagnosticState).success
-      ? {
-          diagnosticState: DiagnosticStateSnapshotSchema.parse(
-            context.diagnosticState,
-          ),
-        }
-      : {}),
-  };
-}
-
-function parseFixContext(value: unknown): FixContext | undefined {
-  if (typeof value !== "object" || value === null) {
-    return undefined;
-  }
-  const context = value as Partial<FixContext>;
-  if (
-    context.status !== "available" ||
-    typeof context.customerSafeSummary !== "string" ||
-    typeof context.customerAction !== "string" ||
-    typeof context.verificationRequest !== "string"
-  ) {
-    return undefined;
-  }
-  return {
-    status: "available",
-    customerSafeSummary: context.customerSafeSummary,
-    customerAction: context.customerAction,
-    verificationRequest: context.verificationRequest,
-  };
-}
-
-function latestAuditTimestamp(
-  audits: readonly AuditEvent[],
-  action: AuditEvent["action"],
-): string | undefined {
-  return audits
-    .filter((event) => event.action === action)
-    .map((event) =>
-      action === "customer-response-sent" && typeof event.after.sentAt === "string"
-        ? event.after.sentAt
-        : event.timestamp,
-    )
-    .sort((left, right) => right.localeCompare(left))[0];
 }
 
 function plusMilliseconds(timestamp: string, milliseconds: number): string {
@@ -1416,6 +1284,17 @@ async function toolResult<T extends object>(
       structuredContent,
     };
   } catch (error) {
+    if (error instanceof z.ZodError) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `INVALID_REQUEST: ${error.issues[0]?.message ?? "Invalid request."}`,
+          },
+        ],
+        isError: true,
+      };
+    }
     if (error instanceof DomainError) {
       return {
         content: [

@@ -171,8 +171,10 @@ Expected checkpoints:
 - the Automation Evidence dashboard shows open tickets, recommendation counts,
   active guardrails, audit events, and estimated minutes saved;
 - selecting `TKT-1010` shows the vague "Problem / It does not work" ticket;
-- typing a customer reply about the campaign editor staying blank makes the
-  next recommendation reclassify the ticket as performance/product;
+- opening the action bar's **Advanced settings**, checking **Disable automatic
+  customer replies**, expanding **Manual customer reply**, and adding a
+  customer reply about the campaign editor staying blank makes the next
+  evaluation reclassify the ticket as performance/product;
 - evidence requirements update from generic problem details to campaign,
   timestamp, browser/session, and affected-scope details;
 - the draft response acknowledges the campaign editor loading path instead of

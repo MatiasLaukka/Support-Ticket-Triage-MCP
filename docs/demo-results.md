@@ -80,6 +80,11 @@ not work`. The reviewer adds a realistic customer reply:
 I was trying to open the campaign editor, but the page stayed blank. The steps were: I opened the campaign, clicked Edit, and then the page stayed blank.
 ```
 
+In the Approval Desk, add this reply by expanding the action bar's **Advanced
+settings**, checking **Disable automatic customer replies**, expanding **Manual
+customer reply**, pasting the text, clicking **Add reply**, and then clicking
+**Evaluate**. Conversation Context itself is read-only.
+
 Expected recommendation:
 
 | Field | Expected value |

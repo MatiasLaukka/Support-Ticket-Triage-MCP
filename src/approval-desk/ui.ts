@@ -330,6 +330,108 @@ export const approvalDeskHtml = `<!doctype html>
         z-index: 20;
       }
 
+      .workflow-action-stack[data-dock="bottom-left"] {
+        left: 1rem;
+        right: auto;
+      }
+
+      .workflow-action-stack[data-dock="bottom-center"] {
+        left: 50%;
+        right: auto;
+        transform: translateX(-50%);
+      }
+
+      .workflow-action-stack[data-dock="top-right"] {
+        bottom: auto;
+        top: 1rem;
+      }
+
+      .workflow-action-stack[data-dock="top-left"] {
+        bottom: auto;
+        left: 1rem;
+        right: auto;
+        top: 1rem;
+      }
+
+      .workflow-action-stack[data-dock="top-center"] {
+        bottom: auto;
+        left: 50%;
+        right: auto;
+        top: 1rem;
+        transform: translateX(-50%);
+      }
+
+      .action-bar-position {
+        align-items: center;
+        display: flex;
+        gap: 0.35rem;
+        white-space: nowrap;
+      }
+
+      .action-bar-position label {
+        color: var(--muted);
+        font-size: 0.78rem;
+      }
+
+      .action-bar-position select {
+        min-height: 2rem;
+        padding: 0.3rem 0.45rem;
+        width: auto;
+      }
+
+      .advanced-settings {
+        border-top: 1px solid var(--line);
+        margin-top: 0.65rem;
+        padding-top: 0.55rem;
+      }
+
+      .advanced-settings > summary {
+        color: var(--muted);
+        cursor: pointer;
+        font-size: 0.82rem;
+        font-weight: 700;
+      }
+
+      .advanced-settings-content {
+        display: grid;
+        gap: 0.65rem;
+        margin-top: 0.65rem;
+      }
+
+      .advanced-settings-content .action-bar-position {
+        justify-content: space-between;
+      }
+
+      .advanced-settings-content .toggle-setting,
+      .advanced-settings-content .action-bar-position label,
+      .advanced-settings-content .reply-composer > label {
+        color: var(--muted);
+      }
+
+      .advanced-settings-content .action-bar-position select,
+      .advanced-settings-content .reply-composer > label select {
+        color: var(--muted);
+      }
+
+      .advanced-settings-content .reply-composer > summary {
+        color: var(--muted);
+        font-size: 0.82rem;
+        font-weight: 700;
+      }
+
+      .toggle-setting {
+        align-items: center;
+        display: flex;
+        gap: 0.5rem;
+        line-height: 1.35;
+      }
+
+      .toggle-setting input[type="checkbox"] {
+        flex: 0 0 auto;
+        margin: 0;
+        width: 1rem;
+      }
+
       .recommendation-setup-bar {
         background: rgba(255, 255, 255, 0.96);
         border: 1px solid var(--line);
@@ -351,11 +453,14 @@ export const approvalDeskHtml = `<!doctype html>
       .bar-topline {
         align-items: baseline;
         display: flex;
+        flex-wrap: wrap;
         gap: 0.65rem;
         justify-content: space-between;
       }
 
       .bar-topline .meta {
+        flex: 1 1 12rem;
+        min-width: 0;
         text-align: right;
       }
 
@@ -1057,7 +1162,7 @@ export const approvalDeskHtml = `<!doctype html>
               <pre id="resultPanel" class="result">{}</pre>
             </section>
           </details>
-          <div class="workflow-action-stack">
+          <div id="workflowActionStack" class="workflow-action-stack" data-dock="bottom-right">
             <section id="customerReplyFocus" class="customer-reply-focus" aria-label="Latest customer reply" hidden></section>
             <section class="recommendation-setup-bar" aria-label="Workflow actions">
               <input id="confirmApproval" type="checkbox" hidden checked>
@@ -1142,39 +1247,50 @@ export const approvalDeskHtml = `<!doctype html>
                   <button id="rejectButton" type="button" class="danger" title="Reject and log feedback" disabled>Reject</button>
                 </div>
               </div>
-              <div id="replyControls" class="bar-mode reply-mode" hidden>
-                <div id="pendingReplyPreview" class="bar-reply-preview"></div>
-                <details id="replyTestingMode" class="reply-composer">
-                  <summary>Testing mode</summary>
-                  <p class="meta">Use this before evaluation to control automatic replies or manually inject a customer reply while testing edge cases. The normal showcase flow uses automatic replies.</p>
-                  <label>
-                    <input id="disableAutomaticReplies" type="checkbox">
-                    Disable automatic replies?
-                  </label>
-                  <details id="replyComposer">
-                    <summary>Manual customer reply</summary>
-                    <label>
-                      Predicted reply text
-                      <select id="predictedReply">
-                        <option value="">Choose a predicted reply...</option>
-                        <option value="vague-reply">Vague follow-up</option>
-                        <option value="partial-evidence">Partial evidence</option>
-                        <option value="complete-evidence">All requested evidence</option>
-                        <option value="known-cause-evidence">Known-cause confirmation</option>
-                        <option value="platform-fix-context">Fix verification details</option>
-                        <option value="resolved-confirmation">Customer says it works</option>
-                      </select>
+              <details id="advancedSettings" class="advanced-settings">
+                <summary>Advanced settings</summary>
+                <div class="advanced-settings-content">
+                  <div class="action-bar-position">
+                    <label for="actionBarPosition">Move action bar</label>
+                    <select id="actionBarPosition" aria-label="Move action bar">
+                      <option value="bottom-right">Bottom right</option>
+                      <option value="bottom-left">Bottom left</option>
+                      <option value="bottom-center">Bottom center</option>
+                      <option value="top-left">Top left</option>
+                      <option value="top-center">Top center</option>
+                      <option value="top-right">Top right</option>
+                    </select>
+                  </div>
+                  <div id="replyControls" class="bar-mode reply-mode" hidden>
+                    <label class="toggle-setting">
+                      <input id="disableAutomaticReplies" type="checkbox">
+                      <span>Disable automatic customer replies</span>
                     </label>
-                    <label>
-                      Customer reply
-                      <textarea id="customerReplyBody" rows="3" placeholder="Paste the customer's latest reply here, or choose predicted reply text above."></textarea>
-                    </label>
-                    <div class="bar-actions">
-                      <button id="addCustomerReply" type="button" class="secondary">Add reply</button>
-                    </div>
-                  </details>
-                </details>
-              </div>
+                    <details id="replyComposer" class="reply-composer" hidden>
+                      <summary>Manual customer reply</summary>
+                      <label>
+                        Predicted reply text
+                        <select id="predictedReply">
+                          <option value="">Choose a predicted reply...</option>
+                          <option value="vague-reply">Vague follow-up</option>
+                          <option value="partial-evidence">Partial evidence</option>
+                          <option value="complete-evidence">All requested evidence</option>
+                          <option value="known-cause-evidence">Known-cause confirmation</option>
+                          <option value="platform-fix-context">Fix verification details</option>
+                          <option value="resolved-confirmation">Customer says it works</option>
+                        </select>
+                      </label>
+                      <label>
+                        Customer reply
+                        <textarea id="customerReplyBody" rows="3" placeholder="Paste the customer's latest reply here, or choose predicted reply text above."></textarea>
+                      </label>
+                      <div class="bar-actions">
+                        <button id="addCustomerReply" type="button" class="secondary">Add reply</button>
+                      </div>
+                    </details>
+                  </div>
+                </div>
+              </details>
             </section>
           </div>
         </section>
@@ -1222,8 +1338,10 @@ export const approvalDeskHtml = `<!doctype html>
       const els = {
         addCustomerReply: document.getElementById('addCustomerReply'),
         actor: document.getElementById('actor'),
+        actionBarPosition: document.getElementById('actionBarPosition'),
         actionBarHint: document.getElementById('actionBarHint'),
         actionBarTitle: document.getElementById('actionBarTitle'),
+        advancedSettings: document.getElementById('advancedSettings'),
         approvalStage: document.getElementById('approvalStage'),
         assigneeOverride: document.getElementById('assigneeOverride'),
         approveButton: document.getElementById('approveButton'),
@@ -1257,7 +1375,6 @@ export const approvalDeskHtml = `<!doctype html>
         markSentButton: document.getElementById('markSentButton'),
         queueFilters: document.getElementById('queueFilters'),
         queueStatus: document.getElementById('queueStatus'),
-        pendingReplyPreview: document.getElementById('pendingReplyPreview'),
         predictedReply: document.getElementById('predictedReply'),
         recommendationPanel: document.getElementById('recommendationPanel'),
         priorityOverride: document.getElementById('priorityOverride'),
@@ -1267,7 +1384,6 @@ export const approvalDeskHtml = `<!doctype html>
         rejectControls: document.getElementById('rejectControls'),
         replyComposer: document.getElementById('replyComposer'),
         replyControls: document.getElementById('replyControls'),
-        replyTestingMode: document.getElementById('replyTestingMode'),
         resultPanel: document.getElementById('resultPanel'),
         reviewDraftButton: document.getElementById('reviewDraftButton'),
         setupControls: document.getElementById('setupControls'),
@@ -1277,8 +1393,17 @@ export const approvalDeskHtml = `<!doctype html>
         teamOverride: document.getElementById('teamOverride'),
         ticketList: document.getElementById('ticketList'),
         ticketDetailsPanel: document.getElementById('ticketDetailsPanel'),
-        ticketPanel: document.getElementById('ticketPanel')
+        ticketPanel: document.getElementById('ticketPanel'),
+        workflowActionStack: document.getElementById('workflowActionStack')
       };
+
+      const actionBarDocks = new Set(['bottom-right', 'bottom-left', 'bottom-center', 'top-left', 'top-center', 'top-right']);
+
+      function setActionBarDock(position) {
+        const dock = actionBarDocks.has(String(position)) ? String(position) : 'bottom-right';
+        els.workflowActionStack.dataset.dock = dock;
+        els.actionBarPosition.value = dock;
+      }
 
       function selectedFields() {
         if (state.approvedFields.length > 0) {
@@ -2003,7 +2128,6 @@ export const approvalDeskHtml = `<!doctype html>
         els.backToRecommendation.hidden = !(hasRecommendation && state.stage === 'approval');
         els.decisionChips.innerHTML = hasRecommendation ? renderDecisionChips(state.recommendation) : '';
         els.decisionSummary.textContent = hasRecommendation ? decisionSummaryText(state.recommendation) : 'Review the draft and evidence, then approve or edit.';
-        els.pendingReplyPreview.innerHTML = renderPendingReplyPreview();
         if (customerReplyReady || latestUnevaluatedWorkflowEvent() !== null) {
           els.createUpdatedRecommendation.textContent = createUpdatedRecommendationLabel();
         }
@@ -2186,25 +2310,6 @@ export const approvalDeskHtml = `<!doctype html>
           isTaskDoneWaitingForReply();
       }
 
-      function renderPendingReplyPreview() {
-        const latestReply = latestUnconsumedCustomerReply();
-        if (latestReply !== null) {
-          return '';
-        }
-        if (state.recommendation === null) {
-          return '<strong>Testing mode available</strong><span>Open Testing mode to disable automatic replies or simulate a customer reply before evaluation.</span>';
-        }
-        const workflowEvent = latestUnevaluatedWorkflowEvent();
-        if (workflowEvent !== null) {
-          return '<strong>Workflow update waiting for evaluation</strong>' +
-            '<span>' + escapeHtml(previewRecommendationDraft(workflowEvent.summary ?? workflowEvent.kind ?? '')) + '</span>';
-        }
-        if (isTaskDoneWaitingForReply()) {
-          return '<strong>No automatic customer reply was generated</strong><span>The normal demo flow should move to the next workflow action or receive an automatic reply. Use Testing mode only for edge-case checks.</span>';
-        }
-        return '<strong>Customer reply</strong><span>Add a reply here whenever the customer sends new information.</span>';
-      }
-
       function renderCustomerReplyFocus() {
         const latestReply = latestUnconsumedCustomerReply();
         if (latestReply === null) {
@@ -2361,6 +2466,7 @@ export const approvalDeskHtml = `<!doctype html>
           !fields.includes('customerResponse') ||
           els.editedCustomerResponse.value.trim().length > 0;
         const feedbackPresent = els.feedback.value.trim().length > 0;
+        const manualRepliesEnabled = els.disableAutomaticReplies.checked === true;
 
         const doneReady = hasRecommendation &&
           actorPresent &&
@@ -2382,6 +2488,11 @@ export const approvalDeskHtml = `<!doctype html>
         els.createRecommendation.title = createRecommendationLabel();
         els.createUpdatedRecommendation.textContent = createUpdatedRecommendationLabel();
         els.createUpdatedRecommendation.title = createRecommendationLabel();
+        els.replyComposer.hidden = !manualRepliesEnabled;
+        els.addCustomerReply.disabled = !manualRepliesEnabled || state.selectedTicket === null;
+        if (!manualRepliesEnabled) {
+          els.replyComposer.open = false;
+        }
       }
 
       async function loadQueue() {
@@ -2796,7 +2907,6 @@ export const approvalDeskHtml = `<!doctype html>
             })
           });
           els.replyComposer.open = false;
-          els.replyTestingMode.open = false;
           setResult(sentData);
           await refreshSelectedTicketQueueAndEvidence();
           await loadMetrics(sentData);
@@ -2881,7 +2991,7 @@ export const approvalDeskHtml = `<!doctype html>
       }
 
       async function addManualCustomerReply() {
-        if (state.selectedTicket === null) {
+        if (state.selectedTicket === null || !els.disableAutomaticReplies.checked) {
           return;
         }
         const body = els.customerReplyBody.value.trim();
@@ -2900,7 +3010,6 @@ export const approvalDeskHtml = `<!doctype html>
         els.customerReplyBody.value = '';
         els.predictedReply.value = '';
         els.replyComposer.open = false;
-        els.replyTestingMode.open = false;
         await refreshSelectedTicketQueueAndEvidence();
       }
 
@@ -3785,6 +3894,10 @@ export const approvalDeskHtml = `<!doctype html>
         return 'This is affecting multiple EU stores. The affected store URL is https://eu-a.example.test. One affected customer ID is cus_8821. The event time was 2026-06-10 08:42 UTC. The request ID is req_1001 and the API response was 202 Accepted. The event is still missing from the profile activity timeline.';
       }
 
+      els.actionBarPosition.addEventListener('change', function () {
+        setActionBarDock(els.actionBarPosition.value);
+      });
+      els.disableAutomaticReplies.addEventListener('change', updateControls);
       els.actor.addEventListener('input', updateControls);
       els.addCustomerReply.addEventListener('click', function () {
         void addManualCustomerReply().catch(function (error) { setResult({ error: error.message }); });

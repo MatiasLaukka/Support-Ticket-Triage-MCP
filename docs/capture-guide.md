@@ -19,19 +19,26 @@ The optional OpenAI mode is useful for a separate experiment, but the primary
 portfolio recording should use deterministic local rules so every viewer can
 reproduce it without an API key or network access.
 
-The action bar also has a **Testing mode** with a manual customer-reply
-composer for edge-case testing. It is intentionally not part of the primary
-recording; use the automatic reply generated after **Done** instead.
+The action bar's collapsed **Advanced settings** includes a manual
+customer-reply composer, an automatic-reply toggle, and action-bar positioning
+for edge-case testing or screen recording. To add a manual customer reply,
+expand **Advanced settings**, check **Disable automatic customer replies**,
+expand **Manual customer reply**, then paste or choose the reply and click
+**Add reply**. The toggle applies for the current page session and resets on
+reload. The **Move action bar** selector supports bottom-right, bottom-left,
+bottom-center, top-left, top-center, and top-right; its position also resets on
+reload. These controls are intentionally not part of the primary recording;
+use the automatic reply generated after **Done** instead.
 
 2. Do not show terminals containing `OPENAI_API_KEY`.
 3. Keep the browser on the local Approval Desk URL.
 4. Use synthetic tickets only. Do not paste real customer data into the demo.
 
 Conversation Context is a read-only timeline. If you need to simulate a
-customer providing new information, open the action bar's **Testing mode** and
-use its manual reply composer; do not look for an editor in Conversation
-Context. The same section can disable automatic customer replies after **Done**
-for a controlled test run; leave that option enabled for the normal showcase.
+customer providing new information, open the action bar's **Advanced settings**,
+disable automatic customer replies, and use its manual reply composer; do not
+look for an editor in Conversation Context. Leave automatic replies enabled for
+the normal showcase.
 
 ## Suggested Still Screenshots
 

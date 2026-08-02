@@ -131,10 +131,16 @@ Open the printed local URL. A good portfolio walkthrough is:
    the new lifecycle state.
 5. Use the conversation timeline and audit panel to show the ordered lifecycle.
 
-The action bar's **Testing mode** includes a manual customer-reply composer for
-edge cases. **Conversation Context is read-only** and has no customer-reply
-editor. It also lets a tester disable automatic customer replies after **Done**.
-The manual composer and disabled-reply option are not needed for the normal
+The action bar's collapsed **Advanced settings** includes a manual customer-reply
+composer, an automatic-reply toggle, and action-bar positioning for edge cases
+or screen recording. **Conversation Context is read-only** and has no
+customer-reply editor. For a manual test reply, expand **Advanced settings**,
+check **Disable automatic customer replies**, expand **Manual customer reply**,
+paste or choose the reply, and click **Add reply** before evaluating again.
+The toggle and composer apply to the current Approval Desk page session and
+reset on reload. The **Move action bar** selector offers bottom-right,
+bottom-left, bottom-center, top-left, top-center, and top-right positions; its
+selection also resets on reload. These controls are not needed for the normal
 showcase flow, which uses the automatic reply generated after **Done**.
 
 The alternate incident walkthrough still works well with `TKT-1001`, which

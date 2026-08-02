@@ -598,6 +598,8 @@ describe("approvalDeskHtml", () => {
     await app.approve();
 
     expect(app.el("replyControls").hidden).toBe(false);
+    app.el("disableAutomaticReplies").checked = true;
+    app.el("disableAutomaticReplies").dispatch("change");
     expect(app.el("conversationContextPanel").innerHTML).toContain(
       "Customer replies are added from the action bar",
     );
@@ -629,6 +631,8 @@ describe("approvalDeskHtml", () => {
     app.el("customerReplyBody").value =
       "The campaign editor opens, but the page stays blank after I click Edit.";
     app.el("customerReplyBody").dispatch("input");
+    app.el("disableAutomaticReplies").checked = true;
+    app.el("disableAutomaticReplies").dispatch("change");
     await app.addCustomerReply();
 
     const replyRequest = app.requests.find((request) =>
@@ -788,6 +792,8 @@ describe("approvalDeskHtml", () => {
       },
     });
     await app.selectFirstTicket();
+    app.el("disableAutomaticReplies").checked = true;
+    app.el("disableAutomaticReplies").dispatch("change");
     await app.clickConversationScenario("partial-evidence");
 
     const replyRequest = app.requests.find((request) =>
@@ -826,6 +832,8 @@ describe("approvalDeskHtml", () => {
       },
     });
     await app.selectFirstTicket();
+    app.el("disableAutomaticReplies").checked = true;
+    app.el("disableAutomaticReplies").dispatch("change");
     await app.clickConversationScenario("partial-evidence");
 
     const replyRequest = app.requests.find((request) =>
@@ -850,6 +858,8 @@ describe("approvalDeskHtml", () => {
       },
     });
     await app.selectFirstTicket();
+    app.el("disableAutomaticReplies").checked = true;
+    app.el("disableAutomaticReplies").dispatch("change");
     await app.clickConversationScenario("complete-evidence");
 
     const replyRequest = app.requests.find((request) =>
@@ -906,6 +916,8 @@ describe("approvalDeskHtml", () => {
       },
     });
     await app.selectFirstTicket();
+    app.el("disableAutomaticReplies").checked = true;
+    app.el("disableAutomaticReplies").dispatch("change");
     await app.clickConversationScenario("complete-evidence");
 
     const replyRequest = app.requests.find((request) =>
@@ -955,6 +967,8 @@ describe("approvalDeskHtml", () => {
       },
     });
     await app.selectFirstTicket();
+    app.el("disableAutomaticReplies").checked = true;
+    app.el("disableAutomaticReplies").dispatch("change");
     await app.clickConversationScenario("complete-evidence");
 
     const replyRequest = app.requests.find((request) =>
@@ -992,6 +1006,8 @@ describe("approvalDeskHtml", () => {
       },
     });
     await app.selectFirstTicket();
+    app.el("disableAutomaticReplies").checked = true;
+    app.el("disableAutomaticReplies").dispatch("change");
     await app.clickConversationScenario("vague-reply");
 
     const replyRequest = app.requests.find((request) =>
@@ -1095,10 +1111,6 @@ describe("approvalDeskHtml", () => {
     await app.approve();
 
     expect(app.el("actionBarTitle").textContent).toBe("Customer replied");
-    expect(app.el("pendingReplyPreview").innerHTML).not.toContain(
-      "New customer reply waiting for evaluation",
-    );
-    expect(app.el("pendingReplyPreview").innerHTML).not.toContain("endpoint URL");
     expect(app.el("customerReplyFocus").hidden).toBe(false);
     expect(app.el("customerReplyFocus").innerHTML).toContain("endpoint URL");
     expect(app.el("customerReplyFocus").innerHTML).toContain("retry succeeded");
@@ -1108,11 +1120,11 @@ describe("approvalDeskHtml", () => {
     );
     expect(app.el("createUpdatedRecommendation").hidden).toBe(false);
     expect(app.el("createUpdatedRecommendation").textContent).toBe("Evaluate");
-    expect(app.el("replyTestingMode").open).toBe(false);
+    expect(app.el("advancedSettings").open).toBe(false);
     expect(app.el("replyComposer").open).toBe(false);
   });
 
-  it("shows testing mode before evaluation and can suppress automatic replies", async () => {
+  it("shows advanced settings before evaluation and can suppress automatic replies", async () => {
     const app = await startApprovalDeskApp({
       markSentAutomaticReply:
         "The customer supplied the next diagnostic details automatically.",
@@ -1120,10 +1132,20 @@ describe("approvalDeskHtml", () => {
     await app.selectFirstTicket();
 
     expect(app.el("replyControls").hidden).toBe(false);
-    expect(app.el("replyTestingMode").open).toBe(false);
-    expect(approvalDeskHtml).toContain("Disable automatic replies?");
+    expect(app.el("advancedSettings").open).toBe(false);
+    expect(approvalDeskHtml).toContain("Disable automatic customer replies");
+    expect(app.el("replyComposer").hidden).toBe(true);
+    expect(app.el("addCustomerReply").disabled).toBe(true);
+
+    app.el("customerReplyBody").value = "This reply must remain blocked.";
+    await app.addCustomerReply();
+    expect(app.requests.some((request) => request.path.endsWith("/customer-replies"))).toBe(false);
 
     app.el("disableAutomaticReplies").checked = true;
+    app.el("disableAutomaticReplies").dispatch("change");
+    expect(app.el("replyComposer").hidden).toBe(false);
+    expect(app.el("addCustomerReply").disabled).toBe(false);
+
     await app.createRecommendation();
     await app.approve();
 
@@ -1485,9 +1507,6 @@ describe("approvalDeskHtml", () => {
     });
     await app.selectFirstTicket();
 
-    expect(app.el("pendingReplyPreview").innerHTML).toContain(
-      "Workflow update waiting for evaluation",
-    );
     expect(app.el("decisionControls").hidden).toBe(false);
     expect(app.el("createUpdatedRecommendation").hidden).toBe(false);
     expect(app.el("createUpdatedRecommendation").textContent).toBe("Update");
@@ -1638,15 +1657,12 @@ describe("approvalDeskHtml", () => {
 
     await app.createUpdatedRecommendation();
 
-    expect(app.el("pendingReplyPreview").innerHTML).not.toContain(
-      "I sent the remaining evidence.",
-    );
     expect(app.el("customerReplyFocus").innerHTML).not.toContain(
       "I sent the remaining evidence.",
     );
   });
 
-  it("keeps manual customer reply tooling behind testing mode", async () => {
+  it("keeps manual customer reply tooling behind advanced settings", async () => {
     const app = await startApprovalDeskApp();
     await app.selectFirstTicket();
     await app.createRecommendation();
@@ -1656,8 +1672,13 @@ describe("approvalDeskHtml", () => {
     expect(app.el("conversationContextPanel").innerHTML).not.toContain(
       "Insert partial evidence sample",
     );
-    expect(app.el("replyTestingMode").open).toBe(false);
-    expect(approvalDeskHtml).toContain("Testing mode");
+    expect(app.el("advancedSettings").open).toBe(false);
+    expect(approvalDeskHtml).toContain("Advanced settings");
+    expect(approvalDeskHtml).not.toContain("Testing mode");
+
+    app.el("disableAutomaticReplies").checked = true;
+    app.el("disableAutomaticReplies").dispatch("change");
+    expect(app.el("replyComposer").hidden).toBe(false);
 
     app.el("predictedReply").value = "partial-evidence";
     app.el("predictedReply").dispatch("change");
@@ -1690,12 +1711,14 @@ describe("approvalDeskHtml", () => {
 
     expect(app.el("replyControls").hidden).toBe(false);
     expect(app.el("customerReplyFocus").hidden).toBe(true);
-    expect(app.el("replyTestingMode").open).toBe(false);
+    expect(app.el("advancedSettings").open).toBe(false);
     expect(app.el("replyComposer").open).toBe(false);
-    expect(app.el("pendingReplyPreview").innerHTML).toContain(
-      "No automatic customer reply was generated",
+    expect(approvalDeskHtml).not.toContain(
+      "Add a reply here whenever the customer sends new information.",
     );
 
+    app.el("disableAutomaticReplies").checked = true;
+    app.el("disableAutomaticReplies").dispatch("change");
     app.el("customerReplyBody").value =
       "The campaign editor is still blank after I click Edit.";
     await app.addCustomerReply();
@@ -1737,6 +1760,70 @@ describe("approvalDeskHtml", () => {
     expect(approvalDeskHtml.indexOf("<h3>Conversation workspace</h3>")).toBeLessThan(
       approvalDeskHtml.indexOf('<section class="recommendation-setup-bar"'),
     );
+  });
+
+  it("offers bounded action-bar dock positions with the default at bottom right", () => {
+    expect(approvalDeskHtml).toContain('id="workflowActionStack"');
+    expect(approvalDeskHtml).toContain('data-dock="bottom-right"');
+    expect(approvalDeskHtml).toContain('id="actionBarPosition"');
+    expect(approvalDeskHtml).toContain('aria-label="Move action bar"');
+    expect(approvalDeskHtml).toContain('<option value="bottom-left">Bottom left</option>');
+    expect(approvalDeskHtml).toContain('<option value="bottom-center">Bottom center</option>');
+    expect(approvalDeskHtml).toContain('<option value="top-left">Top left</option>');
+    expect(approvalDeskHtml).toContain('<option value="top-center">Top center</option>');
+    expect(approvalDeskHtml).toContain('<option value="top-right">Top right</option>');
+    expect(approvalDeskHtml).toContain('<option value="bottom-right">Bottom right</option>');
+    expect(approvalDeskHtml).toContain('class="toggle-setting"');
+    expect(approvalDeskHtml).toContain("Disable automatic customer replies");
+    expect(approvalDeskHtml).toContain(".toggle-setting input[type=\"checkbox\"]");
+    expect(approvalDeskHtml).toContain(
+      ".advanced-settings-content .reply-composer > summary",
+    );
+    expect(approvalDeskHtml).toContain(
+      '<details id="replyComposer" class="reply-composer" hidden>',
+    );
+    expect(approvalDeskHtml).toContain(".advanced-settings-content .toggle-setting");
+    expect(approvalDeskHtml).toContain(
+      ".advanced-settings-content .action-bar-position label",
+    );
+    expect(approvalDeskHtml).toContain(
+      ".advanced-settings-content .reply-composer > label",
+    );
+    expect(approvalDeskHtml).toContain(
+      ".advanced-settings-content .action-bar-position select,",
+    );
+    expect(approvalDeskHtml).toContain(
+      ".advanced-settings-content .reply-composer > label select",
+    );
+  });
+
+  it("moves the action bar for the current page and resets to the default dock", async () => {
+    const app = await startApprovalDeskApp();
+    const actionBar = app.el("workflowActionStack");
+    const position = app.el("actionBarPosition");
+
+    position.value = "bottom-left";
+    position.dispatch("change");
+    expect(actionBar.dataset.dock).toBe("bottom-left");
+
+    position.value = "top-right";
+    position.dispatch("change");
+    expect(actionBar.dataset.dock).toBe("top-right");
+
+    position.value = "top-center";
+    position.dispatch("change");
+    expect(actionBar.dataset.dock).toBe("top-center");
+
+    position.value = "top-left";
+    position.dispatch("change");
+    expect(actionBar.dataset.dock).toBe("top-left");
+
+    position.value = "bottom-right";
+    position.dispatch("change");
+    expect(actionBar.dataset.dock).toBe("bottom-right");
+
+    const reloaded = await startApprovalDeskApp();
+    expect(reloaded.el("workflowActionStack").dataset.dock).toBe("bottom-right");
   });
 
   it("uses primary styling for secondary workflow actions in the floating bar", () => {
@@ -3203,6 +3290,7 @@ function createElements(): Record<string, FakeElement> {
   const elements = Object.fromEntries(
     [
       "actor",
+      "actionBarPosition",
       "actionBarHint",
       "actionBarTitle",
       "approvalStage",
@@ -3236,7 +3324,6 @@ function createElements(): Record<string, FakeElement> {
       "activityPanel",
       "markSentButton",
       "priorityOverride",
-      "pendingReplyPreview",
       "predictedReply",
       "queueFilters",
       "queueStatus",
@@ -3247,7 +3334,7 @@ function createElements(): Record<string, FakeElement> {
       "rejectControls",
       "replyComposer",
       "replyControls",
-      "replyTestingMode",
+      "advancedSettings",
       "disableAutomaticReplies",
       "resultPanel",
       "reviewDraftButton",
@@ -3260,6 +3347,7 @@ function createElements(): Record<string, FakeElement> {
       "ticketList",
       "ticketDetailsPanel",
       "ticketPanel",
+      "workflowActionStack",
       "knowledgeName",
       "knowledgeSummary",
       "knowledgeTriggerPatterns",
@@ -3276,12 +3364,14 @@ function createElements(): Record<string, FakeElement> {
     ].map((id) => [id, new FakeElement()]),
   );
   elements.actor.value = "approval-desk";
+  elements.actionBarPosition.value = "bottom-right";
+  elements.workflowActionStack.dataset.dock = "bottom-right";
   elements.draftStyle.value = "auto";
   elements.approveButton.disabled = true;
   elements.approveEditedButton.disabled = true;
   elements.rejectButton.disabled = true;
   elements.replyComposer.open = false;
-  elements.replyTestingMode.open = false;
+  elements.advancedSettings.open = false;
   elements.disableAutomaticReplies.checked = false;
   elements.fieldChoices.children = [
     "category",
@@ -3332,6 +3422,7 @@ class FakeElement {
   checked = false;
   children: FakeElement[] = [];
   className = "";
+  dataset: Record<string, string> = {};
   disabled = false;
   hidden = false;
   open = false;

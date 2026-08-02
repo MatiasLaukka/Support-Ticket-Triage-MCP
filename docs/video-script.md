@@ -61,7 +61,8 @@ the conversation timeline, then click **Evaluate** again.
 > The customer response draft is generated immediately from the current ticket
 > and conversation context. I do not type or select a customer reply here.
 > Conversation Context is a read-only timeline; simulated incoming replies are
-> available only from the action bar's Testing mode.
+> available only from the action bar's Advanced settings after I check
+> **Disable automatic customer replies** and open **Manual customer reply**.
 > After the approved response is marked sent, the local demo adds a
 > ticket-specific customer reply automatically so the next evaluation has a
 > realistic lifecycle event to read.
@@ -142,8 +143,9 @@ npm run demo:knowledge-evolution -- --verbose
 - Record in short sections; do not attempt one perfect take.
 - Use a large terminal font and hide unrelated windows.
 - Keep the deterministic mode visible in the narrative.
-- Manual customer replies are available under the action bar's Testing mode
-  for edge-case testing, but do not use that control in the primary recording.
+- Manual customer replies are available under the action bar's Advanced settings
+  after disabling automatic customer replies; do not use that control in the
+  primary recording.
 - Do not display environment variables containing secrets.
 - A face camera is optional; clear narration and readable screens are enough.
 - Keep the final edit under three minutes.

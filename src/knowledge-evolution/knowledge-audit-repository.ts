@@ -2,6 +2,7 @@ import { open, type FileHandle } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { z } from "zod";
 import { assertSafeFile, initializeDirectory, isMissing, repositoryError, serialize } from "./repository-utils.js";
+import { ApprovedEvidencePolicySchema } from "./domain.js";
 
 const Text = z.string().trim().min(1).max(1_000);
 export const KnowledgeAuditEventSchema = z.object({
@@ -9,6 +10,7 @@ export const KnowledgeAuditEventSchema = z.object({
   actor: Text, timestamp: z.string().datetime(), supportIds: z.array(Text).max(100), scores: z.record(z.string(), z.number()).optional(), provenanceSummary: Text.optional(),
   reviewedFields: z.array(Text).max(100), result: Text, rejectionReason: Text.optional(), notes: Text.optional(),
   evidencePolicyMetadata: z.object({
+    approvedPolicy: ApprovedEvidencePolicySchema.optional(),
     derivedEvidenceIds: z.array(Text).max(100),
     operatorAddedEvidenceIds: z.array(Text).max(100),
   }).strict().optional(),

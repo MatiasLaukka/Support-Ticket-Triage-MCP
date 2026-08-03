@@ -213,7 +213,7 @@ export class KnowledgeEvolutionService {
       };
       let promoted: KnowledgeObject | undefined;
       try {
-        promoted = await this.dependencies.objects.promote(candidate.id, object);
+        promoted = await this.dependencies.objects.promote(candidate.id, object, candidate.version);
         await this.appendAudit({
           objectId: promoted.id,
           candidateId: candidate.id,
@@ -225,7 +225,10 @@ export class KnowledgeEvolutionService {
           reviewedFields: input.edits === undefined ? [] : Object.keys(input.edits).sort(),
           result: "approved",
           notes: reviewed.operatorRationale,
-          evidencePolicyMetadata: reviewed.evidencePolicyMetadata,
+          evidencePolicyMetadata: {
+            approvedPolicy: reviewedPolicy,
+            ...reviewed.evidencePolicyMetadata,
+          },
         });
         return promoted;
       } catch (error) {

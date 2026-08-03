@@ -91,6 +91,73 @@ describe("knowledge evolution service", () => {
       edits: { evidencePolicy: { mode: "required", evidenceIds: ["legacy-browser-details"] } },
     })).rejects.toMatchObject({ code: "INVALID_APPROVAL_FIELDS" });
     await expect(fixture.objects.listApproved()).resolves.toEqual([]);
+    await expect(fixture.audits.list({ action: "approved" })).resolves.toEqual([]);
+  });
+
+  it("revalidates the candidate revision at the promotion boundary", async () => {
+    const fixture = createFixture({
+      beforePromote: async () => {
+        fixture.candidates[0] = { ...fixture.candidates[0]!, version: 2 };
+      },
+    });
+    const service = fixture.service();
+    await service.discover({ includeGpt: false, actorId: "support-lead" });
+
+    await expect(service.approve({
+      candidateId: "known-cause-diagnosis-001",
+      actorId: "support-lead",
+      expectedVersion: 1,
+    })).rejects.toMatchObject({ code: "STALE_APPROVAL" });
+    await expect(fixture.objects.listApproved()).resolves.toEqual([]);
+    await expect(fixture.audits.list({ action: "approved" })).resolves.toEqual([]);
+  });
+
+  it.each([
+    ["unknown", { mode: "required", evidenceIds: ["not-registered"] }],
+    ["duplicate", { mode: "required", evidenceIds: ["request-id", "request-id"] }],
+    ["undecided", { mode: "undecided" }],
+    ["empty none-required rationale", { mode: "none-required", rationale: "   " }],
+  ] as const)("rejects %s evidence policy without an approval audit", async (_label, evidencePolicy) => {
+    const fixture = createFixture();
+    const service = fixture.service();
+    await service.discover({ includeGpt: false, actorId: "support-lead" });
+
+    await expect(service.approve({
+      candidateId: "known-cause-diagnosis-001",
+      actorId: "support-lead",
+      expectedVersion: 1,
+      edits: { evidencePolicy: evidencePolicy as never },
+    })).rejects.toMatchObject({ code: "INVALID_APPROVAL_FIELDS" });
+    await expect(fixture.objects.listApproved()).resolves.toEqual([]);
+    await expect(fixture.audits.list({ action: "approved" })).resolves.toEqual([]);
+  });
+
+  it("converts an explicitly validated current candidate policy into the approved policy", async () => {
+    const fixture = createFixture();
+    const service = fixture.service();
+    await service.discover({ includeGpt: false, actorId: "support-lead" });
+
+    const approved = await service.approve({
+      candidateId: "known-cause-diagnosis-001",
+      actorId: "support-lead",
+      expectedVersion: 1,
+      edits: { evidencePolicy: { mode: "none-required", rationale: "The completed diagnosis is sufficient and no additional customer evidence is required." } },
+    });
+
+    expect(approved.evidencePolicy).toEqual({
+      mode: "none-required",
+      rationale: "The completed diagnosis is sufficient and no additional customer evidence is required.",
+    });
+    await expect(fixture.audits.list({ action: "approved" })).resolves.toMatchObject([{
+      evidencePolicyMetadata: {
+        approvedPolicy: {
+          mode: "none-required",
+          rationale: "The completed diagnosis is sufficient and no additional customer evidence is required.",
+        },
+        derivedEvidenceIds: [],
+        operatorAddedEvidenceIds: [],
+      },
+    }]);
   });
 
   it("uses an explicitly requested validated GPT draft and never persists an invalid draft", async () => {
@@ -378,7 +445,14 @@ function createFixture(options: {
     async saveCandidate(candidate: KnowledgeCandidate) { if (candidates.some((item) => item.id === candidate.id)) throw repositoryError("Duplicate candidate."); candidates.push(candidate); },
     async removeCandidate(candidateId: string) { const index = candidates.findIndex((item) => item.id === candidateId); if (index < 0) throw repositoryError("Candidate was not found."); candidates.splice(index, 1); },
     async listApproved() { return approved; },
-    async promote(candidateId: string, object: KnowledgeObject) { if (candidateId !== object.id || approved.some((item) => item.id === object.id)) throw repositoryError("Duplicate promotion."); await options.beforePromote?.(); approved.push(object); return object; },
+    async promote(candidateId: string, object: KnowledgeObject, expectedVersion?: number) {
+      if (candidateId !== object.id || approved.some((item) => item.id === object.id)) throw repositoryError("Duplicate promotion.");
+      await options.beforePromote?.();
+      const current = candidates.find((item) => item.id === candidateId);
+      if (expectedVersion !== undefined && current?.version !== expectedVersion) throw Object.assign(new Error("Knowledge candidate version is stale."), { code: "STALE_APPROVAL" });
+      approved.push(object);
+      return object;
+    },
     async removeApproved(candidateId: string) { const index = approved.findIndex((item) => item.id === candidateId); if (index < 0) throw repositoryError("Approved object was not found."); approved.splice(index, 1); },
   };
   let remainingAuditFailures = options.failApprovedAuditOnce ? 1 : 0;

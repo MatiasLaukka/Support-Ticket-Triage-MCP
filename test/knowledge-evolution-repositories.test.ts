@@ -4,7 +4,7 @@ import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { DomainError } from "../src/errors.js";
 import { DiagnosisRepository } from "../src/knowledge-evolution/diagnosis-repository.js";
-import { KnowledgeAuditRepository } from "../src/knowledge-evolution/knowledge-audit-repository.js";
+import { KnowledgeAuditRepository, type KnowledgeAuditEvent } from "../src/knowledge-evolution/knowledge-audit-repository.js";
 import { KnowledgeObjectRepository } from "../src/knowledge-evolution/knowledge-object-repository.js";
 import type { CompletedDiagnosis, KnowledgeCandidate, KnowledgeObject } from "../src/knowledge-evolution/domain.js";
 
@@ -110,6 +110,8 @@ describe("knowledge evolution repositories", () => {
     const storage = await root();
     const repository = new KnowledgeObjectRepository(join(storage, "candidates"), join(storage, "approved"));
     await repository.saveCandidate(candidate);
+    await expect(repository.promote(candidate.id, approved, candidate.version + 1)).rejects.toMatchObject({ code: "STALE_APPROVAL" });
+    await expect(repository.listApproved()).resolves.toEqual([]);
     await expect(repository.promote(candidate.id, approved)).resolves.toMatchObject({ ...approved, version: 1 });
     await expect(repository.listCandidates()).resolves.toMatchObject([candidate]);
     await expect(repository.listApproved()).resolves.toMatchObject([{ ...approved, version: 1 }]);
@@ -153,6 +155,20 @@ describe("knowledge evolution repositories", () => {
     }));
     await Promise.all(events.map((event) => repository.append(event)));
     await expect(repository.list({ objectId: candidate.id, action: "approved" })).resolves.toEqual([events[1]]);
+  });
+
+  it("round trips approved evidence policy provenance in audit metadata", async () => {
+    const repository = new KnowledgeAuditRepository(join(await root(), "audit", "events.jsonl"));
+    const event: KnowledgeAuditEvent = {
+      id: "audit-approved-policy", objectId: candidate.id, candidateId: candidate.id, action: "approved",
+      actor: "support-lead", timestamp: "2026-07-29T10:06:00.000Z", supportIds: ["diagnosis-001"], reviewedFields: ["evidencePolicy"], result: "approved",
+      evidencePolicyMetadata: {
+        approvedPolicy: { mode: "required", evidenceIds: ["request-id"] },
+        derivedEvidenceIds: ["request-id"], operatorAddedEvidenceIds: [],
+      },
+    };
+    await repository.append(event);
+    await expect(repository.list({ action: "approved" })).resolves.toEqual([event]);
   });
 
   it("atomically compares and appends a terminal action once", async () => {

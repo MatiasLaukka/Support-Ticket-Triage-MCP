@@ -96,6 +96,12 @@ describe("runtime configuration", () => {
       diagnosis: {
         status: "completed", causeType: "configuration", customerSafeSummary: "A configuration mismatch caused the request failure.",
         evidenceUsed: ["request trace"], confidence: "confirmed", owner: "engineering",
+        evidenceReferences: [{
+          id: "request-id",
+          labelAtDiagnosis: "Customer request ID",
+          source: "ticket",
+          sourceRef: "TKT-1005",
+        }],
         recommendedNextAction: "Apply the approved configuration update.", doNotSay: [],
       },
       knowledgeArticleIds: [],
@@ -103,7 +109,17 @@ describe("runtime configuration", () => {
 
     const diagnoses = await deps.knowledgeEvolution.diagnoses.list();
     expect(diagnoses).toMatchObject([
-      { ticketId: "TKT-1005", ownerTeam: "api-platform", evidenceUsed: ["request trace"], evidenceReferences: [] },
+      {
+        ticketId: "TKT-1005",
+        ownerTeam: "api-platform",
+        evidenceUsed: ["request trace"],
+        evidenceReferences: [{
+          id: "request-id",
+          labelAtDiagnosis: "Customer request ID",
+          source: "ticket",
+          sourceRef: "TKT-1005",
+        }],
+      },
     ]);
     expect(diagnoses[0]).not.toHaveProperty("evidenceIds");
   });

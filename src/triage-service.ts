@@ -1684,7 +1684,7 @@ function completedDiagnosisFrom(
     problem: input.diagnosis.customerSafeSummary,
     symptoms: [input.diagnosis.causeType, ...input.diagnosis.evidenceUsed],
     evidenceUsed: input.diagnosis.evidenceUsed,
-    evidenceReferences: [],
+    evidenceReferences: input.diagnosis.evidenceReferences ?? [],
     ownerTeam: completedDiagnosisOwner(input.diagnosis.owner),
     fixSteps: ["Apply the completed diagnosis next action through the governed support workflow."],
     verificationSteps: ["Confirm the customer-safe outcome after the governed next action."],

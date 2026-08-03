@@ -2240,7 +2240,7 @@ export const approvalDeskHtml = `<!doctype html>
         const journey = state.knowledgeJourneyState;
         const hasRecommendation = state.recommendation !== null;
         const currentStep = journey === 'approved'
-          ? 5
+          ? 4
           : journey === 'candidate'
             ? 3
             : journey === 'searching' || journey === 'none' || journey === 'reviewed'
@@ -2253,7 +2253,7 @@ export const approvalDeskHtml = `<!doctype html>
           : journey === 'searching'
             ? 'Comparing completed diagnoses and open-ticket signals...'
             : journey === 'approved'
-              ? 'Approved knowledge will guide future evaluations only.'
+              ? 'Approved knowledge will guide future evaluations only; a later match remains evidence-gated until its requirements are supplied.'
               : journey === 'none'
                 ? 'No reusable pattern found from the available evidence.'
                 : journey === 'reviewed'
@@ -2278,7 +2278,7 @@ export const approvalDeskHtml = `<!doctype html>
 
       function focusKnowledgePattern() {
         const panel = document.getElementById('knowledgePatternReview');
-        if (panel === null) {
+        if (panel == null) {
           return;
         }
         if (typeof panel.scrollIntoView === 'function') {
@@ -2911,6 +2911,8 @@ export const approvalDeskHtml = `<!doctype html>
       async function reviewKnowledgeCandidate(action) {
         const candidate = state.knowledgeCandidate;
         if (candidate === null) return;
+        const ticketId = state.selectedTicket?.id;
+        const knowledgeRequestId = state.knowledgeRequestId;
         const actor = els.actor.value.trim();
         if (actor === '') {
           setResult({ error: 'An actor is required for knowledge review.' });
@@ -2927,6 +2929,9 @@ export const approvalDeskHtml = `<!doctype html>
           body.reason = reason;
         }
         const data = await requestJson(path, { method: 'POST', body: JSON.stringify(body) });
+        if (state.selectedTicket?.id !== ticketId || state.knowledgeRequestId !== knowledgeRequestId) {
+          return;
+        }
         state.knowledgeCandidate = null;
         state.knowledgeJourneyState = action === 'approve' ? 'approved' : 'reviewed';
         state.knowledgeDiscoveryStatus = action === 'approve'

@@ -472,6 +472,46 @@ describe("approvalDeskHtml", () => {
     expect(app.el("knowledgeJourneySteps").innerHTML).toContain("Review diagnosis");
     expect(app.el("knowledgeJourneySteps").innerHTML).toContain("Approve for future evaluations");
     expect(app.el("reviewKnowledgePatternButton").hidden).toBe(false);
+    expect(() => app.el("reviewKnowledgePatternButton").dispatch("click")).not.toThrow();
+  });
+
+  it("does not let a late knowledge review response update a newer ticket journey", async () => {
+    const candidate = {
+      id: "known-cause-diagnosis-a",
+      name: "Prior ticket pattern",
+      summary: "A recurring issue.",
+      triggerPatterns: ["The same issue repeats."],
+      evidencePolicy: { mode: "none-required", rationale: "An authoritative event confirms this cause." },
+      timeConstraints: ["Apply while the event is active."],
+      diagnosticSteps: ["Review the event."],
+      fixSteps: ["Apply the correction."],
+      verificationSteps: ["Confirm recovery."],
+      deterministic: { score: 0.8, supportCount: 2, reasons: ["support"], meetsAlertThreshold: true },
+      gptAdvisory: { status: "not-used" },
+      support: [],
+      supportingDiagnosisIds: ["diagnosis-a"],
+      supportingTicketIds: ["TKT-1001"],
+      contradictions: [],
+      validationStatus: "valid",
+      validationWarnings: [],
+      customerSafeExplanation: "We identified a recurring issue.",
+      operatorRationale: "Reviewed.",
+      owner: "api-platform",
+      version: 1,
+    };
+    const app = await startApprovalDeskApp({
+      tickets: [fixtureTicket, { ...fixtureTicket, id: "TKT-1002", subject: "Second ticket" }],
+      knowledgeCandidate: candidate,
+      knowledgeCandidatesByTicket: { "TKT-1001": candidate },
+      knowledgeReviewDelayTicks: 12,
+    });
+
+    await app.selectTicket("TKT-1001");
+    app.el("recommendationPanel").dispatch("click", { target: { dataset: { action: "approve-knowledge" } } });
+    app.selectTicketWithoutSettling("TKT-1002");
+    await app.wait(20);
+
+    expect(app.el("knowledgeJourneyStatus").textContent).not.toContain("Approved knowledge");
   });
 
   it("lets the operator explicitly rerun knowledge discovery and reports when no candidate is found", async () => {
@@ -2956,6 +2996,7 @@ async function startApprovalDeskApp(options: {
   knowledgeGptAdvisory?: Record<string, unknown>;
   knowledgeCandidatesByTicket?: Record<string, Record<string, unknown>>;
   knowledgeDiscoveryDelayTicks?: Record<string, number>;
+  knowledgeReviewDelayTicks?: number;
   ticketDetailDelayTicks?: Record<string, number>;
   diagnoses?: Array<Record<string, unknown>>;
   diagnosesByTicket?: Record<string, Array<Record<string, unknown>>>;
@@ -3022,6 +3063,7 @@ async function startApprovalDeskApp(options: {
       });
     }
     if (/^\/api\/knowledge-candidates\/[^/]+\/approve$/.test(path)) {
+      await settle(options.knowledgeReviewDelayTicks ?? 0);
       return jsonResponse({
         object: { id: "known-cause-diagnosis-a", status: "approved", version: 1 },
       });

@@ -168,6 +168,7 @@ describe("createApprovalDeskHttpServer", () => {
       causeType: "performance",
       customerSafeSummary: "The confirmed editor diagnosis is ready for follow-up.",
       evidenceUsed: ["The editor remains blank in Chrome."],
+      evidenceReferences: [],
       confidence: "confirmed",
       owner: "engineering",
       recommendedNextAction: "Share the governed remediation update.",

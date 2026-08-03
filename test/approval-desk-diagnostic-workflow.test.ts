@@ -172,6 +172,42 @@ const ambiguousState = {
 };
 
 describe("diagnosisContextForTicket", () => {
+  it("snapshots only recognized provided evidence with reply provenance", () => {
+    const provided = {
+      id: "request-id",
+      label: "Request ID",
+      customerQuestion: "request ID if available",
+      aliases: ["request id"],
+      source: "knowledge" as const,
+    };
+    const requiredButNotProvided = {
+      id: "endpoint-url",
+      label: "Endpoint URL",
+      customerQuestion: "endpoint URL",
+      aliases: ["endpoint url"],
+      source: "policy" as const,
+    };
+    const reply = customerReply(
+      "2026-06-10T09:00:00.000Z",
+      "The request ID req-12345 reproduces the issue.",
+    );
+    const diagnosis = diagnosisContextForTicket(ticket, TriageRecommendationSchema.parse({
+      ...recommendation,
+      requiredEvidence: [requiredButNotProvided],
+      providedEvidence: [provided],
+      missingEvidence: [],
+    }), [reply]);
+
+    expect(diagnosis).toMatchObject({
+      evidenceReferences: [{
+        id: "request-id",
+        labelAtDiagnosis: "Request ID",
+        source: "reply",
+        sourceRef: reply.id,
+      }],
+    });
+  });
+
   it("selects the edited diagnosis context from a governed review audit", () => {
     const reviewedAt = "2026-06-10T09:05:00.000Z";
     const original = diagnosisAudit("2026-06-10T09:02:00.000Z", ambiguousState);

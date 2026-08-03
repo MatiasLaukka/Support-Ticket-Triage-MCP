@@ -213,6 +213,23 @@ describe("domain contracts", () => {
   });
 
   it.each([
+    "Authorization: Bearer definitely-a-secret",
+    "authorization=bearer definitely-a-secret",
+    "Bearer definitely-a-secret",
+    "X-Access-Token: definitely-a-secret",
+  ])("rejects credential-bearing evidence source references: %s", (sourceRef) => {
+    expect(DiagnosisContextSchema.safeParse({
+      ...completedDiagnosisContext,
+      evidenceReferences: [{
+        id: "request-id",
+        labelAtDiagnosis: "Request ID",
+        source: "ticket",
+        sourceRef,
+      }],
+    }).success).toBe(false);
+  });
+
+  it.each([
     "TKT-100",
     "tkt-1001",
     "ABC-1001",

@@ -28,6 +28,18 @@ describe("knowledge evolution service", () => {
     });
   });
 
+  it("keeps duplicate provenance in diagnosis history while deduplicating candidate policy IDs", async () => {
+    const fixture = createFixture({ duplicateEvidence: true });
+    const service = fixture.service();
+
+    await service.discover({ includeGpt: false, actorId: "support-lead" });
+
+    expect(fixture.diagnoses[0]?.evidenceReferences).toHaveLength(2);
+    await expect(service.getCandidate("known-cause-diagnosis-001")).resolves.toMatchObject({
+      evidencePolicy: { mode: "required", evidenceIds: ["request-id"] },
+    });
+  });
+
   it("uses an explicitly requested validated GPT draft and never persists an invalid draft", async () => {
     const fixture = createFixture();
     let invoked = 0;
@@ -252,6 +264,7 @@ function createFixture(options: {
   synchronizeReviewHistory?: boolean;
   ticketScopedComponents?: boolean;
   legacyEvidence?: boolean;
+  duplicateEvidence?: boolean;
   beforePromote?: () => Promise<void>;
 } = {}) {
   const diagnosis: CompletedDiagnosis = {
@@ -259,7 +272,12 @@ function createFixture(options: {
     symptoms: ["Requests return 401 after rotation."],
     ...(options.legacyEvidence
       ? { evidenceIds: ["legacy-synthetic-evidence"] }
-      : { evidenceReferences: [{ id: "request-id", labelAtDiagnosis: "API request ID", source: "ticket", sourceRef: "TKT-1001" }] }),
+      : { evidenceReferences: options.duplicateEvidence
+        ? [
+          { id: "request-id", labelAtDiagnosis: "API request ID in ticket", source: "ticket", sourceRef: "TKT-1001" },
+          { id: "request-id", labelAtDiagnosis: "API request ID in reply", source: "reply", sourceRef: "reply-001" },
+        ]
+        : [{ id: "request-id", labelAtDiagnosis: "API request ID", source: "ticket", sourceRef: "TKT-1001" }] }),
     ownerTeam: "api-platform",
     fixSteps: ["Refresh the service credential in the deployment configuration."],
     verificationSteps: ["Confirm a new request succeeds with the refreshed credential."], completedAt: "2026-07-29T10:00:00.000Z",
@@ -344,6 +362,7 @@ function createFixture(options: {
   };
   return {
     ticket,
+    diagnoses,
     candidates,
     objects,
     audits,

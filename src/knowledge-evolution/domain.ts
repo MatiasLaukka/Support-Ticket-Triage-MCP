@@ -154,7 +154,7 @@ export type EvidencePolicy = z.infer<typeof EvidencePolicySchema>;
 /** Accepts legacy persisted records; CompletedDiagnosisSchema supplies defaults when reading. */
 export type CompletedDiagnosis = z.input<typeof CompletedDiagnosisSchema>;
 export function evidenceReferenceIds(diagnosis: CompletedDiagnosis): string[] {
-  return diagnosis.evidenceReferences?.map(({ id }) => id) ?? [];
+  return [...new Set(diagnosis.evidenceReferences?.map(({ id }) => id) ?? [])];
 }
 export type KnowledgeObject = z.infer<typeof KnowledgeObjectSchema>;
 export type KnowledgeCandidate = z.infer<typeof KnowledgeCandidateSchema>;

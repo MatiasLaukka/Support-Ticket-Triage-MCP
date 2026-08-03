@@ -438,6 +438,42 @@ describe("approvalDeskHtml", () => {
     expect(app.el("recommendationPanel").innerHTML).toContain("historical recommendations");
   });
 
+  it("guides the operator through the visible knowledge-evolution journey", async () => {
+    const app = await startApprovalDeskApp({
+      knowledgeCandidate: {
+        id: "known-cause-diagnosis-a",
+        name: "Recurring credential rotation cause",
+        summary: "A deployed service can retain a rotated credential.",
+        triggerPatterns: ["Requests return 401 after credential rotation."],
+        evidencePolicy: { mode: "required", evidenceIds: ["credential-rotation-evidence"] },
+        timeConstraints: ["Apply after a credential rotation."],
+        diagnosticSteps: ["Compare the deployed credential with the active credential."],
+        fixSteps: ["Refresh the deployed credential configuration."],
+        verificationSteps: ["Confirm a new request succeeds."],
+        deterministic: { score: 0.805, supportCount: 2, reasons: ["shared-evidence: credential-rotation-evidence"], meetsAlertThreshold: true },
+        gptAdvisory: { status: "not-used" },
+        support: [{ source: "completed-diagnosis", diagnosisId: "diagnosis-a", ticketId: "TKT-1001", reasons: ["evidence: credential-rotation-evidence"] }],
+        supportingDiagnosisIds: ["diagnosis-a"],
+        supportingTicketIds: ["TKT-1001"],
+        contradictions: [],
+        validationStatus: "valid",
+        validationWarnings: [],
+        customerSafeExplanation: "We are reviewing a recurring configuration issue.",
+        operatorRationale: "Completed diagnoses support operator review.",
+        owner: "api-platform",
+        version: 1,
+      },
+    });
+
+    await app.selectFirstTicket();
+
+    expect(app.el("knowledgeJourneyBar").hidden).toBe(false);
+    expect(app.el("knowledgeJourneyStatus").textContent).toContain("Candidate ready for review");
+    expect(app.el("knowledgeJourneySteps").innerHTML).toContain("Review diagnosis");
+    expect(app.el("knowledgeJourneySteps").innerHTML).toContain("Approve for future evaluations");
+    expect(app.el("reviewKnowledgePatternButton").hidden).toBe(false);
+  });
+
   it("lets the operator explicitly rerun knowledge discovery and reports when no candidate is found", async () => {
     const app = await startApprovalDeskApp();
     await app.selectFirstTicket();
@@ -3407,6 +3443,10 @@ function createElements(): Record<string, FakeElement> {
       "knowledgeOwner",
       "knowledgeRejectReason",
       "knowledgeDiscoveryStatus",
+      "knowledgeJourneyBar",
+      "knowledgeJourneyStatus",
+      "knowledgeJourneySteps",
+      "reviewKnowledgePatternButton",
     ].map((id) => [id, new FakeElement()]),
   );
   elements.actor.value = "approval-desk";
@@ -3419,6 +3459,8 @@ function createElements(): Record<string, FakeElement> {
   elements.replyComposer.open = false;
   elements.advancedSettings.open = false;
   elements.disableAutomaticReplies.checked = false;
+  elements.knowledgeJourneyBar.hidden = true;
+  elements.reviewKnowledgePatternButton.hidden = true;
   elements.fieldChoices.children = [
     "category",
     "priority",

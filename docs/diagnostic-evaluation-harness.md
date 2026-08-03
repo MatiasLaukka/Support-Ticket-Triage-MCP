@@ -83,9 +83,11 @@ reused:
   explicitly justified `none-required`, or `undecided` when no reusable
   references were observed. `undecided` is intentionally visible but cannot be
   promoted.
-- **Approved policy** is the result of strict operator promotion. Only an
-  active catalog-backed `required` policy or a justified `none-required` policy
-  can affect a later evaluation.
+- **Approved policy** is the result of strict operator promotion. New
+  promotions require an active catalog-backed `required` policy or a justified
+  `none-required` policy. Existing approved objects that reference a
+  deprecated ID remain readable and executable for compatibility; new
+  promotion with that ID is blocked.
 
 The eleven-scenario diagnostic harness remains a non-mutating lifecycle check:
 it does not create candidates or promote knowledge objects. The positive and

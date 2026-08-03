@@ -1,11 +1,33 @@
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { TicketSchema, type Ticket } from "../src/domain.js";
+import {
+  EvidenceRequirementSchema,
+  TicketSchema,
+  type Ticket,
+} from "../src/domain.js";
 import { analyzeEvidenceReadiness } from "../src/approval-desk/evidence-readiness.js";
 import { getKnownCause } from "../src/approval-desk/known-cause-catalog.js";
 
 describe("analyzeEvidenceReadiness", () => {
+  it("returns evidence requirements accepted by the strict recommendation schema", async () => {
+    const readiness = analyzeEvidenceReadiness({
+      ticket: await loadSeedTicket("TKT-1005"),
+      outcome: {
+        ticketId: "TKT-1005",
+        category: "integration",
+        acceptablePriorities: ["P2", "P3"],
+        team: "integrations",
+        requiredEscalations: [],
+        knowledgeArticleIds: ["flow-trigger-troubleshooting"],
+      },
+    });
+
+    expect(EvidenceRequirementSchema.array().parse(readiness.requiredEvidence)).toEqual(
+      readiness.requiredEvidence,
+    );
+  });
+
   it.each([
     {
       name: "ordinary ticket with missing evidence",

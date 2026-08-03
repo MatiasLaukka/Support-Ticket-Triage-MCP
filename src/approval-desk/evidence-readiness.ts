@@ -395,7 +395,13 @@ function evidenceForIds(
 
 function evidenceRequirement(id: string, source: EvidenceSource): EvidenceRequirement {
   const base = requireEvidenceRequirement(id);
-  return { ...base, source };
+  return {
+    id: base.id,
+    label: base.label,
+    customerQuestion: base.customerQuestion,
+    aliases: base.aliases,
+    source,
+  };
 }
 
 function chooseSupportState(input: {

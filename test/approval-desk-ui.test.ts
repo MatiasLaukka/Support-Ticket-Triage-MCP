@@ -567,11 +567,11 @@ describe("approvalDeskHtml", () => {
 
   it("has demo reply samples for every evidence requirement", () => {
     const evidenceSource = readFileSync(
-      "src/approval-desk/evidence-readiness.ts",
+      "src/evidence-catalog.ts",
       "utf8",
     );
     const catalogBlock = evidenceSource.match(
-      /const EVIDENCE_CATALOG[\s\S]*?const KNOWLEDGE_EVIDENCE/,
+      /export const EVIDENCE_CATALOG[\s\S]*?export type EvidenceRequirementId/,
     )?.[0];
     expect(catalogBlock).toBeDefined();
     const catalogIds = [...catalogBlock!.matchAll(/\n\s+"([a-z0-9-]+)": \{/g)]

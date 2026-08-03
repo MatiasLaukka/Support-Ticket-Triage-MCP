@@ -943,6 +943,43 @@ recommendations or audits. Approval Desk and MCP use the same knowledge
 service, while lifecycle replay and AI comparison project the same approved
 object context through the shared evidence and diagnostic workflow.
 
+#### Evidence provenance and policy boundaries
+
+Knowledge evolution keeps three related, but deliberately different, records:
+
+1. **Observed diagnosis evidence** is what was actually present when an
+   operator completed a diagnosis. `evidenceUsed` remains readable reasoning;
+   `evidenceReferences` contains catalog-backed IDs, the immutable label seen at
+   diagnosis time, and optional ticket/reply/knowledge/operator provenance.
+   References are created from recognized provided evidence only. The system
+   never turns an audit ID or free-form prose into a synthetic evidence ID.
+2. **Candidate evidence policy** is a reviewable proposal for future tickets.
+   Discovery deduplicates observed IDs for this proposal while preserving
+   duplicate observations and their provenance in diagnosis history. A
+   candidate may be `required`, explicitly `none-required` with a rationale, or
+   `undecided` when the completed diagnosis has no reusable references. An
+   `undecided` candidate stays visible for review but cannot be promoted.
+3. **Approved evidence policy** is the operator-approved contract used by later
+   evaluations. Promotion reloads the current candidate and catalog, then
+   accepts only a valid `required` policy or a justified `none-required`
+   policy. GPT can suggest fields, but it cannot select this policy or promote
+   it.
+
+This creates two important reuse paths. In the positive path, a diagnosis with
+real catalog references produces a candidate, an operator approves its policy,
+and a later matching ticket remains evidence-gated until required evidence is
+present; after reevaluation, the approved known cause can be selected through
+the same catalog. In the negative path, a diagnosis may still be valid and
+readable when it has no structured references, but its candidate is
+`undecided`, cannot affect routing, and is rejected until an operator supplies
+and approves a valid policy. An active outage or an open-ticket similarity
+signal does not bypass this gate by itself.
+
+Catalog entries are retained for compatibility. Existing approved objects that
+refer to a deprecated evidence ID remain readable and executable; new
+promotions containing that ID are blocked and must use its replacement when
+one is defined.
+
 In the Approval Desk, select a ticket and use **Find pattern** in the action
 bar to run knowledge discovery explicitly. The search also runs when a ticket
 is selected, but the button makes the trigger visible and reports when the

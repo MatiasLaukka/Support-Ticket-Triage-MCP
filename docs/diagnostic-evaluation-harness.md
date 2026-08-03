@@ -70,6 +70,45 @@ human approval remain authoritative. Invalid or unavailable provider output
 falls back to the deterministic diagnosis, and the report records only
 sanitized candidate fields and fallback categories.
 
+## Knowledge-evolution evidence checks
+
+The harness and knowledge-evolution service use the same evidence catalog and
+diagnostic workflow. This keeps three concerns separate when a diagnosis is
+reused:
+
+- **Observed evidence** is what was actually provided and recorded on a
+  completed diagnosis. Structured `evidenceReferences` carry catalog IDs and
+  provenance; readable `evidenceUsed` text is not converted into policy.
+- **Candidate policy** is a reviewable proposal. It may be `required`, an
+  explicitly justified `none-required`, or `undecided` when no reusable
+  references were observed. `undecided` is intentionally visible but cannot be
+  promoted.
+- **Approved policy** is the result of strict operator promotion. Only an
+  active catalog-backed `required` policy or a justified `none-required` policy
+  can affect a later evaluation.
+
+The eleven-scenario diagnostic harness remains a non-mutating lifecycle check:
+it does not create candidates or promote knowledge objects. The positive and
+negative reuse paths are covered by the knowledge-evolution integration tests:
+
+1. A diagnosis with a real catalog reference can become a candidate, be
+   approved, keep a later matching ticket evidence-gated while the requirement
+   is missing, and enter the approved known-cause workflow after reevaluation
+   with that evidence.
+2. A diagnosis with readable reasoning but no structured references remains
+   valid for its original ticket, yet produces an `undecided` candidate that is
+   blocked from promotion and has no routing effect.
+
+Known-event or outage correlation and open-ticket similarity are signals, not
+permission to skip required evidence. Existing approved objects that use a
+deprecated catalog ID remain readable for compatibility; new promotion with a
+deprecated ID is rejected and must use the active replacement. These contracts
+are exercised directly with:
+
+```powershell
+npm test -- --run test/knowledge-evolution-reuse.test.ts test/knowledge-evolution-service.test.ts
+```
+
 ## AI Comparison Evaluation
 
 The AI comparison harness reuses this eleven-scenario catalog to make the

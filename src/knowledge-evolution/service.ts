@@ -426,7 +426,10 @@ function assertReferences(candidate: KnowledgeCandidate, diagnoses: readonly Com
   if (candidate.supportingDiagnosisIds.some((id) => !candidate.supportingTicketIds.includes(diagnosisById.get(id)!.ticketId))) {
     throw new DomainError("Knowledge candidate references are invalid.", "INVALID_APPROVAL_FIELDS");
   }
-  if (candidate.evidencePolicy.mode === "required" && candidate.evidencePolicy.evidenceIds.some((id) => findEvidenceRequirement(id) === undefined)) {
+  if (candidate.evidencePolicy.mode === "required" && candidate.evidencePolicy.evidenceIds.some((id) => {
+    const requirement = findEvidenceRequirement(id);
+    return requirement === undefined || requirement.status === "deprecated";
+  })) {
     throw new DomainError("Knowledge candidate references are invalid.", "INVALID_APPROVAL_FIELDS");
   }
 }

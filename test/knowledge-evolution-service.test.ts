@@ -79,6 +79,20 @@ describe("knowledge evolution service", () => {
     }]);
   });
 
+  it("rejects deprecated evidence IDs during authoritative promotion validation", async () => {
+    const fixture = createFixture();
+    const service = fixture.service();
+    await service.discover({ includeGpt: false, actorId: "support-lead" });
+
+    await expect(service.approve({
+      candidateId: "known-cause-diagnosis-001",
+      actorId: "support-lead",
+      expectedVersion: 1,
+      edits: { evidencePolicy: { mode: "required", evidenceIds: ["legacy-browser-details"] } },
+    })).rejects.toMatchObject({ code: "INVALID_APPROVAL_FIELDS" });
+    await expect(fixture.objects.listApproved()).resolves.toEqual([]);
+  });
+
   it("uses an explicitly requested validated GPT draft and never persists an invalid draft", async () => {
     const fixture = createFixture();
     let invoked = 0;

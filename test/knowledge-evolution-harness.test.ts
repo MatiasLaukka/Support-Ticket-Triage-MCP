@@ -289,7 +289,7 @@ function diagnosis(id: string, ticketId: string): CompletedDiagnosis {
     ticketId,
     problem: "Webhook deliveries fail after a signing-key rotation.",
     symptoms: ["Webhook deliveries fail after a signing-key rotation."],
-    evidenceIds: ["request-id"],
+    evidenceReferences: [{ id: "request-id", labelAtDiagnosis: "Webhook request ID", source: "ticket", sourceRef: ticketId }],
     ownerTeam: "integrations",
     fixSteps: ["Refresh the signing key in the webhook integration."],
     verificationSteps: ["Verify a newly delivered webhook is accepted."],

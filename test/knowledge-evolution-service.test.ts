@@ -6,6 +6,15 @@ import type { KnowledgeAuditEvent } from "../src/knowledge-evolution/knowledge-a
 import type { CompletedDiagnosis, KnowledgeCandidate, KnowledgeObject } from "../src/knowledge-evolution/domain.js";
 
 describe("knowledge evolution service", () => {
+  it("loads a legacy diagnosis without turning its synthetic evidence ID into reusable policy", async () => {
+    const fixture = createFixture({ legacyEvidence: true });
+
+    const result = await fixture.service().discover({ includeGpt: false, actorId: "support-lead" });
+
+    expect(result.candidates).toHaveLength(1);
+    await expect(fixture.service().getCandidate("known-cause-diagnosis-001")).rejects.toMatchObject({ code: "REPOSITORY_ERROR" });
+  });
+
   it("discovers and persists deterministic candidates without invoking GPT", async () => {
     const fixture = createFixture();
     const service = fixture.service({ enabled: false, draft: async () => { throw new Error("must not run"); } });
@@ -242,11 +251,16 @@ function createFixture(options: {
   failCandidateCreatedAuditOnce?: boolean;
   synchronizeReviewHistory?: boolean;
   ticketScopedComponents?: boolean;
+  legacyEvidence?: boolean;
   beforePromote?: () => Promise<void>;
 } = {}) {
   const diagnosis: CompletedDiagnosis = {
     id: "diagnosis-001", ticketId: "TKT-1001", problem: "API requests fail after rotating a credential.",
-    symptoms: ["Requests return 401 after rotation."], evidenceIds: ["evidence-001"], ownerTeam: "api-platform",
+    symptoms: ["Requests return 401 after rotation."],
+    ...(options.legacyEvidence
+      ? { evidenceIds: ["legacy-synthetic-evidence"] }
+      : { evidenceReferences: [{ id: "request-id", labelAtDiagnosis: "API request ID", source: "ticket", sourceRef: "TKT-1001" }] }),
+    ownerTeam: "api-platform",
     fixSteps: ["Refresh the service credential in the deployment configuration."],
     verificationSteps: ["Confirm a new request succeeds with the refreshed credential."], completedAt: "2026-07-29T10:00:00.000Z",
   };
@@ -278,7 +292,7 @@ function createFixture(options: {
         ticketId: "TKT-1003",
         problem: "The billing invoice export link is missing.",
         symptoms: ["Billing invoice export is unavailable."],
-        evidenceIds: ["billing-export-evidence"],
+        evidenceReferences: [{ id: "invoice-number", labelAtDiagnosis: "Invoice number", source: "ticket" as const, sourceRef: "TKT-1003" }],
         ownerTeam: "billing" as const,
       }]
       : []),
@@ -364,7 +378,7 @@ function ticketRecord() {
 function gptDraft() {
   return {
     kind: "known-cause", name: "Recurring credential rotation pattern", summary: "A deployed service can retain a credential after rotation.",
-    triggerPatterns: ["Requests return 401 after a credential rotation."], evidencePolicy: { mode: "required", evidenceIds: ["evidence-001"] },
+    triggerPatterns: ["Requests return 401 after a credential rotation."], evidencePolicy: { mode: "required", evidenceIds: ["request-id"] },
     knowledgeArticleIds: ["credential-rotation"], timeConstraints: ["Apply only after a credential rotation."],
     diagnosticSteps: ["Compare the deployment credential with the active credential."], fixSteps: ["Refresh the deployment credential."], verificationSteps: ["Confirm a new request succeeds."],
     customerSafeExplanation: "We found a configuration mismatch and are refreshing it.", operatorRationale: "Completed diagnosis support indicates a recurring pattern.",

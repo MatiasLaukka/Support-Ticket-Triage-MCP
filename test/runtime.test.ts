@@ -101,9 +101,11 @@ describe("runtime configuration", () => {
       knowledgeArticleIds: [],
     });
 
-    await expect(deps.knowledgeEvolution.diagnoses.list()).resolves.toMatchObject([
-      { ticketId: "TKT-1005", ownerTeam: "api-platform", evidenceIds: [expect.stringMatching(/^evidence-/)] },
+    const diagnoses = await deps.knowledgeEvolution.diagnoses.list();
+    expect(diagnoses).toMatchObject([
+      { ticketId: "TKT-1005", ownerTeam: "api-platform", evidenceUsed: ["request trace"], evidenceReferences: [] },
     ]);
+    expect(diagnoses[0]).not.toHaveProperty("evidenceIds");
   });
 
   it("injects an optional candidate draft provider through the runtime boundary", async () => {
@@ -122,7 +124,7 @@ describe("runtime configuration", () => {
       ticketId: "TKT-1001",
       problem: "The event-processing delay recurs for accepted checkout events.",
       symptoms: ["Accepted checkout events are missing from profile timelines."],
-      evidenceIds: ["runtime-provider-evidence"],
+      evidenceReferences: [{ id: "request-id", labelAtDiagnosis: "Accepted request ID", source: "ticket", sourceRef: "TKT-1001" }],
       ownerTeam: "api-platform",
       fixSteps: ["Apply the governed event-processing mitigation."],
       verificationSteps: ["Confirm a new accepted event reaches the profile timeline."],

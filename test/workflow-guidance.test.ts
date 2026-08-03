@@ -15,6 +15,8 @@ import {
   latestAuthoritativeDiagnosis,
   latestDiagnosisAudit,
 } from "../src/approval-desk/workflow-guidance.js";
+import type { KnowledgeCandidate } from "../src/knowledge-evolution/domain.js";
+import type { KnowledgeAuditEvent } from "../src/knowledge-evolution/knowledge-audit-repository.js";
 
 const ticketId = "TKT-1001" as const;
 const recommendationId = "10000000-0000-4000-8000-000000000001";
@@ -109,6 +111,55 @@ type WorkflowInput = Parameters<typeof buildOperatorGuidance>[0];
 
 function emptyWorkflow(): WorkflowInput {
   return { ticket: ticket(), recommendations: [], audits: [] };
+}
+
+function actionablePatternCandidate(): KnowledgeCandidate {
+  return {
+    id: "candidate-1",
+    kind: "known-cause",
+    name: "Recurring event delay",
+    summary: "The same event processing delay recurs.",
+    triggerPatterns: ["event delay"],
+    evidencePolicy: { mode: "required", evidenceIds: ["request-id"] },
+    timeConstraints: ["Use when the cited event evidence is present."],
+    diagnosticSteps: ["Compare the event evidence with the prior diagnosis."],
+    fixSteps: ["Apply the governed mitigation."],
+    verificationSteps: ["Ask the customer to retry the affected event."],
+    customerSafeExplanation: "We identified a recurring issue and are reviewing the next safe step.",
+    operatorRationale: "The candidate is supported by a completed diagnosis.",
+    owner: "engineering",
+    version: 1,
+    supportingDiagnosisIds: ["diagnosis-20000000-0000-4000-8000-000000000001"],
+    supportingTicketIds: [ticketId],
+    provenance: { source: "test", recordedAt: "2026-08-04T10:00:00.000Z" },
+    status: "candidate",
+    deterministicScores: { confidence: 0.9, support: 2 },
+    deterministicReasons: ["The completed diagnosis repeats."],
+    discovery: {
+      score: 0.9,
+      reasons: ["The completed diagnosis repeats."],
+      support: [],
+      supportCount: 2,
+      contradictions: [],
+      meetsAlertThreshold: true,
+    },
+    contradictions: [],
+    validationStatus: "valid",
+    evidencePolicyMetadata: { derivedEvidenceIds: ["request-id"], operatorAddedEvidenceIds: [] },
+  };
+}
+
+function patternAudit(): KnowledgeAuditEvent {
+  return {
+    id: "candidate-audit-1",
+    candidateId: "candidate-1",
+    action: "candidate-created",
+    actor: "casey",
+    timestamp: "2026-06-10T09:04:00.000Z",
+    supportIds: ["TKT-1001"],
+    reviewedFields: [],
+    result: "candidate-created",
+  };
 }
 
 function pendingRecommendationWorkflow(): WorkflowInput {
@@ -507,6 +558,32 @@ describe("buildOperatorGuidance", () => {
     expect(guidance.approval).toEqual({ required: true, fields: [] });
     expect(guidance.unlocksTool).toBe("review_diagnosis");
     expect(guidance.blockers).toEqual([]);
+  });
+
+  it("requires pattern review before offering downstream support actions", () => {
+    const input = confirmedEngineeringDiagnosisWorkflow();
+    const diagnosis = latestDiagnosisAudit(input.audits)!;
+    const pattern = actionablePatternCandidate();
+    const guidance = buildOperatorGuidance({
+      ...input,
+      knowledgeEvolution: {
+        candidates: [{
+          ...pattern,
+          supportingDiagnosisIds: [`diagnosis-${diagnosis.id}`],
+        }],
+        audits: [patternAudit()],
+      },
+    });
+
+    expect(guidance).toMatchObject({
+      stage: "pattern-review",
+      nextAction: "review-pattern",
+      requiredReview: {
+        kind: "knowledge-pattern",
+        id: "candidate-1",
+      },
+      knowledgePattern: { state: "pending", actionable: true },
+    });
   });
 
   it("continues evidence evaluation instead of offering ambiguous diagnoses for review", () => {

@@ -1,4 +1,6 @@
 import type { AuditEvent, Ticket, TriageRecommendation } from "../domain.js";
+import type { KnowledgeCandidate } from "../knowledge-evolution/domain.js";
+import type { KnowledgeAuditEvent } from "../knowledge-evolution/knowledge-audit-repository.js";
 import { compareIsoInstants } from "../iso-instant.js";
 import {
   buildConversationHistory,
@@ -35,6 +37,10 @@ export function buildTicketWorkflowReadModel(input: {
   ticket: Ticket;
   recommendations: readonly TriageRecommendation[];
   audits: readonly AuditEvent[];
+  knowledgeEvolution?: {
+    candidates: readonly KnowledgeCandidate[];
+    audits: readonly KnowledgeAuditEvent[];
+  };
 }) {
   const recommendation = summarizeRecommendationsForTicket(
     input.ticket,

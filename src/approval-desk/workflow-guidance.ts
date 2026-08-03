@@ -10,6 +10,8 @@ import type {
   CustomerReplyWatermark,
   DiagnosisContext,
 } from "../triage-service.js";
+import type { KnowledgeCandidate } from "../knowledge-evolution/domain.js";
+import type { KnowledgeAuditEvent } from "../knowledge-evolution/knowledge-audit-repository.js";
 import {
   diagnosisContextForTicket,
   diagnosisContextFromAudit,
@@ -30,6 +32,7 @@ import {
   latestRecommendationSubmissionPosition,
   type AuditCausalPosition,
 } from "./workflow-causal-context.js";
+import { knowledgePatternGate } from "./knowledge-pattern-gate.js";
 
 export const OperatorGuidanceSchema = z
   .object({
@@ -40,6 +43,7 @@ export const OperatorGuidanceSchema = z
       "customer-replied",
       "diagnosis-ready",
       "diagnosis-recorded",
+      "pattern-review",
       "fix-ready",
       "verification",
       "ready-for-close",
@@ -51,6 +55,7 @@ export const OperatorGuidanceSchema = z
       "evaluate-ticket",
       "review-recommendation",
       "review-diagnosis",
+      "review-pattern",
       "wait-for-customer",
       "record-diagnosis",
       "mark-fix-available",
@@ -77,6 +82,17 @@ export const OperatorGuidanceSchema = z
       .optional(),
     blockers: z.array(z.string().trim().min(1)),
     customerNextStep: z.string().trim().min(1).optional(),
+    requiredReview: z.object({
+      kind: z.enum(["diagnosis", "knowledge-pattern"]),
+      id: z.string().trim().min(1).optional(),
+      reason: z.string().trim().min(1),
+    }).optional(),
+    knowledgePattern: z.object({
+      state: z.enum(["none", "pending", "approved", "rejected", "deferred"]),
+      actionable: z.boolean(),
+      candidateId: z.string().trim().min(1).optional(),
+      reason: z.string().trim().min(1).optional(),
+    }).strict().default({ state: "none", actionable: false }),
   })
   .strict();
 
@@ -330,6 +346,10 @@ export function buildOperatorGuidance(input: {
   ticket: Ticket;
   recommendations: readonly TriageRecommendation[];
   audits: readonly AuditEvent[];
+  knowledgeEvolution?: {
+    candidates: readonly KnowledgeCandidate[];
+    audits: readonly KnowledgeAuditEvent[];
+  };
 }): OperatorGuidance {
   const latest = latestCurrentRecommendation(input);
   const latestDiagnosticContext =
@@ -454,6 +474,37 @@ export function buildOperatorGuidance(input: {
       approval: { required: true, fields: [] },
       unlocksTool: "review_diagnosis",
       blockers: [],
+    });
+  }
+
+  const authoritativeDiagnosis = latestDiagnosis === undefined
+    ? undefined
+    : latestAuthoritativeDiagnosis(input.ticket.id, input.audits);
+  const knowledgePattern = input.knowledgeEvolution === undefined ||
+    authoritativeDiagnosis === undefined ||
+    currentDiagnosisReviewIsStale
+    ? { state: "none" as const, actionable: false }
+    : knowledgePatternGate({
+        ticketId: input.ticket.id,
+        currentDiagnosisId: `diagnosis-${authoritativeDiagnosis.originalDiagnosis.id}`,
+        candidates: input.knowledgeEvolution.candidates,
+        audits: input.knowledgeEvolution.audits,
+      });
+  if (knowledgePattern.actionable) {
+    return OperatorGuidanceSchema.parse({
+      stage: "pattern-review",
+      changed: "An actionable knowledge pattern is awaiting operator review.",
+      nextAction: "review-pattern",
+      reason: knowledgePattern.reason ??
+        "Review the knowledge pattern before continuing support actions.",
+      approval: noApproval,
+      blockers: [knowledgePattern.reason ?? "Knowledge pattern review is required."],
+      requiredReview: {
+        kind: "knowledge-pattern",
+        ...(knowledgePattern.candidateId === undefined ? {} : { id: knowledgePattern.candidateId }),
+        reason: knowledgePattern.reason ?? "Knowledge pattern review is required.",
+      },
+      knowledgePattern,
     });
   }
 

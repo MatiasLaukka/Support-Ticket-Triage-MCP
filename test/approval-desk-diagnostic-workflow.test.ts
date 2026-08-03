@@ -208,6 +208,49 @@ describe("diagnosisContextForTicket", () => {
     });
   });
 
+  it("persists evidence provenance from the causally latest matching reply despite a backdated timestamp", () => {
+    const provided = {
+      id: "request-id",
+      label: "Request ID",
+      customerQuestion: "request ID if available",
+      aliases: ["request id"],
+      source: "knowledge" as const,
+    };
+    const firstReply = customerReply(
+      "2026-06-10T09:05:00.000Z",
+      "The first request ID req-12345 reproduces the issue.",
+    );
+    const causallyLaterBackdatedReply = customerReply(
+      "2026-06-10T08:55:00.000Z",
+      "The updated request ID req-67890 reproduces the issue.",
+    );
+    const diagnosis = diagnosisContextForTicket(ticket, TriageRecommendationSchema.parse({
+      ...recommendation,
+      providedEvidence: [provided],
+      missingEvidence: [],
+    }), [firstReply, causallyLaterBackdatedReply]);
+    const persisted = AuditEventSchema.parse({
+      id: auditId("20000000"),
+      timestamp: "2026-06-10T09:10:00.000Z",
+      actor: "product-support",
+      action: "diagnosis-completed",
+      ticketId: ticket.id,
+      before: {},
+      after: { diagnosis },
+      rationale: "Persist diagnosis evidence provenance.",
+      knowledgeArticleIds: [],
+      result: "success",
+    });
+
+    expect(diagnosisContextFromAudit(persisted)).toMatchObject({
+      evidenceReferences: [{
+        id: "request-id",
+        source: "reply",
+        sourceRef: causallyLaterBackdatedReply.id,
+      }],
+    });
+  });
+
   it("selects the edited diagnosis context from a governed review audit", () => {
     const reviewedAt = "2026-06-10T09:05:00.000Z";
     const original = diagnosisAudit("2026-06-10T09:02:00.000Z", ambiguousState);

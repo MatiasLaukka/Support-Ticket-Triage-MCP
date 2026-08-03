@@ -21,6 +21,7 @@ import {
   strictDiagnosisReviewRecord,
 } from "./diagnosis-review.js";
 import {
+  auditCausalPositions,
   compareAuditCausalOrder,
   latestAuditPosition,
   type AuditCausalPosition,
@@ -622,13 +623,13 @@ function latestReplyContainingEvidence(
 ): AuditEvent | undefined {
   const phrases = [evidence.label, evidence.customerQuestion, ...evidence.aliases]
     .map((value) => value.toLowerCase());
-  return audits
-    .filter((event) => {
+  return auditCausalPositions(audits)
+    .filter(({ event }) => {
       if (event.ticketId !== ticketId || event.action !== "customer-reply-received") return false;
       const body = event.after.body;
       return typeof body === "string" && phrases.some((phrase) => body.toLowerCase().includes(phrase));
     })
-    .sort((left, right) => right.timestamp.localeCompare(left.timestamp))[0];
+    .sort((left, right) => compareAuditCausalOrder(right, left))[0]?.event;
 }
 
 function causeTypeForRecommendation(

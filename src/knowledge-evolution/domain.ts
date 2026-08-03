@@ -55,6 +55,7 @@ export const CompletedDiagnosisSchema = z.object({
   symptoms: UniqueTextSchema,
   evidenceUsed: z.array(PersistedTextSchema).default([]),
   evidenceReferences: z.array(DiagnosisEvidenceReferenceSchema).default([]),
+  // Deprecated: legacy read-only data; never used to derive new policy.
   evidenceIds: UniqueIdentifiersSchema.optional(),
   ownerTeam: TeamSchema,
   fixSteps: z.array(WorkflowStepSchema).min(1),

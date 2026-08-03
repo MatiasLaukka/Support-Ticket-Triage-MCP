@@ -628,17 +628,19 @@ function hasKnownSigningSecretRotationTime(text: string): boolean {
 function hasConcreteAuditSource(text: string): boolean {
   const subject = "(?:audit source|source address|source ip|actor)";
   if (hasUnknownQualification(text, subject)) return false;
-  return /\bsource (?:ip|address)\s*(?:is|was|:)?\s*(?:\d{1,3}\.){3}\d{1,3}\b|\b(?:audit source|actor)\s*(?:is|was|:)\s*[a-z0-9][a-z0-9@._-]{2,}\b/i.test(
+  return /\b(?:audit source|source (?:ip|address))\s*(?:shown|listed|reported)?\s*(?:is|was|:)\s*(?:ip\s*)?(?:\d{1,3}\.){3}\d{1,3}\b|\b(?:audit source|actor)\s*(?:shown|listed|reported)?\s*(?:is|was|:)\s*[a-z0-9][a-z0-9@._-]{2,}\b/i.test(
     text,
   );
 }
 
 function hasKnownAffectedScope(text: string): boolean {
   const subject = "(?:affected scope|affected profiles|profiles? (?:were )?accessed|accounts? (?:were )?accessed)";
-  if (hasUnknownQualification(text, subject)) return false;
-  return /\b\d+\s+(?:profiles?|accounts?|logs?|actions?)\b|\b(?:affected|accessed|exposed|impacted)\s+(?:profiles?|accounts?|logs?|actions?)\b|\b(?:profiles?|accounts?) were (?:accessed|exposed|affected)\b/i.test(
-    text,
-  );
+  const positivePattern = /\b\d+\s+(?:profiles?|accounts?|logs?|actions?)\b|\b(?:affected|accessed|exposed|impacted)\s+(?:profiles?|accounts?|logs?|actions?)\b|\b(?:profiles?|accounts?) were (?:accessed|exposed|affected)\b|\b(?:affected )?scope\s*(?:appears|is|was|shown)?\s*(?:to be|:)?\s*\d+\s+(?:profiles?|accounts?|records?|actions?)\b/gi;
+  return [...text.matchAll(positivePattern)].some((match) => {
+    const index = match.index ?? 0;
+    const window = text.slice(Math.max(0, index - 100), index + match[0].length + 20);
+    return !hasUnknownQualification(window, escapeRegExp(match[0]));
+  });
 }
 
 function hasSpecificProblemSummary(text: string): boolean {

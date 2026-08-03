@@ -171,4 +171,21 @@ describe("validateDraftQuality", () => {
       status: "pass",
     }));
   });
+
+  it("rejects a stale evidence promise when the checklist is complete", () => {
+    const result = validateDraftQuality({
+      response:
+        "We do not need any additional information from you before the next update. Once we have those details, we will compare the storefront event with the flow setup.",
+      style: "balanced",
+      evidenceReadiness: { ...evidenceReadiness, missingEvidence: [] },
+    });
+
+    expect(result.checks).toContainEqual(expect.objectContaining({
+      id: "evidence-state-consistency",
+      status: "fail",
+    }));
+    expect(result.blockingMessages).toContain(
+      "The draft asked for evidence that the authoritative checklist marks complete.",
+    );
+  });
 });

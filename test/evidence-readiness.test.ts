@@ -539,6 +539,31 @@ describe("analyzeEvidenceReadiness", () => {
     ]);
   });
 
+  it("recognizes the natural audit-source and affected-scope wording used in testing mode", async () => {
+    const ticket = TicketSchema.parse({
+      ...(await loadSeedTicket("TKT-1004")),
+      description: `${(await loadSeedTicket("TKT-1004")).description}\n\nCustomer reply: The audit source shown is IP 198.51.100.24. The affected scope appears to be 12 profiles in the latest export.`,
+    });
+    const readiness = analyzeEvidenceReadiness({
+      ticket,
+      outcome: {
+        ticketId: "TKT-1004",
+        category: "security",
+        acceptablePriorities: ["P1"],
+        team: "security",
+        requiredEscalations: ["security", "missing-information"],
+        knowledgeArticleIds: ["security-incident-response"],
+      },
+    });
+
+    expect(readiness.providedEvidence.map((requirement) => requirement.id)).toEqual(
+      expect.arrayContaining(["audit-source", "affected-scope"]),
+    );
+    expect(readiness.missingEvidence.map((requirement) => requirement.id)).not.toEqual(
+      expect.arrayContaining(["audit-source", "affected-scope"]),
+    );
+  });
+
   it("keeps unknown private-key facts missing for TKT-1019", async () => {
     const ticket = await loadSeedTicket("TKT-1019");
     const readiness = analyzeEvidenceReadiness({

@@ -33,6 +33,9 @@ export function validateDraftQuality(input: {
   const limit = WORD_LIMITS[input.style];
   const lengthPassed = wordCount <= limit;
   const requestResult = classifyInformationRequests(input);
+  const evidenceStatePassed =
+    input.evidenceReadiness?.missingEvidence.length !== 0 ||
+    !containsStaleEvidencePromise(input.response);
   const checks: AiGuardrailCheck[] = [
     {
       id: "style-word-limit",
@@ -48,6 +51,14 @@ export function validateDraftQuality(input: {
       status: requestResult.status,
       message: requestResult.message,
     },
+    {
+      id: "evidence-state-consistency",
+      label: "Evidence-state consistency",
+      status: evidenceStatePassed ? "pass" : "fail",
+      message: evidenceStatePassed
+        ? "The draft matches the authoritative evidence checklist."
+        : "The draft asked for evidence that the authoritative checklist marks complete.",
+    },
   ];
 
   return {
@@ -56,6 +67,12 @@ export function validateDraftQuality(input: {
       .filter((check) => check.status === "fail")
       .map((check) => check.message),
   };
+}
+
+function containsStaleEvidencePromise(response: string): boolean {
+  return /\b(?:once|after|when)\s+(?:we|you)\s+(?:have|receive|get|send|share|provide)\s+(?:those|the remaining|the requested|these)\s+(?:details|information|evidence)\b/i.test(
+    response,
+  );
 }
 
 function classifyInformationRequests(input: {

@@ -1425,6 +1425,43 @@ describe("TriageService", () => {
     });
   });
 
+  it("keeps ticket revision unchanged when approved triage fields already match the ticket", async () => {
+    const harness = makeHarness();
+    const recommendation = await harness.service.submit(
+      makeSubmitInput({
+        category: "api",
+        priority: "P3",
+        team: "api-platform",
+      }),
+    );
+    const before = await harness.tickets.get("TKT-1001");
+
+    const approved = await harness.service.approve(
+      makeApproval({
+        recommendationId: recommendation.id,
+        approvedFields: ["category", "priority", "team", "customerResponse"],
+        editedCustomerResponse: recommendation.draftCustomerResponse,
+      }),
+    );
+
+    expect(approved.ticket).toEqual(before);
+    expect(await harness.tickets.get("TKT-1001")).toEqual(before);
+    expect(harness.audit.events.at(-1)).toMatchObject({
+      action: "recommendation-approved",
+      before: {
+        category: "api",
+        priority: "P3",
+        team: "api-platform",
+      },
+      after: {
+        category: "api",
+        priority: "P3",
+        team: "api-platform",
+        customerResponse: recommendation.draftCustomerResponse,
+      },
+    });
+  });
+
   it("compensates a response-only approval when its audit cannot persist", async () => {
     const harness = makeHarness();
     const recommendation = await harness.service.submit(makeSubmitInput());

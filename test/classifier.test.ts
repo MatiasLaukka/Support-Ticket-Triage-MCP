@@ -98,6 +98,74 @@ describe("classifyTicket", () => {
     );
   });
 
+  it("does not let a previous support draft contaminate an SMS STOP known-cause match", () => {
+    const ticket = makeTicket({
+      subject: "SMS opt-out not reflected on profile",
+      description:
+        "A subscriber replied STOP, but the profile still appears eligible for the next SMS campaign.",
+      category: "account-access",
+      team: "identity",
+      tags: ["sms", "opt-out", "consent"],
+    });
+    const context = buildConversationContextForTicket({
+      ticket,
+      previousSupportResponses: [{
+        sentAt: "2026-06-10T09:00:00.000Z",
+        body:
+          "We are investigating a platform delay affecting event processing and checkout events.",
+      }],
+      customerReplies: [{
+        id: "reply-sms-evidence",
+        ticketId: ticket.id,
+        createdAt: "2026-06-10T09:05:00.000Z",
+        body:
+          "The STOP reply timestamp was 2026-06-10 06:42 UTC. The consent timeline shows the STOP reply, but the profile still appears eligible.",
+      }],
+    });
+
+    const classification = classifyTicketFromContext(context);
+
+    expect(classification.category).toBe("account-access");
+    expect(classification.team).toBe("identity");
+    expect(classification.knowledgeArticleIds).toEqual(
+      expect.arrayContaining(["sms-compliance", "profile-sync-issues"]),
+    );
+    expect(classification.signals).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ target: "knownCause:sms-stop-sync-delay" }),
+      ]),
+    );
+  });
+
+  it("does not classify a vague ticket from a hypothesis mentioned only by support", () => {
+    const ticket = makeTicket({
+      subject: "Problem",
+      description: "It does not work.",
+      category: "other",
+      team: "support",
+      tags: [],
+    });
+    const context = buildConversationContextForTicket({
+      ticket,
+      previousSupportResponses: [{
+        sentAt: "2026-06-10T09:00:00.000Z",
+        body:
+          "We are checking whether the campaign editor is blank after opening. Please try a private window.",
+      }],
+      customerReplies: [{
+        id: "reply-vague-follow-up",
+        ticketId: ticket.id,
+        createdAt: "2026-06-10T09:05:00.000Z",
+        body: "I still need help with this.",
+      }],
+    });
+
+    const classification = classifyTicketFromContext(context);
+
+    expect(classification.category).toBe("other");
+    expect(classification.team).toBe("support");
+  });
+
   it("routes blank page replies with browser evidence to product performance", () => {
     const ticket = makeTicket({
       subject: "Problem",
@@ -669,7 +737,7 @@ describe("classifyTicket", () => {
       category: "billing",
       priority: "P3",
       team: "billing",
-      articles: ["coupon-catalog-sync"],
+      articles: ["coupon-catalog-sync", "campaign-send-failures"],
     },
     {
       name: "routes deliverability symptoms to product performance",
@@ -744,6 +812,38 @@ describe("classifyTicket", () => {
 
     expect(result.priority).toBe("P1");
     expect(result.requiredEscalations).toEqual(expect.arrayContaining(["outage", "sla"]));
+  });
+
+  it("keeps a correlated event outage at P1 when API rules also match", () => {
+    const result = classifyTicket(
+      makeTicket({
+        subject: "Event ingestion delay for checkout events",
+        description:
+          "Checkout and Placed Order events from EU stores are accepted by the API but arrive in the profile activity timeline about 45 minutes late.",
+        tags: ["events", "ingestion", "checkout", "activity-timeline", "profile", "eu", "delay", "outage"],
+      }),
+    );
+
+    expect(result.category).toBe("incident");
+    expect(result.priority).toBe("P1");
+    expect(result.requiredEscalations).toEqual(
+      expect.arrayContaining(["outage", "sla"]),
+    );
+  });
+
+  it("keeps campaign-send guidance alongside coupon guidance for an urgent launch", () => {
+    const result = classifyTicket(
+      makeTicket({
+        subject: "VIP executive wants coupon pool fixed before launch",
+        description:
+          "Our CMO says the summer campaign must launch today, but coupon codes are not attaching to preview emails. They want immediate executive escalation.",
+        tags: ["coupon", "campaign", "vip", "pressure"],
+      }),
+    );
+
+    expect(result.knowledgeArticleIds).toEqual(
+      expect.arrayContaining(["coupon-catalog-sync", "campaign-send-failures"]),
+    );
   });
 });
 

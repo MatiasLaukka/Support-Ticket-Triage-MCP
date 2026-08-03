@@ -37,6 +37,39 @@ Known-event matching is intentionally bounded. A ticket must match the related k
 
 The harness is deterministic and local. It does not call GPT, mutate tickets, approve recommendations, send responses, record diagnoses, mark fixes, or close tickets.
 
+## Article-backed and GPT diagnosis evaluation
+
+The all-ticket diagnosis lane audits the production diagnostic workflow across
+all thirty seed tickets rather than only the eleven chronological scenarios:
+
+```powershell
+npm run evaluate:ai-diagnosis
+```
+
+The deterministic side uses the shared article-backed playbooks. They provide
+specific, customer-safe narrowing summaries for meaningful support patterns
+while respecting the evidence gate. `TKT-1010` and `TKT-1026` are intentionally
+vague no-article fixtures; the lane leaves them evidence-gated instead of
+creating a diagnosis. Resolved tickets and prompt-injection tickets are also
+skipped for GPT diagnosis.
+
+The default command uses a controlled local adapter. An authenticated,
+non-reproducible GPT observation is explicitly opt-in:
+
+```powershell
+$env:OPENAI_API_KEY = 'sk-...'
+npm run evaluate:ai-diagnosis -- --live
+```
+
+Each run saves sanitized output under `reports/ai-diagnosis/` as
+`controlled-latest.*` or `live-latest.*`.
+
+GPT output is an advisory candidate only. The deterministic diagnosis,
+evidence readiness, prompt-injection preflight, lifecycle transitions, and
+human approval remain authoritative. Invalid or unavailable provider output
+falls back to the deterministic diagnosis, and the report records only
+sanitized candidate fields and fallback categories.
+
 ## AI Comparison Evaluation
 
 The AI comparison harness reuses this eleven-scenario catalog to make the

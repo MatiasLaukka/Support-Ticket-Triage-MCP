@@ -438,6 +438,24 @@ describe("approvalDeskHtml", () => {
     expect(app.el("recommendationPanel").innerHTML).toContain("historical recommendations");
   });
 
+  it("lets the operator explicitly rerun knowledge discovery and reports when no candidate is found", async () => {
+    const app = await startApprovalDeskApp();
+    await app.selectFirstTicket();
+    const automaticDiscoveries = app.requests.filter(
+      ({ path }) => path === "/api/knowledge-candidates",
+    ).length;
+
+    app.el("discoverKnowledgeButton").dispatch("click");
+    await settle(5);
+
+    expect(
+      app.requests.filter(({ path }) => path === "/api/knowledge-candidates"),
+    ).toHaveLength(automaticDiscoveries + 1);
+    expect(app.el("knowledgeDiscoveryStatus").textContent).toContain(
+      "No reusable knowledge pattern found",
+    );
+  });
+
   it("submits operator edits for every proposed workflow field through the knowledge approval route", async () => {
     const app = await startApprovalDeskApp({
       knowledgeCandidate: {
@@ -3305,6 +3323,7 @@ function createElements(): Record<string, FakeElement> {
       "conversationContextPanel",
       "createRecommendation",
       "createUpdatedRecommendation",
+      "discoverKnowledgeButton",
       "customerReplyBody",
       "customerReplyFocus",
       "decisionChips",
@@ -3361,6 +3380,7 @@ function createElements(): Record<string, FakeElement> {
       "knowledgeOperatorRationale",
       "knowledgeOwner",
       "knowledgeRejectReason",
+      "knowledgeDiscoveryStatus",
     ].map((id) => [id, new FakeElement()]),
   );
   elements.actor.value = "approval-desk";

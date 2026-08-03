@@ -464,6 +464,11 @@ export const approvalDeskHtml = `<!doctype html>
         text-align: right;
       }
 
+      #knowledgeDiscoveryStatus {
+        flex: 0 1 auto;
+        text-align: left;
+      }
+
       .bar-actions {
         display: flex;
         flex-wrap: wrap;
@@ -1169,6 +1174,8 @@ export const approvalDeskHtml = `<!doctype html>
               <div class="bar-topline">
                 <h3 id="actionBarTitle">Evaluate ticket</h3>
                 <span id="actionBarHint" class="meta">Uses the full conversation timeline.</span>
+                <button id="discoverKnowledgeButton" type="button" class="secondary" title="Search for a reusable knowledge pattern">Find pattern</button>
+                <span id="knowledgeDiscoveryStatus" class="meta" aria-live="polite"></span>
               </div>
               <div id="setupControls" class="bar-mode">
                 <div class="setup-grid">
@@ -1322,6 +1329,8 @@ export const approvalDeskHtml = `<!doctype html>
         consumedCustomerReplyTimestamp: null,
         knowledgeCandidate: null,
         knowledgeAdvisory: null,
+        knowledgeDiscoveryStatus: '',
+        knowledgeDiscoveryPending: false,
         knowledgeRequestId: 0,
         ticketRequestId: 0,
         operatorGuidance: null,
@@ -1355,6 +1364,8 @@ export const approvalDeskHtml = `<!doctype html>
         continueApproval: document.getElementById('continueApproval'),
         createRecommendation: document.getElementById('createRecommendation'),
         createUpdatedRecommendation: document.getElementById('createUpdatedRecommendation'),
+        discoverKnowledgeButton: document.getElementById('discoverKnowledgeButton'),
+        knowledgeDiscoveryStatus: document.getElementById('knowledgeDiscoveryStatus'),
         customerReplyBody: document.getElementById('customerReplyBody'),
         customerReplyFocus: document.getElementById('customerReplyFocus'),
         decisionChips: document.getElementById('decisionChips'),
@@ -2128,6 +2139,8 @@ export const approvalDeskHtml = `<!doctype html>
         els.backToRecommendation.hidden = !(hasRecommendation && state.stage === 'approval');
         els.decisionChips.innerHTML = hasRecommendation ? renderDecisionChips(state.recommendation) : '';
         els.decisionSummary.textContent = hasRecommendation ? decisionSummaryText(state.recommendation) : 'Review the draft and evidence, then approve or edit.';
+        els.discoverKnowledgeButton.disabled = state.selectedTicket === null || state.knowledgeDiscoveryPending;
+        els.knowledgeDiscoveryStatus.textContent = state.knowledgeDiscoveryStatus;
         if (customerReplyReady || latestUnevaluatedWorkflowEvent() !== null) {
           els.createUpdatedRecommendation.textContent = createUpdatedRecommendationLabel();
         }
@@ -2605,6 +2618,8 @@ export const approvalDeskHtml = `<!doctype html>
         const knowledgeRequestId = ++state.knowledgeRequestId;
         state.knowledgeCandidate = null;
         state.knowledgeAdvisory = null;
+        state.knowledgeDiscoveryStatus = '';
+        state.knowledgeDiscoveryPending = false;
         if (switchingTickets) {
           els.recommendationPanel.innerHTML =
             '<section class="hero-card description"><strong>Loading ticket...</strong>' +
@@ -2661,6 +2676,11 @@ export const approvalDeskHtml = `<!doctype html>
       }
 
       async function loadKnowledgeCandidate(ticketId, knowledgeRequestId, includeGpt) {
+        state.knowledgeDiscoveryPending = true;
+        state.knowledgeDiscoveryStatus = includeGpt === true
+          ? 'Refreshing knowledge pattern with optional GPT...'
+          : 'Searching for a reusable knowledge pattern...';
+        renderRecommendationStageControls();
         try {
           const actor = els.actor.value.trim() || 'approval-desk';
           const data = await requestJson('/api/knowledge-candidates', {
@@ -2675,11 +2695,34 @@ export const approvalDeskHtml = `<!doctype html>
           }) ?? candidates.find(function (candidate) {
             return candidate.deterministic?.meetsAlertThreshold === true;
           }) ?? null;
+          state.knowledgeDiscoveryStatus = state.knowledgeCandidate === null
+            ? 'No reusable knowledge pattern found from available completed diagnoses.'
+            : 'Potential knowledge pattern found — review it below.';
         } catch (_) {
           if (state.selectedTicket?.id === ticketId && state.knowledgeRequestId === knowledgeRequestId) {
             state.knowledgeCandidate = null;
             state.knowledgeAdvisory = null;
+            state.knowledgeDiscoveryStatus = 'Knowledge discovery is unavailable right now.';
           }
+        } finally {
+          if (state.selectedTicket?.id === ticketId && state.knowledgeRequestId === knowledgeRequestId) {
+            state.knowledgeDiscoveryPending = false;
+            renderRecommendationStageControls();
+          }
+        }
+      }
+
+      async function discoverKnowledgePattern() {
+        if (state.selectedTicket === null || state.knowledgeDiscoveryPending) return;
+        const ticketId = state.selectedTicket.id;
+        const knowledgeRequestId = ++state.knowledgeRequestId;
+        state.knowledgeCandidate = null;
+        state.knowledgeAdvisory = null;
+        renderRecommendation(true);
+        await loadKnowledgeCandidate(ticketId, knowledgeRequestId, false);
+        if (state.selectedTicket?.id === ticketId && state.knowledgeRequestId === knowledgeRequestId) {
+          renderRecommendation(true);
+          renderRecommendationStageControls();
         }
       }
 
@@ -4057,6 +4100,9 @@ export const approvalDeskHtml = `<!doctype html>
       });
       els.createUpdatedRecommendation.addEventListener('click', function () {
         void createRecommendation().catch(function (error) { setResult({ error: error.message }); });
+      });
+      els.discoverKnowledgeButton.addEventListener('click', function () {
+        void discoverKnowledgePattern().catch(function (error) { setResult({ error: error.message }); });
       });
       els.diagnoseButton.addEventListener('click', function () {
         void recordDiagnosis().catch(function (error) { setResult({ error: error.message }); });

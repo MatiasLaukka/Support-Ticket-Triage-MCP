@@ -59,7 +59,7 @@ export function diagnosisContextForTicket(
   if ((recommendation.missingEvidence?.length ?? 0) > 0) {
     return {
       status: "completed",
-      causeType: recommendation.category === "security" ? "security" : "configuration",
+      causeType: causeTypeForRecommendation(recommendation),
       customerSafeSummary:
         "We need the requested evidence before confirming whether the reported issue matches a known cause or platform event.",
       evidenceUsed: providedEvidenceLabels(recommendation, "provided customer evidence"),
@@ -169,7 +169,7 @@ export function diagnosisContextForTicket(
 
   return {
     status: "completed",
-    causeType: recommendation.category === "security" ? "security" : "configuration",
+    causeType: causeTypeForRecommendation(recommendation),
     customerSafeSummary:
       "The support team has completed the investigation and identified the most likely cause from the provided evidence.",
     evidenceUsed: providedEvidenceLabels(
@@ -571,6 +571,26 @@ function providedEvidenceLabels(
 ): string[] {
   const labels = recommendation.providedEvidence?.map((item) => item.label) ?? [];
   return labels.length > 0 ? labels : [fallback];
+}
+
+function causeTypeForRecommendation(
+  recommendation: TriageRecommendation,
+): DiagnosisContext["causeType"] {
+  switch (recommendation.category) {
+    case "security":
+      return "security";
+    case "incident":
+      return "platform-delay";
+    case "integration":
+      return "integration";
+    case "performance":
+      return "performance";
+    case "account-access":
+    case "authentication":
+      return "customer-data";
+    default:
+      return "configuration";
+  }
 }
 
 function customerReplyTextFromAudits(

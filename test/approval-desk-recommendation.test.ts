@@ -2142,6 +2142,32 @@ describe("Approval Desk recommendation builder", () => {
     expect(input.draftCustomerResponse).not.toContain("smart sending");
   });
 
+  it("does not contradict complete flow evidence with a new-evidence promise", async () => {
+    const outcomes = await loadExpectedOutcomes(
+      resolve("data/seed/expected-outcomes.json"),
+    );
+    const ticket = await loadSeedTicket("TKT-1005");
+    const input = buildApprovalDeskRecommendationInput({
+      ticket,
+      outcome: outcomes.get("TKT-1005")!,
+      actor: "approval-desk",
+      customerReplies: [{
+        id: "reply-flow-complete",
+        ticketId: ticket.id,
+        createdAt: "2026-06-10T10:00:00.000Z",
+        body:
+          "The store is on Shopify. The Browse Abandonment flow ID is Browse123. Profile customer@example.com viewed Product-456 at 09:42 UTC and the event ID is evt-123. The product URL is https://shop.example/products/456.",
+      }],
+    });
+
+    expect(input.draftCustomerResponse).toContain(
+      "We do not need any additional information from you before the next update.",
+    );
+    expect(input.draftCustomerResponse).not.toContain(
+      "Once we have those details",
+    );
+  });
+
   it("answers known-cause SMS quiet-hour blocks without asking for diagnostics", async () => {
     const outcomes = await loadExpectedOutcomes(
       resolve("data/seed/expected-outcomes.json"),

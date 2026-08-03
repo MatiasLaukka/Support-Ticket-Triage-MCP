@@ -7,4 +7,9 @@ data/runtime/*
 .approval-desk*.log
 reports/ai-comparison/live-latest.md
 reports/ai-comparison/live-latest.json
+reports/ai-diagnosis/controlled-latest.md
+reports/ai-diagnosis/controlled-latest.json
+reports/ai-diagnosis/live-latest.md
+reports/ai-diagnosis/live-latest.json
 .superpowers/sdd/
+.superpowers/brainstorm/

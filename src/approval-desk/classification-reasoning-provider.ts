@@ -250,7 +250,7 @@ function buildReasoningInput(input: GptClassificationReasoningInput): string {
       description: input.ticket.description,
       tags: input.ticket.tags,
     },
-    conversationText: input.conversationContext.combinedText,
+      conversationText: input.conversationContext.classificationText,
     deterministicClassification: {
       category: input.deterministicClassification.category,
       team: input.deterministicClassification.team,

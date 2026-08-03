@@ -1355,11 +1355,17 @@ export class TriageService {
       result: "success",
     });
 
-    // Customer-response approval authorizes an outbound message, but does not
-    // change ticket state or evidence. Keeping the ticket revision stable lets
-    // an already-reviewed diagnosis remain current until customer context or
-    // an actual ticket field changes.
-    if (approval.approvedFields.every((field) => field === "customerResponse")) {
+    // An approval that only authorizes an outbound response, or repeats the
+    // ticket's existing triage values, does not change ticket state or
+    // evidence. Keeping the ticket revision stable lets an already-reviewed
+    // diagnosis remain current until customer context or an actual ticket
+    // field changes.
+    const changesTicket = approval.approvedFields.some(
+      (field) =>
+        field !== "customerResponse" &&
+        !sameStructuredValue(before[field], after[field]),
+    );
+    if (!changesTicket && approval.approvedFields.includes("customerResponse")) {
       await this.dependencies.recommendations.transitionResolution(
         recommendation.id,
         "pending",

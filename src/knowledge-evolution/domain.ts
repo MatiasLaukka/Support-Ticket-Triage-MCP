@@ -1,5 +1,10 @@
 import { z } from "zod";
-import { IsoTimestampSchema, TeamSchema, TicketIdSchema } from "../domain.js";
+import {
+  DiagnosisEvidenceReferenceSchema,
+  IsoTimestampSchema,
+  TeamSchema,
+  TicketIdSchema,
+} from "../domain.js";
 
 const NonBlankStringSchema = z.string().trim().min(1).max(1_000);
 const IdentifierSchema = z.string().trim().min(1).max(120).regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/);
@@ -48,7 +53,9 @@ export const CompletedDiagnosisSchema = z.object({
   ticketId: TicketIdSchema,
   problem: PersistedTextSchema,
   symptoms: UniqueTextSchema,
-  evidenceIds: UniqueIdentifiersSchema,
+  evidenceUsed: z.array(PersistedTextSchema).default([]),
+  evidenceReferences: z.array(DiagnosisEvidenceReferenceSchema).default([]),
+  evidenceIds: UniqueIdentifiersSchema.optional(),
   ownerTeam: TeamSchema,
   fixSteps: z.array(WorkflowStepSchema).min(1),
   verificationSteps: z.array(WorkflowStepSchema).min(1),
@@ -144,6 +151,10 @@ export const KnowledgeCandidateSchema = KnowledgeObjectFieldsSchema.extend({
 export type KnowledgeObjectKind = z.infer<typeof KnowledgeObjectKindSchema>;
 export type KnowledgeObjectStatus = z.infer<typeof KnowledgeObjectStatusSchema>;
 export type EvidencePolicy = z.infer<typeof EvidencePolicySchema>;
-export type CompletedDiagnosis = z.infer<typeof CompletedDiagnosisSchema>;
+/** Accepts legacy persisted records; CompletedDiagnosisSchema supplies defaults when reading. */
+export type CompletedDiagnosis = z.input<typeof CompletedDiagnosisSchema>;
+export function evidenceReferenceIds(diagnosis: CompletedDiagnosis): string[] {
+  return diagnosis.evidenceReferences?.map(({ id }) => id) ?? [];
+}
 export type KnowledgeObject = z.infer<typeof KnowledgeObjectSchema>;
 export type KnowledgeCandidate = z.infer<typeof KnowledgeCandidateSchema>;

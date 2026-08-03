@@ -46,6 +46,35 @@ describe("knowledge evolution domain contracts", () => {
     expect(KnowledgeObjectSchema.parse(knowledgeObject)).toMatchObject(knowledgeObject);
   });
 
+  it("loads legacy completed diagnosis JSON with empty evidence references", () => {
+    expect(CompletedDiagnosisSchema.parse(diagnosis)).toMatchObject({
+      ...diagnosis,
+      evidenceUsed: [],
+      evidenceReferences: [],
+    });
+  });
+
+  it("retains readable evidence alongside its catalog-backed diagnosis reference", () => {
+    expect(CompletedDiagnosisSchema.parse({
+      ...diagnosis,
+      evidenceUsed: ["The customer supplied request ID req-123."],
+      evidenceReferences: [{
+        id: "request-id",
+        labelAtDiagnosis: "Customer request ID",
+        source: "reply",
+        sourceRef: "reply-001",
+      }],
+    })).toMatchObject({
+      evidenceUsed: ["The customer supplied request ID req-123."],
+      evidenceReferences: [{
+        id: "request-id",
+        labelAtDiagnosis: "Customer request ID",
+        source: "reply",
+        sourceRef: "reply-001",
+      }],
+    });
+  });
+
   it("rejects duplicate support and evidence IDs plus blank fields", () => {
     expect(() => CompletedDiagnosisSchema.parse({ ...diagnosis, evidenceIds: ["evidence-001", "evidence-001"] })).toThrow();
     expect(() => KnowledgeObjectSchema.parse({ ...knowledgeObject, supportingDiagnosisIds: ["diagnosis-001", "diagnosis-001"] })).toThrow();

@@ -49,6 +49,19 @@ describe("knowledge evolution repositories", () => {
     await expect(repository.list()).resolves.toMatchObject([diagnosis, { id: "diagnosis-002" }]);
   });
 
+  it("loads legacy diagnosis records without structured evidence references", async () => {
+    const storage = await root();
+    const diagnoses = join(storage, "diagnoses");
+    await mkdir(diagnoses, { recursive: true });
+    await writeFile(join(diagnoses, "diagnosis-001.json"), JSON.stringify(diagnosis));
+
+    await expect(new DiagnosisRepository(diagnoses).list()).resolves.toEqual([{
+      ...diagnosis,
+      evidenceUsed: [],
+      evidenceReferences: [],
+    }]);
+  });
+
   it("removes a persisted diagnosis so a failed audit can be retried without a duplicate", async () => {
     const repository = new DiagnosisRepository(join(await root(), "diagnoses"));
     await repository.save(diagnosis);

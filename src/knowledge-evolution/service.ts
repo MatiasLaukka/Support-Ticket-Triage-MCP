@@ -5,7 +5,7 @@ import type { Ticket, TicketId } from "../domain.js";
 import type { TicketRepository } from "../ticket-repository.js";
 import { draftKnowledgeCandidate, type CandidateDraftProvider } from "./candidate-draft-provider.js";
 import type { CandidateDraftPayload } from "./candidate-draft-contract.js";
-import type { CompletedDiagnosis, KnowledgeCandidate, KnowledgeObject } from "./domain.js";
+import { evidenceReferenceIds, type CompletedDiagnosis, type KnowledgeCandidate, type KnowledgeObject } from "./domain.js";
 import { KnowledgeCandidateSchema } from "./domain.js";
 import { discoverCandidates, type KnowledgeDiscoveryResult } from "./discovery.js";
 import type { DiagnosisRepository } from "./diagnosis-repository.js";
@@ -88,9 +88,9 @@ export class KnowledgeEvolutionService {
       const draftDiagnoses = relevantDiagnoses.filter(({ id }) => draftSupportDiagnosisIds.has(id));
       const draft = await draftKnowledgeCandidate({
         discovery,
-        allowedEvidenceIds: unique(draftDiagnoses.flatMap((diagnosis) => diagnosis.evidenceIds)),
+        allowedEvidenceIds: unique(draftDiagnoses.flatMap(evidenceReferenceIds)),
         allowedEvidenceByDiagnosisId: Object.fromEntries(
-          draftDiagnoses.map((diagnosis) => [diagnosis.id, diagnosis.evidenceIds]),
+          draftDiagnoses.map((diagnosis) => [diagnosis.id, evidenceReferenceIds(diagnosis)]),
         ),
         allowedKnowledgeArticleIds: articles.map((article) => article.id),
         actorId: input.actorId,
@@ -296,13 +296,15 @@ function deterministicCandidate(
   const ticketIds = unique(records.map((record) => record.ticketId));
   const diagnosis = diagnoses.find((item) => item.id === diagnosisIds[0]);
   if (diagnosis === undefined || diagnosisIds.length === 0 || ticketIds.length === 0) return undefined;
+  const evidenceIds = evidenceReferenceIds(diagnosis);
+  if (evidenceIds.length === 0) return undefined;
   const value = {
     id: `known-cause-${sourceId}`,
     kind: "known-cause" as const,
     name: `Recurring ${diagnosis.ownerTeam} known cause`,
     summary: diagnosis.problem,
     triggerPatterns: diagnosis.symptoms,
-    evidencePolicy: { mode: "required" as const, evidenceIds: diagnosis.evidenceIds },
+    evidencePolicy: { mode: "required" as const, evidenceIds },
     timeConstraints: ["Apply only when the cited evidence is present."],
     diagnosticSteps: ["Review the cited evidence and compare it with the completed incident."],
     fixSteps: diagnosis.fixSteps,
@@ -389,7 +391,10 @@ function assertReferences(candidate: KnowledgeCandidate, diagnoses: readonly Com
   if (candidate.supportingDiagnosisIds.some((id) => !candidate.supportingTicketIds.includes(diagnosisById.get(id)!.ticketId))) {
     throw new DomainError("Knowledge candidate references are invalid.", "INVALID_APPROVAL_FIELDS");
   }
-  const allowedEvidence = new Set(candidate.supportingDiagnosisIds.flatMap((id) => diagnosisById.get(id)?.evidenceIds ?? []));
+  const allowedEvidence = new Set(candidate.supportingDiagnosisIds.flatMap((id) => {
+    const diagnosis = diagnosisById.get(id);
+    return diagnosis === undefined ? [] : evidenceReferenceIds(diagnosis);
+  }));
   if (candidate.evidencePolicy.mode === "required" && candidate.evidencePolicy.evidenceIds.some((id) => !allowedEvidence.has(id))) {
     throw new DomainError("Knowledge candidate references are invalid.", "INVALID_APPROVAL_FIELDS");
   }

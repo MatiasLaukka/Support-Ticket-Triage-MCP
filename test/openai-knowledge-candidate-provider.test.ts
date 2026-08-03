@@ -84,7 +84,7 @@ describe("OpenAI knowledge candidate provider", () => {
     };
     expect(body).toMatchObject({ model: "gpt-test", store: false, text: { format: { type: "json_schema", strict: true } } });
     expect(body.text.format.schema.properties.evidencePolicy.anyOf).toEqual([
-      { type: "object", additionalProperties: false, properties: { mode: { type: "string", enum: ["none-required"] } }, required: ["mode", "rationale"] },
+      { type: "object", additionalProperties: false, properties: { mode: { type: "string", enum: ["none-required"] }, rationale: { type: "string" } }, required: ["mode", "rationale"] },
       { type: "object", additionalProperties: false, properties: { mode: { type: "string", enum: ["undecided"] } }, required: ["mode"] },
       { type: "object", additionalProperties: false, properties: { mode: { type: "string", enum: ["required"] }, evidenceIds: { type: "array", items: { type: "string" }, minItems: 1 } }, required: ["mode", "evidenceIds"] },
     ]);

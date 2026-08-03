@@ -295,9 +295,7 @@
     "securityRisk": "none",
     "slaRisk": "none",
     "missingInformation": [],
-    "knowledgeArticleIds": [
-      "event-tracking-debugging"
-    ],
+    "knowledgeArticleIds": [],
     "draftCustomerResponse": "We are reviewing this ticket.",
     "rationale": "The recommendation matches the expected synthetic outcome.",
     "confidence": 0.95,
@@ -589,7 +587,7 @@
     "duplicateCandidates": [],
     "outageRisk": "none",
     "securityRisk": "none",
-    "slaRisk": "likely",
+    "slaRisk": "none",
     "missingInformation": [],
     "knowledgeArticleIds": [
       "campaign-send-failures",
@@ -599,10 +597,8 @@
     "rationale": "The recommendation matches the expected synthetic outcome.",
     "confidence": 0.95,
     "recommendedNextAction": "Review and approve the proposed triage fields.",
-    "escalationRequired": true,
-    "escalationReasons": [
-      "sla"
-    ],
+    "escalationRequired": false,
+    "escalationReasons": [],
     "resolution": "pending",
     "createdAt": "2026-06-10T09:21:00.000Z"
   },
@@ -716,9 +712,7 @@
     "securityRisk": "none",
     "slaRisk": "none",
     "missingInformation": [],
-    "knowledgeArticleIds": [
-      "campaign-send-failures"
-    ],
+    "knowledgeArticleIds": [],
     "draftCustomerResponse": "We are reviewing this ticket.",
     "rationale": "The recommendation matches the expected synthetic outcome.",
     "confidence": 0.95,

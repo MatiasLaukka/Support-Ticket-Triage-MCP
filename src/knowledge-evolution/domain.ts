@@ -1,5 +1,10 @@
 import { z } from "zod";
-import { IsoTimestampSchema, TeamSchema, TicketIdSchema } from "../domain.js";
+import {
+  DiagnosisEvidenceReferenceSchema,
+  IsoTimestampSchema,
+  TeamSchema,
+  TicketIdSchema,
+} from "../domain.js";
 
 const NonBlankStringSchema = z.string().trim().min(1).max(1_000);
 const IdentifierSchema = z.string().trim().min(1).max(120).regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/);
@@ -38,17 +43,44 @@ export const KnowledgeObjectStatusSchema = z.enum([
   "superseded",
 ]);
 
-export const EvidencePolicySchema = z.discriminatedUnion("mode", [
-  z.object({ mode: z.literal("none-required") }).strict(),
+const EvidencePolicyRationaleSchema = NonBlankStringSchema.max(500);
+
+export const CandidateEvidencePolicySchema = z.discriminatedUnion("mode", [
+  z.object({ mode: z.literal("undecided") }).strict(),
+  z.object({ mode: z.literal("none-required"), rationale: EvidencePolicyRationaleSchema }).strict(),
   z.object({ mode: z.literal("required"), evidenceIds: UniqueIdentifiersSchema.min(1) }).strict(),
 ]);
+
+export const ApprovedEvidencePolicySchema = z.discriminatedUnion("mode", [
+  z.object({ mode: z.literal("none-required"), rationale: EvidencePolicyRationaleSchema }).strict(),
+  z.object({ mode: z.literal("required"), evidenceIds: UniqueIdentifiersSchema.min(1) }).strict(),
+]);
+
+const LegacyApprovedEvidencePolicySchema = z.preprocess((value) => {
+  if (value && typeof value === "object" && "mode" in value && value.mode === "none-required" && !("rationale" in value)) {
+    return { ...value, rationale: "Legacy approved policy; rationale was not recorded." };
+  }
+  return value;
+}, ApprovedEvidencePolicySchema);
+const LegacyCandidateEvidencePolicySchema = z.preprocess((value) => {
+  if (value && typeof value === "object" && "mode" in value && value.mode === "none-required" && !("rationale" in value)) {
+    return { mode: "undecided" };
+  }
+  return value;
+}, CandidateEvidencePolicySchema);
+
+/** @deprecated Use CandidateEvidencePolicySchema or ApprovedEvidencePolicySchema. */
+export const EvidencePolicySchema = ApprovedEvidencePolicySchema;
 
 export const CompletedDiagnosisSchema = z.object({
   id: IdentifierSchema.readonly(),
   ticketId: TicketIdSchema,
   problem: PersistedTextSchema,
   symptoms: UniqueTextSchema,
-  evidenceIds: UniqueIdentifiersSchema,
+  evidenceUsed: z.array(PersistedTextSchema).default([]),
+  evidenceReferences: z.array(DiagnosisEvidenceReferenceSchema).default([]),
+  // Deprecated: legacy read-only data; never used to derive new policy.
+  evidenceIds: UniqueIdentifiersSchema.optional(),
   ownerTeam: TeamSchema,
   fixSteps: z.array(WorkflowStepSchema).min(1),
   verificationSteps: z.array(WorkflowStepSchema).min(1),
@@ -99,7 +131,7 @@ const KnowledgeObjectFieldsSchema = z.object({
     (values) => new Set(values).size === values.length,
     { message: "Values must be unique." },
   ),
-  evidencePolicy: EvidencePolicySchema,
+  evidencePolicy: LegacyApprovedEvidencePolicySchema,
   timeConstraints: UniqueTextSchema,
   diagnosticSteps: z.array(WorkflowStepSchema).min(1),
   fixSteps: z.array(WorkflowStepSchema).min(1),
@@ -129,6 +161,7 @@ export const KnowledgeObjectSchema = KnowledgeObjectFieldsSchema.extend({
 });
 
 export const KnowledgeCandidateSchema = KnowledgeObjectFieldsSchema.extend({
+  evidencePolicy: LegacyCandidateEvidencePolicySchema,
   status: z.literal("candidate"),
   deterministicScores: z.object({
     confidence: z.number().min(0).max(1),
@@ -139,11 +172,22 @@ export const KnowledgeCandidateSchema = KnowledgeObjectFieldsSchema.extend({
   discovery: DiscoverySummarySchema.optional(),
   contradictions: z.array(PersistedTextSchema),
   validationStatus: z.enum(["pending", "valid", "invalid"]),
+  evidencePolicyMetadata: z.object({
+    derivedEvidenceIds: UniqueIdentifiersSchema.default([]),
+    operatorAddedEvidenceIds: UniqueIdentifiersSchema.default([]),
+  }).strict().default({ derivedEvidenceIds: [], operatorAddedEvidenceIds: [] }),
 }).strict();
 
 export type KnowledgeObjectKind = z.infer<typeof KnowledgeObjectKindSchema>;
 export type KnowledgeObjectStatus = z.infer<typeof KnowledgeObjectStatusSchema>;
-export type EvidencePolicy = z.infer<typeof EvidencePolicySchema>;
-export type CompletedDiagnosis = z.infer<typeof CompletedDiagnosisSchema>;
+export type CandidateEvidencePolicy = z.infer<typeof CandidateEvidencePolicySchema>;
+export type ApprovedEvidencePolicy = z.infer<typeof ApprovedEvidencePolicySchema>;
+/** @deprecated Use CandidateEvidencePolicy or ApprovedEvidencePolicy. */
+export type EvidencePolicy = ApprovedEvidencePolicy;
+/** Accepts legacy persisted records; CompletedDiagnosisSchema supplies defaults when reading. */
+export type CompletedDiagnosis = z.input<typeof CompletedDiagnosisSchema>;
+export function evidenceReferenceIds(diagnosis: CompletedDiagnosis): string[] {
+  return [...new Set(diagnosis.evidenceReferences?.map(({ id }) => id) ?? [])];
+}
 export type KnowledgeObject = z.infer<typeof KnowledgeObjectSchema>;
 export type KnowledgeCandidate = z.infer<typeof KnowledgeCandidateSchema>;

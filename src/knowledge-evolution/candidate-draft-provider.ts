@@ -77,18 +77,22 @@ export async function draftKnowledgeCandidate(
       allowedEvidenceIds: allowlists.allowedEvidenceIds,
       allowedKnowledgeArticleIds: allowlists.allowedKnowledgeArticleIds,
     });
-    const candidate = validateCandidateDraft(parseCandidateDraftContract(execution.outputText), {
+    const candidate = parseCandidateDraftContract(execution.outputText);
+    const validation = validateCandidateDraft(candidate, {
       discovery,
       allowedEvidenceIds: allowlists.allowedEvidenceIds,
       allowedKnowledgeArticleIds: allowlists.allowedKnowledgeArticleIds,
       allowedEvidenceByDiagnosisId: input.allowedEvidenceByDiagnosisId,
     });
+    const nonPolicyErrors = validation.errors.filter((issue) => issue.code !== "EVIDENCE_POLICY_UNDECIDED");
+    if (nonPolicyErrors.length > 0) throw new CandidateDraftGuardrailError();
     const provenance = sanitizeProvenance(execution.provenance);
     return {
       used: true,
       status: "used",
       fallbackReason: undefined,
       candidate,
+      ...(validation.errors.length === 0 ? {} : { diagnostics: validation.errors.map((issue) => issue.message) }),
       ...(provenance === undefined ? {} : { provenance }),
     };
   } catch (error) {

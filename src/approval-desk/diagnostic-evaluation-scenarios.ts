@@ -104,7 +104,7 @@ export function approvedKnowledgeEvolutionScenarios(): DiagnosticEvaluationScena
     name: "Webhook signing-key refresh",
     summary: "Webhook deliveries can fail after a signing-key rotation.",
     triggerPatterns: ["Webhook deliveries fail after a signing-key rotation."],
-    evidencePolicy: { mode: "none-required" },
+    evidencePolicy: { mode: "none-required", rationale: "An authoritative event signal confirms this cause." },
     timeConstraints: ["Apply only when the deterministic trigger matches."],
     diagnosticSteps: ["Review the approved support path."],
     fixSteps: ["Guide the customer through the safe correction."],

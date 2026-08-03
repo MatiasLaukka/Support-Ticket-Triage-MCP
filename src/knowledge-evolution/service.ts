@@ -5,12 +5,13 @@ import type { Ticket, TicketId } from "../domain.js";
 import type { TicketRepository } from "../ticket-repository.js";
 import { draftKnowledgeCandidate, type CandidateDraftProvider } from "./candidate-draft-provider.js";
 import type { CandidateDraftPayload } from "./candidate-draft-contract.js";
-import type { CompletedDiagnosis, KnowledgeCandidate, KnowledgeObject } from "./domain.js";
+import { evidenceReferenceIds, type CompletedDiagnosis, type KnowledgeCandidate, type KnowledgeObject } from "./domain.js";
 import { KnowledgeCandidateSchema } from "./domain.js";
 import { discoverCandidates, type KnowledgeDiscoveryResult } from "./discovery.js";
 import type { DiagnosisRepository } from "./diagnosis-repository.js";
 import type { KnowledgeAuditEvent, KnowledgeAuditRepository } from "./knowledge-audit-repository.js";
 import type { KnowledgeObjectRepository } from "./knowledge-object-repository.js";
+import { findEvidenceRequirement } from "../evidence-catalog.js";
 
 const editableFields = [
   "name", "summary", "triggerPatterns", "evidencePolicy", "timeConstraints",
@@ -88,9 +89,9 @@ export class KnowledgeEvolutionService {
       const draftDiagnoses = relevantDiagnoses.filter(({ id }) => draftSupportDiagnosisIds.has(id));
       const draft = await draftKnowledgeCandidate({
         discovery,
-        allowedEvidenceIds: unique(draftDiagnoses.flatMap((diagnosis) => diagnosis.evidenceIds)),
+        allowedEvidenceIds: unique(draftDiagnoses.flatMap(evidenceReferenceIds)),
         allowedEvidenceByDiagnosisId: Object.fromEntries(
-          draftDiagnoses.map((diagnosis) => [diagnosis.id, diagnosis.evidenceIds]),
+          draftDiagnoses.map((diagnosis) => [diagnosis.id, evidenceReferenceIds(diagnosis)]),
         ),
         allowedKnowledgeArticleIds: articles.map((article) => article.id),
         actorId: input.actorId,
@@ -182,12 +183,16 @@ export class KnowledgeEvolutionService {
         this.dependencies.tickets.snapshot(),
         this.dependencies.audits.list({ candidateId: candidate.id }),
       ]);
-      assertPromotable(candidate, reviewEvents);
       if (approved.some((object) => object.id === candidate.id)) {
         throw new DomainError("Knowledge candidate has already been promoted.", "REPOSITORY_ERROR");
       }
       const reviewed = applyEdits(candidate, input.edits);
+      assertPromotable(reviewed, reviewEvents);
       assertReferences(reviewed, diagnoses, tickets);
+      const reviewedPolicy = reviewed.evidencePolicy;
+      if (reviewedPolicy.mode === "undecided") {
+        throw new DomainError("Knowledge candidate requires an explicit evidence policy before approval.", "INVALID_APPROVAL_FIELDS");
+      }
       const {
         deterministicScores: _deterministicScores,
         deterministicReasons: _deterministicReasons,
@@ -195,17 +200,20 @@ export class KnowledgeEvolutionService {
         validationStatus: _validationStatus,
         gptProvenance: _gptProvenance,
         discovery: _discovery,
+        evidencePolicyMetadata: _evidencePolicyMetadata,
+        evidencePolicy: _evidencePolicy,
         ...approvedFields
       } = reviewed;
       const object: KnowledgeObject = {
         ...approvedFields,
+        evidencePolicy: reviewedPolicy,
         status: "approved",
         version: 1,
         approval: { approvedBy: input.actorId.trim(), approvedAt: this.now().toISOString() },
       };
       let promoted: KnowledgeObject | undefined;
       try {
-        promoted = await this.dependencies.objects.promote(candidate.id, object);
+        promoted = await this.dependencies.objects.promote(candidate.id, object, candidate.version);
         await this.appendAudit({
           objectId: promoted.id,
           candidateId: candidate.id,
@@ -217,6 +225,10 @@ export class KnowledgeEvolutionService {
           reviewedFields: input.edits === undefined ? [] : Object.keys(input.edits).sort(),
           result: "approved",
           notes: reviewed.operatorRationale,
+          evidencePolicyMetadata: {
+            approvedPolicy: reviewedPolicy,
+            ...reviewed.evidencePolicyMetadata,
+          },
         });
         return promoted;
       } catch (error) {
@@ -296,13 +308,17 @@ function deterministicCandidate(
   const ticketIds = unique(records.map((record) => record.ticketId));
   const diagnosis = diagnoses.find((item) => item.id === diagnosisIds[0]);
   if (diagnosis === undefined || diagnosisIds.length === 0 || ticketIds.length === 0) return undefined;
+  const evidenceIds = evidenceReferenceIds(diagnosis);
+  const evidencePolicy = evidenceIds.length === 0
+    ? { mode: "undecided" as const }
+    : { mode: "required" as const, evidenceIds };
   const value = {
     id: `known-cause-${sourceId}`,
     kind: "known-cause" as const,
     name: `Recurring ${diagnosis.ownerTeam} known cause`,
     summary: diagnosis.problem,
     triggerPatterns: diagnosis.symptoms,
-    evidencePolicy: { mode: "required" as const, evidenceIds: diagnosis.evidenceIds },
+    evidencePolicy,
     timeConstraints: ["Apply only when the cited evidence is present."],
     diagnosticSteps: ["Review the cited evidence and compare it with the completed incident."],
     fixSteps: diagnosis.fixSteps,
@@ -319,7 +335,8 @@ function deterministicCandidate(
     deterministicReasons: reasons.length > 0 ? [...reasons] : ["Completed diagnosis support is available."],
     discovery: discoverySummary({ score: confidence, reasons, support: records, supportCount: support, contradictions, meetsAlertThreshold }),
     contradictions: [...contradictions],
-    validationStatus: "valid" as const,
+    validationStatus: evidenceIds.length === 0 ? "invalid" as const : "valid" as const,
+    evidencePolicyMetadata: { derivedEvidenceIds: evidenceIds, operatorAddedEvidenceIds: [] },
   };
   const parsed = KnowledgeCandidateSchema.safeParse(value);
   return parsed.success ? parsed.data : undefined;
@@ -347,7 +364,8 @@ function candidateFromDraft(
     deterministicReasons: discovery?.reasons.length ? discovery.reasons : [rationale],
     discovery: discovery === undefined ? undefined : discoverySummary(discovery),
     gptProvenance: provenance === undefined ? undefined : { provider: "openai" as const, model: provenance.model ?? "unspecified", generatedAt: recordedAt, summary: provenance.rationale ?? "Validated advisory candidate draft.", confidence },
-    validationStatus: "valid" as const,
+    validationStatus: draft.evidencePolicy.mode === "undecided" ? "invalid" as const : "valid" as const,
+    evidencePolicyMetadata: evidencePolicyMetadataForDraft(draft, diagnoses),
   };
   const parsed = KnowledgeCandidateSchema.safeParse(value);
   return parsed.success ? parsed.data : undefined;
@@ -376,9 +394,31 @@ function applyEdits(candidate: KnowledgeCandidate, edits: CandidateEdits | undef
   if (typeof edits !== "object" || edits === null || Array.isArray(edits) || Object.keys(edits).some((field) => !editableFields.includes(field as (typeof editableFields)[number]))) {
     throw new DomainError("Knowledge candidate edits are invalid.", "INVALID_APPROVAL_FIELDS");
   }
-  const parsed = KnowledgeCandidateSchema.safeParse({ ...candidate, ...edits });
+  const merged = { ...candidate, ...edits };
+  if (edits.evidencePolicy !== undefined) {
+    const derived = candidate.evidencePolicyMetadata.derivedEvidenceIds;
+    const selected = merged.evidencePolicy.mode === "required" ? merged.evidencePolicy.evidenceIds : [];
+    merged.evidencePolicyMetadata = {
+      derivedEvidenceIds: derived.filter((id) => selected.includes(id)),
+      operatorAddedEvidenceIds: selected.filter((id) => !derived.includes(id)),
+    };
+    merged.validationStatus = merged.evidencePolicy.mode === "undecided" ? "invalid" : "valid";
+  }
+  const parsed = KnowledgeCandidateSchema.safeParse(merged);
   if (!parsed.success) throw new DomainError("Knowledge candidate edits are invalid.", "INVALID_APPROVAL_FIELDS");
   return parsed.data;
+}
+
+function evidencePolicyMetadataForDraft(draft: CandidateDraftPayload, diagnoses: readonly CompletedDiagnosis[]) {
+  if (draft.evidencePolicy.mode !== "required") return { derivedEvidenceIds: [], operatorAddedEvidenceIds: [] };
+  const observed = new Set(draft.supportingDiagnosisIds.flatMap((id) => {
+    const diagnosis = diagnoses.find((item) => item.id === id);
+    return diagnosis === undefined ? [] : evidenceReferenceIds(diagnosis);
+  }));
+  return {
+    derivedEvidenceIds: draft.evidencePolicy.evidenceIds.filter((id) => observed.has(id)),
+    operatorAddedEvidenceIds: draft.evidencePolicy.evidenceIds.filter((id) => !observed.has(id)),
+  };
 }
 
 function assertReferences(candidate: KnowledgeCandidate, diagnoses: readonly CompletedDiagnosis[], tickets: readonly Ticket[]): void {
@@ -389,8 +429,10 @@ function assertReferences(candidate: KnowledgeCandidate, diagnoses: readonly Com
   if (candidate.supportingDiagnosisIds.some((id) => !candidate.supportingTicketIds.includes(diagnosisById.get(id)!.ticketId))) {
     throw new DomainError("Knowledge candidate references are invalid.", "INVALID_APPROVAL_FIELDS");
   }
-  const allowedEvidence = new Set(candidate.supportingDiagnosisIds.flatMap((id) => diagnosisById.get(id)?.evidenceIds ?? []));
-  if (candidate.evidencePolicy.mode === "required" && candidate.evidencePolicy.evidenceIds.some((id) => !allowedEvidence.has(id))) {
+  if (candidate.evidencePolicy.mode === "required" && candidate.evidencePolicy.evidenceIds.some((id) => {
+    const requirement = findEvidenceRequirement(id);
+    return requirement === undefined || requirement.status === "deprecated";
+  })) {
     throw new DomainError("Knowledge candidate references are invalid.", "INVALID_APPROVAL_FIELDS");
   }
 }

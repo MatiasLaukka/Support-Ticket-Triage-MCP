@@ -22,6 +22,20 @@ const APPROVABLE_FIELDS = new Set<ApprovedField>([
   "customerResponse",
 ]);
 
+// Keep escalation output predictable for audit consumers and UI projections.
+// The order is part of the domain contract: risk and workflow signals are
+// emitted consistently regardless of the order in which callers supplied
+// explicit reasons.
+const ESCALATION_REASON_ORDER: readonly RequiredEscalation[] = [
+  "security",
+  "outage",
+  "low-confidence",
+  "sla",
+  "missing-information",
+  "diagnostic-ambiguity",
+  "policy-conflict",
+];
+
 export function evaluateEscalation(
   recommendation: TriageRecommendation,
   now: Date,
@@ -75,7 +89,18 @@ export function evaluateEscalation(
     reasons.push("policy-conflict");
   }
 
-  const uniqueReasons = [...new Set(reasons)];
+  // `supportState` is a trusted structured workflow signal.  An escalated
+  // diagnostic must remain visible in the persisted policy even when an
+  // adapter omitted the derived reason from its input payload.
+  if (recommendation.supportState === "escalated") {
+    reasons.push("diagnostic-ambiguity");
+  }
+
+  const uniqueReasons = [...new Set(reasons)].sort(
+    (left, right) =>
+      ESCALATION_REASON_ORDER.indexOf(left) -
+      ESCALATION_REASON_ORDER.indexOf(right),
+  );
   return {
     required: uniqueReasons.length > 0,
     reasons: uniqueReasons,

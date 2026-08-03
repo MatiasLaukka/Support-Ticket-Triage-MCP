@@ -783,6 +783,60 @@ work. The evaluator requires recommendation ticket IDs to match the expected
 outcome set exactly and counts any non-pending sample recommendation as an
 approval-safety violation.
 
+The focused diagnostic harness is intentionally a small scenario suite. To
+audit the live deterministic path against every seeded ticket, run:
+
+```powershell
+npm run evaluate:lifecycle
+```
+
+This 30-ticket audit reports each ticket's seed status, category/routing,
+known-cause and known-event matches, evidence gate, diagnosis confidence, and
+operator next action. It is a baseline lifecycle audit rather than a claim that
+every ticket has been replayed through every chronological customer turn.
+The current seed audit reports 30/30 classification contracts, 28 tickets
+correctly waiting for evidence, 7 known-cause matches, 3 known-event matches,
+and one already-resolved ticket with zero evidence requests.
+
+### Article-backed diagnosis and GPT advisory diagnosis
+
+The deterministic diagnostic workflow now has specific playbooks for the
+approved knowledge articles used by the seed set, including deliverability,
+audience rules, campaign preparation, catalog/coupon sync, profile sync,
+ecommerce integration, SMS compliance, and webhook validation. These
+playbooks produce a customer-safe narrowing diagnosis and next action; they
+never turn an article match into proof of a root cause. Missing evidence still
+forces a `likely` diagnosis and keeps the ticket in its evidence-gated state.
+
+Two deliberately vague tickets (`TKT-1010` and `TKT-1026`) have no meaningful
+article or playbook on purpose. They request basic problem evidence and the GPT
+diagnosis lane skips them rather than manufacturing a diagnosis. Resolved
+tickets and prompt-injection tickets are skipped for the same governance
+reason.
+
+To evaluate the optional GPT diagnosis lane across all 30 seed tickets, run:
+
+```powershell
+npm run evaluate:ai-diagnosis
+```
+
+The default run uses a controlled local adapter to exercise the same provider
+contract without network access. For an authenticated observation using real
+GPT, set `OPENAI_API_KEY` and opt in explicitly:
+
+```powershell
+npm run evaluate:ai-diagnosis -- --live
+```
+
+Each run saves sanitized output under `reports/ai-diagnosis/` as
+`controlled-latest.*` or `live-latest.*`.
+
+GPT returns an advisory candidate only. The deterministic diagnosis, evidence
+gate, prompt-injection preflight, lifecycle state, and human approval boundary
+remain authoritative. Invalid output, unavailable GPT, or stale/unsafe
+context falls back to the deterministic diagnosis without exposing provider
+payloads.
+
 ### AI Comparison Evaluation
 
 `npm run evaluate:ai-comparison` adds a network-free, controlled-local
@@ -888,6 +942,52 @@ candidates) have no routing effect, and promotion never rewrites earlier
 recommendations or audits. Approval Desk and MCP use the same knowledge
 service, while lifecycle replay and AI comparison project the same approved
 object context through the shared evidence and diagnostic workflow.
+
+#### Evidence provenance and policy boundaries
+
+Knowledge evolution keeps three related, but deliberately different, records:
+
+1. **Observed diagnosis evidence** is what was actually present when an
+   operator completed a diagnosis. `evidenceUsed` remains readable reasoning;
+   `evidenceReferences` contains catalog-backed IDs, the immutable label seen at
+   diagnosis time, and optional ticket/reply/knowledge/operator provenance.
+   References are created from recognized provided evidence only. The system
+   never turns an audit ID or free-form prose into a synthetic evidence ID.
+2. **Candidate evidence policy** is a reviewable proposal for future tickets.
+   Discovery deduplicates observed IDs for this proposal while preserving
+   duplicate observations and their provenance in diagnosis history. A
+   candidate may be `required`, explicitly `none-required` with a rationale, or
+   `undecided` when the completed diagnosis has no reusable references. An
+   `undecided` candidate stays visible for review but cannot be promoted.
+3. **Approved evidence policy** is the operator-approved contract used by later
+   evaluations. Promotion reloads the current candidate and catalog, then
+   accepts only a valid `required` policy or a justified `none-required`
+   policy. GPT can suggest fields, but it cannot select this policy or promote
+   it.
+
+This creates two important reuse paths. In the positive path, a diagnosis with
+real catalog references produces a candidate, an operator approves its policy,
+and a later matching ticket remains evidence-gated until required evidence is
+present; after reevaluation, the approved known cause can be selected through
+the same catalog. In the negative path, a diagnosis may still be valid and
+readable when it has no structured references, but its candidate is
+`undecided`, cannot affect routing, and is rejected until an operator supplies
+and approves a valid policy. An active outage or an open-ticket similarity
+signal does not bypass this gate by itself.
+
+Catalog entries are retained for compatibility. Existing approved objects that
+refer to a deprecated evidence ID remain readable and executable; new
+promotions containing that ID are blocked and must use its replacement when
+one is defined.
+
+In the Approval Desk, select a ticket and use **Find pattern** in the action
+bar to run knowledge discovery explicitly. The search also runs when a ticket
+is selected, but the button makes the trigger visible and reports when the
+current completed-diagnosis evidence does not meet the candidate threshold.
+When a candidate is found, the review panel appears below the recommendation;
+the operator can inspect the supporting evidence, edit the declarative fields,
+and approve, reject, or defer it. The button never changes the ticket or
+promotes a candidate by itself.
 
 Evidence policy remains the gate. For example, an approved
 `none-required` known cause whose deterministic trigger matches may use its

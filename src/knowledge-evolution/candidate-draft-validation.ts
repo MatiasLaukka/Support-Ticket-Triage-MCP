@@ -1,5 +1,6 @@
 import type { KnowledgeDiscoveryCandidate, KnowledgeDiscoveryResult } from "./discovery.js";
 import type { CandidateDraftPayload } from "./candidate-draft-contract.js";
+import { findEvidenceRequirement } from "../evidence-catalog.js";
 
 const MAX_DISCOVERY_CANDIDATES = 5;
 const MAX_SUPPORT_RECORDS = 5;
@@ -27,6 +28,18 @@ export interface CandidateDraftValidationContext {
 export interface SanitizedCandidateDraftAllowlists {
   allowedEvidenceIds: string[];
   allowedKnowledgeArticleIds: string[];
+}
+
+export interface CandidateValidationIssue {
+  code: "EVIDENCE_POLICY_UNDECIDED" | "UNKNOWN_EVIDENCE_ID" | "DEPRECATED_EVIDENCE_ID" | "EVIDENCE_NOT_OBSERVED" | "UNKNOWN_KNOWLEDGE_ARTICLE_ID" | "UNKNOWN_SUPPORTING_DIAGNOSIS" | "UNKNOWN_SUPPORTING_TICKET";
+  message: string;
+  evidenceId?: string;
+}
+
+export interface CandidateValidationResult {
+  validForPromotion: boolean;
+  errors: CandidateValidationIssue[];
+  warnings: CandidateValidationIssue[];
 }
 
 export class CandidateDraftGuardrailError extends Error {
@@ -61,7 +74,7 @@ export function sanitizeCandidateDraftAllowlists(input: {
 export function validateCandidateDraft(
   candidate: CandidateDraftPayload,
   context: CandidateDraftValidationContext,
-): CandidateDraftPayload {
+): CandidateValidationResult {
   const allowedEvidence = safeAllowlist(context.allowedEvidenceIds);
   const allowedArticles = safeAllowlist(context.allowedKnowledgeArticleIds);
   const supportingDiagnosisIds = new Set(
@@ -74,14 +87,34 @@ export function validateCandidateDraft(
   const selectedDiagnosisEvidence = new Set(
     candidate.supportingDiagnosisIds.flatMap((id) => context.allowedEvidenceByDiagnosisId?.[id] ?? []),
   );
-  if (
-    evidenceIds.some((id) => !allowedEvidence.has(id)) ||
-    (context.allowedEvidenceByDiagnosisId !== undefined && evidenceIds.some((id) => !selectedDiagnosisEvidence.has(id))) ||
-    candidate.knowledgeArticleIds.some((id) => !allowedArticles.has(id)) ||
-    candidate.supportingDiagnosisIds.some((id) => !supportingDiagnosisIds.has(id)) ||
-    candidate.supportingTicketIds.some((id) => !supportingTicketIds.has(id))
-  ) throw new CandidateDraftGuardrailError();
-  return candidate;
+  const errors: CandidateValidationIssue[] = [];
+  const warnings: CandidateValidationIssue[] = [];
+  if (candidate.evidencePolicy.mode === "undecided") {
+    errors.push({ code: "EVIDENCE_POLICY_UNDECIDED", message: "The diagnosis contains no reusable evidence. Define a required policy or explicitly select none-required." });
+  }
+  for (const id of evidenceIds) {
+    const definition = findEvidenceRequirement(id);
+    if (definition === undefined || !allowedEvidence.has(id)) {
+      errors.push({ code: "UNKNOWN_EVIDENCE_ID", evidenceId: id, message: `Evidence requirement ${id} is not registered in the supplied catalog.` });
+      continue;
+    }
+    if (definition.status === "deprecated") {
+      errors.push({ code: "DEPRECATED_EVIDENCE_ID", evidenceId: id, message: `Evidence requirement ${id} is deprecated and cannot be promoted.` });
+    }
+    if (context.allowedEvidenceByDiagnosisId !== undefined && !selectedDiagnosisEvidence.has(id)) {
+      errors.push({ code: "EVIDENCE_NOT_OBSERVED", evidenceId: id, message: `Evidence requirement ${id} was not observed in the supporting diagnosis.` });
+    }
+  }
+  for (const id of candidate.knowledgeArticleIds) {
+    if (!allowedArticles.has(id)) errors.push({ code: "UNKNOWN_KNOWLEDGE_ARTICLE_ID", message: `Knowledge article ${id} is not in the supplied allowlist.` });
+  }
+  for (const id of candidate.supportingDiagnosisIds) {
+    if (!supportingDiagnosisIds.has(id)) errors.push({ code: "UNKNOWN_SUPPORTING_DIAGNOSIS", message: `Supporting diagnosis ${id} is not present in discovery support.` });
+  }
+  for (const id of candidate.supportingTicketIds) {
+    if (!supportingTicketIds.has(id)) errors.push({ code: "UNKNOWN_SUPPORTING_TICKET", message: `Supporting ticket ${id} is not present in discovery support.` });
+  }
+  return { validForPromotion: errors.length === 0, errors, warnings };
 }
 
 function sanitizeCandidate(candidate: KnowledgeDiscoveryCandidate): SanitizedKnowledgeDiscoveryCandidate {

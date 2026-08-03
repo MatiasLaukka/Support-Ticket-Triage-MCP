@@ -74,7 +74,7 @@ export async function evaluateTicketWithAi(input: {
       : [input.previousSupportResponse],
   });
   const baseline = classifyTicketFromContext(conversationContext);
-  const safety = assessPromptInjection(conversationContext.combinedText);
+  const safety = assessPromptInjection(conversationContext.classificationText);
   const classificationExecution = await runClassificationStage({
     ...input,
     aiPreference: classificationPreference,

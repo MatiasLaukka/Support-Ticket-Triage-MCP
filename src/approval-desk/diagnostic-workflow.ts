@@ -1,4 +1,11 @@
-import type { AuditEvent, Ticket, TriageRecommendation } from "../domain.js";
+import {
+  DiagnosisEvidenceReferenceSchema,
+  type AuditEvent,
+  type DiagnosisEvidenceReference,
+  type Ticket,
+  type TriageRecommendation,
+} from "../domain.js";
+import { isEvidenceRequirementId } from "../evidence-catalog.js";
 import type { DiagnosisContext, FixContext } from "../triage-service.js";
 import { diagnoseFromPlaybook } from "./diagnostic-playbooks.js";
 import { getKnownCause } from "./known-cause-catalog.js";
@@ -14,6 +21,7 @@ import {
   strictDiagnosisReviewRecord,
 } from "./diagnosis-review.js";
 import {
+  auditCausalPositions,
   compareAuditCausalOrder,
   latestAuditPosition,
   type AuditCausalPosition,
@@ -25,13 +33,17 @@ export function diagnosisContextForTicket(
   recommendation: TriageRecommendation,
   audits: readonly AuditEvent[] = [],
 ): DiagnosisContext {
+  const evidenceReferences = providedEvidenceReferences(ticket, recommendation, audits);
   const playbookDiagnosis = diagnoseFromPlaybook({
     ticket,
     recommendation,
     customerReplyText: customerReplyTextFromAudits(ticket.id, audits),
   });
   if (playbookDiagnosis !== undefined) {
-    const diagnosis = applyPersistedDiagnosticState(playbookDiagnosis, ticket.id, audits);
+    const diagnosis = {
+      ...applyPersistedDiagnosticState(playbookDiagnosis, ticket.id, audits),
+      evidenceReferences,
+    };
     if ((recommendation.missingEvidence?.length ?? 0) === 0) return diagnosis;
     return {
       ...diagnosis,
@@ -59,10 +71,11 @@ export function diagnosisContextForTicket(
   if ((recommendation.missingEvidence?.length ?? 0) > 0) {
     return {
       status: "completed",
-      causeType: recommendation.category === "security" ? "security" : "configuration",
+      causeType: causeTypeForRecommendation(recommendation),
       customerSafeSummary:
         "We need the requested evidence before confirming whether the reported issue matches a known cause or platform event.",
       evidenceUsed: providedEvidenceLabels(recommendation, "provided customer evidence"),
+      evidenceReferences,
       confidence: "likely",
       owner: recommendation.category === "integration" ? "integration-partner" : "support",
       recommendedNextAction:
@@ -80,6 +93,7 @@ export function diagnosisContextForTicket(
       causeType: "platform-delay",
       customerSafeSummary: knownEvent.customerSafeSummary,
       evidenceUsed: providedEvidenceLabels(recommendation, knownEvent.label),
+      evidenceReferences,
       confidence: "likely",
       owner: "engineering",
       knownEventId: knownEvent.id,
@@ -97,6 +111,7 @@ export function diagnosisContextForTicket(
       causeType: "platform-delay",
       customerSafeSummary: knownEvent.customerSafeSummary,
       evidenceUsed: providedEvidenceLabels(recommendation, knownEvent.label),
+      evidenceReferences,
       confidence: "likely",
       owner: "engineering",
       knownEventId: knownEvent.id,
@@ -121,6 +136,7 @@ export function diagnosisContextForTicket(
         causeType: recommendation.category === "integration" ? "integration" : "configuration",
         customerSafeSummary: knownCause.problemSummary,
         evidenceUsed: providedEvidenceLabels(recommendation, knownCause.label),
+        evidenceReferences,
         confidence: "confirmed",
         owner: recommendation.team === "integrations" ? "integration-partner" : "support",
         ...(recommendation.knownEventId === undefined ||
@@ -142,6 +158,7 @@ export function diagnosisContextForTicket(
       customerSafeSummary:
         "The ticket matches an approved documented support path and the next safe correction is ready to review.",
       evidenceUsed: providedEvidenceLabels(recommendation, "approved known-cause match"),
+      evidenceReferences,
       confidence: "confirmed",
       owner: recommendation.team === "integrations" ? "integration-partner" : "support",
       recommendedNextAction:
@@ -159,6 +176,7 @@ export function diagnosisContextForTicket(
       customerSafeSummary:
         "The evidence points to a platform-side processing delay affecting checkout event processing and profile timeline updates.",
       evidenceUsed: providedEvidenceLabels(recommendation, "provided customer evidence"),
+      evidenceReferences,
       confidence: "likely",
       owner: "engineering",
       recommendedNextAction:
@@ -169,7 +187,7 @@ export function diagnosisContextForTicket(
 
   return {
     status: "completed",
-    causeType: recommendation.category === "security" ? "security" : "configuration",
+    causeType: causeTypeForRecommendation(recommendation),
     customerSafeSummary:
       "The support team has completed the investigation and identified the most likely cause from the provided evidence.",
     evidenceUsed: providedEvidenceLabels(
@@ -178,6 +196,7 @@ export function diagnosisContextForTicket(
         ? "provided customer evidence"
         : "known cause match",
     ),
+    evidenceReferences,
     confidence: "likely",
     owner: recommendation.category === "integration" ? "integration-partner" : "support",
     recommendedNextAction:
@@ -208,6 +227,9 @@ export function diagnosisContextFromAudit(
   ) {
     return undefined;
   }
+  const parsedEvidenceReferences = DiagnosisEvidenceReferenceSchema.array().safeParse(
+    value.evidenceReferences,
+  );
   return {
     status: "completed",
     causeType: value.causeType as DiagnosisContext["causeType"],
@@ -215,6 +237,9 @@ export function diagnosisContextFromAudit(
     evidenceUsed: value.evidenceUsed.filter(
       (item): item is string => typeof item === "string",
     ),
+    ...(parsedEvidenceReferences.success
+      ? { evidenceReferences: parsedEvidenceReferences.data }
+      : {}),
     confidence: value.confidence,
     owner: value.owner as DiagnosisContext["owner"],
     recommendedNextAction: value.recommendedNextAction,
@@ -571,6 +596,60 @@ function providedEvidenceLabels(
 ): string[] {
   const labels = recommendation.providedEvidence?.map((item) => item.label) ?? [];
   return labels.length > 0 ? labels : [fallback];
+}
+
+function providedEvidenceReferences(
+  ticket: Ticket,
+  recommendation: TriageRecommendation,
+  audits: readonly AuditEvent[],
+): DiagnosisEvidenceReference[] {
+  return (recommendation.providedEvidence ?? []).flatMap((evidence) => {
+    const id = evidence.id;
+    if (!isEvidenceRequirementId(id)) return [];
+    const reply = latestReplyContainingEvidence(ticket.id, audits, evidence);
+    return [{
+      id,
+      labelAtDiagnosis: evidence.label,
+      source: reply === undefined ? "ticket" : "reply",
+      sourceRef: reply === undefined ? ticket.id : reply.id,
+    }];
+  });
+}
+
+function latestReplyContainingEvidence(
+  ticketId: Ticket["id"],
+  audits: readonly AuditEvent[],
+  evidence: NonNullable<TriageRecommendation["providedEvidence"]>[number],
+): AuditEvent | undefined {
+  const phrases = [evidence.label, evidence.customerQuestion, ...evidence.aliases]
+    .map((value) => value.toLowerCase());
+  return auditCausalPositions(audits)
+    .filter(({ event }) => {
+      if (event.ticketId !== ticketId || event.action !== "customer-reply-received") return false;
+      const body = event.after.body;
+      return typeof body === "string" && phrases.some((phrase) => body.toLowerCase().includes(phrase));
+    })
+    .sort((left, right) => compareAuditCausalOrder(right, left))[0]?.event;
+}
+
+function causeTypeForRecommendation(
+  recommendation: TriageRecommendation,
+): DiagnosisContext["causeType"] {
+  switch (recommendation.category) {
+    case "security":
+      return "security";
+    case "incident":
+      return "platform-delay";
+    case "integration":
+      return "integration";
+    case "performance":
+      return "performance";
+    case "account-access":
+    case "authentication":
+      return "customer-data";
+    default:
+      return "configuration";
+  }
 }
 
 function customerReplyTextFromAudits(

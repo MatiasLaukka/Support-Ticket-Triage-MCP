@@ -6,6 +6,34 @@ import type { KnowledgeAuditEvent } from "../src/knowledge-evolution/knowledge-a
 import type { CompletedDiagnosis, KnowledgeCandidate, KnowledgeObject } from "../src/knowledge-evolution/domain.js";
 
 describe("knowledge evolution service", () => {
+  it("loads a legacy diagnosis without turning its synthetic evidence ID into reusable policy", async () => {
+    const fixture = createFixture({ legacyEvidence: true });
+
+    const result = await fixture.service().discover({ includeGpt: false, actorId: "support-lead" });
+
+    expect(result.candidates).toHaveLength(1);
+    await expect(fixture.service().getCandidate("known-cause-diagnosis-001")).resolves.toMatchObject({
+      evidencePolicy: { mode: "undecided" },
+      validationStatus: "invalid",
+    });
+  });
+
+  it("allows an operator to complete an undecided legacy candidate before promotion", async () => {
+    const fixture = createFixture({ legacyEvidence: true });
+    const service = fixture.service();
+    await service.discover({ includeGpt: false, actorId: "support-lead" });
+
+    await expect(service.approve({
+      candidateId: "known-cause-diagnosis-001",
+      actorId: "support-lead",
+      expectedVersion: 1,
+      edits: { evidencePolicy: { mode: "none-required", rationale: "An operator reviewed the full diagnosis and confirmed no additional evidence is required." } },
+    })).resolves.toMatchObject({
+      status: "approved",
+      evidencePolicy: { mode: "none-required", rationale: "An operator reviewed the full diagnosis and confirmed no additional evidence is required." },
+    });
+  });
+
   it("discovers and persists deterministic candidates without invoking GPT", async () => {
     const fixture = createFixture();
     const service = fixture.service({ enabled: false, draft: async () => { throw new Error("must not run"); } });
@@ -17,6 +45,119 @@ describe("knowledge evolution service", () => {
       validationStatus: "valid",
       deterministicScores: { confidence: 0.4, support: 1 },
     });
+  });
+
+  it("keeps duplicate provenance in diagnosis history while deduplicating candidate policy IDs", async () => {
+    const fixture = createFixture({ duplicateEvidence: true });
+    const service = fixture.service();
+
+    await service.discover({ includeGpt: false, actorId: "support-lead" });
+
+    expect(fixture.diagnoses[0]?.evidenceReferences).toHaveLength(2);
+    await expect(service.getCandidate("known-cause-diagnosis-001")).resolves.toMatchObject({
+      evidencePolicy: { mode: "required", evidenceIds: ["request-id"] },
+    });
+  });
+
+  it("records operator-added evidence IDs separately when a candidate policy is edited", async () => {
+    const fixture = createFixture();
+    const service = fixture.service();
+    await service.discover({ includeGpt: false, actorId: "support-lead" });
+
+    await service.approve({
+      candidateId: "known-cause-diagnosis-001",
+      actorId: "support-lead",
+      expectedVersion: 1,
+      edits: { evidencePolicy: { mode: "required", evidenceIds: ["request-id", "browser-session-details"] } },
+    });
+
+    await expect(fixture.audits.list({ action: "approved" })).resolves.toMatchObject([{
+      evidencePolicyMetadata: {
+        derivedEvidenceIds: ["request-id"],
+        operatorAddedEvidenceIds: ["browser-session-details"],
+      },
+    }]);
+  });
+
+  it("rejects deprecated evidence IDs during authoritative promotion validation", async () => {
+    const fixture = createFixture();
+    const service = fixture.service();
+    await service.discover({ includeGpt: false, actorId: "support-lead" });
+
+    await expect(service.approve({
+      candidateId: "known-cause-diagnosis-001",
+      actorId: "support-lead",
+      expectedVersion: 1,
+      edits: { evidencePolicy: { mode: "required", evidenceIds: ["legacy-browser-details"] } },
+    })).rejects.toMatchObject({ code: "INVALID_APPROVAL_FIELDS" });
+    await expect(fixture.objects.listApproved()).resolves.toEqual([]);
+    await expect(fixture.audits.list({ action: "approved" })).resolves.toEqual([]);
+  });
+
+  it("revalidates the candidate revision at the promotion boundary", async () => {
+    const fixture = createFixture({
+      beforePromote: async () => {
+        fixture.candidates[0] = { ...fixture.candidates[0]!, version: 2 };
+      },
+    });
+    const service = fixture.service();
+    await service.discover({ includeGpt: false, actorId: "support-lead" });
+
+    await expect(service.approve({
+      candidateId: "known-cause-diagnosis-001",
+      actorId: "support-lead",
+      expectedVersion: 1,
+    })).rejects.toMatchObject({ code: "STALE_APPROVAL" });
+    await expect(fixture.objects.listApproved()).resolves.toEqual([]);
+    await expect(fixture.audits.list({ action: "approved" })).resolves.toEqual([]);
+  });
+
+  it.each([
+    ["unknown", { mode: "required", evidenceIds: ["not-registered"] }],
+    ["duplicate", { mode: "required", evidenceIds: ["request-id", "request-id"] }],
+    ["undecided", { mode: "undecided" }],
+    ["empty none-required rationale", { mode: "none-required", rationale: "   " }],
+  ] as const)("rejects %s evidence policy without an approval audit", async (_label, evidencePolicy) => {
+    const fixture = createFixture();
+    const service = fixture.service();
+    await service.discover({ includeGpt: false, actorId: "support-lead" });
+
+    await expect(service.approve({
+      candidateId: "known-cause-diagnosis-001",
+      actorId: "support-lead",
+      expectedVersion: 1,
+      edits: { evidencePolicy: evidencePolicy as never },
+    })).rejects.toMatchObject({ code: "INVALID_APPROVAL_FIELDS" });
+    await expect(fixture.objects.listApproved()).resolves.toEqual([]);
+    await expect(fixture.audits.list({ action: "approved" })).resolves.toEqual([]);
+  });
+
+  it("converts an explicitly validated current candidate policy into the approved policy", async () => {
+    const fixture = createFixture();
+    const service = fixture.service();
+    await service.discover({ includeGpt: false, actorId: "support-lead" });
+
+    const approved = await service.approve({
+      candidateId: "known-cause-diagnosis-001",
+      actorId: "support-lead",
+      expectedVersion: 1,
+      edits: { evidencePolicy: { mode: "none-required", rationale: "The completed diagnosis is sufficient and no additional customer evidence is required." } },
+    });
+
+    expect(approved.evidencePolicy).toEqual({
+      mode: "none-required",
+      rationale: "The completed diagnosis is sufficient and no additional customer evidence is required.",
+    });
+    await expect(fixture.audits.list({ action: "approved" })).resolves.toMatchObject([{
+      evidencePolicyMetadata: {
+        approvedPolicy: {
+          mode: "none-required",
+          rationale: "The completed diagnosis is sufficient and no additional customer evidence is required.",
+        },
+        derivedEvidenceIds: [],
+        operatorAddedEvidenceIds: [],
+      },
+    }]);
   });
 
   it("uses an explicitly requested validated GPT draft and never persists an invalid draft", async () => {
@@ -242,11 +383,22 @@ function createFixture(options: {
   failCandidateCreatedAuditOnce?: boolean;
   synchronizeReviewHistory?: boolean;
   ticketScopedComponents?: boolean;
+  legacyEvidence?: boolean;
+  duplicateEvidence?: boolean;
   beforePromote?: () => Promise<void>;
 } = {}) {
   const diagnosis: CompletedDiagnosis = {
     id: "diagnosis-001", ticketId: "TKT-1001", problem: "API requests fail after rotating a credential.",
-    symptoms: ["Requests return 401 after rotation."], evidenceIds: ["evidence-001"], ownerTeam: "api-platform",
+    symptoms: ["Requests return 401 after rotation."],
+    ...(options.legacyEvidence
+      ? { evidenceIds: ["legacy-synthetic-evidence"] }
+      : { evidenceReferences: options.duplicateEvidence
+        ? [
+          { id: "request-id", labelAtDiagnosis: "API request ID in ticket", source: "ticket", sourceRef: "TKT-1001" },
+          { id: "request-id", labelAtDiagnosis: "API request ID in reply", source: "reply", sourceRef: "reply-001" },
+        ]
+        : [{ id: "request-id", labelAtDiagnosis: "API request ID", source: "ticket", sourceRef: "TKT-1001" }] }),
+    ownerTeam: "api-platform",
     fixSteps: ["Refresh the service credential in the deployment configuration."],
     verificationSteps: ["Confirm a new request succeeds with the refreshed credential."], completedAt: "2026-07-29T10:00:00.000Z",
   };
@@ -278,7 +430,7 @@ function createFixture(options: {
         ticketId: "TKT-1003",
         problem: "The billing invoice export link is missing.",
         symptoms: ["Billing invoice export is unavailable."],
-        evidenceIds: ["billing-export-evidence"],
+        evidenceReferences: [{ id: "invoice-number", labelAtDiagnosis: "Invoice number", source: "ticket" as const, sourceRef: "TKT-1003" }],
         ownerTeam: "billing" as const,
       }]
       : []),
@@ -293,7 +445,14 @@ function createFixture(options: {
     async saveCandidate(candidate: KnowledgeCandidate) { if (candidates.some((item) => item.id === candidate.id)) throw repositoryError("Duplicate candidate."); candidates.push(candidate); },
     async removeCandidate(candidateId: string) { const index = candidates.findIndex((item) => item.id === candidateId); if (index < 0) throw repositoryError("Candidate was not found."); candidates.splice(index, 1); },
     async listApproved() { return approved; },
-    async promote(candidateId: string, object: KnowledgeObject) { if (candidateId !== object.id || approved.some((item) => item.id === object.id)) throw repositoryError("Duplicate promotion."); await options.beforePromote?.(); approved.push(object); return object; },
+    async promote(candidateId: string, object: KnowledgeObject, expectedVersion?: number) {
+      if (candidateId !== object.id || approved.some((item) => item.id === object.id)) throw repositoryError("Duplicate promotion.");
+      await options.beforePromote?.();
+      const current = candidates.find((item) => item.id === candidateId);
+      if (expectedVersion !== undefined && current?.version !== expectedVersion) throw Object.assign(new Error("Knowledge candidate version is stale."), { code: "STALE_APPROVAL" });
+      approved.push(object);
+      return object;
+    },
     async removeApproved(candidateId: string) { const index = approved.findIndex((item) => item.id === candidateId); if (index < 0) throw repositoryError("Approved object was not found."); approved.splice(index, 1); },
   };
   let remainingAuditFailures = options.failApprovedAuditOnce ? 1 : 0;
@@ -330,6 +489,7 @@ function createFixture(options: {
   };
   return {
     ticket,
+    diagnoses,
     candidates,
     objects,
     audits,
@@ -364,7 +524,7 @@ function ticketRecord() {
 function gptDraft() {
   return {
     kind: "known-cause", name: "Recurring credential rotation pattern", summary: "A deployed service can retain a credential after rotation.",
-    triggerPatterns: ["Requests return 401 after a credential rotation."], evidencePolicy: { mode: "required", evidenceIds: ["evidence-001"] },
+    triggerPatterns: ["Requests return 401 after a credential rotation."], evidencePolicy: { mode: "required", evidenceIds: ["request-id"] },
     knowledgeArticleIds: ["credential-rotation"], timeConstraints: ["Apply only after a credential rotation."],
     diagnosticSteps: ["Compare the deployment credential with the active credential."], fixSteps: ["Refresh the deployment credential."], verificationSteps: ["Confirm a new request succeeds."],
     customerSafeExplanation: "We found a configuration mismatch and are refreshing it.", operatorRationale: "Completed diagnosis support indicates a recurring pattern.",

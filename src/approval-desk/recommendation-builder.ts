@@ -560,8 +560,9 @@ function buildDraftCustomerResponse(input: {
       evidenceReadiness,
       replyStage: input.replyStage,
       problemSummary: buildFlowProblemSummary(ticket),
-      nextStep:
-        "Once we have those details, we will compare the storefront event with the flow setup and profile timeline before recommending the safest correction.",
+      nextStep: evidenceReadiness.missingEvidence.length === 0
+        ? "We will compare the storefront event with the flow setup and profile timeline before recommending the safest correction."
+        : "Once we have those details, we will compare the storefront event with the flow setup and profile timeline before recommending the safest correction.",
     });
   }
 
@@ -887,6 +888,9 @@ function formatDiagnosisCustomerNextStep(diagnosis: DiagnosisContext): string {
   if (diagnosis.causeType === "performance") {
     return "We will use the result of those checks to decide whether this can be resolved as a browser/session issue or needs frontend engineering investigation.";
   }
+  if (diagnosis.causeType === "integration") {
+    return diagnosis.recommendedNextAction;
+  }
   if (diagnosis.confidence === "confirmed") {
     return diagnosis.recommendedNextAction;
   }
@@ -1065,6 +1069,19 @@ function analyzeCustomerReplyLifecycle(input: {
     outcome: input.outcome,
     approvedObjects: input.approvedObjects,
   });
+  if (input.ticket.status === "resolved") {
+    return {
+      evidenceReadiness: withLifecycleSupportState(
+        {
+          ...evidenceBeforeReplies,
+          missingEvidence: [],
+        },
+        "ready-for-close",
+      ),
+      replyStage: "first-contact",
+      recognizedEvidenceProgress: false,
+    };
+  }
   if (ticketReplies.length === 0) {
     return {
       evidenceReadiness: evidenceBeforeReplies,

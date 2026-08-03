@@ -4,7 +4,7 @@ import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { DomainError } from "../src/errors.js";
 import { DiagnosisRepository } from "../src/knowledge-evolution/diagnosis-repository.js";
-import { KnowledgeAuditRepository } from "../src/knowledge-evolution/knowledge-audit-repository.js";
+import { KnowledgeAuditRepository, type KnowledgeAuditEvent } from "../src/knowledge-evolution/knowledge-audit-repository.js";
 import { KnowledgeObjectRepository } from "../src/knowledge-evolution/knowledge-object-repository.js";
 import type { CompletedDiagnosis, KnowledgeCandidate, KnowledgeObject } from "../src/knowledge-evolution/domain.js";
 
@@ -33,10 +33,11 @@ const candidate: KnowledgeCandidate = {
   status: "candidate" as const, supportingDiagnosisIds: ["diagnosis-001"], supportingTicketIds: ["TKT-0001"],
   provenance: { source: "completed-diagnoses", recordedAt: "2026-07-29T10:05:00.000Z" },
   deterministicScores: { confidence: 0.9, support: 1 }, deterministicReasons: ["Two diagnoses share the same evidence-backed fix."], contradictions: [], validationStatus: "valid" as const,
+  evidencePolicyMetadata: { derivedEvidenceIds: ["evidence-001"], operatorAddedEvidenceIds: [] },
 };
-const { deterministicScores: _scores, deterministicReasons: _reasons, contradictions: _contradictions, validationStatus: _validation, ...candidateFields } = candidate;
+const { deterministicScores: _scores, deterministicReasons: _reasons, contradictions: _contradictions, validationStatus: _validation, evidencePolicyMetadata: _metadata, evidencePolicy: candidateEvidencePolicy, ...candidateFields } = candidate;
 const approved: KnowledgeObject = {
-  ...candidateFields, status: "approved" as const, version: 1,
+  ...candidateFields, evidencePolicy: candidateEvidencePolicy as { mode: "required"; evidenceIds: string[] }, status: "approved" as const, version: 1,
   approval: { approvedBy: "support-lead", approvedAt: "2026-07-29T10:06:00.000Z" },
 };
 
@@ -47,6 +48,19 @@ describe("knowledge evolution repositories", () => {
     await repository.save(diagnosis);
     await expect(repository.save(diagnosis)).rejects.toMatchObject({ code: "REPOSITORY_ERROR" });
     await expect(repository.list()).resolves.toMatchObject([diagnosis, { id: "diagnosis-002" }]);
+  });
+
+  it("loads legacy diagnosis records without structured evidence references", async () => {
+    const storage = await root();
+    const diagnoses = join(storage, "diagnoses");
+    await mkdir(diagnoses, { recursive: true });
+    await writeFile(join(diagnoses, "diagnosis-001.json"), JSON.stringify(diagnosis));
+
+    await expect(new DiagnosisRepository(diagnoses).list()).resolves.toEqual([{
+      ...diagnosis,
+      evidenceUsed: [],
+      evidenceReferences: [],
+    }]);
   });
 
   it("removes a persisted diagnosis so a failed audit can be retried without a duplicate", async () => {
@@ -96,6 +110,8 @@ describe("knowledge evolution repositories", () => {
     const storage = await root();
     const repository = new KnowledgeObjectRepository(join(storage, "candidates"), join(storage, "approved"));
     await repository.saveCandidate(candidate);
+    await expect(repository.promote(candidate.id, approved, candidate.version + 1)).rejects.toMatchObject({ code: "STALE_APPROVAL" });
+    await expect(repository.listApproved()).resolves.toEqual([]);
     await expect(repository.promote(candidate.id, approved)).resolves.toMatchObject({ ...approved, version: 1 });
     await expect(repository.listCandidates()).resolves.toMatchObject([candidate]);
     await expect(repository.listApproved()).resolves.toMatchObject([{ ...approved, version: 1 }]);
@@ -139,6 +155,20 @@ describe("knowledge evolution repositories", () => {
     }));
     await Promise.all(events.map((event) => repository.append(event)));
     await expect(repository.list({ objectId: candidate.id, action: "approved" })).resolves.toEqual([events[1]]);
+  });
+
+  it("round trips approved evidence policy provenance in audit metadata", async () => {
+    const repository = new KnowledgeAuditRepository(join(await root(), "audit", "events.jsonl"));
+    const event: KnowledgeAuditEvent = {
+      id: "audit-approved-policy", objectId: candidate.id, candidateId: candidate.id, action: "approved",
+      actor: "support-lead", timestamp: "2026-07-29T10:06:00.000Z", supportIds: ["diagnosis-001"], reviewedFields: ["evidencePolicy"], result: "approved",
+      evidencePolicyMetadata: {
+        approvedPolicy: { mode: "required", evidenceIds: ["request-id"] },
+        derivedEvidenceIds: ["request-id"], operatorAddedEvidenceIds: [],
+      },
+    };
+    await repository.append(event);
+    await expect(repository.list({ action: "approved" })).resolves.toEqual([event]);
   });
 
   it("atomically compares and appends a terminal action once", async () => {

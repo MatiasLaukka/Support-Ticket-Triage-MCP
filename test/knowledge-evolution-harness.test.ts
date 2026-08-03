@@ -34,7 +34,7 @@ describe("knowledge evolution harness", () => {
       candidateId: candidate.id,
       actorId: "support-lead",
       expectedVersion: candidate.version,
-      edits: { evidencePolicy: { mode: "none-required" } },
+      edits: { evidencePolicy: { mode: "none-required", rationale: "The controlled event is authoritative." } },
     });
     const recommendationAfterPromotion = evaluate(ticket("TKT-2103"), outcome, [approved]);
 
@@ -289,7 +289,7 @@ function diagnosis(id: string, ticketId: string): CompletedDiagnosis {
     ticketId,
     problem: "Webhook deliveries fail after a signing-key rotation.",
     symptoms: ["Webhook deliveries fail after a signing-key rotation."],
-    evidenceIds: ["request-id"],
+    evidenceReferences: [{ id: "request-id", labelAtDiagnosis: "Webhook request ID", source: "ticket", sourceRef: ticketId }],
     ownerTeam: "integrations",
     fixSteps: ["Refresh the signing key in the webhook integration."],
     verificationSteps: ["Verify a newly delivered webhook is accepted."],
@@ -319,7 +319,7 @@ function approvedKnownCause(id: string, triggerPattern: string): KnowledgeObject
     name: "Approved webhook delivery guidance",
     summary: "A recurring webhook delivery condition.",
     triggerPatterns: [triggerPattern],
-    evidencePolicy: { mode: "none-required" },
+    evidencePolicy: { mode: "none-required", rationale: "The controlled event is authoritative." },
     timeConstraints: ["Apply only when the trigger matches."],
     diagnosticSteps: ["Review the approved support path."],
     fixSteps: ["Use the documented correction."],

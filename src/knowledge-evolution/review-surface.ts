@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { TicketIdSchema } from "../domain.js";
 import {
-  EvidencePolicySchema,
+  CandidateEvidencePolicySchema,
   KnowledgeCandidateSchema,
   type KnowledgeCandidate,
   type KnowledgeObject,
@@ -14,7 +14,7 @@ export const KnowledgeCandidateEditsSchema = z.object({
   name: KnowledgeCandidateSchema.shape.name.optional(),
   summary: KnowledgeCandidateSchema.shape.summary.optional(),
   triggerPatterns: KnowledgeCandidateSchema.shape.triggerPatterns.optional(),
-  evidencePolicy: EvidencePolicySchema.optional(),
+  evidencePolicy: CandidateEvidencePolicySchema.optional(),
   timeConstraints: KnowledgeCandidateSchema.shape.timeConstraints.optional(),
   diagnosticSteps: KnowledgeCandidateSchema.shape.diagnosticSteps.optional(),
   fixSteps: KnowledgeCandidateSchema.shape.fixSteps.optional(),
@@ -37,7 +37,11 @@ export const KnowledgeCandidateReviewSchema = z.object({
   name: z.string().trim().min(1).max(160),
   summary: z.string().trim().min(1).max(1_000),
   triggerPatterns: z.array(z.string().trim().min(1).max(1_000)),
-  evidencePolicy: EvidencePolicySchema,
+  evidencePolicy: CandidateEvidencePolicySchema,
+  evidencePolicyMetadata: z.object({
+    derivedEvidenceIds: z.array(KnowledgeCandidateIdSchema),
+    operatorAddedEvidenceIds: z.array(KnowledgeCandidateIdSchema),
+  }).strict(),
   timeConstraints: z.array(z.string().trim().min(1).max(1_000)),
   diagnosticSteps: z.array(z.string().trim().min(1).max(1_000)),
   fixSteps: z.array(z.string().trim().min(1).max(1_000)),
@@ -111,6 +115,7 @@ export function knowledgeCandidateReview(
     summary: candidate.summary,
     triggerPatterns: candidate.triggerPatterns,
     evidencePolicy: candidate.evidencePolicy,
+    evidencePolicyMetadata: candidate.evidencePolicyMetadata,
     timeConstraints: candidate.timeConstraints,
     diagnosticSteps: candidate.diagnosticSteps,
     fixSteps: candidate.fixSteps,

@@ -18,6 +18,7 @@ import {
   type AiExecutionTrace,
 } from "../src/domain.js";
 import { DomainError } from "../src/errors.js";
+import { DiagnosisContextSchema } from "../src/triage-service.js";
 
 const ticket = {
   id: "TKT-1001",
@@ -81,6 +82,17 @@ const recommendation = {
   createdAt: "2026-06-10T08:35:00.000Z",
 } as const;
 
+const completedDiagnosisContext = {
+  status: "completed" as const,
+  causeType: "configuration" as const,
+  customerSafeSummary: "A configuration change caused the API failure.",
+  evidenceUsed: ["The customer supplied a request ID."],
+  confidence: "confirmed" as const,
+  owner: "engineering" as const,
+  recommendedNextAction: "Apply the governed configuration update.",
+  doNotSay: [],
+};
+
 function makeAiExecutionTrace(): AiExecutionTrace {
   return {
     preference: "gpt-preferred",
@@ -133,6 +145,91 @@ function makeAiExecutionTrace(): AiExecutionTrace {
 }
 
 describe("domain contracts", () => {
+  it.each(["ticket", "reply", "knowledge", "operator"] as const)(
+    "keeps a catalog-backed evidence label snapshot from %s",
+    (source) => {
+      const reference = {
+        id: "request-id",
+        labelAtDiagnosis: "Request ID observed during diagnosis",
+        source,
+        sourceRef: `${source}-reference`,
+      };
+
+      expect(
+        DiagnosisContextSchema.parse({
+          ...completedDiagnosisContext,
+          evidenceReferences: [reference],
+        }).evidenceReferences,
+      ).toEqual([reference]);
+    },
+  );
+
+  it("allows duplicate catalog IDs when their provenance differs", () => {
+    const evidenceReferences = [
+      {
+        id: "request-id",
+        labelAtDiagnosis: "Request ID in customer ticket",
+        source: "ticket" as const,
+        sourceRef: "TKT-1001",
+      },
+      {
+        id: "request-id",
+        labelAtDiagnosis: "Request ID in customer reply",
+        source: "reply" as const,
+        sourceRef: "reply-001",
+      },
+    ];
+
+    expect(
+      DiagnosisContextSchema.parse({
+        ...completedDiagnosisContext,
+        evidenceReferences,
+      }).evidenceReferences,
+    ).toEqual(evidenceReferences);
+  });
+
+  it("rejects evidence references with IDs absent from the shared catalog", () => {
+    const result = DiagnosisContextSchema.safeParse({
+      ...completedDiagnosisContext,
+      evidenceReferences: [
+        {
+          id: "invented-evidence",
+          labelAtDiagnosis: "Invented evidence",
+          source: "operator",
+        },
+      ],
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues).toContainEqual(
+        expect.objectContaining({ path: ["evidenceReferences", 0, "id"] }),
+      );
+    }
+  });
+
+  it("defaults missing diagnosis evidence references to an empty array", () => {
+    expect(DiagnosisContextSchema.parse(completedDiagnosisContext).evidenceReferences).toEqual([]);
+  });
+
+  it.each([
+    "Authorization: Bearer definitely-a-secret",
+    "authorization=bearer definitely-a-secret",
+    "Bearer definitely-a-secret",
+    "X-Access-Token: definitely-a-secret",
+    "token=definitely-a-secret",
+  ])("rejects credential-bearing evidence source references: %s", (sourceRef) => {
+    expect(DiagnosisContextSchema.safeParse({
+      ...completedDiagnosisContext,
+      evidenceReferences: [{
+        id: "request-id",
+        labelAtDiagnosis: "Request ID",
+        source: "ticket",
+        sourceRef,
+      }],
+    }).success).toBe(false);
+  });
+
   it.each([
     "TKT-100",
     "tkt-1001",

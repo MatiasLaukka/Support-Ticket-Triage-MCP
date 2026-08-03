@@ -7,6 +7,7 @@ import {
   CategorySchema,
   ClassificationSignalSchema,
   CustomerReplyWatermarkSchema,
+  DiagnosisEvidenceReferenceSchema,
   DiagnosisFixContextSchema,
   DiagnosisIdSchema,
   DiagnosisImpactSetSchema,
@@ -34,6 +35,7 @@ import {
   type Category,
   type ClassificationSignal,
   type DiagnosisImpactSet,
+  type DiagnosisEvidenceReference,
   type DuplicateCandidate,
   type EvidenceRequirement,
   type GptAssist,
@@ -157,7 +159,7 @@ const AddCustomerReplyInputSchema = z
     source: NonBlankStringSchema.optional(),
   })
   .strict();
-export const DiagnosisContextSchema = z
+export const DiagnosisContextSchema: z.ZodType<DiagnosisContext> = z
   .object({
     status: z.literal("completed"),
     causeType: z.enum([
@@ -170,6 +172,7 @@ export const DiagnosisContextSchema = z
     ]),
     customerSafeSummary: NonBlankStringSchema,
     evidenceUsed: z.array(NonBlankStringSchema).min(1),
+    evidenceReferences: z.array(DiagnosisEvidenceReferenceSchema).default([]),
     confidence: z.enum(["likely", "confirmed"]),
     owner: z.enum([
       "support",
@@ -347,7 +350,7 @@ export interface AddCustomerReplyInput {
   source?: string;
 }
 
-export interface DiagnosisContext {
+export interface DiagnosisContext extends Record<string, unknown> {
   status: "completed";
   causeType:
     | "configuration"
@@ -358,6 +361,7 @@ export interface DiagnosisContext {
     | "performance";
   customerSafeSummary: string;
   evidenceUsed: string[];
+  evidenceReferences?: DiagnosisEvidenceReference[];
   confidence: "likely" | "confirmed";
   owner: "support" | "engineering" | "customer" | "integration-partner";
   recommendedNextAction: string;
@@ -1355,11 +1359,17 @@ export class TriageService {
       result: "success",
     });
 
-    // Customer-response approval authorizes an outbound message, but does not
-    // change ticket state or evidence. Keeping the ticket revision stable lets
-    // an already-reviewed diagnosis remain current until customer context or
-    // an actual ticket field changes.
-    if (approval.approvedFields.every((field) => field === "customerResponse")) {
+    // An approval that only authorizes an outbound response, or repeats the
+    // ticket's existing triage values, does not change ticket state or
+    // evidence. Keeping the ticket revision stable lets an already-reviewed
+    // diagnosis remain current until customer context or an actual ticket
+    // field changes.
+    const changesTicket = approval.approvedFields.some(
+      (field) =>
+        field !== "customerResponse" &&
+        !sameStructuredValue(before[field], after[field]),
+    );
+    if (!changesTicket && approval.approvedFields.includes("customerResponse")) {
       await this.dependencies.recommendations.transitionResolution(
         recommendation.id,
         "pending",
@@ -1668,15 +1678,13 @@ function completedDiagnosisFrom(
   event: AuditEvent,
   input: z.infer<typeof RecordDiagnosisInputSchema>,
 ): CompletedDiagnosis {
-  const evidenceIds = input.diagnosis.evidenceUsed.map(
-    (_evidence, index) => `evidence-${event.id}-${index + 1}`,
-  );
   return {
     id: `diagnosis-${event.id}`,
     ticketId: input.ticketId,
     problem: input.diagnosis.customerSafeSummary,
     symptoms: [input.diagnosis.causeType, ...input.diagnosis.evidenceUsed],
-    evidenceIds,
+    evidenceUsed: input.diagnosis.evidenceUsed,
+    evidenceReferences: input.diagnosis.evidenceReferences ?? [],
     ownerTeam: completedDiagnosisOwner(input.diagnosis.owner),
     fixSteps: ["Apply the completed diagnosis next action through the governed support workflow."],
     verificationSteps: ["Confirm the customer-safe outcome after the governed next action."],

@@ -1,6 +1,6 @@
 import type { Ticket } from "../domain.js";
 import { jaccardSimilarity, normalizeTokens } from "../similarity.js";
-import type { CompletedDiagnosis, KnowledgeObject } from "./domain.js";
+import { evidenceReferenceIds, type CompletedDiagnosis, type KnowledgeObject } from "./domain.js";
 
 const MAX_CANDIDATES = 5;
 const DIAGNOSIS_MATCH_THRESHOLD = 0.55;
@@ -104,7 +104,7 @@ function approvedSimilarity(discovered: Discovered, approved: KnowledgeObject): 
   return Math.max(evidence, text * 0.45 + owner * 0.1 + workflow * 0.25 + identifiers * 0.08 + knowledge * 0.07 + time * 0.05);
 }
 
-function signalsFor(diagnosis: CompletedDiagnosis, ticket?: Ticket): Signals { const tags = ticket?.tags ?? []; return { problem: normalizeTokens(diagnosis.problem), symptoms: normalizeTokens(diagnosis.symptoms.join(" ")), evidence: diagnosis.evidenceIds, owner: diagnosis.ownerTeam, workflow: normalizeTokens([...diagnosis.fixSteps, ...diagnosis.verificationSteps].join(" ")), events: tags.filter((tag) => /^(?:event|known-cause)-/.test(tag)), knowledge: tags.filter((tag) => /^knowledge-/.test(tag)), time: tags.filter((tag) => /^time-/.test(tag)), ticketLanguage: ticket ? ticketTokens(ticket) : normalizeTokens(`${diagnosis.problem} ${diagnosis.symptoms.join(" ")}`) }; }
+function signalsFor(diagnosis: CompletedDiagnosis, ticket?: Ticket): Signals { const tags = ticket?.tags ?? []; return { problem: normalizeTokens(diagnosis.problem), symptoms: normalizeTokens(diagnosis.symptoms.join(" ")), evidence: evidenceReferenceIds(diagnosis), owner: diagnosis.ownerTeam, workflow: normalizeTokens([...diagnosis.fixSteps, ...diagnosis.verificationSteps].join(" ")), events: tags.filter((tag) => /^(?:event|known-cause)-/.test(tag)), knowledge: tags.filter((tag) => /^knowledge-/.test(tag)), time: tags.filter((tag) => /^time-/.test(tag)), ticketLanguage: ticket ? ticketTokens(ticket) : normalizeTokens(`${diagnosis.problem} ${diagnosis.symptoms.join(" ")}`) }; }
 function combinedSignals(diagnoses: readonly CompletedDiagnosis[], tickets: ReadonlyMap<string, Ticket>): Signals { const all = diagnoses.map((diagnosis) => signalsFor(diagnosis, tickets.get(diagnosis.ticketId))); return { problem: union(all.map(({ problem }) => problem)), symptoms: union(all.map(({ symptoms }) => symptoms)), evidence: uniqueSorted(all.flatMap(({ evidence }) => evidence)), owner: all[0]!.owner, workflow: union(all.map(({ workflow }) => workflow)), events: uniqueSorted(all.flatMap(({ events }) => events)), knowledge: uniqueSorted(all.flatMap(({ knowledge }) => knowledge)), time: uniqueSorted(all.flatMap(({ time }) => time)), ticketLanguage: union(all.map(({ ticketLanguage }) => ticketLanguage)) }; }
 function diagnosisReasons(diagnosis: CompletedDiagnosis, ticket?: Ticket): string[] { const signals = signalsFor(diagnosis, ticket); return uniqueSorted([...signals.evidence.map((id) => `evidence: ${id}`), `owner: ${signals.owner}`, ...signals.events.map((id) => `event: ${id}`), ...signals.knowledge.map((id) => `knowledge: ${id}`), ...signals.time.map((id) => `time-constraint: ${id}`)]); }
 function negativeBase(value: string): string | undefined { const match = value.match(/^(?:not|no|without|ruled-out)-(.+)$/); return match?.[1]; }

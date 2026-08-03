@@ -935,7 +935,7 @@ const expectedOutcomes = ExpectedOutcomeSchema.array().parse(
       category: "other",
       acceptablePriorities: ["P3"],
       team: "support",
-      knowledgeArticleIds: ["event-tracking-debugging"],
+      knowledgeArticleIds: [],
     },
     {
       number: 1011,
@@ -1023,7 +1023,6 @@ const expectedOutcomes = ExpectedOutcomeSchema.array().parse(
       category: "incident",
       acceptablePriorities: ["P2"],
       team: "incident-response",
-      requiredEscalations: ["sla"],
       knowledgeArticleIds: [
         "campaign-send-failures",
         "segmentation-audience-rules",
@@ -1062,7 +1061,7 @@ const expectedOutcomes = ExpectedOutcomeSchema.array().parse(
       category: "other",
       acceptablePriorities: ["P3"],
       team: "support",
-      knowledgeArticleIds: ["campaign-send-failures"],
+      knowledgeArticleIds: [],
     },
     {
       number: 1027,

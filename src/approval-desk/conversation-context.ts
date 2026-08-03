@@ -24,6 +24,9 @@ export interface ConversationContext {
   customerReplyText: string;
   latestCustomerReply?: ConversationCustomerReply;
   previousSupportResponseText: string;
+  /** Text allowed to influence classification and prompt-injection preflight. */
+  classificationText: string;
+  /** Full conversational text retained for non-classification workflow context. */
   combinedText: string;
 }
 
@@ -49,6 +52,10 @@ export function buildConversationContextForTicket(
   const previousSupportResponseText = supportResponses
     .map((response) => response.body)
     .join("\n\n");
+  const classificationText = [originalText, customerReplyText]
+    .filter((value) => value.trim() !== "")
+    .join("\n\n")
+    .toLowerCase();
 
   return {
     ticket: input.ticket,
@@ -56,6 +63,7 @@ export function buildConversationContextForTicket(
     customerReplyText,
     latestCustomerReply: customerReplies.at(-1),
     previousSupportResponseText,
+    classificationText,
     combinedText: [originalText, previousSupportResponseText, customerReplyText]
       .filter((value) => value.trim() !== "")
       .join("\n\n")

@@ -8,7 +8,12 @@ const completed = (id: string, ticketId: Ticket["id"], overrides: Partial<Comple
   ticketId,
   problem: "Webhook deliveries fail after signing-key rotation.",
   symptoms: ["Webhook requests return signature validation errors."],
-  evidenceIds: ["request-id"],
+  evidenceReferences: [{
+    id: "request-id",
+    labelAtDiagnosis: "Webhook request ID",
+    source: "ticket",
+    sourceRef: ticketId,
+  }],
   ownerTeam: "integrations",
   fixSteps: ["Refresh the signing key in the webhook integration."],
   verificationSteps: ["Verify a newly delivered webhook is accepted."],
@@ -65,7 +70,12 @@ describe("knowledge evolution discovery", () => {
     const result = discoverCandidates({
       diagnoses: [
         completed("diagnosis-001", "TKT-1001"),
-        completed("diagnosis-002", "TKT-1002", { evidenceIds: ["request-id", "certificate-id"] }),
+        completed("diagnosis-002", "TKT-1002", {
+          evidenceReferences: [
+            { id: "request-id", labelAtDiagnosis: "Webhook request ID", source: "ticket", sourceRef: "TKT-1002" },
+            { id: "signing-secret-rotation-time", labelAtDiagnosis: "Signing key rotation time", source: "ticket", sourceRef: "TKT-1002" },
+          ],
+        }),
       ],
       tickets: [],
       approved: [],
@@ -74,24 +84,28 @@ describe("knowledge evolution discovery", () => {
     expect(result.candidates[0]).toMatchObject({ meetsAlertThreshold: true, contradictions: [] });
   });
 
-  it("suppresses an alert when diagnoses contain explicitly ruled-out evidence", () => {
+  it("does not treat unrelated catalog-backed evidence as corroboration", () => {
     const result = discoverCandidates({
       diagnoses: [
         completed("diagnosis-001", "TKT-1001"),
-        completed("diagnosis-002", "TKT-1002", { evidenceIds: ["request-id", "not-request-id"] }),
+        completed("diagnosis-002", "TKT-1002", {
+          problem: "Billing invoice exports are unavailable.",
+          symptoms: ["The billing export page returns an error."],
+          evidenceReferences: [{ id: "invoice-number", labelAtDiagnosis: "Invoice number", source: "ticket", sourceRef: "TKT-1002" }],
+          ownerTeam: "billing",
+        }),
       ],
       tickets: [],
       approved: [],
     });
 
-    expect(result.candidates[0]).toMatchObject({ meetsAlertThreshold: false });
-    expect(result.candidates[0]?.contradictions).toEqual(["conflicting-evidence: request-id"]);
+    expect(result.candidates[0]).toMatchObject({ meetsAlertThreshold: false, contradictions: [] });
   });
 
   it("orders equal-scoring candidates deterministically", () => {
     const result = discoverCandidates({
       diagnoses: [
-        completed("diagnosis-003", "TKT-1003", { problem: "Billing export is delayed.", symptoms: ["Export queue remains pending."], evidenceIds: ["job-id"], ownerTeam: "billing" }),
+        completed("diagnosis-003", "TKT-1003", { problem: "Billing export is delayed.", symptoms: ["Export queue remains pending."], evidenceReferences: [{ id: "invoice-number", labelAtDiagnosis: "Invoice number", source: "ticket", sourceRef: "TKT-1003" }], ownerTeam: "billing" }),
         completed("diagnosis-002", "TKT-1002"),
         completed("diagnosis-001", "TKT-1001"),
       ],

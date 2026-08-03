@@ -417,8 +417,13 @@ describe("generated support fixtures", () => {
     );
     expect(knowledgeIds.size).toBe(18);
 
+    const intentionallyVagueTickets = new Set(["TKT-1010", "TKT-1026"]);
     for (const outcome of outcomes) {
-      expect(outcome.knowledgeArticleIds.length).toBeGreaterThan(0);
+      // Intentionally vague support tickets have no defensible article yet;
+      // they must remain evidence-gated instead of receiving a guessed topic.
+      if (!intentionallyVagueTickets.has(outcome.ticketId)) {
+        expect(outcome.knowledgeArticleIds.length).toBeGreaterThan(0);
+      }
       for (const knowledgeId of outcome.knowledgeArticleIds) {
         expect(knowledgeIds.has(knowledgeId), knowledgeId).toBe(true);
       }

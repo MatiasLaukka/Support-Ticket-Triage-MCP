@@ -143,9 +143,7 @@
     ],
     "team": "support",
     "requiredEscalations": [],
-    "knowledgeArticleIds": [
-      "event-tracking-debugging"
-    ]
+    "knowledgeArticleIds": []
   },
   {
     "ticketId": "TKT-1011",
@@ -287,9 +285,7 @@
       "P2"
     ],
     "team": "incident-response",
-    "requiredEscalations": [
-      "sla"
-    ],
+    "requiredEscalations": [],
     "knowledgeArticleIds": [
       "campaign-send-failures",
       "segmentation-audience-rules"
@@ -354,9 +350,7 @@
     ],
     "team": "support",
     "requiredEscalations": [],
-    "knowledgeArticleIds": [
-      "campaign-send-failures"
-    ]
+    "knowledgeArticleIds": []
   },
   {
     "ticketId": "TKT-1027",

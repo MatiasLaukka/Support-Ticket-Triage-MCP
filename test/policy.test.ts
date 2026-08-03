@@ -213,6 +213,39 @@ describe("evaluateEscalation", () => {
     ).toEqual(["policy-conflict"]);
   });
 
+  it("preserves diagnostic ambiguity from an escalated support state", () => {
+    expect(
+      evaluateEscalation(
+        makeRecommendation({ supportState: "escalated", escalationReasons: [] }),
+        now,
+        makeTicket(),
+      ),
+    ).toEqual({
+      required: true,
+      reasons: ["diagnostic-ambiguity"],
+    });
+  });
+
+  it("merges ambiguity with independent signals in stable order", () => {
+    expect(
+      evaluateEscalation(
+        makeRecommendation({
+          supportState: "escalated",
+          priority: "P1",
+          missingInformation: ["Blast radius"],
+          escalationReasons: ["diagnostic-ambiguity", "sla", "sla"],
+        }),
+        now,
+        makeTicket({
+          sla: {
+            responseDueAt: "2026-06-10T09:30:00.000Z",
+            breached: false,
+          },
+        }),
+      ).reasons,
+    ).toEqual(["sla", "missing-information", "diagnostic-ambiguity"]);
+  });
+
   it("does not derive or change priority from VIP status", () => {
     const recommendation = makeRecommendation({ priority: "P4" });
     const decision = evaluateEscalation(

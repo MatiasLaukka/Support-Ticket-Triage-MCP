@@ -8,6 +8,8 @@ import {
   environmentPath,
   minutesSaved,
 } from "../src/runtime.js";
+import { TriageRecommendationSchema } from "../src/domain.js";
+import { diagnosisContextForTicket } from "../src/approval-desk/diagnostic-workflow.js";
 import { OpenAiKnowledgeCandidateDraftProvider, UnavailableOpenAiKnowledgeCandidateDraftProvider } from "../src/knowledge-evolution/openai-candidate-draft-provider.js";
 import { createControlledKnowledgeCandidateDraftProvider } from "../src/approval-desk/controlled-evaluation-providers.js";
 
@@ -89,20 +91,69 @@ describe("runtime configuration", () => {
       env: { TRIAGE_DATA_ROOT: dataRoot, TRIAGE_SEED_FILE: resolve("data", "seed", "tickets.json"), TRIAGE_KNOWLEDGE_ROOT: resolve("data", "knowledge") },
     });
 
+    const ticket = await deps.tickets.get("TKT-1005");
+    const diagnosis = diagnosisContextForTicket(ticket, TriageRecommendationSchema.parse({
+      id: "a734a24f-27c0-42e9-b7e5-8d5d8d3449a2",
+      ticketId: ticket.id,
+      sourceRevision: ticket.revision,
+      category: "api",
+      priority: "P2",
+      team: "api-platform",
+      duplicateCandidates: [],
+      outageRisk: "none",
+      securityRisk: "none",
+      slaRisk: "none",
+      missingInformation: [],
+      supportState: "diagnosing",
+      requiredEvidence: [],
+      providedEvidence: [{
+        id: "request-id",
+        label: "Request ID",
+        customerQuestion: "request ID if available",
+        aliases: ["request id"],
+        source: "knowledge",
+      }],
+      missingEvidence: [],
+      knowledgeArticleIds: [],
+      draftCustomerResponse: "We have the request ID needed for diagnosis.",
+      rationale: "The supplied request ID is recognized evidence.",
+      confidence: 0.9,
+      recommendedNextAction: "Review the request ID.",
+      escalationRequired: false,
+      escalationReasons: [],
+      resolution: "approved",
+      createdAt: "2026-07-29T12:00:00.000Z",
+    }));
+
     await deps.service.recordDiagnosis({
       ticketId: "TKT-1005",
       actor: "support-lead",
       diagnosedAt: "2026-07-29T12:00:00.000Z",
-      diagnosis: {
-        status: "completed", causeType: "configuration", customerSafeSummary: "A configuration mismatch caused the request failure.",
-        evidenceUsed: ["request trace"], confidence: "confirmed", owner: "engineering",
-        recommendedNextAction: "Apply the approved configuration update.", doNotSay: [],
-      },
+      diagnosis,
       knowledgeArticleIds: [],
     });
 
-    await expect(deps.knowledgeEvolution.diagnoses.list()).resolves.toMatchObject([
-      { ticketId: "TKT-1005", ownerTeam: "api-platform", evidenceIds: [expect.stringMatching(/^evidence-/)] },
+    const diagnoses = await deps.knowledgeEvolution.diagnoses.list();
+    expect(diagnoses).toMatchObject([
+      {
+        ticketId: "TKT-1005",
+        ownerTeam: "support",
+        evidenceUsed: ["Request ID"],
+        evidenceReferences: [{
+          id: "request-id",
+          labelAtDiagnosis: "Request ID",
+          source: "ticket",
+          sourceRef: "TKT-1005",
+        }],
+      },
+    ]);
+    expect(diagnoses[0]).not.toHaveProperty("evidenceIds");
+    await expect(deps.knowledgeEvolution.service.discover({
+      includeGpt: false,
+      actorId: "support-lead",
+    })).resolves.toMatchObject({ candidates: [expect.any(Object)] });
+    await expect(deps.knowledgeEvolution.objects.listCandidates()).resolves.toMatchObject([
+      { evidencePolicy: { mode: "required", evidenceIds: ["request-id"] } },
     ]);
   });
 
@@ -122,7 +173,7 @@ describe("runtime configuration", () => {
       ticketId: "TKT-1001",
       problem: "The event-processing delay recurs for accepted checkout events.",
       symptoms: ["Accepted checkout events are missing from profile timelines."],
-      evidenceIds: ["runtime-provider-evidence"],
+      evidenceReferences: [{ id: "request-id", labelAtDiagnosis: "Accepted request ID", source: "ticket", sourceRef: "TKT-1001" }],
       ownerTeam: "api-platform",
       fixSteps: ["Apply the governed event-processing mitigation."],
       verificationSteps: ["Confirm a new accepted event reaches the profile timeline."],

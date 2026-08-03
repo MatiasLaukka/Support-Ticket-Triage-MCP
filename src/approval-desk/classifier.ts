@@ -116,7 +116,7 @@ export function classifyTicketFromContext(
 ): TicketClassification {
   return classifyTicketWithContent({
     ticket: context.ticket,
-    content: context.combinedText,
+    content: context.classificationText,
     advisorySignals,
   });
 }
@@ -310,6 +310,21 @@ const RULES: readonly Rule[] = [
     "Isolated missing events require normal API event-tracking diagnosis.",
   ),
   issueRule("billing", /\bcoupon (?:codes?|pool)|expired coupon\b/, "billing", "P3", ["coupon-catalog-sync"], "Coupon lifecycle issues are billing-owned."),
+  {
+    id: "billing-campaign-launch",
+    knowledgeCategory: "billing",
+    when: ({ content }) =>
+      /\bcoupon (?:codes?|pool)\b/.test(content) &&
+      /\b(?:campaign|launch|preview email)\b/.test(content),
+    emit: () => [
+      signal(
+        "billing-campaign-launch-article",
+        "knowledge:campaign-send-failures",
+        6,
+        "An urgent campaign launch also needs campaign-send guidance alongside coupon troubleshooting.",
+      ),
+    ],
+  },
   issueRule("performance", /\b(?:deliverability|hard-bounce|bounce rate|spam complaint|branded sending domain)\b/, "product", "P2", ["email-deliverability"], "Deliverability symptoms require product performance investigation."),
   issueRule("account-access", /\bduplicate profiles?.*\bcsv import|csv import.*\bduplicate profiles?\b/, "identity", "P3", ["profile-sync-issues"], "CSV profile reconciliation routes to identity."),
   issueRule("authentication", /\b(?:consent state|email consent).*\b(?:not updating|old)\b/, "identity", "P2", ["profile-sync-issues", "sms-compliance"], "Consent state synchronization routes to identity."),
@@ -551,8 +566,9 @@ function chooseTeam(signals: ClassificationSignal[], category: Category, escalat
 
 function choosePriority(signals: ClassificationSignal[], escalations: RequiredEscalation[], ticket: Ticket): Priority {
   if (escalations.includes("security")) return "P1";
+  if (escalations.includes("outage")) return "P1";
   const scored = chooseScoredValue(signals, "priority", "P3") as Priority;
-  if (escalations.includes("outage") || ticket.sla.breached) return atLeast(scored, "P2");
+  if (ticket.sla.breached) return atLeast(scored, "P2");
   return scored;
 }
 

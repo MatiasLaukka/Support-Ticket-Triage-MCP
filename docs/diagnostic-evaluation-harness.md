@@ -37,6 +37,80 @@ Known-event matching is intentionally bounded. A ticket must match the related k
 
 The harness is deterministic and local. It does not call GPT, mutate tickets, approve recommendations, send responses, record diagnoses, mark fixes, or close tickets.
 
+## Article-backed and GPT diagnosis evaluation
+
+The all-ticket diagnosis lane audits the production diagnostic workflow across
+all thirty seed tickets rather than only the eleven chronological scenarios:
+
+```powershell
+npm run evaluate:ai-diagnosis
+```
+
+The deterministic side uses the shared article-backed playbooks. They provide
+specific, customer-safe narrowing summaries for meaningful support patterns
+while respecting the evidence gate. `TKT-1010` and `TKT-1026` are intentionally
+vague no-article fixtures; the lane leaves them evidence-gated instead of
+creating a diagnosis. Resolved tickets and prompt-injection tickets are also
+skipped for GPT diagnosis.
+
+The default command uses a controlled local adapter. An authenticated,
+non-reproducible GPT observation is explicitly opt-in:
+
+```powershell
+$env:OPENAI_API_KEY = 'sk-...'
+npm run evaluate:ai-diagnosis -- --live
+```
+
+Each run saves sanitized output under `reports/ai-diagnosis/` as
+`controlled-latest.*` or `live-latest.*`.
+
+GPT output is an advisory candidate only. The deterministic diagnosis,
+evidence readiness, prompt-injection preflight, lifecycle transitions, and
+human approval remain authoritative. Invalid or unavailable provider output
+falls back to the deterministic diagnosis, and the report records only
+sanitized candidate fields and fallback categories.
+
+## Knowledge-evolution evidence checks
+
+The harness and knowledge-evolution service use the same evidence catalog and
+diagnostic workflow. This keeps three concerns separate when a diagnosis is
+reused:
+
+- **Observed evidence** is what was actually provided and recorded on a
+  completed diagnosis. Structured `evidenceReferences` carry catalog IDs and
+  provenance; readable `evidenceUsed` text is not converted into policy.
+- **Candidate policy** is a reviewable proposal. It may be `required`, an
+  explicitly justified `none-required`, or `undecided` when no reusable
+  references were observed. `undecided` is intentionally visible but cannot be
+  promoted.
+- **Approved policy** is the result of strict operator promotion. New
+  promotions require an active catalog-backed `required` policy or a justified
+  `none-required` policy. Existing approved objects that reference a
+  deprecated ID remain readable and executable for compatibility; new
+  promotion with that ID is blocked.
+
+The eleven-scenario diagnostic harness remains a non-mutating lifecycle check:
+it does not create candidates or promote knowledge objects. The positive and
+negative reuse paths are covered by the knowledge-evolution integration tests:
+
+1. A diagnosis with a real catalog reference can become a candidate, be
+   approved, keep a later matching ticket evidence-gated while the requirement
+   is missing, and enter the approved known-cause workflow after reevaluation
+   with that evidence.
+2. A diagnosis with readable reasoning but no structured references remains
+   valid for its original ticket, yet produces an `undecided` candidate that is
+   blocked from promotion and has no routing effect.
+
+Known-event or outage correlation and open-ticket similarity are signals, not
+permission to skip required evidence. Existing approved objects that use a
+deprecated catalog ID remain readable for compatibility; new promotion with a
+deprecated ID is rejected and must use the active replacement. These contracts
+are exercised directly with:
+
+```powershell
+npm test -- --run test/knowledge-evolution-reuse.test.ts test/knowledge-evolution-service.test.ts
+```
+
 ## AI Comparison Evaluation
 
 The AI comparison harness reuses this eleven-scenario catalog to make the

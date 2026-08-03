@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   CompletedDiagnosisSchema,
+  ApprovedEvidencePolicySchema,
+  CandidateEvidencePolicySchema,
   EvidencePolicySchema,
   KnowledgeCandidateSchema,
   KnowledgeObjectSchema,
@@ -46,6 +48,35 @@ describe("knowledge evolution domain contracts", () => {
     expect(KnowledgeObjectSchema.parse(knowledgeObject)).toMatchObject(knowledgeObject);
   });
 
+  it("loads legacy completed diagnosis JSON with empty evidence references", () => {
+    expect(CompletedDiagnosisSchema.parse(diagnosis)).toMatchObject({
+      ...diagnosis,
+      evidenceUsed: [],
+      evidenceReferences: [],
+    });
+  });
+
+  it("retains readable evidence alongside its catalog-backed diagnosis reference", () => {
+    expect(CompletedDiagnosisSchema.parse({
+      ...diagnosis,
+      evidenceUsed: ["The customer supplied request ID req-123."],
+      evidenceReferences: [{
+        id: "request-id",
+        labelAtDiagnosis: "Customer request ID",
+        source: "reply",
+        sourceRef: "reply-001",
+      }],
+    })).toMatchObject({
+      evidenceUsed: ["The customer supplied request ID req-123."],
+      evidenceReferences: [{
+        id: "request-id",
+        labelAtDiagnosis: "Customer request ID",
+        source: "reply",
+        sourceRef: "reply-001",
+      }],
+    });
+  });
+
   it("rejects duplicate support and evidence IDs plus blank fields", () => {
     expect(() => CompletedDiagnosisSchema.parse({ ...diagnosis, evidenceIds: ["evidence-001", "evidence-001"] })).toThrow();
     expect(() => KnowledgeObjectSchema.parse({ ...knowledgeObject, supportingDiagnosisIds: ["diagnosis-001", "diagnosis-001"] })).toThrow();
@@ -68,8 +99,42 @@ describe("knowledge evolution domain contracts", () => {
   });
 
   it("requires evidence IDs only when the evidence policy requires evidence", () => {
-    expect(EvidencePolicySchema.parse({ mode: "none-required" })).toEqual({ mode: "none-required" });
+    expect(EvidencePolicySchema.parse({ mode: "none-required", rationale: "Authoritative event evidence is sufficient." })).toEqual({ mode: "none-required", rationale: "Authoritative event evidence is sufficient." });
     expect(() => EvidencePolicySchema.parse({ mode: "required", evidenceIds: [] })).toThrow();
+  });
+
+  it("allows incomplete candidate policies but never incomplete approved policies", () => {
+    expect(CandidateEvidencePolicySchema.parse({ mode: "undecided" })).toEqual({ mode: "undecided" });
+    expect(CandidateEvidencePolicySchema.parse({ mode: "none-required", rationale: "The workflow has an authoritative event signal." })).toEqual({
+      mode: "none-required",
+      rationale: "The workflow has an authoritative event signal.",
+    });
+    expect(() => CandidateEvidencePolicySchema.parse({ mode: "none-required" })).toThrow();
+    expect(() => ApprovedEvidencePolicySchema.parse({ mode: "undecided" })).toThrow();
+    expect(() => ApprovedEvidencePolicySchema.parse({ mode: "none-required" })).toThrow();
+  });
+
+  it("loads pre-policy candidates as undecided without making them promotable", () => {
+    const { approval: _approval, ...candidateFields } = knowledgeObject;
+    const legacyCandidate = {
+      ...candidateFields,
+      status: "candidate" as const,
+      evidencePolicy: { mode: "none-required" },
+      deterministicScores: { confidence: 0.9, support: 1 },
+      deterministicReasons: ["Two diagnoses share the same evidence-backed fix."],
+      contradictions: [],
+      validationStatus: "invalid" as const,
+    };
+    expect(KnowledgeCandidateSchema.parse(legacyCandidate)).toMatchObject({
+      evidencePolicy: { mode: "undecided" },
+      validationStatus: "invalid",
+    });
+  });
+
+  it("keeps pre-policy approved objects readable with an explicit migration rationale", () => {
+    expect(KnowledgeObjectSchema.parse({ ...knowledgeObject, evidencePolicy: { mode: "none-required" } })).toMatchObject({
+      evidencePolicy: { mode: "none-required", rationale: "Legacy approved policy; rationale was not recorded." },
+    });
   });
 
   it("does not accept approval metadata on unapproved candidates", () => {

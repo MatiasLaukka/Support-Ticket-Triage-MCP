@@ -25,7 +25,8 @@ export const CandidateDraftContractSchema = z.object({
   summary: SafeTextSchema,
   triggerPatterns: Unique(SafeTextSchema.max(240)),
   evidencePolicy: z.discriminatedUnion("mode", [
-    z.object({ mode: z.literal("none-required") }).strict(),
+    z.object({ mode: z.literal("undecided") }).strict(),
+    z.object({ mode: z.literal("none-required"), rationale: SafeTextSchema.max(500) }).strict(),
     z.object({ mode: z.literal("required"), evidenceIds: Unique(IdentifierSchema) }).strict(),
   ]),
   knowledgeArticleIds: OptionalUnique(IdentifierSchema),

@@ -5,6 +5,7 @@ import {
   type CustomerResponseDraftProvider,
 } from "./draft-response-provider.js";
 import type { CandidateDraftProvider } from "../knowledge-evolution/candidate-draft-provider.js";
+import type { DiagnosisReasoningProvider } from "./diagnosis-reasoning-provider.js";
 
 export const CONTROLLED_EVALUATION_MODEL = "controlled-local-simulation";
 
@@ -67,6 +68,31 @@ export function createControlledDraftProvider(): CustomerResponseDraftProvider {
   };
 }
 
+/** Offline diagnosis adapter for contract tests; it is not a model result. */
+export function createControlledDiagnosisProvider(): DiagnosisReasoningProvider {
+  return {
+    async reason(input) {
+      const baseline = input.deterministicDiagnosis;
+      const articleIds = input.recommendation.knowledgeArticleIds
+        .filter((id) => input.knowledgeArticles.some((article) => article.id === id));
+      return {
+        reasoning: {
+          causeType: baseline.causeType,
+          customerSafeSummary: baseline.customerSafeSummary,
+          confidence: baseline.confidence,
+          owner: baseline.owner,
+          recommendedNextAction: baseline.recommendedNextAction,
+          evidenceUsed: [...baseline.evidenceUsed],
+          missingEvidenceThatWouldChangeDiagnosis: input.recommendation.missingEvidence?.map((item) => item.label) ?? [],
+          knowledgeArticleIds: articleIds,
+          explanation: "Controlled local simulation mirrors the deterministic diagnostic playbook.",
+        },
+        telemetry: { model: CONTROLLED_EVALUATION_MODEL, latencyMs: 0 },
+      };
+    },
+  };
+}
+
 /** A deterministic offline fixture for the advisory knowledge-draft contract. */
 export function createControlledKnowledgeCandidateDraftProvider(): CandidateDraftProvider {
   return {
@@ -88,7 +114,7 @@ export function createControlledKnowledgeCandidateDraftProvider(): CandidateDraf
           summary: "Completed diagnoses indicate a recurring support pattern suitable for operator review.",
           triggerPatterns: ["The same completed diagnosis pattern appears in multiple support records."],
           evidencePolicy: input.allowedEvidenceIds.length === 0
-            ? { mode: "none-required" }
+            ? { mode: "undecided" }
             : { mode: "required", evidenceIds: [input.allowedEvidenceIds[0]!] },
           knowledgeArticleIds: input.allowedKnowledgeArticleIds.slice(0, 1),
           timeConstraints: ["Apply only when the cited evidence is present."],

@@ -1,4 +1,8 @@
 import { z } from "zod";
+import {
+  isEvidenceRequirementId,
+  type EvidenceRequirementId,
+} from "./evidence-catalog.js";
 
 const NonBlankStringSchema = z.string().trim().min(1);
 const SlugSchema = z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/);
@@ -193,6 +197,24 @@ export const EvidenceRequirementSchema = z
     customerQuestion: NonBlankStringSchema,
     aliases: UniqueNonBlankStringsSchema,
     source: z.enum(["knowledge", "known-cause", "policy"]),
+  })
+  .strict();
+
+const DiagnosisEvidenceSourceRefSchema = NonBlankStringSchema.max(240).refine(
+  (value) =>
+    !/(?:\b(?:api[-_]?key|access[-_]?token|secret|password|token)\s*[=:]\s*\S+|\b(?:proxy-)?authorization\s*[=:]\s*(?:bearer|basic)\s+\S+|\b(?:bearer|token)\s+[A-Za-z0-9._~-]+\b|\bsk-[a-z0-9_-]+\b|\b(?:[a-z]:[\\/]|\\\\)|(?:^|\s)[~\/][^\s]*)/i.test(value),
+  "Evidence source references must not contain secrets or machine paths.",
+);
+
+export const DiagnosisEvidenceReferenceSchema = z
+  .object({
+    id: z.string().refine(
+      isEvidenceRequirementId,
+      "Evidence reference IDs must be registered in the evidence catalog.",
+    ),
+    labelAtDiagnosis: NonBlankStringSchema,
+    source: z.enum(["ticket", "reply", "knowledge", "operator"]),
+    sourceRef: DiagnosisEvidenceSourceRefSchema.optional(),
   })
   .strict();
 
@@ -699,5 +721,11 @@ export type AuditEvent = z.infer<typeof AuditEventSchema>;
 export type RequiredEscalation = z.infer<typeof RequiredEscalationSchema>;
 export type SupportState = z.infer<typeof SupportStateSchema>;
 export type EvidenceRequirement = z.infer<typeof EvidenceRequirementSchema>;
+export interface DiagnosisEvidenceReference {
+  id: EvidenceRequirementId;
+  labelAtDiagnosis: string;
+  source: "ticket" | "reply" | "knowledge" | "operator";
+  sourceRef?: string;
+}
 export type ClassificationSignal = z.infer<typeof ClassificationSignalSchema>;
 export type ExpectedOutcome = z.infer<typeof ExpectedOutcomeSchema>;

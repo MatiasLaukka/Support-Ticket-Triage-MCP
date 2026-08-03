@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   CompletedDiagnosisSchema,
+  ApprovedEvidencePolicySchema,
+  CandidateEvidencePolicySchema,
   EvidencePolicySchema,
   KnowledgeCandidateSchema,
   KnowledgeObjectSchema,
@@ -97,8 +99,19 @@ describe("knowledge evolution domain contracts", () => {
   });
 
   it("requires evidence IDs only when the evidence policy requires evidence", () => {
-    expect(EvidencePolicySchema.parse({ mode: "none-required" })).toEqual({ mode: "none-required" });
+    expect(EvidencePolicySchema.parse({ mode: "none-required", rationale: "Authoritative event evidence is sufficient." })).toEqual({ mode: "none-required", rationale: "Authoritative event evidence is sufficient." });
     expect(() => EvidencePolicySchema.parse({ mode: "required", evidenceIds: [] })).toThrow();
+  });
+
+  it("allows incomplete candidate policies but never incomplete approved policies", () => {
+    expect(CandidateEvidencePolicySchema.parse({ mode: "undecided" })).toEqual({ mode: "undecided" });
+    expect(CandidateEvidencePolicySchema.parse({ mode: "none-required", rationale: "The workflow has an authoritative event signal." })).toEqual({
+      mode: "none-required",
+      rationale: "The workflow has an authoritative event signal.",
+    });
+    expect(() => CandidateEvidencePolicySchema.parse({ mode: "none-required" })).toThrow();
+    expect(() => ApprovedEvidencePolicySchema.parse({ mode: "undecided" })).toThrow();
+    expect(() => ApprovedEvidencePolicySchema.parse({ mode: "none-required" })).toThrow();
   });
 
   it("does not accept approval metadata on unapproved candidates", () => {

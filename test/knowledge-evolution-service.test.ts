@@ -12,7 +12,10 @@ describe("knowledge evolution service", () => {
     const result = await fixture.service().discover({ includeGpt: false, actorId: "support-lead" });
 
     expect(result.candidates).toHaveLength(1);
-    await expect(fixture.service().getCandidate("known-cause-diagnosis-001")).rejects.toMatchObject({ code: "REPOSITORY_ERROR" });
+    await expect(fixture.service().getCandidate("known-cause-diagnosis-001")).resolves.toMatchObject({
+      evidencePolicy: { mode: "undecided" },
+      validationStatus: "invalid",
+    });
   });
 
   it("discovers and persists deterministic candidates without invoking GPT", async () => {
@@ -38,6 +41,26 @@ describe("knowledge evolution service", () => {
     await expect(service.getCandidate("known-cause-diagnosis-001")).resolves.toMatchObject({
       evidencePolicy: { mode: "required", evidenceIds: ["request-id"] },
     });
+  });
+
+  it("records operator-added evidence IDs separately when a candidate policy is edited", async () => {
+    const fixture = createFixture();
+    const service = fixture.service();
+    await service.discover({ includeGpt: false, actorId: "support-lead" });
+
+    await service.approve({
+      candidateId: "known-cause-diagnosis-001",
+      actorId: "support-lead",
+      expectedVersion: 1,
+      edits: { evidencePolicy: { mode: "required", evidenceIds: ["request-id", "browser-session-details"] } },
+    });
+
+    await expect(fixture.audits.list({ action: "approved" })).resolves.toMatchObject([{
+      evidencePolicyMetadata: {
+        derivedEvidenceIds: ["request-id"],
+        operatorAddedEvidenceIds: ["browser-session-details"],
+      },
+    }]);
   });
 
   it("uses an explicitly requested validated GPT draft and never persists an invalid draft", async () => {

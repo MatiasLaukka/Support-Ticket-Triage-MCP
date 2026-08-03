@@ -114,7 +114,7 @@ export function createControlledKnowledgeCandidateDraftProvider(): CandidateDraf
           summary: "Completed diagnoses indicate a recurring support pattern suitable for operator review.",
           triggerPatterns: ["The same completed diagnosis pattern appears in multiple support records."],
           evidencePolicy: input.allowedEvidenceIds.length === 0
-            ? { mode: "none-required" }
+            ? { mode: "undecided" }
             : { mode: "required", evidenceIds: [input.allowedEvidenceIds[0]!] },
           knowledgeArticleIds: input.allowedKnowledgeArticleIds.slice(0, 1),
           timeConstraints: ["Apply only when the cited evidence is present."],

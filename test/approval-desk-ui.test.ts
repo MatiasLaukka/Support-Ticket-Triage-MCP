@@ -463,7 +463,7 @@ describe("approvalDeskHtml", () => {
         name: "Original name",
         summary: "Original summary",
         triggerPatterns: ["Original trigger pattern"],
-        evidencePolicy: { mode: "none-required" },
+        evidencePolicy: { mode: "none-required", rationale: "An authoritative event confirms this cause." },
         timeConstraints: ["Original time constraint"],
         diagnosticSteps: ["Original diagnostic step"],
         fixSteps: ["Original fix step"],
@@ -520,7 +520,7 @@ describe("approvalDeskHtml", () => {
 
   it("clears a prior ticket knowledge candidate while the next ticket discovery is pending", async () => {
     const candidate = {
-      id: "known-cause-diagnosis-a", name: "Prior ticket pattern", evidencePolicy: { mode: "none-required" },
+      id: "known-cause-diagnosis-a", name: "Prior ticket pattern", evidencePolicy: { mode: "none-required", rationale: "An authoritative event confirms this cause." },
       deterministic: { score: 0.8, supportCount: 2, reasons: ["support"], meetsAlertThreshold: true },
       gptAdvisory: { status: "not-used" }, support: [], contradictions: [], validationStatus: "valid",
       validationWarnings: [], customerSafeExplanation: "We are reviewing a recurring issue.", version: 1,
@@ -544,7 +544,7 @@ describe("approvalDeskHtml", () => {
 
   it("removes the prior knowledge review panel before a delayed next-ticket detail arrives", async () => {
     const candidate = {
-      id: "known-cause-diagnosis-a", name: "Prior ticket pattern", evidencePolicy: { mode: "none-required" },
+      id: "known-cause-diagnosis-a", name: "Prior ticket pattern", evidencePolicy: { mode: "none-required", rationale: "An authoritative event confirms this cause." },
       deterministic: { score: 0.8, supportCount: 2, reasons: ["support"], meetsAlertThreshold: true },
       gptAdvisory: { status: "not-used" }, support: [], contradictions: [], validationStatus: "valid",
       validationWarnings: [], customerSafeExplanation: "We are reviewing a recurring issue.", version: 1,

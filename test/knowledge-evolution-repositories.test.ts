@@ -33,10 +33,11 @@ const candidate: KnowledgeCandidate = {
   status: "candidate" as const, supportingDiagnosisIds: ["diagnosis-001"], supportingTicketIds: ["TKT-0001"],
   provenance: { source: "completed-diagnoses", recordedAt: "2026-07-29T10:05:00.000Z" },
   deterministicScores: { confidence: 0.9, support: 1 }, deterministicReasons: ["Two diagnoses share the same evidence-backed fix."], contradictions: [], validationStatus: "valid" as const,
+  evidencePolicyMetadata: { derivedEvidenceIds: ["evidence-001"], operatorAddedEvidenceIds: [] },
 };
-const { deterministicScores: _scores, deterministicReasons: _reasons, contradictions: _contradictions, validationStatus: _validation, ...candidateFields } = candidate;
+const { deterministicScores: _scores, deterministicReasons: _reasons, contradictions: _contradictions, validationStatus: _validation, evidencePolicyMetadata: _metadata, evidencePolicy: candidateEvidencePolicy, ...candidateFields } = candidate;
 const approved: KnowledgeObject = {
-  ...candidateFields, status: "approved" as const, version: 1,
+  ...candidateFields, evidencePolicy: candidateEvidencePolicy as { mode: "required"; evidenceIds: string[] }, status: "approved" as const, version: 1,
   approval: { approvedBy: "support-lead", approvedAt: "2026-07-29T10:06:00.000Z" },
 };
 

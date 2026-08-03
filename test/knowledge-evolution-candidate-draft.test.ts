@@ -6,6 +6,8 @@ import {
   draftKnowledgeCandidate,
   type CandidateDraftProvider,
 } from "../src/knowledge-evolution/candidate-draft-provider.js";
+import { validateCandidateDraft } from "../src/knowledge-evolution/candidate-draft-validation.js";
+import { CandidateDraftContractSchema } from "../src/knowledge-evolution/candidate-draft-contract.js";
 import type { KnowledgeDiscoveryResult } from "../src/knowledge-evolution/discovery.js";
 
 const baseInput = () => ({
@@ -234,10 +236,23 @@ describe("knowledge candidate drafting", () => {
       allowedEvidenceIds: [],
     }, createControlledKnowledgeCandidateDraftProvider());
 
-    expect(result).toMatchObject({
-      used: true,
-      candidate: { evidencePolicy: { mode: "none-required" } },
+    expect(result).toMatchObject({ used: true, candidate: { evidencePolicy: { mode: "undecided" } } });
+  });
+
+  it("aggregates unknown evidence policy issues instead of stopping at the first one", () => {
+    const candidate = CandidateDraftContractSchema.parse({
+      ...draft(),
+      evidencePolicy: { mode: "required", evidenceIds: ["unknown-a", "unknown-b"] },
     });
+    const result = validateCandidateDraft(candidate, {
+      discovery: [{ ...discovery().candidates[0]!, support: [{ ...discovery().candidates[0]!.support[0]!, diagnosisId: "diagnosis-001" }] }],
+      allowedEvidenceIds: ["request-id"],
+      allowedKnowledgeArticleIds: ["webhook-signature-validation"],
+      allowedEvidenceByDiagnosisId: { "diagnosis-001": ["request-id"] },
+    });
+    expect(result.validForPromotion).toBe(false);
+    expect(result.errors.map((issue) => issue.evidenceId)).toEqual(["unknown-a", "unknown-b"]);
+    expect(result.errors.every((issue) => issue.code === "UNKNOWN_EVIDENCE_ID")).toBe(true);
   });
 });
 

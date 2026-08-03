@@ -132,6 +132,12 @@ const candidateJsonSchema = {
           type: "object",
           additionalProperties: false,
           properties: { mode: { type: "string", enum: ["none-required"] } },
+          required: ["mode", "rationale"],
+        },
+        {
+          type: "object",
+          additionalProperties: false,
+          properties: { mode: { type: "string", enum: ["undecided"] } },
           required: ["mode"],
         },
         {

@@ -1002,6 +1002,55 @@ describe("TriageService", () => {
     expect(recommendation.escalationReasons).toContain("policy-conflict");
   });
 
+  it("persists diagnostic ambiguity when the trusted support state is escalated", async () => {
+    const harness = makeHarness();
+
+    const recommendation = await harness.service.submit(
+      makeSubmitInput({
+        supportState: "escalated",
+        escalationRequired: false,
+        escalationReasons: [],
+      }),
+    );
+
+    expect(recommendation).toMatchObject({
+      supportState: "escalated",
+      escalationRequired: true,
+      escalationReasons: ["diagnostic-ambiguity"],
+    });
+    expect(harness.audit.events.at(-1)).toMatchObject({
+      action: "recommendation-submitted",
+      after: {
+        escalationRequired: true,
+        escalationReasons: ["diagnostic-ambiguity"],
+      },
+    });
+  });
+
+  it("retains diagnostic ambiguity alongside SLA and missing-information reasons", async () => {
+    const harness = makeHarness(makeTicket({
+      sla: {
+        responseDueAt: "2026-06-10T09:30:00.000Z",
+        breached: false,
+      },
+    }));
+
+    const recommendation = await harness.service.submit(
+      makeSubmitInput({
+        supportState: "escalated",
+        priority: "P1",
+        missingInformation: ["Blast radius"],
+        escalationRequired: false,
+        escalationReasons: [],
+      }),
+    );
+
+    expect(recommendation).toMatchObject({
+      escalationRequired: true,
+      escalationReasons: ["sla", "missing-information", "diagnostic-ambiguity"],
+    });
+  });
+
   it("persists known event identity and match reasons in the recommendation audit", async () => {
     const harness = makeHarness();
 

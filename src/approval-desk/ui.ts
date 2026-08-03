@@ -464,6 +464,72 @@ export const approvalDeskHtml = `<!doctype html>
         text-align: right;
       }
 
+      .knowledge-journey-bar {
+        background: linear-gradient(135deg, #f5f3ff, #eef2ff);
+        border: 1px solid #c4b5fd;
+        border-radius: 16px;
+        box-shadow: 0 10px 26px rgba(79, 70, 229, 0.14);
+        margin-bottom: 0.55rem;
+        padding: 0.65rem 0.75rem;
+      }
+
+      .knowledge-journey-bar[hidden] {
+        display: none;
+      }
+
+      .knowledge-journey-header {
+        align-items: baseline;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+        justify-content: space-between;
+      }
+
+      .knowledge-journey-header strong {
+        color: #4338ca;
+      }
+
+      .knowledge-journey-header span {
+        color: var(--muted);
+        font-size: 0.82rem;
+      }
+
+      .knowledge-journey-steps {
+        display: grid;
+        gap: 0.35rem;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        list-style: none;
+        margin: 0.55rem 0 0;
+        padding: 0;
+      }
+
+      .knowledge-journey-step {
+        background: rgba(255, 255, 255, 0.72);
+        border: 1px solid #c7d2fe;
+        border-radius: 10px;
+        color: var(--muted);
+        font-size: 0.72rem;
+        line-height: 1.25;
+        padding: 0.35rem 0.4rem;
+      }
+
+      .knowledge-journey-step.current {
+        border-color: #6366f1;
+        color: #3730a3;
+        font-weight: 700;
+      }
+
+      .knowledge-journey-step.complete {
+        background: #eefdf5;
+        border-color: #86efac;
+        color: #166534;
+      }
+
+      .knowledge-journey-bar .bar-actions {
+        justify-content: flex-start;
+        margin-top: 0.45rem;
+      }
+
       #knowledgeDiscoveryStatus {
         flex: 0 1 auto;
         text-align: left;
@@ -1177,6 +1243,16 @@ export const approvalDeskHtml = `<!doctype html>
                 <button id="discoverKnowledgeButton" type="button" class="secondary" title="Search for a reusable knowledge pattern">Find pattern</button>
                 <span id="knowledgeDiscoveryStatus" class="meta" aria-live="polite"></span>
               </div>
+              <section id="knowledgeJourneyBar" class="knowledge-journey-bar" aria-label="Knowledge evolution journey" hidden>
+                <div class="knowledge-journey-header">
+                  <strong>Knowledge evolution</strong>
+                  <span id="knowledgeJourneyStatus" aria-live="polite">Evaluate a ticket to begin.</span>
+                </div>
+                <ol id="knowledgeJourneySteps" class="knowledge-journey-steps"></ol>
+                <div class="bar-actions">
+                  <button id="reviewKnowledgePatternButton" type="button" class="secondary" hidden>Review candidate</button>
+                </div>
+              </section>
               <div id="setupControls" class="bar-mode">
                 <div class="setup-grid">
                   <label>
@@ -1331,6 +1407,7 @@ export const approvalDeskHtml = `<!doctype html>
         knowledgeAdvisory: null,
         knowledgeDiscoveryStatus: '',
         knowledgeDiscoveryPending: false,
+        knowledgeJourneyState: 'idle',
         knowledgeRequestId: 0,
         ticketRequestId: 0,
         operatorGuidance: null,
@@ -1366,6 +1443,10 @@ export const approvalDeskHtml = `<!doctype html>
         createUpdatedRecommendation: document.getElementById('createUpdatedRecommendation'),
         discoverKnowledgeButton: document.getElementById('discoverKnowledgeButton'),
         knowledgeDiscoveryStatus: document.getElementById('knowledgeDiscoveryStatus'),
+        knowledgeJourneyBar: document.getElementById('knowledgeJourneyBar'),
+        knowledgeJourneyStatus: document.getElementById('knowledgeJourneyStatus'),
+        knowledgeJourneySteps: document.getElementById('knowledgeJourneySteps'),
+        reviewKnowledgePatternButton: document.getElementById('reviewKnowledgePatternButton'),
         customerReplyBody: document.getElementById('customerReplyBody'),
         customerReplyFocus: document.getElementById('customerReplyFocus'),
         decisionChips: document.getElementById('decisionChips'),
@@ -2141,8 +2222,71 @@ export const approvalDeskHtml = `<!doctype html>
         els.decisionSummary.textContent = hasRecommendation ? decisionSummaryText(state.recommendation) : 'Review the draft and evidence, then approve or edit.';
         els.discoverKnowledgeButton.disabled = state.selectedTicket === null || state.knowledgeDiscoveryPending;
         els.knowledgeDiscoveryStatus.textContent = state.knowledgeDiscoveryStatus;
+        renderKnowledgeJourney();
         if (customerReplyReady || latestUnevaluatedWorkflowEvent() !== null) {
           els.createUpdatedRecommendation.textContent = createUpdatedRecommendationLabel();
+        }
+      }
+
+      function renderKnowledgeJourney() {
+        if (els.knowledgeJourneyBar === undefined) {
+          return;
+        }
+        const hasTicket = state.selectedTicket !== null;
+        els.knowledgeJourneyBar.hidden = !hasTicket;
+        if (!hasTicket) {
+          return;
+        }
+        const journey = state.knowledgeJourneyState;
+        const hasRecommendation = state.recommendation !== null;
+        const currentStep = journey === 'approved'
+          ? 4
+          : journey === 'candidate'
+            ? 3
+            : journey === 'searching' || journey === 'none' || journey === 'reviewed'
+              ? 2
+              : hasRecommendation
+                ? 1
+                : 1;
+        const status = journey === 'candidate'
+          ? 'Candidate ready for review. Inspect its evidence before approval.'
+          : journey === 'searching'
+            ? 'Comparing completed diagnoses and open-ticket signals...'
+            : journey === 'approved'
+              ? 'Approved knowledge will guide future evaluations only; a later match remains evidence-gated until its requirements are supplied.'
+              : journey === 'none'
+                ? 'No reusable pattern found from the available evidence.'
+                : journey === 'reviewed'
+                  ? 'Pattern review recorded. Historical recommendations remain unchanged.'
+                  : hasRecommendation
+                    ? 'Review the diagnosis, then search for a reusable pattern.'
+                    : 'Evaluate this ticket to establish the diagnosis first.';
+        const labels = [
+          'Review diagnosis',
+          'Find pattern',
+          'Approve for future evaluations',
+          'Reuse with evidence',
+        ];
+        els.knowledgeJourneyStatus.textContent = status;
+        els.knowledgeJourneySteps.innerHTML = labels.map(function (label, index) {
+          const step = index + 1;
+          const stateClass = step < currentStep ? ' complete' : step === currentStep ? ' current' : '';
+          return '<li class="knowledge-journey-step' + stateClass + '">' + escapeHtml(String(step) + '. ' + label) + '</li>';
+        }).join('');
+        els.reviewKnowledgePatternButton.hidden = state.knowledgeCandidate === null;
+      }
+
+      function focusKnowledgePattern() {
+        const panel = document.getElementById('knowledgePatternReview');
+        if (panel == null) {
+          return;
+        }
+        if (typeof panel.scrollIntoView === 'function') {
+          panel.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+        const firstField = panel.querySelector('input, textarea, select');
+        if (firstField !== null && typeof firstField.focus === 'function') {
+          firstField.focus();
         }
       }
 
@@ -2230,7 +2374,7 @@ export const approvalDeskHtml = `<!doctype html>
         const evidenceRationale = candidate.evidencePolicy?.mode === 'none-required'
           ? (candidate.evidencePolicy.rationale ?? '')
           : '';
-        return '<section class="hero-card description knowledge-review-panel"><strong>Potential knowledge pattern</strong>' +
+        return '<section id="knowledgePatternReview" class="hero-card description knowledge-review-panel"><strong>Potential knowledge pattern</strong>' +
           '<p class="hint">This is a separate, explicit review gate. Approval affects future evaluations only; it does not alter historical recommendations or customer responses.</p>' +
           '<div class="details-grid">' +
             card('Proposed name', candidate.name) +
@@ -2626,6 +2770,7 @@ export const approvalDeskHtml = `<!doctype html>
         state.knowledgeAdvisory = null;
         state.knowledgeDiscoveryStatus = '';
         state.knowledgeDiscoveryPending = false;
+        state.knowledgeJourneyState = 'idle';
         if (switchingTickets) {
           els.recommendationPanel.innerHTML =
             '<section class="hero-card description"><strong>Loading ticket...</strong>' +
@@ -2683,6 +2828,7 @@ export const approvalDeskHtml = `<!doctype html>
 
       async function loadKnowledgeCandidate(ticketId, knowledgeRequestId, includeGpt) {
         state.knowledgeDiscoveryPending = true;
+        state.knowledgeJourneyState = 'searching';
         state.knowledgeDiscoveryStatus = includeGpt === true
           ? 'Refreshing knowledge pattern with optional GPT...'
           : 'Searching for a reusable knowledge pattern...';
@@ -2704,11 +2850,13 @@ export const approvalDeskHtml = `<!doctype html>
           state.knowledgeDiscoveryStatus = state.knowledgeCandidate === null
             ? 'No reusable knowledge pattern found from available completed diagnoses.'
             : 'Potential knowledge pattern found — review it below.';
+          state.knowledgeJourneyState = state.knowledgeCandidate === null ? 'none' : 'candidate';
         } catch (_) {
           if (state.selectedTicket?.id === ticketId && state.knowledgeRequestId === knowledgeRequestId) {
             state.knowledgeCandidate = null;
             state.knowledgeAdvisory = null;
             state.knowledgeDiscoveryStatus = 'Knowledge discovery is unavailable right now.';
+            state.knowledgeJourneyState = 'none';
           }
         } finally {
           if (state.selectedTicket?.id === ticketId && state.knowledgeRequestId === knowledgeRequestId) {
@@ -2763,6 +2911,8 @@ export const approvalDeskHtml = `<!doctype html>
       async function reviewKnowledgeCandidate(action) {
         const candidate = state.knowledgeCandidate;
         if (candidate === null) return;
+        const ticketId = state.selectedTicket?.id;
+        const knowledgeRequestId = state.knowledgeRequestId;
         const actor = els.actor.value.trim();
         if (actor === '') {
           setResult({ error: 'An actor is required for knowledge review.' });
@@ -2779,7 +2929,14 @@ export const approvalDeskHtml = `<!doctype html>
           body.reason = reason;
         }
         const data = await requestJson(path, { method: 'POST', body: JSON.stringify(body) });
+        if (state.selectedTicket?.id !== ticketId || state.knowledgeRequestId !== knowledgeRequestId) {
+          return;
+        }
         state.knowledgeCandidate = null;
+        state.knowledgeJourneyState = action === 'approve' ? 'approved' : 'reviewed';
+        state.knowledgeDiscoveryStatus = action === 'approve'
+          ? 'Knowledge object approved for future evaluations.'
+          : 'Pattern review recorded.';
         renderRecommendation(true);
         setResult(data);
       }
@@ -4113,6 +4270,7 @@ export const approvalDeskHtml = `<!doctype html>
       els.discoverKnowledgeButton.addEventListener('click', function () {
         void discoverKnowledgePattern().catch(function (error) { setResult({ error: error.message }); });
       });
+      els.reviewKnowledgePatternButton.addEventListener('click', focusKnowledgePattern);
       els.diagnoseButton.addEventListener('click', function () {
         void recordDiagnosis().catch(function (error) { setResult({ error: error.message }); });
       });

@@ -438,6 +438,82 @@ describe("approvalDeskHtml", () => {
     expect(app.el("recommendationPanel").innerHTML).toContain("historical recommendations");
   });
 
+  it("guides the operator through the visible knowledge-evolution journey", async () => {
+    const app = await startApprovalDeskApp({
+      knowledgeCandidate: {
+        id: "known-cause-diagnosis-a",
+        name: "Recurring credential rotation cause",
+        summary: "A deployed service can retain a rotated credential.",
+        triggerPatterns: ["Requests return 401 after credential rotation."],
+        evidencePolicy: { mode: "required", evidenceIds: ["credential-rotation-evidence"] },
+        timeConstraints: ["Apply after a credential rotation."],
+        diagnosticSteps: ["Compare the deployed credential with the active credential."],
+        fixSteps: ["Refresh the deployed credential configuration."],
+        verificationSteps: ["Confirm a new request succeeds."],
+        deterministic: { score: 0.805, supportCount: 2, reasons: ["shared-evidence: credential-rotation-evidence"], meetsAlertThreshold: true },
+        gptAdvisory: { status: "not-used" },
+        support: [{ source: "completed-diagnosis", diagnosisId: "diagnosis-a", ticketId: "TKT-1001", reasons: ["evidence: credential-rotation-evidence"] }],
+        supportingDiagnosisIds: ["diagnosis-a"],
+        supportingTicketIds: ["TKT-1001"],
+        contradictions: [],
+        validationStatus: "valid",
+        validationWarnings: [],
+        customerSafeExplanation: "We are reviewing a recurring configuration issue.",
+        operatorRationale: "Completed diagnoses support operator review.",
+        owner: "api-platform",
+        version: 1,
+      },
+    });
+
+    await app.selectFirstTicket();
+
+    expect(app.el("knowledgeJourneyBar").hidden).toBe(false);
+    expect(app.el("knowledgeJourneyStatus").textContent).toContain("Candidate ready for review");
+    expect(app.el("knowledgeJourneySteps").innerHTML).toContain("Review diagnosis");
+    expect(app.el("knowledgeJourneySteps").innerHTML).toContain("Approve for future evaluations");
+    expect(app.el("reviewKnowledgePatternButton").hidden).toBe(false);
+    expect(() => app.el("reviewKnowledgePatternButton").dispatch("click")).not.toThrow();
+  });
+
+  it("does not let a late knowledge review response update a newer ticket journey", async () => {
+    const candidate = {
+      id: "known-cause-diagnosis-a",
+      name: "Prior ticket pattern",
+      summary: "A recurring issue.",
+      triggerPatterns: ["The same issue repeats."],
+      evidencePolicy: { mode: "none-required", rationale: "An authoritative event confirms this cause." },
+      timeConstraints: ["Apply while the event is active."],
+      diagnosticSteps: ["Review the event."],
+      fixSteps: ["Apply the correction."],
+      verificationSteps: ["Confirm recovery."],
+      deterministic: { score: 0.8, supportCount: 2, reasons: ["support"], meetsAlertThreshold: true },
+      gptAdvisory: { status: "not-used" },
+      support: [],
+      supportingDiagnosisIds: ["diagnosis-a"],
+      supportingTicketIds: ["TKT-1001"],
+      contradictions: [],
+      validationStatus: "valid",
+      validationWarnings: [],
+      customerSafeExplanation: "We identified a recurring issue.",
+      operatorRationale: "Reviewed.",
+      owner: "api-platform",
+      version: 1,
+    };
+    const app = await startApprovalDeskApp({
+      tickets: [fixtureTicket, { ...fixtureTicket, id: "TKT-1002", subject: "Second ticket" }],
+      knowledgeCandidate: candidate,
+      knowledgeCandidatesByTicket: { "TKT-1001": candidate },
+      knowledgeReviewDelayTicks: 12,
+    });
+
+    await app.selectTicket("TKT-1001");
+    app.el("recommendationPanel").dispatch("click", { target: { dataset: { action: "approve-knowledge" } } });
+    app.selectTicketWithoutSettling("TKT-1002");
+    await app.wait(20);
+
+    expect(app.el("knowledgeJourneyStatus").textContent).not.toContain("Approved knowledge");
+  });
+
   it("lets the operator explicitly rerun knowledge discovery and reports when no candidate is found", async () => {
     const app = await startApprovalDeskApp();
     await app.selectFirstTicket();
@@ -2920,6 +2996,7 @@ async function startApprovalDeskApp(options: {
   knowledgeGptAdvisory?: Record<string, unknown>;
   knowledgeCandidatesByTicket?: Record<string, Record<string, unknown>>;
   knowledgeDiscoveryDelayTicks?: Record<string, number>;
+  knowledgeReviewDelayTicks?: number;
   ticketDetailDelayTicks?: Record<string, number>;
   diagnoses?: Array<Record<string, unknown>>;
   diagnosesByTicket?: Record<string, Array<Record<string, unknown>>>;
@@ -2986,6 +3063,7 @@ async function startApprovalDeskApp(options: {
       });
     }
     if (/^\/api\/knowledge-candidates\/[^/]+\/approve$/.test(path)) {
+      await settle(options.knowledgeReviewDelayTicks ?? 0);
       return jsonResponse({
         object: { id: "known-cause-diagnosis-a", status: "approved", version: 1 },
       });
@@ -3407,6 +3485,10 @@ function createElements(): Record<string, FakeElement> {
       "knowledgeOwner",
       "knowledgeRejectReason",
       "knowledgeDiscoveryStatus",
+      "knowledgeJourneyBar",
+      "knowledgeJourneyStatus",
+      "knowledgeJourneySteps",
+      "reviewKnowledgePatternButton",
     ].map((id) => [id, new FakeElement()]),
   );
   elements.actor.value = "approval-desk";
@@ -3419,6 +3501,8 @@ function createElements(): Record<string, FakeElement> {
   elements.replyComposer.open = false;
   elements.advancedSettings.open = false;
   elements.disableAutomaticReplies.checked = false;
+  elements.knowledgeJourneyBar.hidden = true;
+  elements.reviewKnowledgePatternButton.hidden = true;
   elements.fieldChoices.children = [
     "category",
     "priority",

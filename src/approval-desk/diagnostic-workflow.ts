@@ -442,6 +442,9 @@ export interface PersistedDiagnosticContext<T> {
 
 export interface PersistedDiagnosticWorkflowContext {
   diagnosis?: PersistedDiagnosticContext<DiagnosisContext>;
+  rejectedDiagnosis?: PersistedDiagnosticContext<DiagnosisContext> & {
+    review: import("./diagnosis-review.js").DiagnosisReviewDecision;
+  };
   fix?: PersistedDiagnosticContext<FixContext>;
   latestCustomerReply?: AuditCausalPosition;
 }
@@ -467,6 +470,7 @@ export function selectPersistedDiagnosticWorkflowContext(
       isPersistedDiagnosisContextEvent(event, audits),
     diagnosisContextFromAudit,
   );
+  const rejectedDiagnosis = latestRejectedDiagnosisContext(audits);
   const fix = currentPersistedContext(
     audits,
     (event) => event.action === "fix-available",
@@ -474,9 +478,37 @@ export function selectPersistedDiagnosticWorkflowContext(
   );
   return {
     ...(diagnosis === undefined ? {} : { diagnosis }),
+    ...(rejectedDiagnosis === undefined ? {} : { rejectedDiagnosis }),
     ...(fix === undefined ? {} : { fix }),
     ...(latestCustomerReply === undefined ? {} : { latestCustomerReply }),
   };
+}
+
+function latestRejectedDiagnosisContext(
+  audits: readonly AuditEvent[],
+): PersistedDiagnosticWorkflowContext["rejectedDiagnosis"] {
+  return auditCausalPositions(audits)
+    .filter(({ event }) =>
+      (event.action === "diagnosis-completed" ||
+        event.action === "diagnostic-escalated") &&
+      diagnosisContextFromAudit(event) !== undefined,
+    )
+    .flatMap((position) => {
+      const review = latestStrictDiagnosisReviewRecord(audits, position.event.id);
+      if (review?.review.decision !== "reject") return [];
+      const context = diagnosisContextFromAudit(position.event);
+      return context === undefined
+        ? []
+        : [{
+            event: position.event,
+            position,
+            context,
+            review: review.review,
+            reviewPosition: review.index,
+          }];
+    })
+    .sort((left, right) => right.reviewPosition - left.reviewPosition)
+    .map(({ reviewPosition: _reviewPosition, ...value }) => value)[0];
 }
 
 function isPersistedDiagnosisContextEvent(

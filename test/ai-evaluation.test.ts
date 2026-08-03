@@ -85,6 +85,46 @@ const throwingClassificationProvider: ClassificationReasoningProvider = {
 };
 
 describe("evaluateTicketWithAi", () => {
+  it("passes an explicitly rejected diagnosis to advisory stages as exclusion context", async () => {
+    let classificationInput: unknown;
+    let draftInput: unknown;
+    const rejectedDiagnosis = {
+      status: "completed" as const,
+      causeType: "performance" as const,
+      customerSafeSummary: "The campaign editor may have a loading issue.",
+      evidenceUsed: ["blank editor"],
+      confidence: "likely" as const,
+      owner: "support" as const,
+      recommendedNextAction: "Collect browser comparison evidence.",
+      doNotSay: ["Do not confirm this cause."],
+    };
+
+    await evaluateTicketWithAi({
+      ticket: await loadSeedTicket("TKT-1010"),
+      actor: "approval-desk",
+      allKnowledgeArticles: await loadKnowledgeArticles(),
+      customerReplies: [campaignEditorReply],
+      aiPreference: "gpt-preferred",
+      responseStyle: "auto",
+      rejectedDiagnosis,
+      classificationProvider: {
+        async reason(input) {
+          classificationInput = input;
+          return campaignEditorProvider.reason(input);
+        },
+      },
+      draftProvider: {
+        async draft(input) {
+          draftInput = input;
+          return acceptedDraftProvider.draft(input);
+        },
+      },
+    });
+
+    expect(classificationInput).toMatchObject({ excludedDiagnosis: rejectedDiagnosis });
+    expect(draftInput).toMatchObject({ excludedDiagnosis: rejectedDiagnosis });
+  });
+
   it("uses GPT advice and drafting while preserving deterministic final authority", async () => {
     const input = await evaluateTicketWithAi({
       ticket: await loadSeedTicket("TKT-1010"),

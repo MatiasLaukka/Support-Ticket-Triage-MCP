@@ -9,6 +9,7 @@ import {
   isDiagnosisStale,
   latestDiagnosisReview,
 } from "../src/approval-desk/diagnosis-review.js";
+import { selectPersistedDiagnosticWorkflowContext } from "../src/approval-desk/diagnostic-workflow.js";
 
 const diagnosis = {
   status: "completed" as const,
@@ -58,6 +59,37 @@ function reviewAudit(overrides: Record<string, unknown> = {}) {
 }
 
 describe("diagnosis review contracts", () => {
+  it("keeps a rejected diagnosis as exclusion context without treating it as authoritative", () => {
+    const original = AuditEventSchema.parse({
+      id: "22222222-2222-4222-8222-222222222222",
+      timestamp: "2026-06-10T10:00:00.000Z",
+      actor: "support-agent",
+      action: "diagnosis-completed",
+      ticketId: "TKT-1001",
+      before: {},
+      after: { diagnosis },
+      rationale: "Diagnosis completed from trusted support context.",
+      knowledgeArticleIds: [],
+      result: "success",
+    });
+    const rejected = AuditEventSchema.parse({
+      ...reviewAudit({
+        decision: "reject",
+        rationale: "The evidence does not support this diagnosis.",
+        reviewedAt: "2026-06-10T10:02:00.000Z",
+      }),
+      before: { diagnosisId: original.id },
+    });
+
+    const context = selectPersistedDiagnosticWorkflowContext([original, rejected]);
+
+    expect(context.diagnosis).toBeUndefined();
+    expect(context.rejectedDiagnosis).toMatchObject({
+      context: diagnosis,
+      review: { decision: "reject" },
+    });
+  });
+
   it("compares sub-millisecond ISO instants exactly across offsets", () => {
     expect(
       compareIsoInstants(

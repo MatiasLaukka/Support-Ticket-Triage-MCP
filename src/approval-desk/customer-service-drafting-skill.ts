@@ -31,12 +31,14 @@ export const CUSTOMER_SERVICE_DRAFTING_POLICY = [
   "For confirmed diagnosis, explain the customer-safe summary in plain language and state the recommended next action without overclaiming a fix.",
   "For fix available, explain the fix or mitigation, give the customer action, and ask them to verify whether it now works.",
   "For known causes, explain the documented cause and recommended customer action without pretending it was newly diagnosed.",
+  "If excludedDiagnosis is present, do not present that rejected hypothesis as the current cause; describe the next evaluation without exposing review mechanics.",
   "For customer thanks or confirmation that it works, reply warmly, thank them, and say the ticket is ready to close from our side.",
   "Never ask for live secrets, passwords, API keys, signing secret values, payment data, or unredacted logs.",
 ] as const;
 
 export function buildCustomerServiceSkillContext(input: {
   diagnosisContext?: DiagnosisContext;
+  excludedDiagnosis?: DiagnosisContext;
   fixContext?: FixContext;
   customerConfirmed?: boolean;
 }): CustomerServiceSkillContext {
@@ -74,6 +76,15 @@ export function buildCustomerServiceSkillContext(input: {
             "Explain this as a narrowing step, not a completed diagnosis.",
             "Ask for or describe the next evidence needed to choose between remaining causes.",
           ],
+    };
+  }
+  if (input.excludedDiagnosis !== undefined) {
+    return {
+      stage: "first-contact-or-evidence",
+      rules: [
+        "Treat the rejected hypothesis only as an internal exclusion signal.",
+        "Do not repeat it to the customer; explain the next evaluation step in plain language.",
+      ],
     };
   }
   return {

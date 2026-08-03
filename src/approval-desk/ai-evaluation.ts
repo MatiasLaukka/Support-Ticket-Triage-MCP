@@ -55,6 +55,7 @@ export async function evaluateTicketWithAi(input: {
   customerReplies: readonly CustomerReply[];
   previousSupportResponse?: PreviousSupportResponse;
   diagnosisContext?: DiagnosisContext;
+  rejectedDiagnosis?: DiagnosisContext;
   fixContext?: FixContext;
   aiPreference: AiPreference;
   classificationPreference?: AiPreference;
@@ -90,6 +91,7 @@ export async function evaluateTicketWithAi(input: {
     previousSupportResponse: input.previousSupportResponse,
     advisoryClassificationSignals: classificationExecution.acceptedSignals,
     diagnosisContext: input.diagnosisContext,
+    rejectedDiagnosis: input.rejectedDiagnosis,
     fixContext: input.fixContext,
     approvedObjects: input.approvedObjects,
   });
@@ -106,6 +108,7 @@ export async function evaluateTicketWithAi(input: {
     previousSupportResponse: input.previousSupportResponse,
     advisoryClassificationSignals: classificationExecution.acceptedSignals,
     diagnosisContext: input.diagnosisContext,
+    rejectedDiagnosis: input.rejectedDiagnosis,
     fixContext: input.fixContext,
     approvedObjects: input.approvedObjects,
     draftProvider: draftingPreference === "deterministic" || safety.detected
@@ -128,6 +131,7 @@ async function runClassificationStage(input: {
   classificationProvider?: ClassificationReasoningProvider;
   conversationContext: ReturnType<typeof buildConversationContextForTicket>;
   baseline: TicketClassification;
+  rejectedDiagnosis?: DiagnosisContext;
   safety: PromptInjectionAssessment;
 }): Promise<{
   acceptedSignals: ClassificationSignal[];
@@ -166,6 +170,7 @@ async function runClassificationStage(input: {
       ticket: input.ticket,
       conversationContext: input.conversationContext,
       deterministicClassification: input.baseline,
+      excludedDiagnosis: input.rejectedDiagnosis,
     });
     const advice = advisoryAdvice({
       reasoning: execution.reasoning,

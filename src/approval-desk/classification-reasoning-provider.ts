@@ -165,7 +165,7 @@ async function requestReasoning(input: {
       signal: abortController.signal,
       body: JSON.stringify({
         model: input.model,
-        instructions: "Classify the support ticket using only the provided context. Return exactly the requested structured advisory reasoning, use null for unknown candidate fields, use only the listed enum values, and do not include operational actions or extra fields.",
+        instructions: "Classify the support ticket using only the provided context. If excludedDiagnosis is present, treat it only as a rejected prior hypothesis: do not repeat it as the selected cause or positive evidence. Return exactly the requested structured advisory reasoning, use null for unknown candidate fields, use only the listed enum values, and do not include operational actions or extra fields.",
         input: buildReasoningInput(input.input),
         store: false,
         text: {
@@ -258,6 +258,14 @@ function buildReasoningInput(input: GptClassificationReasoningInput): string {
       knowledgeArticleIds: input.deterministicClassification.knowledgeArticleIds,
       confidence: input.deterministicClassification.confidence,
     },
+    excludedDiagnosis: input.excludedDiagnosis === undefined
+      ? undefined
+      : {
+          causeType: input.excludedDiagnosis.causeType,
+          customerSafeSummary: input.excludedDiagnosis.customerSafeSummary,
+          evidenceUsed: input.excludedDiagnosis.evidenceUsed,
+          confidence: input.excludedDiagnosis.confidence,
+        },
   });
 }
 

@@ -69,6 +69,7 @@ export interface CustomerResponseDraftInput {
   evidenceReadiness?: EvidenceReadiness;
   conversationContext?: CustomerResponseConversationContext;
   diagnosisContext?: DiagnosisContext;
+  excludedDiagnosis?: DiagnosisContext;
   fixContext?: FixContext;
 }
 
@@ -145,6 +146,7 @@ export interface GptClassificationReasoningInput {
   ticket: Ticket;
   conversationContext: ConversationContext;
   deterministicClassification: TicketClassification;
+  excludedDiagnosis?: DiagnosisContext;
 }
 
 export interface ValidatedCustomerResponseDraft {
@@ -1298,9 +1300,18 @@ function buildDraftInput(input: CustomerResponseDraftInput): string {
             nextInvestigationSteps: input.evidenceReadiness.nextInvestigationSteps,
           },
       diagnosisContext: input.diagnosisContext,
+      excludedDiagnosis: input.excludedDiagnosis === undefined
+        ? undefined
+        : {
+            causeType: input.excludedDiagnosis.causeType,
+            customerSafeSummary: input.excludedDiagnosis.customerSafeSummary,
+            evidenceUsed: input.excludedDiagnosis.evidenceUsed,
+            confidence: input.excludedDiagnosis.confidence,
+          },
       fixContext: input.fixContext,
       customerServiceSkill: buildCustomerServiceSkillContext({
         diagnosisContext: input.diagnosisContext,
+        excludedDiagnosis: input.excludedDiagnosis,
         fixContext: input.fixContext,
         customerConfirmed:
           input.conversationContext?.turnType === "customer-confirmed",

@@ -104,6 +104,7 @@ export function buildApprovalDeskRecommendationInput(input: {
   previousSupportResponse?: PreviousSupportResponse;
   advisoryClassificationSignals?: readonly ClassificationSignal[];
   diagnosisContext?: DiagnosisContext;
+  rejectedDiagnosis?: DiagnosisContext;
   fixContext?: FixContext;
   approvedObjects?: readonly KnowledgeObject[];
 }): Omit<SubmitRecommendationInput, "submittedAt"> {
@@ -197,6 +198,7 @@ export function buildApprovalDeskRecommendationInput(input: {
       evidenceReadiness,
       conversationContext,
       diagnosisContext: input.diagnosisContext,
+      excludedDiagnosis: input.rejectedDiagnosis,
       fixContext: input.fixContext,
     },
     "deterministic",
@@ -267,6 +269,7 @@ export async function buildApprovalDeskRecommendationInputWithDrafting(input: {
   previousSupportResponse?: PreviousSupportResponse;
   advisoryClassificationSignals?: readonly ClassificationSignal[];
   diagnosisContext?: DiagnosisContext;
+  rejectedDiagnosis?: DiagnosisContext;
   fixContext?: FixContext;
   approvedObjects?: readonly KnowledgeObject[];
   aiPreference?: AiPreference;
@@ -316,6 +319,7 @@ export async function buildApprovalDeskRecommendationInputWithDrafting(input: {
         nextInvestigationSteps: base.nextInvestigationSteps ?? [],
       },
       diagnosisContext: input.diagnosisContext,
+      excludedDiagnosis: input.rejectedDiagnosis,
       fixContext: input.fixContext,
       conversationContext: buildConversationContext({
         customerReplies: input.customerReplies ?? [],

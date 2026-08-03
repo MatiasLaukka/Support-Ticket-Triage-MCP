@@ -217,6 +217,7 @@ describe("domain contracts", () => {
     "authorization=bearer definitely-a-secret",
     "Bearer definitely-a-secret",
     "X-Access-Token: definitely-a-secret",
+    "token=definitely-a-secret",
   ])("rejects credential-bearing evidence source references: %s", (sourceRef) => {
     expect(DiagnosisContextSchema.safeParse({
       ...completedDiagnosisContext,

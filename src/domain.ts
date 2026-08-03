@@ -202,7 +202,7 @@ export const EvidenceRequirementSchema = z
 
 const DiagnosisEvidenceSourceRefSchema = NonBlankStringSchema.max(240).refine(
   (value) =>
-    !/(?:\b(?:api[-_]?key|access[-_]?token|secret|password)\s*[=:]\s*\S+|\b(?:proxy-)?authorization\s*[=:]\s*(?:bearer|basic)\s+\S+|\b(?:bearer|token)\s+[A-Za-z0-9._~-]+\b|\bsk-[a-z0-9_-]+\b|\b(?:[a-z]:[\\/]|\\\\)|(?:^|\s)[~\/][^\s]*)/i.test(value),
+    !/(?:\b(?:api[-_]?key|access[-_]?token|secret|password|token)\s*[=:]\s*\S+|\b(?:proxy-)?authorization\s*[=:]\s*(?:bearer|basic)\s+\S+|\b(?:bearer|token)\s+[A-Za-z0-9._~-]+\b|\bsk-[a-z0-9_-]+\b|\b(?:[a-z]:[\\/]|\\\\)|(?:^|\s)[~\/][^\s]*)/i.test(value),
   "Evidence source references must not contain secrets or machine paths.",
 );
 

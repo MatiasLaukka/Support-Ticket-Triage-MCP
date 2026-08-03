@@ -201,6 +201,13 @@ const WorkflowActionBodySchema = z
     actor: z.string().trim().min(1),
   })
   .strict();
+const PlatformMitigationBodySchema = z
+  .object({
+    actor: z.string().trim().min(1),
+    eventId: z.string().trim().min(1),
+    rationale: z.string().trim().min(1).max(1_000),
+  })
+  .strict();
 const ReviewDiagnosisBodySchema = DiagnosisReviewDraftSchema.omit({
   diagnosisId: true,
   ticketId: true,
@@ -321,6 +328,14 @@ function matchRoute(
     return {
       status: 201,
       handle: (context) => recordDiagnosis(context, diagnosis[1]!),
+    };
+  }
+
+  const platformMitigation = /^\/api\/tickets\/([^/]+)\/platform-mitigation$/.exec(pathname);
+  if (method === "POST" && platformMitigation !== null) {
+    return {
+      status: 201,
+      handle: (context) => recordPlatformMitigation(context, platformMitigation[1]!),
     };
   }
 
@@ -696,6 +711,7 @@ async function createRecommendation(
     customerReplies,
     previousSupportResponse,
     diagnosisContext: persistedDiagnosticContext.diagnosis?.context,
+    rejectedDiagnosis: persistedDiagnosticContext.rejectedDiagnosis?.context,
     fixContext: persistedDiagnosticContext.fix?.context,
     aiPreference: body.aiPreference,
     responseStyle: body.responseStyle,
@@ -770,6 +786,21 @@ async function recordDiagnosis(
         ticketRevision: ticket.revision,
         customerReplyWatermark: customerReplyWatermarkFromAudits(audits),
       },
+    }),
+  };
+}
+
+async function recordPlatformMitigation(
+  { deps, request }: RouteContext,
+  id: string,
+): Promise<unknown> {
+  const ticketId = TicketIdSchema.parse(id);
+  const body = PlatformMitigationBodySchema.parse(await readJsonBody(request));
+  return {
+    auditEvent: await deps.service.recordPlatformMitigation({
+      ...body,
+      ticketId,
+      recordedAt: deps.now().toISOString(),
     }),
   };
 }

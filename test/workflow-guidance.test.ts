@@ -586,6 +586,29 @@ describe("buildOperatorGuidance", () => {
     });
   });
 
+  it("requires a fresh evaluation after platform mitigation is recorded", () => {
+    const input = diagnosisReadyWorkflow();
+    input.recommendations = [recommendation({
+      supportState: "waiting-on-platform-fix",
+      knownEventId: "EVT-2026-06-10-WEBHOOK-LATENCY",
+    })];
+    input.audits = [
+      ...input.audits,
+      audit("platform-mitigation-available", "2026-06-10T09:02:00.000Z", {
+        after: {
+          eventId: "EVT-2026-06-10-WEBHOOK-LATENCY",
+          status: "available",
+        },
+      }),
+    ];
+
+    expect(buildOperatorGuidance(input)).toMatchObject({
+      nextAction: "evaluate-ticket",
+      unlocksTool: "evaluate_ticket",
+      reason: "Platform mitigation was recorded; evaluate the current context before requesting verification.",
+    });
+  });
+
   it("continues evidence evaluation instead of offering ambiguous diagnoses for review", () => {
     const input = diagnosisRecordedWorkflow();
     input.audits = [

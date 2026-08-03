@@ -41,6 +41,33 @@ afterEach(async () => {
 });
 
 describe("TriageService", () => {
+  it("records an audited platform mitigation signal for an active known event", async () => {
+    const harness = makeHarness();
+    await harness.service.submit(
+      makeSubmitInput({
+        supportState: "waiting-on-platform-fix",
+        knownEventId: "EVT-2026-06-10-WEBHOOK-LATENCY",
+      }),
+    );
+
+    const event = await harness.service.recordPlatformMitigation({
+      ticketId: "TKT-1001",
+      eventId: "EVT-2026-06-10-WEBHOOK-LATENCY",
+      actor: "casey",
+      recordedAt: "2026-06-10T09:05:00.000Z",
+      rationale: "The platform mitigation signal was confirmed by the incident owner.",
+    });
+
+    expect(event).toMatchObject({
+      action: "platform-mitigation-available",
+      ticketId: "TKT-1001",
+      after: {
+        eventId: "EVT-2026-06-10-WEBHOOK-LATENCY",
+        status: "available",
+      },
+    });
+  });
+
   it("rechecks diagnosis readiness inside its serialized transition", async () => {
     const harness = makeHarness();
     const recommendation = await harness.service.submit(

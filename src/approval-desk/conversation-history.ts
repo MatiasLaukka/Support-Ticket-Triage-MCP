@@ -232,6 +232,8 @@ function summarizeAuditEvent(event: AuditEvent): string {
       return "Diagnostic ambiguity was escalated for specialist review.";
     case "fix-available":
       return "Fix or mitigation is available for customer verification.";
+    case "platform-mitigation-available":
+      return "Platform mitigation was recorded and is ready for the next governed evaluation.";
     case "ticket-updated":
       return "Ticket fields were updated.";
     case "approval-rejected":

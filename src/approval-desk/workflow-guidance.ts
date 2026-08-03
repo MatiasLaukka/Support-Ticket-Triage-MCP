@@ -545,6 +545,31 @@ export function buildOperatorGuidance(input: {
     });
   }
 
+  const latestPlatformMitigation = latestAuditPosition(
+    input.audits,
+    (event) => event.action === "platform-mitigation-available",
+  );
+  if (
+    latestPlatformMitigation !== undefined &&
+    isAuditNewerThanRecommendation(
+      latestPlatformMitigation.event,
+      latest,
+      input.audits,
+    )
+  ) {
+    return OperatorGuidanceSchema.parse({
+      stage: "verification",
+      changed: "A platform mitigation signal was recorded after the latest evaluation.",
+      nextAction: "evaluate-ticket",
+      reason: "Platform mitigation was recorded; evaluate the current context before requesting verification.",
+      approval: noApproval,
+      unlocksTool: "evaluate_ticket",
+      blockers: [],
+      customerNextStep:
+        "No customer action is required until support sends the reviewed verification request.",
+    });
+  }
+
   if (
     isAuditNewerThanRecommendation(
       latestDiagnosis,

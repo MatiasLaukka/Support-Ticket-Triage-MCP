@@ -226,6 +226,14 @@ const WorkflowActionInputSchema = z
     actor: NonBlankStringSchema.default("approval-desk"),
   })
   .strict();
+const PlatformMitigationInputSchema = z
+  .object({
+    ticketId: TicketIdSchema,
+    eventId: z.string().trim().min(1),
+    actor: NonBlankStringSchema.default("approval-desk"),
+    rationale: NonBlankStringSchema.max(1_000),
+  })
+  .strict();
 const ReviewDiagnosisToolInputSchema = DiagnosisReviewDraftSchema.omit({
   reviewedAt: true,
 });
@@ -673,6 +681,21 @@ export function createTriageServer(
   );
 
   server.registerTool(
+    "record_platform_mitigation",
+    {
+      description:
+        "Record an explicitly confirmed mitigation signal for an active known platform event without treating it as a confirmed diagnosis fix.",
+      inputSchema: PlatformMitigationInputSchema,
+      outputSchema: WorkflowAuditOutputSchema,
+      annotations: SubmissionAnnotations,
+    },
+    async (input) =>
+      toolResult(async () => ({
+        auditEvent: await recordPlatformMitigation(deps, input),
+      })),
+  );
+
+  server.registerTool(
     "review_diagnosis",
     {
       description:
@@ -888,6 +911,7 @@ async function evaluateTicket(
     customerReplies,
     previousSupportResponse,
     diagnosisContext: persistedDiagnosticContext.diagnosis?.context,
+    rejectedDiagnosis: persistedDiagnosticContext.rejectedDiagnosis?.context,
     fixContext: persistedDiagnosticContext.fix?.context,
     aiPreference: input.aiPreference,
     responseStyle: input.responseStyle,
@@ -1026,6 +1050,16 @@ async function markFixAvailable(
     fixedAt: deps.now().toISOString(),
     fix: fixContextForTicket(persistedDiagnosticContext.diagnosis?.event),
     knowledgeArticleIds: latest?.knowledgeArticleIds ?? [],
+  });
+}
+
+async function recordPlatformMitigation(
+  deps: TriageServerDependencies,
+  input: z.infer<typeof PlatformMitigationInputSchema>,
+): Promise<AuditEvent> {
+  return deps.service.recordPlatformMitigation({
+    ...input,
+    recordedAt: deps.now().toISOString(),
   });
 }
 

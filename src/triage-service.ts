@@ -59,6 +59,7 @@ import {
 import type { CompletedDiagnosis } from "./knowledge-evolution/domain.js";
 import type { DiagnosisReviewInput } from "./approval-desk/diagnosis-review.js";
 import { hasCustomerReplyAfterRecommendation } from "./approval-desk/workflow-causal-context.js";
+import { getKnownEvent } from "./approval-desk/known-event-catalog.js";
 export type {
   DiagnosisReviewInput,
 } from "./approval-desk/diagnosis-review.js";
@@ -397,6 +398,14 @@ export interface RecordFixInput {
   fixedAt: string;
   fix: FixContext;
   knowledgeArticleIds: string[];
+}
+
+export interface RecordPlatformMitigationInput {
+  ticketId: TicketId;
+  eventId: string;
+  actor: string;
+  recordedAt: string;
+  rationale: string;
 }
 
 export interface CloseTicketInput {
@@ -1061,6 +1070,66 @@ export class TriageService {
       );
     }
     return auditEvent;
+  }
+
+  async recordPlatformMitigation(
+    input: RecordPlatformMitigationInput,
+  ): Promise<AuditEvent> {
+    const eventId = z.string().trim().min(1).parse(input.eventId);
+    const actor = NonBlankStringSchema.parse(input.actor);
+    const recordedAt = IsoTimestampSchema.parse(input.recordedAt);
+    const rationale = NonBlankStringSchema.parse(input.rationale);
+    return serializeTicket(input.ticketId, async () => {
+      const [ticket, audits, recommendations] = await Promise.all([
+        this.dependencies.tickets.get(input.ticketId),
+        this.dependencies.audit.list(input.ticketId),
+        this.dependencies.recommendations.list(),
+      ]);
+      if (ticket.status === "resolved") {
+        throw new DomainError("A resolved ticket cannot receive a platform mitigation signal.", "INVALID_APPROVAL_FIELDS");
+      }
+      const knownEvent = getKnownEvent(eventId);
+      if (knownEvent?.status !== "active") {
+        throw new DomainError("Only an active known event can receive a platform mitigation signal.", "INVALID_APPROVAL_FIELDS");
+      }
+      const { summarizeRecommendationsForTicket } = await import(
+        "./approval-desk/workflow-read-model.js"
+      );
+      const recommendation = summarizeRecommendationsForTicket(
+        ticket,
+        recommendations,
+        audits,
+      ).latest;
+      if (
+        recommendation?.knownEventId !== eventId ||
+        recommendation.supportState !== "waiting-on-platform-fix"
+      ) {
+        throw new DomainError(
+          "The current ticket recommendation is not waiting on this platform event.",
+          "INVALID_APPROVAL_FIELDS",
+        );
+      }
+      if (audits.some((audit) =>
+        audit.action === "platform-mitigation-available" &&
+        audit.after.eventId === eventId,
+      )) {
+        throw new DomainError("A platform mitigation signal already exists for this event.", "STALE_APPROVAL");
+      }
+      const auditEvent = AuditEventSchema.parse({
+        id: this.uuid(),
+        timestamp: recordedAt,
+        actor,
+        action: "platform-mitigation-available",
+        ticketId: input.ticketId,
+        before: { eventId, status: knownEvent.status },
+        after: { eventId, status: "available" },
+        rationale,
+        knowledgeArticleIds: recommendation.knowledgeArticleIds,
+        result: "success",
+      });
+      await this.dependencies.audit.append(auditEvent);
+      return auditEvent;
+    });
   }
 
   /**

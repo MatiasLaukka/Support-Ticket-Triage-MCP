@@ -114,6 +114,29 @@ describe("knowledge evolution domain contracts", () => {
     expect(() => ApprovedEvidencePolicySchema.parse({ mode: "none-required" })).toThrow();
   });
 
+  it("loads pre-policy candidates as undecided without making them promotable", () => {
+    const { approval: _approval, ...candidateFields } = knowledgeObject;
+    const legacyCandidate = {
+      ...candidateFields,
+      status: "candidate" as const,
+      evidencePolicy: { mode: "none-required" },
+      deterministicScores: { confidence: 0.9, support: 1 },
+      deterministicReasons: ["Two diagnoses share the same evidence-backed fix."],
+      contradictions: [],
+      validationStatus: "invalid" as const,
+    };
+    expect(KnowledgeCandidateSchema.parse(legacyCandidate)).toMatchObject({
+      evidencePolicy: { mode: "undecided" },
+      validationStatus: "invalid",
+    });
+  });
+
+  it("keeps pre-policy approved objects readable with an explicit migration rationale", () => {
+    expect(KnowledgeObjectSchema.parse({ ...knowledgeObject, evidencePolicy: { mode: "none-required" } })).toMatchObject({
+      evidencePolicy: { mode: "none-required", rationale: "Legacy approved policy; rationale was not recorded." },
+    });
+  });
+
   it("does not accept approval metadata on unapproved candidates", () => {
     expect(() => KnowledgeCandidateSchema.parse({
       ...knowledgeObject,

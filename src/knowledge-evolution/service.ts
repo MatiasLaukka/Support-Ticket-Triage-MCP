@@ -183,11 +183,11 @@ export class KnowledgeEvolutionService {
         this.dependencies.tickets.snapshot(),
         this.dependencies.audits.list({ candidateId: candidate.id }),
       ]);
-      assertPromotable(candidate, reviewEvents);
       if (approved.some((object) => object.id === candidate.id)) {
         throw new DomainError("Knowledge candidate has already been promoted.", "REPOSITORY_ERROR");
       }
       const reviewed = applyEdits(candidate, input.edits);
+      assertPromotable(reviewed, reviewEvents);
       assertReferences(reviewed, diagnoses, tickets);
       const reviewedPolicy = reviewed.evidencePolicy;
       if (reviewedPolicy.mode === "undecided") {

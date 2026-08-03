@@ -18,6 +18,22 @@ describe("knowledge evolution service", () => {
     });
   });
 
+  it("allows an operator to complete an undecided legacy candidate before promotion", async () => {
+    const fixture = createFixture({ legacyEvidence: true });
+    const service = fixture.service();
+    await service.discover({ includeGpt: false, actorId: "support-lead" });
+
+    await expect(service.approve({
+      candidateId: "known-cause-diagnosis-001",
+      actorId: "support-lead",
+      expectedVersion: 1,
+      edits: { evidencePolicy: { mode: "none-required", rationale: "An operator reviewed the full diagnosis and confirmed no additional evidence is required." } },
+    })).resolves.toMatchObject({
+      status: "approved",
+      evidencePolicy: { mode: "none-required", rationale: "An operator reviewed the full diagnosis and confirmed no additional evidence is required." },
+    });
+  });
+
   it("discovers and persists deterministic candidates without invoking GPT", async () => {
     const fixture = createFixture();
     const service = fixture.service({ enabled: false, draft: async () => { throw new Error("must not run"); } });

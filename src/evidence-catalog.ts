@@ -18,6 +18,7 @@ export const EVIDENCE_CATALOG = {
   "audit-source": { id: "audit-source", label: "Audit source", customerQuestion: "audit source, source IP, or actor if available", aliases: ["audit source", "source address", "source ip", "actor"], status: "active" },
   "bounce-samples": { id: "bounce-samples", label: "Bounce samples", customerQuestion: "Bounce samples or bounce codes", aliases: ["bounce sample", "bounce code", "bounce reason"], status: "active" },
   "browser-session-details": { id: "browser-session-details", label: "Browser or session details", customerQuestion: "browser and whether the same issue happens after signing out and back in", aliases: ["browser", "session", "signed out", "signing out", "cache"], status: "active" },
+  "legacy-browser-details": { id: "legacy-browser-details", label: "Legacy browser details", customerQuestion: "browser details", aliases: ["legacy browser"], status: "deprecated", replacementId: "browser-session-details" },
   "campaign-name": { id: "campaign-name", label: "Campaign or flow name", customerQuestion: "Campaign or flow name", aliases: ["campaign name", "flow name"], status: "active" },
   "catalog-sync-time": { id: "catalog-sync-time", label: "Last catalog sync time", customerQuestion: "Last catalog sync time", aliases: ["last catalog sync", "catalog sync time"], status: "active" },
   "compliance-banner": { id: "compliance-banner", label: "Compliance banner", customerQuestion: "Compliance banner shown in the dashboard", aliases: ["compliance banner", "dashboard banner"], status: "active" },

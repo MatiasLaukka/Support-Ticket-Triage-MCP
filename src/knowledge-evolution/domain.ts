@@ -56,6 +56,19 @@ export const ApprovedEvidencePolicySchema = z.discriminatedUnion("mode", [
   z.object({ mode: z.literal("required"), evidenceIds: UniqueIdentifiersSchema.min(1) }).strict(),
 ]);
 
+const LegacyApprovedEvidencePolicySchema = z.preprocess((value) => {
+  if (value && typeof value === "object" && "mode" in value && value.mode === "none-required" && !("rationale" in value)) {
+    return { ...value, rationale: "Legacy approved policy; rationale was not recorded." };
+  }
+  return value;
+}, ApprovedEvidencePolicySchema);
+const LegacyCandidateEvidencePolicySchema = z.preprocess((value) => {
+  if (value && typeof value === "object" && "mode" in value && value.mode === "none-required" && !("rationale" in value)) {
+    return { mode: "undecided" };
+  }
+  return value;
+}, CandidateEvidencePolicySchema);
+
 /** @deprecated Use CandidateEvidencePolicySchema or ApprovedEvidencePolicySchema. */
 export const EvidencePolicySchema = ApprovedEvidencePolicySchema;
 
@@ -118,7 +131,7 @@ const KnowledgeObjectFieldsSchema = z.object({
     (values) => new Set(values).size === values.length,
     { message: "Values must be unique." },
   ),
-  evidencePolicy: ApprovedEvidencePolicySchema,
+  evidencePolicy: LegacyApprovedEvidencePolicySchema,
   timeConstraints: UniqueTextSchema,
   diagnosticSteps: z.array(WorkflowStepSchema).min(1),
   fixSteps: z.array(WorkflowStepSchema).min(1),
@@ -148,7 +161,7 @@ export const KnowledgeObjectSchema = KnowledgeObjectFieldsSchema.extend({
 });
 
 export const KnowledgeCandidateSchema = KnowledgeObjectFieldsSchema.extend({
-  evidencePolicy: CandidateEvidencePolicySchema,
+  evidencePolicy: LegacyCandidateEvidencePolicySchema,
   status: z.literal("candidate"),
   deterministicScores: z.object({
     confidence: z.number().min(0).max(1),

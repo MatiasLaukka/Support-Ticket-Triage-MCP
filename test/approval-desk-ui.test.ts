@@ -484,6 +484,7 @@ describe("approvalDeskHtml", () => {
     app.el("knowledgeTriggerPatterns").value = "First trigger\nSecond trigger";
     app.el("knowledgeEvidenceMode").value = "required";
     app.el("knowledgeEvidenceIds").value = "evidence-one\nevidence-two";
+    app.el("knowledgeEvidenceRationale").value = "The operator confirmed no additional evidence is required.";
     app.el("knowledgeTimeConstraints").value = "2026-07-01T00:00:00.000Z/2026-08-01T00:00:00.000Z";
     app.el("knowledgeDiagnosticSteps").value = "Inspect the current state.";
     app.el("knowledgeFixSteps").value = "Apply the reviewed correction.";
@@ -515,6 +516,27 @@ describe("approvalDeskHtml", () => {
         operatorRationale: "The completed diagnoses support this correction.",
         owner: "integrations",
       },
+    });
+  });
+
+  it("submits a rationale when approving a none-required candidate policy", async () => {
+    const app = await startApprovalDeskApp({
+      knowledgeCandidate: {
+        id: "known-cause-diagnosis-a", name: "No-evidence pattern", summary: "An authoritative event identifies the cause.",
+        triggerPatterns: ["The event confirms the same condition."], evidencePolicy: { mode: "none-required", rationale: "Existing event evidence is authoritative." },
+        timeConstraints: ["Apply only while the event is active."], diagnosticSteps: ["Review the authoritative event."], fixSteps: ["Apply the documented correction."], verificationSteps: ["Confirm the event is resolved."],
+        deterministic: { score: 0.8, supportCount: 2, reasons: ["support"], meetsAlertThreshold: true }, gptAdvisory: { status: "not-used" }, support: [], supportingDiagnosisIds: ["diagnosis-a"], supportingTicketIds: ["TKT-1001"], contradictions: [], validationStatus: "valid", validationWarnings: [], customerSafeExplanation: "We identified the cause.", operatorRationale: "Reviewed.", owner: "api-platform", version: 1,
+      },
+    });
+    await app.selectFirstTicket();
+    app.el("knowledgeEvidenceMode").value = "none-required";
+    app.el("knowledgeEvidenceRationale").value = "The event is authoritative and no additional evidence is required.";
+    app.el("recommendationPanel").dispatch("click", { target: { dataset: { action: "approve-knowledge" } } });
+    await settle(10);
+    const request = app.requests.find(({ path }) => path.endsWith("/approve"));
+    expect(JSON.parse(String(request?.init?.body)).edits.evidencePolicy).toEqual({
+      mode: "none-required",
+      rationale: "The event is authoritative and no additional evidence is required.",
     });
   });
 
@@ -577,6 +599,9 @@ describe("approvalDeskHtml", () => {
     const catalogIds = [...catalogBlock!.matchAll(/\n\s+"([a-z0-9-]+)": \{/g)]
       .map((match) => match[1]!)
       .sort();
+    const deprecatedIds = [...catalogBlock!.matchAll(/\n\s+"([a-z0-9-]+)": \{[^\n]*status: "deprecated"/g)]
+      .map((match) => match[1]!);
+    const activeCatalogIds = catalogIds.filter((id) => !deprecatedIds.includes(id));
     const markerBlock = approvalDeskHtml.match(
       /const markersById = \{[\s\S]*?\n\s+\};/,
     )?.[0];
@@ -592,8 +617,8 @@ describe("approvalDeskHtml", () => {
       (match) => match[1]!,
     );
 
-    expect(catalogIds.filter((id) => !markerIds.includes(id))).toEqual([]);
-    expect(catalogIds.filter((id) => !sampleIds.includes(id))).toEqual([]);
+    expect(activeCatalogIds.filter((id) => !markerIds.includes(id))).toEqual([]);
+    expect(activeCatalogIds.filter((id) => !sampleIds.includes(id))).toEqual([]);
   });
 
   it("persists synthetic customer replies and refreshes ticket, queue, and evidence", async () => {
@@ -3372,6 +3397,7 @@ function createElements(): Record<string, FakeElement> {
       "knowledgeTriggerPatterns",
       "knowledgeEvidenceMode",
       "knowledgeEvidenceIds",
+      "knowledgeEvidenceRationale",
       "knowledgeTimeConstraints",
       "knowledgeDiagnosticSteps",
       "knowledgeFixSteps",

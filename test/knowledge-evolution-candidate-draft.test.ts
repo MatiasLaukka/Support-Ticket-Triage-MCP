@@ -254,6 +254,23 @@ describe("knowledge candidate drafting", () => {
     expect(result.errors.map((issue) => issue.evidenceId)).toEqual(["unknown-a", "unknown-b"]);
     expect(result.errors.every((issue) => issue.code === "UNKNOWN_EVIDENCE_ID")).toBe(true);
   });
+
+  it("blocks deprecated evidence IDs while retaining a specific validation issue", () => {
+    const candidate = CandidateDraftContractSchema.parse({
+      ...draft(),
+      evidencePolicy: { mode: "required", evidenceIds: ["legacy-browser-details"] },
+    });
+    const result = validateCandidateDraft(candidate, {
+      discovery: [{ ...discovery().candidates[0]!, support: [{ ...discovery().candidates[0]!.support[0]!, diagnosisId: "diagnosis-001" }] }],
+      allowedEvidenceIds: ["legacy-browser-details"],
+      allowedEvidenceByDiagnosisId: { "diagnosis-001": ["legacy-browser-details"] },
+      allowedKnowledgeArticleIds: ["webhook-signature-validation"],
+    });
+    expect(result.validForPromotion).toBe(false);
+    expect(result.errors).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: "DEPRECATED_EVIDENCE_ID", evidenceId: "legacy-browser-details" }),
+    ]));
+  });
 });
 
 function providerWith(output: object | string): CandidateDraftProvider {

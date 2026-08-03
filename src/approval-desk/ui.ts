@@ -2213,7 +2213,9 @@ export const approvalDeskHtml = `<!doctype html>
         const support = Array.isArray(candidate.support) ? candidate.support : [];
         const evidence = candidate.evidencePolicy?.mode === 'required'
           ? formatList(candidate.evidencePolicy.evidenceIds)
-          : 'No evidence required';
+          : candidate.evidencePolicy?.mode === 'none-required'
+            ? 'None required: ' + (candidate.evidencePolicy.rationale ?? 'Rationale required')
+            : 'Evidence policy undecided';
         const discoveryAdvisory = state.knowledgeAdvisory;
         const fallback = discoveryAdvisory?.fallbackReason === undefined
           ? ''
@@ -2224,6 +2226,9 @@ export const approvalDeskHtml = `<!doctype html>
         const listText = function (value) { return Array.isArray(value) ? value.join('\\n') : ''; };
         const requiredEvidence = candidate.evidencePolicy?.mode === 'required'
           ? listText(candidate.evidencePolicy.evidenceIds)
+          : '';
+        const evidenceRationale = candidate.evidencePolicy?.mode === 'none-required'
+          ? (candidate.evidencePolicy.rationale ?? '')
           : '';
         return '<section class="hero-card description knowledge-review-panel"><strong>Potential knowledge pattern</strong>' +
           '<p class="hint">This is a separate, explicit review gate. Approval affects future evaluations only; it does not alter historical recommendations or customer responses.</p>' +
@@ -2245,8 +2250,9 @@ export const approvalDeskHtml = `<!doctype html>
           '<label>Owner team <input id="knowledgeOwner" value="' + escapeHtml(candidate.owner ?? '') + '"></label></div>' +
           '<label>Summary <textarea id="knowledgeSummary">' + escapeHtml(candidate.summary ?? '') + '</textarea></label>' +
           '<label>Trigger patterns <textarea id="knowledgeTriggerPatterns">' + escapeHtml(listText(candidate.triggerPatterns)) + '</textarea></label>' +
-          '<div class="details-grid"><label>Evidence policy <select id="knowledgeEvidenceMode"><option value="none-required"' + (candidate.evidencePolicy?.mode === 'none-required' ? ' selected' : '') + '>None required</option><option value="required"' + (candidate.evidencePolicy?.mode === 'required' ? ' selected' : '') + '>Required</option></select></label>' +
+          '<div class="details-grid"><label>Evidence policy <select id="knowledgeEvidenceMode"><option value="undecided"' + (candidate.evidencePolicy?.mode === 'undecided' ? ' selected' : '') + '>Undecided</option><option value="none-required"' + (candidate.evidencePolicy?.mode === 'none-required' ? ' selected' : '') + '>None required</option><option value="required"' + (candidate.evidencePolicy?.mode === 'required' ? ' selected' : '') + '>Required</option></select></label>' +
           '<label>Required evidence IDs <textarea id="knowledgeEvidenceIds">' + escapeHtml(requiredEvidence) + '</textarea></label></div>' +
+          '<label>None-required rationale <textarea id="knowledgeEvidenceRationale" placeholder="Explain why this known cause needs no additional evidence.">' + escapeHtml(evidenceRationale) + '</textarea></label>' +
           '<label>Time constraints <textarea id="knowledgeTimeConstraints">' + escapeHtml(listText(candidate.timeConstraints)) + '</textarea></label>' +
           '<label>Diagnostic workflow <textarea id="knowledgeDiagnosticSteps">' + escapeHtml(listText(candidate.diagnosticSteps)) + '</textarea></label>' +
           '<label>Fix workflow <textarea id="knowledgeFixSteps">' + escapeHtml(listText(candidate.fixSteps)) + '</textarea></label>' +
@@ -2734,13 +2740,16 @@ export const approvalDeskHtml = `<!doctype html>
 
       function knowledgeEdits() {
         const evidenceMode = document.getElementById('knowledgeEvidenceMode')?.value ?? 'none-required';
+        const evidenceRationale = document.getElementById('knowledgeEvidenceRationale')?.value.trim() ?? '';
         return {
           name: document.getElementById('knowledgeName')?.value.trim() ?? '',
           summary: document.getElementById('knowledgeSummary')?.value.trim() ?? '',
           triggerPatterns: knowledgeListValue('knowledgeTriggerPatterns'),
           evidencePolicy: evidenceMode === 'required'
             ? { mode: 'required', evidenceIds: knowledgeListValue('knowledgeEvidenceIds') }
-            : { mode: 'none-required' },
+            : evidenceMode === 'undecided'
+              ? { mode: 'undecided' }
+              : { mode: 'none-required', rationale: evidenceRationale },
           timeConstraints: knowledgeListValue('knowledgeTimeConstraints'),
           diagnosticSteps: knowledgeListValue('knowledgeDiagnosticSteps'),
           fixSteps: knowledgeListValue('knowledgeFixSteps'),

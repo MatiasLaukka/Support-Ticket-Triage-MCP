@@ -17,6 +17,7 @@ import {
 import { KnowledgeRepository } from "../src/knowledge-repository.js";
 import { RecommendationRepository } from "../src/recommendation-repository.js";
 import { createTriageServer } from "../src/server.js";
+import { QueueMetricsSchema } from "../src/metrics.js";
 import { TicketRepository } from "../src/ticket-repository.js";
 import { TriageService } from "../src/triage-service.js";
 
@@ -208,6 +209,7 @@ async function createFixture(): Promise<{
 
 async function connect(
   fixture: Awaited<ReturnType<typeof createFixture>>,
+  minutesPerAcceptedRecommendation: number | undefined,
 ): Promise<Client> {
   const server = createTriageServer({
     tickets: fixture.tickets,
@@ -216,7 +218,7 @@ async function connect(
     audits: fixture.audits,
     service: fixture.service,
     now: () => now,
-    minutesPerAcceptedRecommendation: 12,
+    minutesPerAcceptedRecommendation,
     env: {},
   });
   const client = new Client({ name: "server-read-test", version: "1.0.0" });
@@ -275,9 +277,26 @@ afterEach(async () => {
 });
 
 describe("createTriageServer read protocol", () => {
+  it("uses the shared eight-minute default when no runtime override is supplied", async () => {
+    const fixture = await createFixture();
+    const client = await connect(fixture, undefined);
+
+    const metrics = await callTool(client, {
+      name: "get_queue_metrics",
+      arguments: {},
+    });
+
+    QueueMetricsSchema.parse(metrics.structuredContent);
+    expect(metrics.structuredContent).toMatchObject({
+      minutesPerAcceptedRecommendation: 8,
+      estimatedMinutesSaved: 8,
+      potentialMinutesSaved: 8,
+    });
+  });
+
   it("discovers bounded read-only tools and safety instructions", async () => {
     const fixture = await createFixture();
-    const client = await connect(fixture);
+    const client = await connect(fixture, 12);
 
     const discovery = await client.listTools();
     const readTools = discovery.tools.filter(
@@ -348,7 +367,7 @@ describe("createTriageServer read protocol", () => {
 
   it("returns schema-valid structured output for all seven read tools", async () => {
     const fixture = await createFixture();
-    const client = await connect(fixture);
+    const client = await connect(fixture, 12);
 
     const listed = await callTool(client, {
       name: "list_tickets",
@@ -540,7 +559,7 @@ describe("createTriageServer read protocol", () => {
         result: "success",
       }),
     );
-    const replied = await callTool(await connect(replyFixture), {
+    const replied = await callTool(await connect(replyFixture, 12), {
       name: "get_ticket_workflow",
       arguments: { id: "TKT-1001" },
     });
@@ -634,7 +653,7 @@ describe("createTriageServer read protocol", () => {
         result: "success",
       }),
     );
-    const diagnosed = await callTool(await connect(diagnosisFixture), {
+    const diagnosed = await callTool(await connect(diagnosisFixture, 12), {
       name: "get_ticket_workflow",
       arguments: { id: "TKT-1001" },
     });
@@ -672,7 +691,7 @@ describe("createTriageServer read protocol", () => {
       recommendations: await diagnosisRecordedFixture.recommendations.list(),
     };
     const diagnosisRecorded = await callTool(
-      await connect(diagnosisRecordedFixture),
+      await connect(diagnosisRecordedFixture, 12),
       {
         name: "get_ticket_workflow",
         arguments: { id: "TKT-1001" },
@@ -731,7 +750,7 @@ describe("createTriageServer read protocol", () => {
         result: "success",
       }),
     );
-    const verification = await callTool(await connect(fixFixture), {
+    const verification = await callTool(await connect(fixFixture, 12), {
       name: "get_ticket_workflow",
       arguments: { id: "TKT-1001" },
     });
@@ -756,7 +775,7 @@ describe("createTriageServer read protocol", () => {
         createdAt: "2026-06-10T09:08:00.000Z",
       }),
     );
-    const fixed = await callTool(await connect(fixFixture), {
+    const fixed = await callTool(await connect(fixFixture, 12), {
       name: "get_ticket_workflow",
       arguments: { id: "TKT-1001" },
     });
@@ -774,7 +793,7 @@ describe("createTriageServer read protocol", () => {
       status: "resolved",
       updatedAt: "2026-06-10T09:09:00.000Z",
     }));
-    const closed = await callTool(await connect(closedFixture), {
+    const closed = await callTool(await connect(closedFixture, 12), {
       name: "get_ticket_workflow",
       arguments: { id: "TKT-1001" },
     });
@@ -863,7 +882,7 @@ describe("createTriageServer read protocol", () => {
       }),
     );
 
-    const result = await callTool(await connect(fixture), {
+    const result = await callTool(await connect(fixture, 12), {
       name: "get_ticket_workflow",
       arguments: { id: "TKT-1001" },
     });
@@ -881,7 +900,7 @@ describe("createTriageServer read protocol", () => {
   });
 
   it("rejects out-of-bounds and invalid inputs through MCP schemas", async () => {
-    const client = await connect(await createFixture());
+    const client = await connect(await createFixture(), 12);
 
     for (const request of [
       {
@@ -920,7 +939,7 @@ describe("createTriageServer read protocol", () => {
   });
 
   it("accepts audit offsets beyond 10,000 and returns a bounded empty page", async () => {
-    const client = await connect(await createFixture());
+    const client = await connect(await createFixture(), 12);
 
     const result = await callTool(client, {
       name: "get_audit_events",
@@ -938,7 +957,7 @@ describe("createTriageServer read protocol", () => {
 
   it("maps DomainError safely and unexpected errors to one generic tool error", async () => {
     const fixture = await createFixture();
-    const client = await connect(fixture);
+    const client = await connect(fixture, 12);
 
     const missing = await callTool(client, {
       name: "get_ticket",
@@ -969,7 +988,7 @@ describe("createTriageServer read protocol", () => {
 
   it("lists templates and reads ticket, knowledge, audit, and metrics resources", async () => {
     const fixture = await createFixture();
-    const client = await connect(fixture);
+    const client = await connect(fixture, 12);
 
     const templates = await client.listResourceTemplates();
     expect(
@@ -1068,7 +1087,7 @@ describe("createTriageServer read protocol", () => {
         }),
       );
     }
-    const client = await connect(fixture);
+    const client = await connect(fixture, 12);
 
     const result = await client.readResource({
       uri: "audit://ticket/TKT-1001",
@@ -1092,7 +1111,7 @@ describe("createTriageServer read protocol", () => {
     const fixture = await createFixture();
     const ticketSnapshot = vi.spyOn(fixture.tickets, "snapshot");
     const recommendationSnapshot = vi.spyOn(fixture.recommendations, "list");
-    const client = await connect(fixture);
+    const client = await connect(fixture, 12);
 
     await callTool(client, {
       name: "find_similar_tickets",
@@ -1109,7 +1128,7 @@ describe("createTriageServer read protocol", () => {
 
   it("maps resource domain, malformed ID, and unexpected failures safely", async () => {
     const fixture = await createFixture();
-    const client = await connect(fixture);
+    const client = await connect(fixture, 12);
 
     const missingError = await client
       .readResource({ uri: "ticket://TKT-9999" })

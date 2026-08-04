@@ -12,6 +12,7 @@ import { TriageRecommendationSchema } from "../src/domain.js";
 import { diagnosisContextForTicket } from "../src/approval-desk/diagnostic-workflow.js";
 import { OpenAiKnowledgeCandidateDraftProvider, UnavailableOpenAiKnowledgeCandidateDraftProvider } from "../src/knowledge-evolution/openai-candidate-draft-provider.js";
 import { createControlledKnowledgeCandidateDraftProvider } from "../src/approval-desk/controlled-evaluation-providers.js";
+import { DEFAULT_MINUTES_PER_ACCEPTED_RECOMMENDATION } from "../src/metrics.js";
 
 const temporaryRoots: string[] = [];
 
@@ -44,6 +45,7 @@ describe("runtime configuration", () => {
   });
 
   it("reads minutes saved from the environment", () => {
+    expect(minutesSaved({})).toBe(DEFAULT_MINUTES_PER_ACCEPTED_RECOMMENDATION);
     expect(minutesSaved({ TRIAGE_MINUTES_SAVED: "12" })).toBe(12);
   });
 

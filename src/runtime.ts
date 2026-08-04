@@ -12,8 +12,8 @@ import { KnowledgeEvolutionService } from "./knowledge-evolution/service.js";
 import type { CandidateDraftProvider } from "./knowledge-evolution/candidate-draft-provider.js";
 import { createControlledKnowledgeCandidateDraftProvider } from "./approval-desk/controlled-evaluation-providers.js";
 import { createOpenAiKnowledgeCandidateDraftProvider } from "./knowledge-evolution/openai-candidate-draft-provider.js";
+import { DEFAULT_MINUTES_PER_ACCEPTED_RECOMMENDATION } from "./metrics.js";
 
-const DEFAULT_MINUTES_SAVED = 8;
 const STARTUP_PATH_MESSAGES = {
   TRIAGE_DATA_ROOT: "TRIAGE_DATA_ROOT must not be blank.",
   TRIAGE_SEED_FILE: "TRIAGE_SEED_FILE must not be blank.",
@@ -74,7 +74,7 @@ export function environmentPath(
 export function minutesSaved(env: RuntimeEnvironment): number {
   const configured = env.TRIAGE_MINUTES_SAVED;
   if (configured === undefined) {
-    return DEFAULT_MINUTES_SAVED;
+    return DEFAULT_MINUTES_PER_ACCEPTED_RECOMMENDATION;
   }
   if (configured.trim() === "") {
     throw invalidMinutesSaved();

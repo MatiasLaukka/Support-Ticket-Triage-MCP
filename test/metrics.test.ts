@@ -54,6 +54,8 @@ describe("calculateQueueMetrics", () => {
       makeRecommendation("approved", 0.6, ["low-confidence", "sla"], "TKT-1002"),
       makeRecommendation("rejected", 0.75, ["security"], "TKT-1003"),
       makeRecommendation("pending", 0.95, [], "TKT-1004"),
+      makeRecommendation("canceled", 0.8, [], "TKT-1004", "55555555-5555-4555-8555-555555555555"),
+      makeRecommendation("superseded", 0.7, [], "TKT-1004", "66666666-6666-4666-8666-666666666666"),
     ];
 
     expect(
@@ -76,13 +78,15 @@ describe("calculateQueueMetrics", () => {
         security: 1,
         unassigned: 1,
       },
-      submittedRecommendations: 4,
+      submittedRecommendations: 6,
       pendingRecommendations: 1,
       approvedRecommendations: 2,
       rejectedRecommendations: 1,
       acceptanceRate: 2 / 3,
       rejectionRate: 1 / 3,
-      averageConfidence: 0.8,
+      averageConfidence: (0.9 + 0.6 + 0.75 + 0.95 + 0.8 + 0.7) / 6,
+      averageApprovedConfidence: 0.75,
+      confidenceBandCounts: { low: 2, medium: 2, high: 2 },
       escalationCounts: {
         total: 3,
         outage: 1,
@@ -92,6 +96,7 @@ describe("calculateQueueMetrics", () => {
       },
       minutesPerAcceptedRecommendation: 12,
       estimatedMinutesSaved: 24,
+      potentialMinutesSaved: 12,
     });
   });
 
@@ -106,7 +111,10 @@ describe("calculateQueueMetrics", () => {
     expect(metrics.acceptanceRate).toBeNull();
     expect(metrics.rejectionRate).toBeNull();
     expect(metrics.averageConfidence).toBeNull();
+    expect(metrics.averageApprovedConfidence).toBeNull();
+    expect(metrics.confidenceBandCounts).toEqual({ low: 0, medium: 0, high: 0 });
     expect(metrics.estimatedMinutesSaved).toBe(0);
+    expect(metrics.potentialMinutesSaved).toBe(0);
   });
 });
 
@@ -142,9 +150,10 @@ function makeRecommendation(
   confidence: number,
   escalationReasons: TriageRecommendation["escalationReasons"],
   ticketId: Ticket["id"] = "TKT-1001",
+  id?: string,
 ): TriageRecommendation {
   return TriageRecommendationSchema.parse({
-    id:
+    id: id ??
       ticketId === "TKT-1001"
         ? "11111111-1111-4111-8111-111111111111"
         : ticketId === "TKT-1002"

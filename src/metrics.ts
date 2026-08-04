@@ -1,38 +1,70 @@
-import type {
-  RequiredEscalation,
-  Ticket,
-  TriageRecommendation,
+import { z } from "zod";
+import {
+  IsoTimestampSchema,
+  type Ticket,
+  type TriageRecommendation,
 } from "./domain.js";
+import { confidenceBand } from "./classifier-confidence.js";
 import { DomainError } from "./errors.js";
+
+export const DEFAULT_MINUTES_PER_ACCEPTED_RECOMMENDATION = 8;
+
+export const QueueMetricsSchema = z
+  .object({
+    generatedAt: IsoTimestampSchema,
+    openTickets: z.number().int().nonnegative(),
+    untriagedTickets: z.number().int().nonnegative(),
+    slaBreachedTickets: z.number().int().nonnegative(),
+    slaAtRiskTickets: z.number().int().nonnegative(),
+    ticketsByCategory: z.record(z.string(), z.number().int().nonnegative()),
+    ticketsByPriority: z.record(z.string(), z.number().int().nonnegative()),
+    ticketsByTeam: z.record(z.string(), z.number().int().nonnegative()),
+    submittedRecommendations: z.number().int().nonnegative(),
+    pendingRecommendations: z.number().int().nonnegative(),
+    approvedRecommendations: z.number().int().nonnegative(),
+    rejectedRecommendations: z.number().int().nonnegative(),
+    acceptanceRate: z.number().min(0).max(1).nullable(),
+    rejectionRate: z.number().min(0).max(1).nullable(),
+    averageConfidence: z.number().min(0).max(1).nullable(),
+    averageApprovedConfidence: z.number().min(0).max(1).nullable(),
+    confidenceBandCounts: z
+      .object({
+        low: z.number().int().nonnegative(),
+        medium: z.number().int().nonnegative(),
+        high: z.number().int().nonnegative(),
+      })
+      .strict(),
+    escalationCounts: z
+      .object({ total: z.number().int().nonnegative() })
+      .catchall(z.number().int().nonnegative()),
+    minutesPerAcceptedRecommendation: z.number().nonnegative(),
+    estimatedMinutesSaved: z.number().nonnegative(),
+    potentialMinutesSaved: z.number().nonnegative(),
+  })
+  .strict();
+
+type QueueMetricsOutput = z.infer<typeof QueueMetricsSchema>;
+/**
+ * The calculator always returns the complete schema output. The optional
+ * additions keep older in-process report adapters source-compatible while
+ * they migrate to the expanded transport contract.
+ */
+export type QueueMetrics = Omit<
+  QueueMetricsOutput,
+  "averageApprovedConfidence" | "confidenceBandCounts" | "potentialMinutesSaved"
+> &
+  Partial<
+    Pick<
+      QueueMetricsOutput,
+      "averageApprovedConfidence" | "confidenceBandCounts" | "potentialMinutesSaved"
+    >
+  >;
 
 export interface QueueMetricsInput {
   tickets: readonly Ticket[];
   recommendations: readonly TriageRecommendation[];
   now: Date;
   minutesPerAcceptedRecommendation: number;
-}
-
-export interface QueueMetrics {
-  generatedAt: string;
-  openTickets: number;
-  untriagedTickets: number;
-  slaBreachedTickets: number;
-  slaAtRiskTickets: number;
-  ticketsByCategory: Record<string, number>;
-  ticketsByPriority: Record<string, number>;
-  ticketsByTeam: Record<string, number>;
-  submittedRecommendations: number;
-  pendingRecommendations: number;
-  approvedRecommendations: number;
-  rejectedRecommendations: number;
-  acceptanceRate: number | null;
-  rejectionRate: number | null;
-  averageConfidence: number | null;
-  escalationCounts: { total: number } & Partial<
-    Record<RequiredEscalation, number>
-  >;
-  minutesPerAcceptedRecommendation: number;
-  estimatedMinutesSaved: number;
 }
 
 const AT_RISK_WINDOW_MS = 60 * 60 * 1000;
@@ -63,8 +95,20 @@ export function calculateQueueMetrics(input: QueueMetricsInput): QueueMetrics {
   const rejectedRecommendations = input.recommendations.filter(
     ({ resolution }) => resolution === "rejected",
   ).length;
+  const pendingRecommendations = input.recommendations.filter(
+    ({ resolution }) => resolution === "pending",
+  ).length;
   const resolvedRecommendations =
     approvedRecommendations + rejectedRecommendations;
+  const confidenceBandCounts: NonNullable<QueueMetrics["confidenceBandCounts"]> = {
+    low: 0,
+    medium: 0,
+    high: 0,
+  };
+  for (const recommendation of input.recommendations) {
+    const band = confidenceBand(recommendation.confidence);
+    confidenceBandCounts[band] += 1;
+  }
   const escalationCounts: QueueMetrics["escalationCounts"] = { total: 0 };
 
   for (const recommendation of input.recommendations) {
@@ -76,7 +120,7 @@ export function calculateQueueMetrics(input: QueueMetricsInput): QueueMetrics {
     }
   }
 
-  return {
+  return QueueMetricsSchema.parse({
     generatedAt: input.now.toISOString(),
     openTickets: openTickets.length,
     untriagedTickets: openTickets.filter(
@@ -99,9 +143,7 @@ export function calculateQueueMetrics(input: QueueMetricsInput): QueueMetrics {
     ticketsByPriority: countBy(openTickets, ({ priority }) => priority),
     ticketsByTeam: countBy(openTickets, ({ team }) => team),
     submittedRecommendations: input.recommendations.length,
-    pendingRecommendations: input.recommendations.filter(
-      ({ resolution }) => resolution === "pending",
-    ).length,
+    pendingRecommendations,
     approvedRecommendations,
     rejectedRecommendations,
     acceptanceRate:
@@ -119,12 +161,22 @@ export function calculateQueueMetrics(input: QueueMetricsInput): QueueMetrics {
               (sum, recommendation) => sum + recommendation.confidence,
               0,
             ) / input.recommendations.length,
+    averageApprovedConfidence:
+      approvedRecommendations === 0
+        ? null
+        : input.recommendations
+            .filter(({ resolution }) => resolution === "approved")
+            .reduce((sum, recommendation) => sum + recommendation.confidence, 0) /
+          approvedRecommendations,
+    confidenceBandCounts,
     escalationCounts,
     minutesPerAcceptedRecommendation:
       input.minutesPerAcceptedRecommendation,
     estimatedMinutesSaved:
       approvedRecommendations * input.minutesPerAcceptedRecommendation,
-  };
+    potentialMinutesSaved:
+      pendingRecommendations * input.minutesPerAcceptedRecommendation,
+  });
 }
 
 function countBy(

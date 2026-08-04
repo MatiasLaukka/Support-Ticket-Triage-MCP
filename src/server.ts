@@ -30,7 +30,11 @@ import {
 } from "./domain.js";
 import { DomainError } from "./errors.js";
 import type { KnowledgeRepository } from "./knowledge-repository.js";
-import { calculateQueueMetrics } from "./metrics.js";
+import {
+  calculateQueueMetrics,
+  DEFAULT_MINUTES_PER_ACCEPTED_RECOMMENDATION,
+  QueueMetricsSchema,
+} from "./metrics.js";
 import type { RecommendationRepository } from "./recommendation-repository.js";
 import { findSimilarTickets } from "./similarity.js";
 import {
@@ -91,7 +95,6 @@ import {
 
 const PAGE_SIZE = 50;
 const MAX_OFFSET = 10_000;
-const DEFAULT_MINUTES_PER_ACCEPTED_RECOMMENDATION = 10;
 const UNEXPECTED_ERROR_TEXT = "Unexpected local triage error.";
 
 const ReadOnlyAnnotations = {
@@ -306,30 +309,7 @@ const AuditEventsOutputSchema = z
     limit: z.number().int().min(1).max(PAGE_SIZE),
   })
   .strict();
-const QueueMetricsOutputSchema = z
-  .object({
-    generatedAt: IsoTimestampSchema,
-    openTickets: z.number().int().nonnegative(),
-    untriagedTickets: z.number().int().nonnegative(),
-    slaBreachedTickets: z.number().int().nonnegative(),
-    slaAtRiskTickets: z.number().int().nonnegative(),
-    ticketsByCategory: z.record(z.string(), z.number().int().nonnegative()),
-    ticketsByPriority: z.record(z.string(), z.number().int().nonnegative()),
-    ticketsByTeam: z.record(z.string(), z.number().int().nonnegative()),
-    submittedRecommendations: z.number().int().nonnegative(),
-    pendingRecommendations: z.number().int().nonnegative(),
-    approvedRecommendations: z.number().int().nonnegative(),
-    rejectedRecommendations: z.number().int().nonnegative(),
-    acceptanceRate: z.number().min(0).max(1).nullable(),
-    rejectionRate: z.number().min(0).max(1).nullable(),
-    averageConfidence: z.number().min(0).max(1).nullable(),
-    escalationCounts: z
-      .object({ total: z.number().int().nonnegative() })
-      .catchall(z.number().int().nonnegative()),
-    minutesPerAcceptedRecommendation: z.number().nonnegative(),
-    estimatedMinutesSaved: z.number().nonnegative(),
-  })
-  .strict();
+const QueueMetricsOutputSchema = QueueMetricsSchema;
 const SubmitRecommendationOutputSchema = z
   .object({ recommendation: TriageRecommendationSchema })
   .strict();

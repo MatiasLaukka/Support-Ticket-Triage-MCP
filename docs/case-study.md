@@ -89,6 +89,32 @@ alternate incident demo for EU Checkout Started event delays.
 6. The reviewer edits or approves selected fields.
 7. The service applies only approved fields and records an audit event.
 
+## Chronological Lifecycle Slice
+
+The browser walkthrough is complemented by a deterministic, stateful MCP
+replay. It does not mock the diagnostic engine or skip the approval boundary:
+
+```powershell
+npm run evaluate:lifecycle-replay
+```
+
+The replay follows the backend guidance through evidence collection, diagnosis,
+explicit diagnosis/response approval, a customer reply, mitigation/fix,
+verification, and closure. It reads `get_ticket_workflow` before every
+mutation and checks that each read carries the accumulated conversation,
+recommendation history, evidence-aware latest recommendation, and operator
+blockers/approval fields. The resulting journey ends in `resolved` only after
+the governed close action.
+
+The second example is intentionally different: the bounded ambiguity scenario
+remains evidence-aware and escalates to specialist review when the available
+replies do not distinguish the remaining hypotheses. It is not treated as a
+successful diagnosis merely because the ticket has complete checklist fields.
+
+This split makes the authority boundary visible: the diagnostic matrix tests
+many families without mutation, while the replay proves chronological state
+transitions using the production service and MCP path.
+
 ## Safety Properties
 
 - Prompt-injection text inside tickets is never authorization.

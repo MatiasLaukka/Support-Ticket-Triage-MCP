@@ -35,7 +35,24 @@ The report measures:
 
 Known-event matching is intentionally bounded. A ticket must match the related known cause, service and symptom patterns, and the event’s time window. An active event can surface the existing platform-fix state, while an investigating event remains non-confirmed. Event IDs and match reasons are operator/audit metadata; internal event-matching details are not copied into customer responses.
 
-The harness is deterministic and local. It does not call GPT, mutate tickets, approve recommendations, send responses, record diagnoses, mark fixes, or close tickets.
+The harness is deterministic and local. It does not call GPT, mutate tickets, approve recommendations, send responses, record diagnoses, mark fixes, or close tickets. It is a broad context-aware scenario matrix, not a chronological repository replay.
+
+## Stateful lifecycle replay
+
+Use the companion evaluator when the question is whether a real ticket can
+move through ordered workflow transitions:
+
+```powershell
+npm run evaluate:lifecycle-replay
+```
+
+This replay uses fresh temporary state and the existing MCP tools. It reads
+`get_ticket_workflow` before the first action and after every transition, then
+checks the complete read model (ticket, conversation, recommendations,
+evidence-aware latest recommendation, and operator guidance), explicit human
+approval, diagnosis/fix audits, verification, and closure. It currently
+reports 23 workflow reads, 20 governed actions, and a final `resolved` state.
+The bounded-escalation scenario is printed as a supporting non-closure path.
 
 ## Article-backed and GPT diagnosis evaluation
 

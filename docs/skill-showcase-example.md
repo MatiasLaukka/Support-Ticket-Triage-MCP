@@ -1,5 +1,9 @@
 # Codex Skill AI Showcase
 
+> This compact transcript is a static controlled-mode example. The current
+> replay report also includes complete read-model coverage; run
+> `npm run evaluate:lifecycle-replay` for the current chronological result.
+
 - Mode: controlled
 - Provider provenance: classification=controlled-local-simulation; drafting=controlled-local-simulation; network=disabled.
 - Human approval: scripted portfolio-reviewer simulation; no interactive pause.

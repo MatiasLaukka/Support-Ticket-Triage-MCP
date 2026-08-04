@@ -441,6 +441,12 @@ describe("createTriageServer read protocol", () => {
     expectStableJson(textOf(workflow));
     expect(workflow.structuredContent).toMatchObject({
       ticket: expect.objectContaining({ id: "TKT-1001" }),
+      conversationHistory: expect.arrayContaining([
+        expect.objectContaining({
+          action: "recommendation-submitted",
+          summary: expect.any(String),
+        }),
+      ]),
       operatorGuidance: {
         stage: "active",
         changed: expect.any(String),

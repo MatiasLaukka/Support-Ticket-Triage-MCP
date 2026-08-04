@@ -32,15 +32,16 @@ Recorded results:
 | Reported mode | `controlled` | `deterministic` |
 | Provider provenance | Classification and drafting are `controlled-local-simulation`; network is `disabled` | Classification and drafting are `not-configured`; network is `disabled` |
 | External provider call | None; controlled local simulation only | None; no providers passed |
-| Classification trace | Seven `used` stages | Seven `skipped` stages |
-| Drafting trace | Seven normalized `used` local-simulation stages, all with local deterministic source | Seven `skipped` stages, all with local deterministic source |
-| Human boundary | Seven disclosed `portfolio-reviewer` simulations using guidance-provided fields | Same |
+| Classification trace | Eight `used` stages | Eight `skipped` stages |
+| Drafting trace | Eight normalized `used` local-simulation stages, all with local deterministic source | Eight `skipped` stages, all with local deterministic source |
+| Human boundary | Eight disclosed `portfolio-reviewer` simulations using guidance-provided fields | Same |
 | Lifecycle | Diagnose, Fix, verification, ready-for-close, closed | Same |
 | Final status | `resolved` | `resolved` |
 
-The controlled transcript is preserved exactly in
-[skill-showcase-example.md](skill-showcase-example.md). Each workflow entry
-shows the new next action, making the replay auditable without exposing ticket
+The checked-in [skill-showcase-example.md](skill-showcase-example.md) is a
+compact static controlled-mode transcript. The current stateful report is
+produced by `evaluate:lifecycle-replay`. Each workflow entry shows the new
+next action, making the replay auditable without exposing ticket
 text, response text, prompts, or provider payloads. Audit output is restricted
 to event type, actor, and timestamp. The report also identifies the selected
 safe mode and explicit provider provenance. Controlled traces are normalized
@@ -54,7 +55,7 @@ The focused test command was:
 npm test -- --run test/demo-skill-showcase.test.ts
 ```
 
-Result: one test file passed, with all 15 tests passing. The test verifies the
+Result: one test file passed, with all 16 tests passing. The test verifies the
 narrow report schema, exact guidance-driven lifecycle, explicit controlled
 local-simulation provenance, accepted local deterministic drafting,
 no-provider deterministic skipped semantics,
@@ -68,6 +69,33 @@ only in the current shell and select it explicitly:
 $env:OPENAI_API_KEY = 'set-in-the-shell-only'
 npm run demo:skill-showcase -- --live
 ```
+
+## Stateful Diagnostic Lifecycle Replay
+
+The showcase above is a useful MCP transcript, but the dedicated lifecycle
+evaluator makes its chronological guarantees machine-checkable:
+
+```powershell
+npm run evaluate:lifecycle-replay
+```
+
+Current deterministic result:
+
+| Check | Result |
+| --- | --- |
+| Complete workflow reads | 23 |
+| Governed MCP actions | 20 |
+| Read before every MCP action | PASS |
+| Ordered journey | evidence → diagnosis → approval → response → mitigation/fix → verification → closure |
+| Final ticket status | `resolved` |
+| Context-aware diagnostic matrix | 11/11 scenarios |
+
+The evaluator keeps the bounded-ambiguity/escalation observation visible as a
+supporting path. It verifies that unresolved diagnostic ambiguity remains a
+specialist handoff, not an autonomous fix or closure. This replay is stateful;
+the separate eleven-scenario matrix remains intentionally non-mutating and
+tests breadth across known causes/events, evidence, ambiguity, stale replies,
+fixes, and adversarial text.
 
 ## Primary Scenario
 

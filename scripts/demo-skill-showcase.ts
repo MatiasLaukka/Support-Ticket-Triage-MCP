@@ -64,7 +64,26 @@ export interface SkillShowcaseReport {
   mode: SkillShowcaseMode;
   providerProvenance: SkillShowcaseProviderProvenance;
   toolCalls: string[];
+  toolCallTrace: Array<{ name: string; kind: "read" | "action" }>;
   aiStages: AiExecutionTrace[];
+  workflowReads: Array<{
+    sequence: number;
+    ticketRevision: number;
+    ticketStatus: Ticket["status"];
+    workflowState: string;
+    hasRecommendation: boolean;
+    requiredEvidenceCount: number;
+    providedEvidenceCount: number;
+    missingEvidenceCount: number;
+    hasConversationHistory: boolean;
+    timelineKinds: string[];
+    operatorStage: OperatorGuidance["stage"];
+    nextAction: OperatorGuidance["nextAction"];
+    blockers: string[];
+    approvalRequired: boolean;
+    hasDiagnosis: boolean;
+    hasFix: boolean;
+  }>;
   workflowStages: Array<{
     stage: OperatorGuidance["stage"];
     nextAction: OperatorGuidance["nextAction"];
@@ -105,6 +124,17 @@ export interface SkillShowcaseCliOptions {
 
 interface WorkflowSnapshot {
   ticket: Ticket;
+  conversationHistory: Array<Record<string, unknown>>;
+  conversationTimeline: Array<Record<string, unknown>>;
+  recommendationHistory: z.infer<typeof TriageRecommendationSchema>[];
+  recommendationSummary: {
+    workflowState: string;
+    hasPendingRecommendation: boolean;
+    hasApprovedRecommendation: boolean;
+    hasSentResponse: boolean;
+    hasCustomerReply: boolean;
+    [key: string]: unknown;
+  };
   latestRecommendation?: z.infer<typeof TriageRecommendationSchema>;
   operatorGuidance: OperatorGuidance;
 }
@@ -112,6 +142,18 @@ interface WorkflowSnapshot {
 const WorkflowSnapshotSchema = z
   .object({
     ticket: TicketSchema,
+    conversationHistory: z.array(z.record(z.string(), z.unknown())),
+    conversationTimeline: z.array(z.record(z.string(), z.unknown())),
+    recommendationHistory: z.array(TriageRecommendationSchema),
+    recommendationSummary: z
+      .object({
+        workflowState: z.string(),
+        hasPendingRecommendation: z.boolean(),
+        hasApprovedRecommendation: z.boolean(),
+        hasSentResponse: z.boolean(),
+        hasCustomerReply: z.boolean(),
+      })
+      .passthrough(),
     latestRecommendation: TriageRecommendationSchema.optional(),
     operatorGuidance: OperatorGuidanceSchema,
   })
@@ -191,11 +233,13 @@ async function replayTkt1010(input: {
   mode: SkillShowcaseMode;
 }): Promise<SkillShowcaseReport> {
   const toolCalls: string[] = [];
+  const toolCallTrace: SkillShowcaseReport["toolCallTrace"] = [];
   const aiStages: SkillShowcaseReport["aiStages"] = [];
+  const workflowReads: SkillShowcaseReport["workflowReads"] = [];
   const workflowStages: SkillShowcaseReport["workflowStages"] = [];
   const approvals: SkillShowcaseReport["approvals"] = [];
 
-  let workflow = await readWorkflow(input.client, toolCalls);
+  let workflow = await readWorkflow(input.client, toolCalls, toolCallTrace, workflowReads);
   workflowStages.push(sanitizeGuidance(workflow.operatorGuidance));
 
   for (let transition = 0; transition < MAX_TRANSITIONS; transition += 1) {
@@ -208,7 +252,9 @@ async function replayTkt1010(input: {
         mode: input.mode,
         providerProvenance: providerProvenanceForMode(input.mode),
         toolCalls,
+        toolCallTrace,
         aiStages,
+        workflowReads,
         workflowStages,
         approvals,
         finalTicketStatus: workflow.ticket.status,
@@ -225,7 +271,7 @@ async function replayTkt1010(input: {
           responseStyle: "auto",
           aiPreference:
             input.mode === "deterministic" ? "deterministic" : "gpt-preferred",
-        });
+        }, toolCallTrace);
         const recommendation = TriageRecommendationSchema.parse(
           evaluated.recommendation,
         );
@@ -253,7 +299,7 @@ async function replayTkt1010(input: {
           editedCustomerResponse: recommendation.draftCustomerResponse,
           actor: ACTOR,
           confirm: true,
-        });
+        }, toolCallTrace);
         approvals.push({
           required: approval.required,
           fields,
@@ -265,7 +311,7 @@ async function replayTkt1010(input: {
         await callTool(input.client, toolCalls, "record_diagnosis", {
           ticketId: TICKET_ID,
           actor: "product-support",
-        });
+        }, toolCallTrace);
         break;
       case "review-diagnosis":
         await reviewLatestDiagnosisForShowcase({
@@ -278,13 +324,13 @@ async function replayTkt1010(input: {
         await callTool(input.client, toolCalls, "mark_fix_available", {
           ticketId: TICKET_ID,
           actor: "product-support",
-        });
+        }, toolCallTrace);
         break;
       case "close-ticket":
         await callTool(input.client, toolCalls, "close_ticket", {
           ticketId: TICKET_ID,
           actor: ACTOR,
-        });
+        }, toolCallTrace);
         break;
       case "wait-for-customer":
         throw new Error(
@@ -292,7 +338,7 @@ async function replayTkt1010(input: {
         );
     }
 
-    workflow = await readWorkflow(input.client, toolCalls);
+    workflow = await readWorkflow(input.client, toolCalls, toolCallTrace, workflowReads);
     workflowStages.push(sanitizeGuidance(workflow.operatorGuidance));
   }
 
@@ -377,11 +423,45 @@ function controlledProviders(): {
 async function readWorkflow(
   client: Client,
   toolCalls: string[],
+  toolCallTrace: SkillShowcaseReport["toolCallTrace"],
+  workflowReads: SkillShowcaseReport["workflowReads"],
 ): Promise<WorkflowSnapshot> {
   const content = await callTool(client, toolCalls, "get_ticket_workflow", {
     id: TICKET_ID,
+  }, toolCallTrace);
+  const snapshot = WorkflowSnapshotSchema.parse(content);
+  const timelineKinds = snapshot.conversationTimeline.map((item) => {
+    if (typeof item.kind !== "string") {
+      throw new Error("Workflow read is missing a safe conversation timeline kind.");
+    }
+    if ((item.kind === "diagnosis" || item.kind === "fix") &&
+      typeof item.summary !== "string") {
+      throw new Error(`Workflow read ${item.kind} item is missing its safe summary.`);
+    }
+    return item.kind;
   });
-  return WorkflowSnapshotSchema.parse(content);
+  if (!timelineKinds.includes("original-ticket")) {
+    throw new Error("Workflow read is missing the original ticket context.");
+  }
+  workflowReads.push({
+    sequence: workflowReads.length + 1,
+    ticketRevision: snapshot.ticket.revision,
+    ticketStatus: snapshot.ticket.status,
+    workflowState: snapshot.recommendationSummary.workflowState,
+    hasRecommendation: snapshot.latestRecommendation !== undefined,
+    requiredEvidenceCount: snapshot.latestRecommendation?.requiredEvidence?.length ?? 0,
+    providedEvidenceCount: snapshot.latestRecommendation?.providedEvidence?.length ?? 0,
+    missingEvidenceCount: snapshot.latestRecommendation?.missingEvidence?.length ?? 0,
+    hasConversationHistory: snapshot.conversationHistory.length > 0,
+    timelineKinds,
+    operatorStage: snapshot.operatorGuidance.stage,
+    nextAction: snapshot.operatorGuidance.nextAction,
+    blockers: [...snapshot.operatorGuidance.blockers],
+    approvalRequired: snapshot.operatorGuidance.approval.required,
+    hasDiagnosis: timelineKinds.includes("diagnosis"),
+    hasFix: timelineKinds.includes("fix"),
+  });
+  return snapshot;
 }
 
 async function callTool(
@@ -389,8 +469,13 @@ async function callTool(
   toolCalls: string[],
   name: string,
   args: Record<string, unknown>,
+  toolCallTrace?: SkillShowcaseReport["toolCallTrace"],
 ): Promise<Record<string, unknown>> {
   toolCalls.push(name);
+  toolCallTrace?.push({
+    name,
+    kind: name === "get_ticket_workflow" ? "read" : "action",
+  });
   const result = (await client.callTool({
     name,
     arguments: args,
@@ -458,6 +543,56 @@ export function formatWorkflowTrail(
     .join(" -> ");
 }
 
+export function verifySkillShowcaseReport(
+  report: SkillShowcaseReport,
+): string[] {
+  const failures: string[] = [];
+  const requiredStages: SkillShowcaseReport["workflowStages"][number]["stage"][] = [
+    "review",
+    "diagnosis-ready",
+    "diagnosis-recorded",
+    "fix-ready",
+    "verification",
+    "ready-for-close",
+    "closed",
+  ];
+  let stageIndex = -1;
+  for (const stage of requiredStages) {
+    const nextIndex = report.workflowStages.findIndex(
+      (candidate, index) => index > stageIndex && candidate.stage === stage,
+    );
+    if (nextIndex < 0) failures.push(`missing workflow stage: ${stage}`);
+    else stageIndex = nextIndex;
+  }
+  if (report.finalTicketStatus !== "resolved") {
+    failures.push(`final ticket status was ${report.finalTicketStatus}`);
+  }
+  if (report.approvals.length === 0 || !report.approvals.some((approval) =>
+    approval.fields.includes("customerResponse")
+  )) {
+    failures.push("customer-response approval was not recorded");
+  }
+  for (const action of [
+    "customer-reply-received",
+    "diagnosis-completed",
+    "fix-available",
+  ] as const) {
+    if (!report.auditEvents.some((event) => event.type === action)) {
+      failures.push(`missing audit event: ${action}`);
+    }
+  }
+  if (report.workflowReads.length !== report.workflowStages.length) {
+    failures.push("workflow read count does not match workflow stage count");
+  }
+  for (let index = 0; index < report.toolCallTrace.length; index += 1) {
+    const entry = report.toolCallTrace[index];
+    if (entry.kind === "action" && report.toolCallTrace[index - 1]?.kind !== "read") {
+      failures.push(`action ${entry.name} was not preceded by a workflow read`);
+    }
+  }
+  return failures;
+}
+
 function serializeReport(
   report: Omit<SkillShowcaseReport, "serialized">,
 ): string {
@@ -472,6 +607,13 @@ function serializeReport(
     "## Governed MCP tool calls",
     "",
     ...report.toolCalls.map((name, index) => `${index + 1}. \`${name}\``),
+    "",
+    "## Workflow read coverage",
+    "",
+    `- Complete read-model snapshots: ${report.workflowReads.length}.`,
+    ...report.workflowReads.map((read) =>
+      `- Read ${read.sequence}: revision=${read.ticketRevision}; status=${read.ticketStatus}; state=${read.workflowState}; stage=${read.operatorStage}; next=${read.nextAction}; evidence=required:${read.requiredEvidenceCount}/provided:${read.providedEvidenceCount}/missing:${read.missingEvidenceCount}; timeline=${read.timelineKinds.join(",")}.`,
+    ),
     "",
     "## AI execution traces",
     "",

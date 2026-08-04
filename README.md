@@ -176,7 +176,7 @@ labels both roles `controlled-local-simulation`, labels network access
 `disabled`, and never attributes their output to an external model adapter.
 Their auditable traces are `used` when their advice or draft is accepted;
 deterministic policy still owns routing, lifecycle, validation, and approval.
-All seven controlled drafting stages are reported as accepted local
+All eight controlled drafting stages are reported as accepted local
 deterministic output with explicit simulation provenance.
 
 The explicit `--deterministic` mode passes no providers and never makes a
@@ -198,6 +198,39 @@ npm run demo:skill-showcase -- --live
 The recorded portfolio results cover controlled and deterministic modes only;
 no live showcase run is claimed. Unknown arguments and repeated or conflicting
 mode flags fail safely, so a typo cannot silently select controlled mode.
+
+## Deterministic Lifecycle Replay
+
+The chronological replay is the companion to the snapshot-based evaluation
+harness. It drives the existing MCP tools against fresh temporary state and
+verifies one complete, stateful journey:
+
+```text
+evidence → diagnosis → approval → response → mitigation/fix → verification → closure
+```
+
+Run it locally without GPT or network access:
+
+```powershell
+npm run evaluate:lifecycle-replay
+```
+
+The replay reads `get_ticket_workflow` before the first action and after every
+transition. Each read is validated to include the ticket, conversation history
+and timeline, recommendation history and summary, latest recommendation when
+present, and backend operator guidance. The report also proves that each MCP
+mutation follows a workflow read, records explicit approval, captures the
+customer reply, diagnosis and fix audits, and ends at `resolved`.
+
+The current deterministic run reports 23 complete workflow reads, 20 governed
+MCP actions, and an 11/11 pass for the separate context-aware diagnostic
+scenario matrix. The matrix's bounded-ambiguity/escalation scenario remains a
+second supporting example: it routes unresolved ambiguity toward specialist
+review rather than pretending that an unresolved hypothesis is a fix.
+
+This is a verification and portfolio showcase, not a second workflow engine.
+The same `TriageService`, operator guidance, evidence gates, audit repository,
+and MCP tools used by the Approval Desk perform the work.
 
 ## Governed Diagnosis Review And Fixes
 

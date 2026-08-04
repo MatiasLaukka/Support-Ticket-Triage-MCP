@@ -9,6 +9,7 @@ import {
   providersForMode,
   runSkillShowcase,
   showcaseApprovalFields,
+  verifySkillShowcaseReport,
   type SkillShowcaseMode,
   type SkillShowcaseReport,
 } from "../scripts/demo-skill-showcase.js";
@@ -102,6 +103,15 @@ it("replays TKT-1010 through guidance, approval, diagnosis, fix, verification, a
     ]),
   );
   expect(report.finalTicketStatus).toBe("resolved");
+  expect(report.workflowReads.length).toBe(report.workflowStages.length);
+  expect(report.workflowReads.every((read) =>
+    read.timelineKinds.includes("original-ticket") &&
+    read.operatorStage.length > 0
+  )).toBe(true);
+  expect(report.workflowReads.some((read) => read.hasConversationHistory)).toBe(true);
+  expect(report.workflowReads.some((read) => read.requiredEvidenceCount > 0)).toBe(true);
+  expect(report.workflowReads.some((read) => read.hasDiagnosis && read.hasFix)).toBe(true);
+  expect(verifySkillShowcaseReport(report)).toEqual([]);
   expect(report.auditEvents).toEqual(
     expect.arrayContaining([
       expect.objectContaining({
@@ -151,6 +161,7 @@ it("uses no providers in deterministic mode and preserves skipped local drafting
     trace.drafting.fallback === undefined
   )).toBe(true);
   expect(report.finalTicketStatus).toBe("resolved");
+  expect(verifySkillShowcaseReport(report)).toEqual([]);
 }, SHOWCASE_TEST_TIMEOUT_MS);
 
 it("requires an explicit API key before constructing live providers", () => {
@@ -269,6 +280,16 @@ it("requires approval guidance and returns its actual fields", () => {
   ).toEqual({ required: true, fields: ["customerResponse"] });
 });
 
+it("reports missing lifecycle replay invariants", () => {
+  const failures = verifySkillShowcaseReport(fakeReport("deterministic"));
+
+  expect(failures).toEqual(expect.arrayContaining([
+    "missing workflow stage: review",
+    "customer-response approval was not recorded",
+    "missing audit event: customer-reply-received",
+  ]));
+});
+
 it("formats waiting diagnostics from safe workflow stage and next-action values", () => {
   expect(
     formatWorkflowTrail([
@@ -361,7 +382,9 @@ function fakeReport(mode: SkillShowcaseMode): SkillShowcaseReport {
             networkPolicy: "live-provider-allowed",
           },
     toolCalls: [],
+    toolCallTrace: [],
     aiStages: [],
+    workflowReads: [],
     workflowStages: [],
     approvals: [],
     finalTicketStatus: "resolved",

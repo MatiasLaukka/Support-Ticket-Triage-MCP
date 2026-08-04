@@ -29,5 +29,14 @@ by the Approval Desk runner.
 
 The page reads the latest sanitized report files only. It does not call GPT,
 create recommendations, write audit events, change tickets, or send responses.
-The existing Approval Desk and MCP tools remain the authoritative workflow
-surfaces for diagnosis, fixes, approval, and lifecycle transitions.
+It is therefore a snapshot viewer, not a chronological lifecycle test. For a
+stateful verification using the authoritative MCP workflow, run:
+
+```powershell
+npm run evaluate:lifecycle-replay
+```
+
+That command drives the existing Approval Desk/MCP service through a complete
+multi-turn journey and validates the full `get_ticket_workflow` context before
+each action. The existing Approval Desk and MCP tools remain the authoritative
+workflow surfaces for diagnosis, fixes, approval, and lifecycle transitions.

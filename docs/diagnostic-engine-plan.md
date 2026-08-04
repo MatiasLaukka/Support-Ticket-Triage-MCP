@@ -1,6 +1,6 @@
 # Diagnostic Engine Implementation Plan
 
-> This plan is the architectural reference for the diagnostic-engine phases. It reflects the merged repository state at commit `dd4d40a` (`feat: add known event correlation and diagnostic harness`).
+> This plan is the architectural reference for the diagnostic-engine phases. Phase status below reflects the current repository implementation; run the replay command in Phase 6 to verify the stateful closeout locally.
 
 ## Goal
 
@@ -15,8 +15,8 @@ Evolve support handling from checklist-driven, one-pass triage into an evidence-
 - Complete increment: the shared workflow authority now uses persisted diagnostic state to block ambiguous fixes, requires the approved diagnosis response before fix availability, and surfaces targeted evidence requests to both UI and MCP read models.
 - Complete increment: bounded diagnostic ambiguity escalation is enforced with deterministic specialist routing, explicit escalation audits, safe customer messaging, and shared UI/MCP gates.
 - Complete increment: bounded deterministic known-event correlation links in-window tickets to local, auditable incident records without changing the shared diagnostic authority.
-- Complete increment: the broad deterministic multi-turn evaluation harness covers ordinary triage, known causes/events, evidence, ambiguity, escalation, fixes, stale replies, and adversarial text.
-- Next: review the workflow/read model and portfolio presentation using the harness results.
+- Complete increment: the context-aware deterministic diagnostic evaluation harness covers ordinary triage, known causes/events, evidence, ambiguity, escalation, fixes, stale replies, and adversarial text without mutating runtime state.
+- Complete Phase 6: the authoritative `get_ticket_workflow` read model is verified at every transition in a stateful MCP lifecycle replay, and the complete journey plus bounded-escalation companion are documented for portfolio review.
 
 ## Current audit
 
@@ -143,9 +143,15 @@ Metrics:
 - turns to diagnosis and resolution;
 - human intervention and GPT token/cost telemetry where available.
 
-### Phase 6 — Workflow/read-model review and portfolio presentation (next)
+### Phase 6 — Workflow/read-model review and portfolio presentation (complete)
 
-After the diagnostic state is stable, verify whether `get_ticket_workflow` already provides ticket, conversation, recommendation, workflow, evidence, diagnosis, and fix/verification state. Only add a tool if a concrete missing read capability is demonstrated. Then refresh the case study/demo to show multi-turn evidence, ambiguity, approval, verification, and legitimate closure without relying primarily on TKT-1010.
+After the diagnostic state is stable, verify whether `get_ticket_workflow` already provides ticket, conversation, recommendation, workflow, evidence, diagnosis, and fix/verification state. The MCP contract and replay now verify that it does; no additional workflow-state tool was needed. The stateful replay demonstrates multi-turn evidence, approval, diagnosis, mitigation/fix, verification, and legitimate closure, while the diagnostic matrix documents bounded ambiguity and specialist escalation as a separate supporting path.
+
+Verification:
+
+```powershell
+npm run evaluate:lifecycle-replay
+```
 
 ## Scope guardrails
 

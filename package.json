@@ -17,6 +17,7 @@
     "evaluate": "node dist/scripts/evaluate.js",
     "evaluate:diagnostics": "npm test -- --run test/diagnostic-evaluation.test.ts",
     "evaluate:lifecycle": "npm run build && node dist/scripts/evaluate-all-ticket-lifecycles.js",
+    "evaluate:lifecycle-replay": "npm run build && node dist/scripts/evaluate-diagnostic-lifecycle-replay.js",
     "evaluate:ai-comparison": "npm run build && node dist/scripts/evaluate-ai-comparison.js",
     "evaluate:ai-diagnosis": "npm run build && node dist/scripts/evaluate-ai-diagnosis.js",
     "start": "node dist/src/index.js",

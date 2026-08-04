@@ -122,6 +122,7 @@ describe("evaluateTicketWithAi", () => {
     });
 
     expect(classificationInput).toMatchObject({ excludedDiagnosis: rejectedDiagnosis });
+    expect(classificationInput).not.toHaveProperty("deterministicClassification.classificationConfidence");
     expect(draftInput).toMatchObject({ excludedDiagnosis: rejectedDiagnosis });
   });
 

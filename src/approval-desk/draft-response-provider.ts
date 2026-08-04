@@ -145,7 +145,12 @@ export interface GptClassificationReasoning {
 export interface GptClassificationReasoningInput {
   ticket: Ticket;
   conversationContext: ConversationContext;
-  deterministicClassification: TicketClassification;
+  /**
+   * Only the deterministic routing facts are advisory context for GPT.
+   * Trusted classifier provenance is persisted at the evaluation boundary and
+   * must not be passed to model providers.
+   */
+  deterministicClassification: Omit<TicketClassification, "classificationConfidence">;
   excludedDiagnosis?: DiagnosisContext;
 }
 

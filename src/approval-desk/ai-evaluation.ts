@@ -169,10 +169,14 @@ async function runClassificationStage(input: {
   }
 
   try {
+    const {
+      classificationConfidence: _classificationConfidence,
+      ...providerClassification
+    } = input.baseline;
     const execution = await input.classificationProvider.reason({
       ticket: input.ticket,
       conversationContext: input.conversationContext,
-      deterministicClassification: input.baseline,
+      deterministicClassification: providerClassification,
       excludedDiagnosis: input.rejectedDiagnosis,
     });
     const advice = advisoryAdvice({

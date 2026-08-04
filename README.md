@@ -775,16 +775,25 @@ criteria rather than a guaranteed transcript. The detailed script is in
 - average submitted-recommendation confidence;
 - escalation totals and counts by reason;
 - configured minutes per accepted recommendation;
-- estimated minutes saved.
+- estimated minutes saved;
+- average approved confidence, confidence-band counts, and pending potential
+  savings.
 
 The savings formula is deliberately simple:
 
 ```text
 estimatedMinutesSaved =
   approvedRecommendations * minutesPerAcceptedRecommendation
+
+potentialMinutesSaved =
+  pendingRecommendations * minutesPerAcceptedRecommendation
 ```
 
-The stdio process defaults to 8 minutes per accepted recommendation. Override
+`estimatedMinutesSaved` is a realized, approval-attributed estimate: it counts
+only approved recommendations. `potentialMinutesSaved` is a projection for
+pending recommendations. Neither value is measured stopwatch time, labor cost,
+customer outcome, or financial impact. The stdio process defaults to 8 minutes
+per accepted recommendation. Override
 the bookkeeping assumption before starting a manual server process:
 
 ```powershell
@@ -795,6 +804,42 @@ npm start
 This value is a configured estimate, not measured labor, cost, response time,
 customer outcome, or financial impact. At a fresh runtime there are no
 approved recommendations, so the estimate is zero.
+
+### Uncertainty-aware classification confidence
+
+Classifier confidence is uncertainty-aware decision support, not a calibrated
+probability that the classification is true. The deterministic classifier
+uses the versioned `uncertainty-aware-v1` method, combining category support,
+the margin over the runner-up, independent signal diversity, and disagreement
+penalties. The resulting bands are `low` (<0.75), `medium` (0.75–<0.90), and
+`high` (>=0.90).
+
+Persisted provenance records bounded reason codes such as
+`weak-category-support`, `close-category-competition`, `low-signal-diversity`,
+`metadata-disagreement`, and `no-actionable-category`. Metadata, disagreement,
+known-cause/event, duplicate, and GPT-advisory emissions do not count as
+independent evidence diversity. GPT classification may suggest bounded
+advisory signals, but it cannot author trusted confidence provenance; the
+deterministic classifier and approval boundary remain authoritative.
+
+Older recommendations without optional provenance remain readable. Their
+numeric confidence is retained, and queue metrics can still place it in a
+band, but no retrospective reason codes are invented. Fixture/expected-outcome
+evaluation lanes likewise use the legacy scalar-confidence path and do not
+author trusted provenance.
+
+For a deterministic, transport-consistent showcase run:
+
+```powershell
+npm run demo:metrics
+```
+
+The command reads the seed tickets and sample recommendations, emits stable
+JSON validated by `QueueMetricsSchema`, and uses the same fixed timestamp and
+8-minute default assumption as the metrics calculator. `get_queue_metrics`,
+`/api/metrics`, and `metrics://queue` all use that shared schema/calculator;
+the CLI output is a consistency check rather than a second metrics
+implementation.
 
 ## Reproducible Evaluation
 

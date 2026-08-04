@@ -151,6 +151,26 @@ The committed fixture evaluator reports:
 These metrics are reproducible fixture checks, not real customer support
 performance claims.
 
+## Queue Metrics And Confidence Semantics
+
+The project also exposes one queue-metrics contract through the Approval Desk,
+`/api/metrics`, MCP `get_queue_metrics`, `metrics://queue`, and the deterministic
+`npm run demo:metrics` showcase. The shared `QueueMetricsSchema` keeps those
+surfaces aligned instead of maintaining separate counters.
+
+Classifier confidence is uncertainty-aware decision support, not calibrated
+probability. The `uncertainty-aware-v1` method combines support, runner-up
+margin, independent signal diversity, and disagreement penalties. Low,
+medium, and high bands are `<0.75`, `0.75–<0.90`, and `>=0.90`; bounded reason
+codes make uncertainty inspectable while staying out of customer responses.
+GPT may propose advisory classification signals, but deterministic routing and
+trusted provenance remain authoritative.
+
+Savings are deliberately labelled as estimates. `estimatedMinutesSaved` counts
+approved recommendations under the configured minutes-per-approval assumption;
+`potentialMinutesSaved` projects pending work. Neither is measured stopwatch
+time, labor cost, customer outcome, or financial impact.
+
 ## What To Review In The Code
 
 - `src/server.ts`: MCP tools, resources, prompts, and safety annotations.

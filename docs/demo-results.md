@@ -14,6 +14,38 @@ npm run demo:showcase
 The command resets local runtime data, starts the browser Approval Desk, and
 prints a local URL.
 
+## Deterministic Queue Metrics Showcase
+
+The metrics showcase uses the same calculator and schema as the MCP and HTTP
+surfaces:
+
+```powershell
+npm run demo:metrics
+```
+
+It reads `data/seed/tickets.json` and
+`data/seed/sample-recommendations.json`, uses the fixed showcase timestamp
+`2026-06-10T12:00:00.000Z`, and applies the shared eight-minute approval
+assumption. The current seed output is 30 submitted/pending recommendations,
+29 open tickets, 0 untriaged tickets, 17 breached and 6 at-risk open-ticket
+SLAs, average confidence `0.95` (rounded), all 30 recommendations in the high band, and
+`potentialMinutesSaved: 240`. No recommendations are approved in this seed
+snapshot, so `estimatedMinutesSaved` is `0`. The emitted JSON retains the full
+numeric average; the prose value is rounded for readability.
+
+Confidence is uncertainty-aware decision support, not probability. The
+`uncertainty-aware-v1` bands are low (<0.75), medium (0.75–<0.90), and high
+(>=0.90); reason codes explain bounded uncertainty without becoming
+customer-facing text. GPT advice remains advisory and cannot author trusted
+confidence provenance. `estimatedMinutesSaved` is an approval-attributed
+estimate, while `potentialMinutesSaved` is a pending projection; neither is a
+measured stopwatch or business-impact metric.
+
+For transport consistency, compare the CLI JSON with `get_queue_metrics`,
+`/api/metrics`, and `metrics://queue` at the same fixture time and data state.
+All four surfaces call the shared `calculateQueueMetrics` implementation and
+validate against `QueueMetricsSchema`.
+
 ## Resettable Skill Showcase Results
 
 The separate command-line showcase uses fresh temporary state and exercises

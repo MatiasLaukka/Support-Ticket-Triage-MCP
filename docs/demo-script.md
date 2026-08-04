@@ -122,11 +122,28 @@ Expected checkpoints:
   recommendations; acceptance rate, rejection rate, and average confidence are
   `null`.
 - `minutesPerAcceptedRecommendation` is 8 and
-  `estimatedMinutesSaved` is 0.
+  `estimatedMinutesSaved` is 0. Pending recommendations are reflected in
+  `potentialMinutesSaved`; it is a projection, not realized savings.
 - SLA counts are evaluated at the response's `generatedAt`. Because fixture
   deadlines are fixed on June 10, 2026, later runs classify due open tickets
   as breached.
 - No ticket, recommendation, or audit file is changed.
+
+For a deterministic standalone check of the same contract, run:
+
+```powershell
+npm run demo:metrics
+```
+
+The CLI reads the seed tickets and sample recommendations, fixes the showcase
+time to `2026-06-10T12:00:00.000Z`, and emits `QueueMetricsSchema`-validated
+JSON. Confidence is reported as uncertainty-aware decision support using
+`uncertainty-aware-v1` bands (`low`, `medium`, `high`), not as probability.
+Metadata-only, disagreement, duplicate, known-cause/event, and GPT-advisory
+signals do not inflate independent evidence diversity. GPT suggestions remain
+advisory and cannot author trusted provenance. Compare this output with
+`get_queue_metrics` or `metrics://queue` only when the same data and timestamp
+are used.
 
 ## 2. Safe Prompt-Injection Triage
 

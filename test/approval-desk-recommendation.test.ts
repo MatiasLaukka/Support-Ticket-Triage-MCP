@@ -96,6 +96,28 @@ describe("Approval Desk recommendation builder", () => {
     });
   });
 
+  it("emits classifier confidence only when the deterministic classifier runs", async () => {
+    const outcomes = await loadExpectedOutcomes(
+      resolve("data/seed/expected-outcomes.json"),
+    );
+    const ticket = await loadSeedTicket("TKT-1005");
+
+    const classifierInput = buildApprovalDeskRecommendationInput({
+      ticket,
+      actor: "approval-desk",
+    });
+    const fixtureInput = buildApprovalDeskRecommendationInput({
+      ticket,
+      outcome: outcomes.get("TKT-1005")!,
+      actor: "approval-desk",
+    });
+
+    expect(classifierInput.classificationConfidence).toMatchObject({
+      method: "uncertainty-aware-v1",
+    });
+    expect(fixtureInput.classificationConfidence).toBeUndefined();
+  });
+
   it("persists a known event link alongside the known cause", async () => {
     const outcomes = await loadExpectedOutcomes(
       resolve("data/seed/expected-outcomes.json"),

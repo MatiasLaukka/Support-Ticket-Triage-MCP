@@ -18,7 +18,9 @@ import {
   type Ticket,
 } from "../domain.js";
 import type { KnowledgeObject } from "../knowledge-evolution/domain.js";
-import type { SubmitRecommendationInput } from "../triage-service.js";
+import type {
+  SubmitEvaluationInput,
+} from "../triage-service.js";
 import {
   buildDeterministicGptAssist,
   DEFAULT_SUPPORT_COMPANY_NAME,
@@ -107,7 +109,7 @@ export function buildApprovalDeskRecommendationInput(input: {
   rejectedDiagnosis?: DiagnosisContext;
   fixContext?: FixContext;
   approvedObjects?: readonly KnowledgeObject[];
-}): Omit<SubmitRecommendationInput, "submittedAt"> {
+}): Omit<SubmitEvaluationInput, "submittedAt" | "evaluatedCustomerReplyWatermark"> {
   const { ticket, outcome, actor } = input;
   const conversationContextForClassification = buildConversationContextForTicket({
     ticket,
@@ -245,6 +247,7 @@ export function buildApprovalDeskRecommendationInput(input: {
         }
       : {
           classificationSignals: classification.signals,
+          classificationConfidence: classification.classificationConfidence,
           confidence: classification.confidence,
           rationale: `${ticket.id} was classified by the deterministic classifier as ${resolvedOutcome.category} routing to ${projectedTeam} with knowledge ${resolvedOutcome.knowledgeArticleIds.join(
             ", ",
@@ -275,7 +278,9 @@ export async function buildApprovalDeskRecommendationInputWithDrafting(input: {
   aiPreference?: AiPreference;
   classificationTrace?: AiExecutionTrace["classification"];
   safety?: PromptInjectionAssessment;
-}): Promise<Omit<SubmitRecommendationInput, "submittedAt">> {
+}): Promise<
+  Omit<SubmitEvaluationInput, "submittedAt" | "evaluatedCustomerReplyWatermark">
+> {
   const base = buildApprovalDeskRecommendationInput(input);
   const providerOutcome = input.outcome ?? {
     ticketId: input.ticket.id,

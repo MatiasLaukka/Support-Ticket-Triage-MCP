@@ -5,6 +5,7 @@ import {
   ApprovalSchema,
   AuditEventSchema,
   CategorySchema,
+  ClassificationConfidenceSchema,
   ClassificationSignalSchema,
   CustomerReplyWatermarkSchema,
   DiagnosisEvidenceReferenceSchema,
@@ -33,6 +34,7 @@ import {
   type ApprovedField,
   type AuditEvent,
   type Category,
+  type ClassificationConfidence,
   type ClassificationSignal,
   type DiagnosisImpactSet,
   type DiagnosisEvidenceReference,
@@ -129,6 +131,7 @@ const RejectRecommendationInputSchema = z
 
 const SubmitEvaluationInputSchema = SubmitRecommendationInputSchema.extend({
   evaluatedCustomerReplyWatermark: CustomerReplyWatermarkSchema,
+  classificationConfidence: ClassificationConfidenceSchema.optional(),
 });
 
 const CancelApprovalInputSchema = z
@@ -312,6 +315,7 @@ export type CustomerReplyWatermark = z.infer<
 
 export interface SubmitEvaluationInput extends SubmitRecommendationInput {
   evaluatedCustomerReplyWatermark: CustomerReplyWatermark;
+  classificationConfidence?: ClassificationConfidence;
 }
 
 export interface RejectRecommendationInput {
@@ -513,6 +517,7 @@ export class TriageService {
 
   private async submitValidated(
     parsed: z.infer<typeof SubmitRecommendationInputSchema>,
+    classificationConfidence?: ClassificationConfidence,
   ): Promise<TriageRecommendation> {
     const ticket = await this.dependencies.tickets.get(parsed.ticketId);
     if (ticket.revision !== parsed.sourceRevision) {
@@ -560,6 +565,9 @@ export class TriageService {
       ...(parsed.classificationSignals === undefined
         ? {}
         : { classificationSignals: parsed.classificationSignals }),
+      ...(classificationConfidence === undefined
+        ? {}
+        : { classificationConfidence }),
       ...(parsed.nextInvestigationSteps === undefined
         ? {}
         : { nextInvestigationSteps: parsed.nextInvestigationSteps }),
@@ -660,7 +668,11 @@ export class TriageService {
     const { customerReplyWatermarksMatch } = await import(
       "./approval-desk/diagnosis-review.js"
     );
-    const { evaluatedCustomerReplyWatermark, ...recommendationInput } = parsed;
+    const {
+      evaluatedCustomerReplyWatermark,
+      classificationConfidence,
+      ...recommendationInput
+    } = parsed;
     return serializeTicket(recommendationInput.ticketId, async () => {
       const currentCustomerReplyWatermark = customerReplyWatermarkFromAudits(
         await this.dependencies.audit.list(recommendationInput.ticketId),
@@ -673,9 +685,9 @@ export class TriageService {
       ) {
         throw stale("Evaluation customer reply snapshot is stale.");
       }
-      const recommendation = await this.submit(
+      const recommendation = await this.submitValidated(
         recommendationInput,
-        submitWithinTicketLockCapability,
+        classificationConfidence,
       );
       const recommendations =
         await this.supersedePendingRecommendationsWithNewerReply({

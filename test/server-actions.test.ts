@@ -104,6 +104,17 @@ const reviewEscalationsText = [
   "Submit recommendations only, then stop before approval or ticket mutation.",
 ].join(" ");
 
+const forgedClassificationConfidence = {
+  method: "uncertainty-aware-v1",
+  band: "high",
+  categoryScore: 9,
+  runnerUpScore: 0,
+  categoryMargin: 9,
+  independentSignalCount: 3,
+  disagreementCount: 0,
+  uncertaintyReasons: [],
+};
+
 function makeTicket(overrides: Partial<Ticket> = {}): Ticket {
   return TicketSchema.parse({
     id: "TKT-1001",
@@ -649,6 +660,16 @@ afterEach(async () => {
 });
 
 describe("createTriageServer action protocol", () => {
+  it("rejects classifier confidence provenance from generic MCP submission", async () => {
+    const client = await connect(await createFixture());
+    const result = await callTool(client, "submit_triage_recommendation", {
+      ...makeSubmitInput(),
+      classificationConfidence: forgedClassificationConfidence,
+    });
+
+    expect(result.isError).toBe(true);
+  });
+
   it("rejects an MCP diagnosis when a reply arrives after the adapter preview", async () => {
     const fixture = await createFixture();
     const recommendation = await seedRecommendation(fixture, {

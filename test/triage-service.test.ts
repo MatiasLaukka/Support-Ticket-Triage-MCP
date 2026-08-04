@@ -23,6 +23,7 @@ import {
   type DiagnosisReviewInput,
   type RecommendationStore,
   type RejectRecommendationInput,
+  type SubmitEvaluationInput,
   type SubmitRecommendationInput,
   type TicketStore,
 } from "../src/triage-service.js";
@@ -31,6 +32,16 @@ const recommendationId = "11111111-1111-4111-8111-111111111111";
 const auditId = "22222222-2222-4222-8222-222222222222";
 const fixedNow = new Date("2026-06-10T09:00:00.000Z");
 const temporaryRoots: string[] = [];
+const trustedClassificationConfidence = {
+  method: "uncertainty-aware-v1",
+  band: "high",
+  categoryScore: 9,
+  runnerUpScore: 0,
+  categoryMargin: 9,
+  independentSignalCount: 3,
+  disagreementCount: 0,
+  uncertaintyReasons: [],
+} as const;
 
 afterEach(async () => {
   await Promise.all(
@@ -41,6 +52,43 @@ afterEach(async () => {
 });
 
 describe("TriageService", () => {
+  it("rejects classifier confidence provenance from generic submission", async () => {
+    const harness = makeHarness();
+
+    await expect(
+      harness.service.submit({
+        ...makeSubmitInput(),
+        classificationConfidence: trustedClassificationConfidence,
+      } as unknown as SubmitRecommendationInput),
+    ).rejects.toThrow();
+  });
+
+  it("persists trusted classifier confidence on evaluation while allowing fixture input without it", async () => {
+    const fixtureHarness = makeHarness();
+    const fixtureWatermark = customerReplyWatermarkFromAudits(
+      await fixtureHarness.audit.list("TKT-1001"),
+    );
+    const fixtureEvaluation = await fixtureHarness.service.submitEvaluation({
+      ...makeSubmitInput(),
+      evaluatedCustomerReplyWatermark: fixtureWatermark,
+    });
+    expect("classificationConfidence" in fixtureEvaluation.recommendation).toBe(false);
+
+    const classifierHarness = makeHarness();
+    const classifierWatermark = customerReplyWatermarkFromAudits(
+      await classifierHarness.audit.list("TKT-1001"),
+    );
+    const evaluated = await classifierHarness.service.submitEvaluation({
+      ...makeSubmitInput(),
+      classificationConfidence: trustedClassificationConfidence,
+      evaluatedCustomerReplyWatermark: classifierWatermark,
+    } as unknown as SubmitEvaluationInput);
+
+    expect(evaluated.recommendation.classificationConfidence).toEqual(
+      trustedClassificationConfidence,
+    );
+  });
+
   it("records an audited platform mitigation signal for an active known event", async () => {
     const harness = makeHarness();
     await harness.service.submit(

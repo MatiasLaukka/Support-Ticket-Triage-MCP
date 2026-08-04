@@ -14,6 +14,7 @@ import type { KnowledgeObject } from "../knowledge-evolution/domain.js";
 import type {
   DiagnosisContext,
   FixContext,
+  SubmitEvaluationInput,
   SubmitRecommendationInput,
 } from "../triage-service.js";
 import {
@@ -63,7 +64,9 @@ export async function evaluateTicketWithAi(input: {
   responseStyle: DraftCustomerResponseStyleInput;
   classificationProvider?: ClassificationReasoningProvider;
   draftProvider?: CustomerResponseDraftProvider;
-}): Promise<Omit<SubmitRecommendationInput, "submittedAt">> {
+}): Promise<
+  Omit<SubmitEvaluationInput, "submittedAt" | "evaluatedCustomerReplyWatermark">
+> {
   const classificationPreference =
     input.classificationPreference ?? input.aiPreference;
   const draftingPreference = input.draftingPreference ?? input.aiPreference;

@@ -13,6 +13,10 @@ describe("buildAutomationEvidenceReport", () => {
       approvedRecommendations: 2,
       rejectedRecommendations: 1,
       estimatedMinutesSaved: 16,
+      averageConfidence: 0.81,
+      averageApprovedConfidence: 0.9,
+      confidenceBandCounts: { low: 1, medium: 2, high: 3 },
+      potentialMinutesSaved: 8,
       ticketsByCategory: { authentication: 2 },
       ticketsByPriority: { P2: 2 },
       ticketsByTeam: { identity: 2 },
@@ -41,11 +45,11 @@ describe("buildAutomationEvidenceReport", () => {
 
     expect(report.generatedAt).toBe(generatedAt);
     expect(report.summary).toEqual({
-      openTickets: 7,
-      pendingRecommendations: 1,
-      approvedRecommendations: 2,
-      rejectedRecommendations: 1,
-      estimatedMinutesSaved: 16,
+      ...metrics,
+      averageApprovedConfidence: 0.9,
+      confidenceBandCounts: { low: 1, medium: 2, high: 3 },
+      potentialMinutesSaved: 8,
+      lowConfidenceCount: 1,
       auditEvents: 2,
       safetyBlocks: 1,
       activeGuardrails: 6,
@@ -80,18 +84,22 @@ describe("buildAutomationEvidenceReport", () => {
     expect(report.metrics.ticketsByPriority).not.toBe(metrics.ticketsByPriority);
     expect(report.metrics.ticketsByTeam).not.toBe(metrics.ticketsByTeam);
     expect(report.metrics.escalationCounts).not.toBe(metrics.escalationCounts);
+    expect(report.metrics.confidenceBandCounts).not.toBe(metrics.confidenceBandCounts);
+    expect(report.summary.confidenceBandCounts).not.toBe(report.metrics.confidenceBandCounts);
 
     metrics.openTickets = 99;
     metrics.ticketsByCategory.authentication = 99;
     metrics.ticketsByPriority.P2 = 99;
     metrics.ticketsByTeam.identity = 99;
     metrics.escalationCounts.total = 99;
+    metrics.confidenceBandCounts!.low = 99;
 
     expect(report.metrics.openTickets).toBe(7);
     expect(report.metrics.ticketsByCategory.authentication).toBe(2);
     expect(report.metrics.ticketsByPriority.P2).toBe(2);
     expect(report.metrics.ticketsByTeam.identity).toBe(2);
     expect(report.metrics.escalationCounts.total).toBe(1);
+    expect(report.metrics.confidenceBandCounts!.low).toBe(1);
   });
 
   it("counts only provable blocked safety outcomes", () => {
@@ -165,9 +173,12 @@ function makeMetrics(overrides: Partial<QueueMetrics> = {}): QueueMetrics {
     acceptanceRate: null,
     rejectionRate: null,
     averageConfidence: null,
+    averageApprovedConfidence: null,
+    confidenceBandCounts: { low: 0, medium: 0, high: 0 },
     escalationCounts: { total: 0 },
     minutesPerAcceptedRecommendation: 8,
     estimatedMinutesSaved: 0,
+    potentialMinutesSaved: 0,
     ...overrides,
   };
 }

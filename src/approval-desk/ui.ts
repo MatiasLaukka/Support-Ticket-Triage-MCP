@@ -2888,7 +2888,11 @@ export const approvalDeskHtml = `<!doctype html>
           card('Pending recommendations', formatEvidenceValue(summary.pendingRecommendations)) +
           card('Approved recommendations', formatEvidenceValue(summary.approvedRecommendations)) +
           card('Rejected recommendations', formatEvidenceValue(summary.rejectedRecommendations)) +
-          card('Estimated minutes saved', formatEvidenceValue(summary.estimatedMinutesSaved)) +
+          card('Estimated minutes saved (realized approval estimate)', formatEvidenceValue(summary.estimatedMinutesSaved)) +
+          card('Potential minutes saved', formatEvidenceValue(summary.potentialMinutesSaved)) +
+          card('Average confidence', formatEvidencePercentage(summary.averageConfidence)) +
+          card('Average approved confidence', formatEvidencePercentage(summary.averageApprovedConfidence)) +
+          card('Low-confidence recommendations', formatEvidenceValue(summary.lowConfidenceCount)) +
           card('Audit events', formatEvidenceValue(summary.auditEvents)) +
           card('Safety blocks', formatEvidenceValue(summary.safetyBlocks)) +
           card('Active guardrails', formatEvidenceValue(summary.activeGuardrails));
@@ -3852,6 +3856,11 @@ export const approvalDeskHtml = `<!doctype html>
 
       function formatEvidenceValue(value) {
         return value === undefined || value === null ? 'unknown' : String(value);
+      }
+
+      function formatEvidencePercentage(value) {
+        const numeric = Number(value);
+        return Number.isFinite(numeric) ? (numeric * 100).toFixed(1) + '%' : 'unknown';
       }
 
       function formatDuplicateCandidates(candidates) {

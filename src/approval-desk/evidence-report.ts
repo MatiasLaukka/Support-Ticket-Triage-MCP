@@ -3,12 +3,8 @@ import type { QueueMetrics } from "../metrics.js";
 
 export interface AutomationEvidenceReport {
   generatedAt: string;
-  summary: {
-    openTickets: number;
-    pendingRecommendations: number;
-    approvedRecommendations: number;
-    rejectedRecommendations: number;
-    estimatedMinutesSaved: number;
+  summary: QueueMetrics & {
+    lowConfidenceCount: number;
     auditEvents: number;
     safetyBlocks: number;
     activeGuardrails: number;
@@ -101,21 +97,28 @@ export function buildAutomationEvidenceReport(
     .slice(0, 8)
     .map(toEvidenceActivity);
 
+  const metrics = cloneMetrics(input.metrics);
+  const confidenceBandCounts = metrics.confidenceBandCounts ?? {
+    low: 0,
+    medium: 0,
+    high: 0,
+  };
+  const summaryMetrics = cloneMetrics(metrics);
   return {
     generatedAt: input.generatedAt,
     summary: {
-      openTickets: input.metrics.openTickets,
-      pendingRecommendations: input.metrics.pendingRecommendations,
-      approvedRecommendations: input.metrics.approvedRecommendations,
-      rejectedRecommendations: input.metrics.rejectedRecommendations,
-      estimatedMinutesSaved: input.metrics.estimatedMinutesSaved,
+      ...summaryMetrics,
+      averageApprovedConfidence: summaryMetrics.averageApprovedConfidence ?? null,
+      confidenceBandCounts: { ...confidenceBandCounts },
+      potentialMinutesSaved: summaryMetrics.potentialMinutesSaved ?? 0,
+      lowConfidenceCount: confidenceBandCounts.low,
       auditEvents: input.audits.length,
       safetyBlocks: input.audits.filter(isSafetyBlock).length,
       activeGuardrails: GUARDRAILS.length,
     },
     guardrails: GUARDRAILS.map((guardrail) => ({ ...guardrail })),
     recentActivity,
-    metrics: cloneMetrics(input.metrics),
+    metrics,
   };
 }
 
@@ -140,5 +143,8 @@ function cloneMetrics(metrics: QueueMetrics): QueueMetrics {
     ticketsByPriority: { ...metrics.ticketsByPriority },
     ticketsByTeam: { ...metrics.ticketsByTeam },
     escalationCounts: { ...metrics.escalationCounts },
+    ...(metrics.confidenceBandCounts === undefined
+      ? {}
+      : { confidenceBandCounts: { ...metrics.confidenceBandCounts } }),
   };
 }

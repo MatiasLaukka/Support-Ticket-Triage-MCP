@@ -3394,12 +3394,17 @@ describe("createApprovalDeskHttpServer", () => {
 
     expect(evidence.status).toBe(200);
     expect(evidence.body.generatedAt).toBe(now.toISOString());
-    expect(evidence.body.summary).toEqual({
+    expect(evidence.body.summary).toMatchObject({
       openTickets: 29,
       pendingRecommendations: 1,
       approvedRecommendations: 0,
       rejectedRecommendations: 0,
       estimatedMinutesSaved: 0,
+      averageConfidence: 0.95,
+      averageApprovedConfidence: null,
+      lowConfidenceCount: 0,
+      confidenceBandCounts: { low: 0, medium: 0, high: 1 },
+      potentialMinutesSaved: 8,
       auditEvents: 1,
       safetyBlocks: 0,
       activeGuardrails: 6,

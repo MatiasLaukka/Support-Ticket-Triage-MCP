@@ -17,6 +17,7 @@ describe("approvalDeskHtml", () => {
     expect(approvalDeskHtml).toContain("Estimated minutes saved");
     expect(approvalDeskHtml).toContain("Technical ticket details");
     expect(approvalDeskHtml).toContain("Developer/audit output");
+    expect(approvalDeskHtml).not.toContain("uncertaintyReasons");
     expect(approvalDeskHtml.indexOf("Conversation context")).toBeLessThan(
       approvalDeskHtml.indexOf("Advanced details"),
     );
@@ -2117,7 +2118,14 @@ describe("approvalDeskHtml", () => {
     expect(app.el("evidencePanel").innerHTML).toContain(
       "Estimated minutes saved",
     );
+    expect(app.el("evidencePanel").innerHTML).toContain(
+      "Estimated minutes saved (realized approval estimate)",
+    );
     expect(app.el("evidencePanel").innerHTML).toContain("42");
+    expect(app.el("evidencePanel").innerHTML).toContain("Average confidence");
+    expect(app.el("evidencePanel").innerHTML).toContain("81.0%");
+    expect(app.el("evidencePanel").innerHTML).toContain("Low-confidence recommendations");
+    expect(app.el("evidencePanel").innerHTML).toContain("Potential minutes saved");
     expect(app.el("evidencePanel").innerHTML).toContain("Safety blocks");
     expect(app.el("guardrailsPanel").innerHTML).toContain("Approval required");
     expect(app.el("guardrailsPanel").innerHTML).toContain(
@@ -2966,6 +2974,11 @@ const fixtureEvidence = {
     approvedRecommendations: 2,
     rejectedRecommendations: 1,
     estimatedMinutesSaved: 42,
+    averageConfidence: 0.81,
+    averageApprovedConfidence: 0.9,
+    lowConfidenceCount: 1,
+    confidenceBandCounts: { low: 1, medium: 2, high: 3 },
+    potentialMinutesSaved: 8,
     auditEvents: 7,
     safetyBlocks: 1,
     activeGuardrails: 5,

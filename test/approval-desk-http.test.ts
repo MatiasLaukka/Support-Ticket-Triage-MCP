@@ -19,6 +19,7 @@ import { evaluateTicketWithAi } from "../src/approval-desk/ai-evaluation.js";
 import type { ClassificationReasoningProvider } from "../src/approval-desk/classification-reasoning-provider.js";
 import type { CustomerResponseDraftProvider } from "../src/approval-desk/draft-response-provider.js";
 import type { CandidateDraftProvider } from "../src/knowledge-evolution/candidate-draft-provider.js";
+import { KnowledgeCandidateSchema } from "../src/knowledge-evolution/domain.js";
 import { KnowledgeEvolutionService } from "../src/knowledge-evolution/service.js";
 import { createRuntimeDependencies } from "../src/runtime.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -951,6 +952,134 @@ describe("createApprovalDeskHttpServer", () => {
         JSON.parse(JSON.stringify(
           (mcpWorkflow.structuredContent as any).recommendationSummary,
         )),
+      );
+    } finally {
+      await Promise.allSettled([client.close(), server.close()]);
+    }
+  });
+
+  it("exposes the same knowledge-pattern gate in HTTP and MCP workflow reads", async () => {
+    const { deps, json } = await startFixture();
+    const ticket = await deps.tickets.get("TKT-1001");
+    const recommendation = await json("/api/tickets/TKT-1001/recommendations", {
+      method: "POST",
+      body: JSON.stringify({ actor: "approval-desk" }),
+    });
+    await approveAndSend(json, "TKT-1001", recommendation.body.recommendation, false);
+
+    const diagnosis = {
+      status: "completed" as const,
+      causeType: "performance" as const,
+      customerSafeSummary: "The platform is delaying event processing.",
+      evidenceUsed: ["The event timeline shows the same processing delay."],
+      evidenceReferences: [],
+      confidence: "confirmed" as const,
+      owner: "engineering" as const,
+      recommendedNextAction: "Review the platform mitigation signal.",
+      doNotSay: [],
+    } satisfies DiagnosisContext;
+    const originalDiagnosis = AuditEventSchema.parse({
+      id: "71000000-0000-4000-8000-000000000001",
+      timestamp: "2026-06-10T09:10:00.000Z",
+      actor: "product-support",
+      action: "diagnosis-completed",
+      ticketId: "TKT-1001",
+      before: {},
+      after: {
+        diagnosis,
+        sourceTicketRevision: ticket.revision,
+        sourceConversationWatermark: { state: "none" },
+      },
+      rationale: "The evidence supports a confirmed platform delay.",
+      knowledgeArticleIds: ["event-tracking-debugging"],
+      result: "success",
+    });
+    await deps.audits.append(originalDiagnosis);
+    await deps.service.reviewDiagnosis({
+      decision: "revalidate",
+      diagnosisId: originalDiagnosis.id,
+      ticketId: "TKT-1001",
+      sourceTicketRevision: ticket.revision,
+      sourceConversationWatermark: { state: "none" },
+      editedDiagnosis: diagnosis,
+      actor: "reviewer",
+      rationale: "The diagnosis is current and supported.",
+      reviewedAt: "2026-06-10T09:11:00.000Z",
+    });
+    await deps.knowledgeEvolution.objects.saveCandidate(KnowledgeCandidateSchema.parse({
+      id: "known-cause-platform-delay",
+      kind: "known-cause",
+      name: "Recurring platform event delay",
+      summary: "Event processing can be delayed during a platform incident.",
+      triggerPatterns: ["event processing delay"],
+      evidencePolicy: { mode: "undecided" },
+      timeConstraints: ["During an active platform incident."],
+      diagnosticSteps: ["Compare the event timeline with the active incident."],
+      fixSteps: ["Apply the platform mitigation workflow."],
+      verificationSteps: ["Confirm event processing resumes."],
+      customerSafeExplanation: "We are reviewing a platform processing delay.",
+      operatorRationale: "The repeated diagnosis supports a reusable platform-delay workflow.",
+      owner: "api-platform",
+      version: 1,
+      supportingDiagnosisIds: [`diagnosis-${originalDiagnosis.id}`],
+      supportingTicketIds: ["TKT-1001", "TKT-1002"],
+      provenance: {
+        source: "deterministic discovery",
+        recordedAt: "2026-06-10T09:12:00.000Z",
+      },
+      status: "candidate",
+      deterministicScores: { confidence: 0.8, support: 2 },
+      deterministicReasons: ["shared platform-delay diagnosis"],
+      contradictions: [],
+      validationStatus: "valid",
+      evidencePolicyMetadata: { derivedEvidenceIds: [], operatorAddedEvidenceIds: [] },
+      discovery: {
+        score: 0.8,
+        reasons: ["shared platform-delay diagnosis"],
+        support: [
+          {
+            source: "completed-diagnosis",
+            diagnosisId: `diagnosis-${originalDiagnosis.id}`,
+            ticketId: "TKT-1001",
+            score: 0.8,
+            reasons: ["shared diagnosis"],
+          },
+          {
+            source: "open-ticket",
+            ticketId: "TKT-1002",
+            score: 0.4,
+            reasons: ["ticket similarity"],
+          },
+        ],
+        supportCount: 2,
+        contradictions: [],
+        meetsAlertThreshold: true,
+      },
+    }));
+
+    const http = await json("/api/tickets/TKT-1001");
+    const server = createTriageServer(deps);
+    const client = new Client({ name: "knowledge-pattern-read-parity", version: "1.0.0" });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    await server.connect(serverTransport);
+    await client.connect(clientTransport);
+    try {
+      const mcp = await client.callTool({
+        name: "get_ticket_workflow",
+        arguments: { id: "TKT-1001" },
+      });
+      const mcpWorkflow = mcp.structuredContent as any;
+      expect(http.body.operatorGuidance).toMatchObject({
+        stage: "pattern-review",
+        nextAction: "review-pattern",
+        knowledgePattern: {
+          state: "pending",
+          actionable: true,
+          candidateId: "known-cause-platform-delay",
+        },
+      });
+      expect(http.body.operatorGuidance).toEqual(
+        JSON.parse(JSON.stringify(mcpWorkflow.operatorGuidance)),
       );
     } finally {
       await Promise.allSettled([client.close(), server.close()]);
@@ -3904,6 +4033,7 @@ async function approveAndSend(
   json: Awaited<ReturnType<typeof startFixture>>["json"],
   ticketId: string,
   recommendation: { id: string; draftCustomerResponse: string },
+  automaticReplyEnabled?: boolean,
 ): Promise<void> {
   const approved = await json(`/api/recommendations/${recommendation.id}/approve`, {
     method: "POST",
@@ -3922,6 +4052,7 @@ async function approveAndSend(
     body: JSON.stringify({
       ticketId,
       actor: "matias-reviewer",
+      ...(automaticReplyEnabled === undefined ? {} : { automaticReplyEnabled }),
     }),
   });
   expect(sent.status).toBe(200);

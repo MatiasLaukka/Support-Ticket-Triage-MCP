@@ -656,16 +656,22 @@ async function getTicketDetail(
   id: string,
 ): Promise<unknown> {
   const ticketId = TicketIdSchema.parse(id);
-  const [ticket, auditPage, ticketAudits, recommendations] = await Promise.all([
+  const [ticket, auditPage, ticketAudits, recommendations, knowledgeCandidates, knowledgeAudits] = await Promise.all([
     deps.tickets.get(ticketId),
     deps.audits.listPage({ ticketId, offset: 0, limit: 10 }),
     deps.audits.list(ticketId),
     deps.recommendations.list(),
+    deps.knowledgeEvolution.objects.listCandidates(),
+    deps.knowledgeEvolution.audits.list(),
   ]);
   const workflow = buildTicketWorkflowReadModel({
     ticket,
     recommendations,
     audits: ticketAudits,
+    knowledgeEvolution: {
+      candidates: knowledgeCandidates,
+      audits: knowledgeAudits,
+    },
   });
   return {
     audits: auditPage,

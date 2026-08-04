@@ -74,6 +74,8 @@ import type {
 } from "./triage-service.js";
 import { customerReplyWatermarkFromAudits } from "./triage-service.js";
 import type { KnowledgeEvolutionService } from "./knowledge-evolution/service.js";
+import type { KnowledgeAuditRepository } from "./knowledge-evolution/knowledge-audit-repository.js";
+import type { KnowledgeObjectRepository } from "./knowledge-evolution/knowledge-object-repository.js";
 import {
   KnowledgeCandidateApprovalOutputSchema,
   KnowledgeCandidateEditsSchema,
@@ -412,7 +414,11 @@ export interface TriageServerDependencies {
   classificationReasoningProvider?: ClassificationReasoningProvider;
   draftProvider?: CustomerResponseDraftProvider;
   env?: NodeJS.ProcessEnv;
-  knowledgeEvolution?: { service: KnowledgeEvolutionService };
+  knowledgeEvolution?: {
+    service: KnowledgeEvolutionService;
+    objects?: Pick<KnowledgeObjectRepository, "listCandidates">;
+    audits?: Pick<KnowledgeAuditRepository, "list">;
+  };
 }
 
 export function createTriageServer(
@@ -831,13 +837,26 @@ async function getTicketWorkflow(
   deps: TriageServerDependencies,
   ticketId: TicketId,
 ): Promise<z.infer<typeof TicketWorkflowOutputSchema>> {
-  const [ticket, audits, recommendations] = await Promise.all([
+  const knowledgeEvolutionRead = deps.knowledgeEvolution?.objects !== undefined &&
+      deps.knowledgeEvolution.audits !== undefined
+    ? Promise.all([
+        deps.knowledgeEvolution.objects.listCandidates(),
+        deps.knowledgeEvolution.audits.list(),
+      ]).then(([candidates, audits]) => ({ candidates, audits }))
+    : Promise.resolve(undefined);
+  const [ticket, audits, recommendations, knowledgeEvolution] = await Promise.all([
     deps.tickets.get(ticketId),
     deps.audits.list(ticketId),
     deps.recommendations.list(),
+    knowledgeEvolutionRead,
   ]);
   return TicketWorkflowOutputSchema.parse(
-    buildTicketWorkflowReadModel({ ticket, audits, recommendations }),
+    buildTicketWorkflowReadModel({
+      ticket,
+      audits,
+      recommendations,
+      ...(knowledgeEvolution === undefined ? {} : { knowledgeEvolution }),
+    }),
   );
 }
 

@@ -59,6 +59,34 @@ describe("knowledge evolution service", () => {
     });
   });
 
+  it("derives policy from evidence shared by every supporting diagnosis", async () => {
+    const fixture = createFixture({ multiDiagnosisEvidence: "shared" });
+    await fixture.service().discover({ includeGpt: false, actorId: "support-lead" });
+
+    await expect(fixture.service().getCandidate("known-cause-diagnosis-001")).resolves.toMatchObject({
+      supportingDiagnosisIds: ["diagnosis-001", "diagnosis-002"],
+      evidencePolicy: { mode: "required", evidenceIds: ["request-id"] },
+      validationStatus: "valid",
+    });
+  });
+
+  it("leaves divergent multi-diagnosis evidence undecided instead of choosing by order", async () => {
+    const fixture = createFixture({ multiDiagnosisEvidence: "divergent" });
+    const service = fixture.service();
+    await service.discover({ includeGpt: false, actorId: "support-lead" });
+
+    await expect(service.getCandidate("known-cause-diagnosis-001")).resolves.toMatchObject({
+      supportingDiagnosisIds: ["diagnosis-001", "diagnosis-002"],
+      evidencePolicy: { mode: "undecided" },
+      validationStatus: "invalid",
+    });
+    await expect(service.approve({
+      candidateId: "known-cause-diagnosis-001",
+      actorId: "support-lead",
+      expectedVersion: 1,
+    })).rejects.toMatchObject({ code: "INVALID_APPROVAL_FIELDS" });
+  });
+
   it("records operator-added evidence IDs separately when a candidate policy is edited", async () => {
     const fixture = createFixture();
     const service = fixture.service();
@@ -287,7 +315,32 @@ describe("knowledge evolution service", () => {
     await expect(fixture.audits.list({ action: "rejected" })).resolves.toHaveLength(1);
   });
 
-  it("requires an authorized valid candidate that has not received a terminal review", async () => {
+  it("allows a deferred candidate to later be explicitly approved", async () => {
+    const fixture = createFixture();
+    const service = fixture.service();
+    const input = {
+      candidateId: "known-cause-diagnosis-001",
+      actorId: "support-lead",
+      expectedVersion: 1,
+    };
+    await service.discover({ includeGpt: false, actorId: "support-lead" });
+
+    await service.defer(input);
+
+    await expect(service.approve(input)).resolves.toMatchObject({
+      id: input.candidateId,
+      status: "approved",
+      version: 1,
+    });
+    await expect(fixture.audits.list({ candidateId: input.candidateId })).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ action: "deferred" }),
+        expect.objectContaining({ action: "approved" }),
+      ]),
+    );
+  });
+
+  it("requires an authorized valid candidate that has not received a terminal decision", async () => {
     const fixture = createFixture();
     const service = fixture.service();
     await service.discover({ includeGpt: false, actorId: "support-lead" });
@@ -385,6 +438,7 @@ function createFixture(options: {
   ticketScopedComponents?: boolean;
   legacyEvidence?: boolean;
   duplicateEvidence?: boolean;
+  multiDiagnosisEvidence?: "shared" | "divergent";
   beforePromote?: () => Promise<void>;
 } = {}) {
   const diagnosis: CompletedDiagnosis = {
@@ -423,6 +477,19 @@ function createFixture(options: {
   };
   const diagnoses = [
     diagnosis,
+    ...(options.multiDiagnosisEvidence === undefined
+      ? []
+      : [{
+        ...diagnosis,
+        id: "diagnosis-002",
+        ticketId: "TKT-1002",
+        evidenceReferences: options.multiDiagnosisEvidence === "shared"
+          ? [
+            { id: "request-id", labelAtDiagnosis: "Accepted request ID", source: "ticket" as const, sourceRef: "TKT-1002" },
+            { id: "event-id", labelAtDiagnosis: "Event ID", source: "ticket" as const, sourceRef: "TKT-1002" },
+          ]
+          : [{ id: "event-id", labelAtDiagnosis: "Event ID", source: "ticket" as const, sourceRef: "TKT-1002" }],
+      }]),
     ...(options.ticketScopedComponents
       ? [{
         ...diagnosis,

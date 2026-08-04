@@ -4,6 +4,14 @@ import { join, resolve } from "node:path";
 import process from "node:process";
 import { createControlledKnowledgeCandidateDraftProvider } from "../src/approval-desk/controlled-evaluation-providers.js";
 import { createRuntimeDependencies } from "../src/runtime.js";
+import { buildApprovalDeskRecommendationInput } from "../src/approval-desk/recommendation-builder.js";
+import {
+  TriageRecommendationSchema,
+  TicketSchema,
+  type ExpectedOutcome,
+  type SupportState,
+  type Ticket,
+} from "../src/domain.js";
 import type { CompletedDiagnosis } from "../src/knowledge-evolution/domain.js";
 
 export interface KnowledgeEvolutionShowcaseOptions {
@@ -20,7 +28,20 @@ export interface KnowledgeEvolutionShowcaseReport {
   candidateName?: string;
   approval: { actor: string; status: "approved" };
   auditActions: string[];
+  futureTicketReuse: {
+    ticketId: string;
+    prePromotion: ReuseObservation;
+    postPromotion: ReuseObservation;
+    afterEvidence: ReuseObservation;
+    historicalRecommendationUnchanged: boolean;
+  };
   output: string;
+}
+
+interface ReuseObservation {
+  knownCause: string | null;
+  supportState: SupportState;
+  missingEvidenceIds: string[];
 }
 
 export async function runKnowledgeEvolutionShowcase(
@@ -48,11 +69,56 @@ export async function runKnowledgeEvolutionShowcase(
   const candidateId = discovery.gptAdvisory.candidateId;
   if (candidateId === undefined) throw new Error("Showcase did not produce an advisory candidate.");
   const candidate = await deps.knowledgeEvolution.service.getCandidate(candidateId);
+  const futureTicket = futureReuseTicket();
+  const futureOutcome = futureReuseOutcome(futureTicket.id);
+  const recommendationBeforePromotion = buildApprovalDeskRecommendationInput({
+    ticket: futureTicket,
+    outcome: futureOutcome,
+    actor: "knowledge-evolution-showcase",
+  });
+  const historicalRecommendationId = "d0000000-0000-4000-8000-000000000099";
+  const { actor: _actor, ...historicalInput } = recommendationBeforePromotion;
+  await deps.recommendations.create(TriageRecommendationSchema.parse({
+    ...historicalInput,
+    id: historicalRecommendationId,
+    resolution: "pending",
+    createdAt: "2026-08-01T12:01:00.000Z",
+  }));
+  const historicalBefore = stableJson(await deps.recommendations.get(historicalRecommendationId));
   const approved = await deps.knowledgeEvolution.service.approve({
     candidateId,
     actorId: "support-lead",
     expectedVersion: candidate.version,
+    edits: {
+      triggerPatterns: ["Accepted checkout events are missing from profile timelines."],
+    },
   });
+  const recommendationAfterPromotion = buildApprovalDeskRecommendationInput({
+    ticket: futureTicket,
+    outcome: futureOutcome,
+    actor: "knowledge-evolution-showcase",
+    approvedObjects: [approved],
+  });
+  const recommendationAfterEvidence = buildApprovalDeskRecommendationInput({
+    ticket: futureTicket,
+    outcome: futureOutcome,
+    actor: "knowledge-evolution-showcase",
+    approvedObjects: [approved],
+    customerReplies: [{
+      id: "reply-2099-request-id",
+      ticketId: futureTicket.id,
+      createdAt: "2026-08-01T12:05:00.000Z",
+      body: "Request ID: req-2099 confirms the accepted event processing attempt.",
+    }],
+  });
+  const historicalAfter = stableJson(await deps.recommendations.get(historicalRecommendationId));
+  const futureTicketReuse = {
+    ticketId: futureTicket.id,
+    prePromotion: reuseObservation(recommendationBeforePromotion),
+    postPromotion: reuseObservation(recommendationAfterPromotion),
+    afterEvidence: reuseObservation(recommendationAfterEvidence),
+    historicalRecommendationUnchanged: historicalBefore === historicalAfter,
+  };
   const auditActions = (await deps.knowledgeEvolution.audits.list({ candidateId }))
     .map((event) => event.action);
   const auditEvents = await deps.knowledgeEvolution.audits.list({ candidateId });
@@ -68,6 +134,13 @@ export async function runKnowledgeEvolutionShowcase(
     "- Human approval required: support-lead explicitly promoted the candidate.",
     `- Approved knowledge object: ${approved.id} v${approved.version}.`,
     `- Audit actions: ${auditActions.join(", ")}.`,
+    "",
+    "## Future-ticket reuse",
+    "",
+    `- Before promotion: ${formatReuseObservation(futureTicketReuse.prePromotion)}.`,
+    `- After v1 promotion: ${formatReuseObservation(futureTicketReuse.postPromotion)}.`,
+    `- After required evidence: ${formatReuseObservation(futureTicketReuse.afterEvidence)}.`,
+    `- Historical recommendation: ${futureTicketReuse.historicalRecommendationUnchanged ? "byte-for-byte unchanged" : "CHANGED"}.`,
     ...(options.verbose ? [
       "",
       "## Sanitized evidence",
@@ -94,7 +167,58 @@ export async function runKnowledgeEvolutionShowcase(
     candidateName: candidate.name,
     approval: { actor: "support-lead", status: "approved" },
     auditActions,
+    futureTicketReuse,
     output,
+  };
+}
+
+function reuseObservation(input: {
+  knownCause?: string | null;
+  supportState?: SupportState;
+  missingEvidence?: readonly { id: string }[];
+}): ReuseObservation {
+  return {
+    knownCause: input.knownCause ?? null,
+    supportState: input.supportState ?? "diagnosing",
+    missingEvidenceIds: (input.missingEvidence ?? []).map(({ id }) => id),
+  };
+}
+
+function formatReuseObservation(observation: ReuseObservation): string {
+  return `knownCause=${observation.knownCause ?? "none"}; state=${observation.supportState}; missing=${observation.missingEvidenceIds.join(",") || "none"}`;
+}
+
+function stableJson(value: unknown): string {
+  return JSON.stringify(value, null, 2);
+}
+
+function futureReuseTicket(): Ticket {
+  return TicketSchema.parse({
+    id: "TKT-2099",
+    createdAt: "2026-08-01T11:00:00.000Z",
+    updatedAt: "2026-08-01T11:00:00.000Z",
+    customer: { name: "Future Store", plan: "enterprise", region: "eu-west", vip: false },
+    subject: "Accepted checkout events are missing from profile timelines.",
+    description: "Accepted checkout events are missing from profile timelines. Endpoint URL: https://api.future.example/events. API response status: 202 accepted. Sample payload: redacted event data. Failure timestamp: 2026-08-01 10:55 UTC.",
+    status: "triage",
+    category: "integration",
+    priority: "P2",
+    team: "integrations",
+    tags: ["checkout-events", "profile-timeline"],
+    sla: { responseDueAt: "2026-08-01T13:00:00.000Z", breached: false },
+    relatedTicketIds: [],
+    revision: 0,
+  });
+}
+
+function futureReuseOutcome(ticketId: string): ExpectedOutcome {
+  return {
+    ticketId,
+    category: "integration",
+    acceptablePriorities: ["P2"],
+    team: "integrations",
+    requiredEscalations: [],
+    knowledgeArticleIds: ["api-reference"],
   };
 }
 

@@ -982,9 +982,11 @@ the candidate detail endpoint.
 
 Only approved objects affect later evaluations; candidates (including rejected
 candidates) have no routing effect, and promotion never rewrites earlier
-recommendations or audits. Approval Desk and MCP use the same knowledge
-service, while lifecycle replay and AI comparison project the same approved
-object context through the shared evidence and diagnostic workflow.
+recommendations or audits. Defer is a resumable review pause, not approval or
+rejection: the candidate remains a hard gate until the operator explicitly
+approves or rejects it. Approval Desk and MCP use the same knowledge service,
+while lifecycle replay and AI comparison project the same approved object
+context through the shared evidence and diagnostic workflow.
 
 #### Evidence provenance and policy boundaries
 
@@ -998,10 +1000,13 @@ Knowledge evolution keeps three related, but deliberately different, records:
    never turns an audit ID or free-form prose into a synthetic evidence ID.
 2. **Candidate evidence policy** is a reviewable proposal for future tickets.
    Discovery deduplicates observed IDs for this proposal while preserving
-   duplicate observations and their provenance in diagnosis history. A
+   duplicate observations and their provenance in diagnosis history. With
+   multiple supporting diagnoses, deterministic discovery uses the
+   intersection of catalog-backed IDs shared by every diagnosis; it never
+   unions divergent evidence or chooses the first diagnosis by order. A
    candidate may be `required`, explicitly `none-required` with a rationale, or
-   `undecided` when the completed diagnosis has no reusable references. An
-   `undecided` candidate stays visible for review but cannot be promoted.
+   `undecided` when no safe shared policy is available. An `undecided` candidate
+   stays visible for review but cannot be promoted.
 3. **Approved evidence policy** is the operator-approved contract used by later
    evaluations. Promotion reloads the current candidate and catalog, then
    accepts only a valid `required` policy or a justified `none-required`
@@ -1052,14 +1057,18 @@ npm run demo:knowledge-evolution -- --verbose
 
 It uses the controlled provider, so it requires no API key or network access.
 The output shows deterministic discovery, an advisory candidate draft, the
-explicit human approval boundary, the promoted version, and the corresponding
-audit actions. Add `--verbose` to show the sanitized supporting diagnoses,
-tickets, evidence IDs, scores, provenance, similarity reasons, and per-action
-audit detail. The fixture includes two matching completed diagnoses, an
-unrelated completed diagnosis, and an open-ticket corroboration so the output
-shows the difference between confirmed support and an early signal. This is
-suitable for a repeatable recording or screenshot; a live OpenAI run remains
-an optional separate evaluation.
+explicit human approval boundary, the promoted `v1` object, and the
+corresponding audit actions. It then evaluates a future matching ticket before
+promotion, after promotion while required evidence is still missing, and after
+that evidence arrives. The final line proves that the historical
+pre-promotion recommendation is byte-for-byte unchanged. Add `--verbose` to
+show the sanitized supporting diagnoses, tickets, evidence IDs, scores,
+provenance, similarity reasons, and per-action audit detail. The fixture
+includes two matching completed diagnoses, an unrelated completed diagnosis,
+and an open-ticket corroboration so the output shows the difference between
+confirmed support and an early signal. This is suitable for a repeatable
+recording or screenshot; a live OpenAI run remains an optional separate
+evaluation.
 
 ### Lifecycle Replay Viewer
 

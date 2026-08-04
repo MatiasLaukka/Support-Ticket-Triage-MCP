@@ -247,8 +247,8 @@ export class KnowledgeEvolutionService {
     await serializeCandidate(input.candidateId, async () => {
       const candidate = await this.dependencies.objects.getCandidate(input.candidateId);
       assertCurrentVersion(candidate, input.expectedVersion);
-      assertNoTerminalReview(await this.dependencies.audits.list({ candidateId: candidate.id }));
-      await this.appendTerminalAudit({
+      assertNoTerminalDecision(await this.dependencies.audits.list({ candidateId: candidate.id }));
+      await this.appendReviewAction({
         candidateId: candidate.id,
         action: "rejected",
         actor: input.actorId,
@@ -268,8 +268,8 @@ export class KnowledgeEvolutionService {
     await serializeCandidate(input.candidateId, async () => {
       const candidate = await this.dependencies.objects.getCandidate(input.candidateId);
       assertCurrentVersion(candidate, input.expectedVersion);
-      assertNoTerminalReview(await this.dependencies.audits.list({ candidateId: candidate.id }));
-      await this.appendTerminalAudit({
+      assertNoTerminalDecision(await this.dependencies.audits.list({ candidateId: candidate.id }));
+      await this.appendReviewAction({
         candidateId: candidate.id,
         action: "deferred",
         actor: input.actorId,
@@ -287,7 +287,7 @@ export class KnowledgeEvolutionService {
     await this.dependencies.audits.append({ ...event, id: this.nextAuditId(), timestamp: this.now().toISOString() });
   }
 
-  private async appendTerminalAudit(event: Omit<KnowledgeAuditEvent, "id" | "timestamp">): Promise<void> {
+  private async appendReviewAction(event: Omit<KnowledgeAuditEvent, "id" | "timestamp">): Promise<void> {
     const appended = await this.dependencies.audits.appendIfNoPriorAction({ ...event, id: this.nextAuditId(), timestamp: this.now().toISOString() });
     if (!appended) throw new DomainError("Knowledge candidate has already received this review action.", "STALE_APPROVAL");
   }
@@ -306,9 +306,12 @@ function deterministicCandidate(
 ): KnowledgeCandidate | undefined {
   const diagnosisIds = unique(records.flatMap((record) => record.source === "completed-diagnosis" && record.diagnosisId !== undefined ? [record.diagnosisId] : []));
   const ticketIds = unique(records.map((record) => record.ticketId));
-  const diagnosis = diagnoses.find((item) => item.id === diagnosisIds[0]);
-  if (diagnosis === undefined || diagnosisIds.length === 0 || ticketIds.length === 0) return undefined;
-  const evidenceIds = evidenceReferenceIds(diagnosis);
+  const supportingDiagnoses = diagnosisIds.map((id) => diagnoses.find((item) => item.id === id));
+  const diagnosis = supportingDiagnoses[0];
+  if (diagnosis === undefined || supportingDiagnoses.some((item) => item === undefined) || diagnosisIds.length === 0 || ticketIds.length === 0) return undefined;
+  const evidenceIds = supportingDiagnoses
+    .map((item) => evidenceReferenceIds(item!))
+    .reduce((sharedIds, currentIds) => sharedIds.filter((id) => currentIds.includes(id)));
   const evidencePolicy = evidenceIds.length === 0
     ? { mode: "undecided" as const }
     : { mode: "required" as const, evidenceIds };
@@ -444,13 +447,13 @@ function assertPromotable(
   if (candidate.validationStatus !== "valid" || candidate.contradictions.length > 0) {
     throw new DomainError("Knowledge candidate is not valid for promotion.", "INVALID_APPROVAL_FIELDS");
   }
-  if (events.some((event) => event.action === "rejected" || event.action === "deferred")) {
+  if (events.some((event) => event.action === "rejected")) {
     throw new DomainError("Knowledge candidate has reached a terminal review state.", "STALE_APPROVAL");
   }
 }
 
-function assertNoTerminalReview(events: readonly KnowledgeAuditEvent[]): void {
-  if (events.some((event) => event.action === "approved" || event.action === "rejected" || event.action === "deferred")) {
+function assertNoTerminalDecision(events: readonly KnowledgeAuditEvent[]): void {
+  if (events.some((event) => event.action === "approved" || event.action === "rejected")) {
     throw new DomainError("Knowledge candidate has reached a terminal review state.", "STALE_APPROVAL");
   }
 }

@@ -25,6 +25,27 @@ describe("knowledge evolution showcase", () => {
     expect(report.approval).toMatchObject({ actor: "support-lead", status: "approved" });
     expect(report.auditActions).toEqual(expect.arrayContaining(["candidate-created", "approved"]));
     expect(report.output).toContain("Human approval required");
+    expect(report.futureTicketReuse).toMatchObject({
+      ticketId: "TKT-2099",
+      prePromotion: {
+        knownCause: null,
+        supportState: "needs-information",
+        missingEvidenceIds: ["request-id"],
+      },
+      postPromotion: {
+        knownCause: report.candidateId,
+        supportState: "needs-information",
+        missingEvidenceIds: ["request-id"],
+      },
+      afterEvidence: {
+        knownCause: report.candidateId,
+        supportState: "known-cause",
+        missingEvidenceIds: [],
+      },
+      historicalRecommendationUnchanged: true,
+    });
+    expect(report.output).toContain("Future-ticket reuse");
+    expect(report.output).toContain("Historical recommendation: byte-for-byte unchanged");
   });
 
   it("prints sanitized evidence and audit detail in verbose mode", async () => {

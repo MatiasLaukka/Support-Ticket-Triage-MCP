@@ -97,6 +97,35 @@ the separate eleven-scenario matrix remains intentionally non-mutating and
 tests breadth across known causes/events, evidence, ambiguity, stale replies,
 fixes, and adversarial text.
 
+## Governed Knowledge-Reuse Showcase
+
+The knowledge-evolution showcase proves the reuse boundary with a controlled,
+network-free run:
+
+```powershell
+npm run demo:knowledge-evolution -- --verbose
+```
+
+The deterministic candidate uses evidence shared by all completed supporting
+diagnoses. If those diagnoses disagree, discovery produces an `undecided`
+candidate that cannot be promoted until an operator supplies a policy. A
+deferred review is likewise resumable but remains a hard gate; only explicit
+approval or rejection is terminal.
+
+The printed future-ticket sequence is:
+
+1. Before promotion, the matching ticket has no known cause and is
+   `needs-information` with `request-id` missing.
+2. After the approved object is created as `v1`, the ticket is linked to that
+   known cause but remains evidence-gated.
+3. After a reply supplies `request-id`, reevaluation enters the actionable
+   `known-cause` workflow.
+4. The showcase re-reads a persisted pre-promotion recommendation and verifies
+   its serialized form is byte-for-byte unchanged after later evaluations.
+
+This makes the human approval boundary and historical immutability visible,
+not just implied by unit tests.
+
 ## Primary Scenario
 
 Ticket: `TKT-1010`

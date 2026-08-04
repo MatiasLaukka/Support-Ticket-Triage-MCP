@@ -72,15 +72,24 @@ policy provenance in the knowledge audit.
 
 Only approved objects participate in later evaluations. Candidates, rejected
 candidates, and deferred reviews never route tickets, change evidence
-readiness, or alter customer drafts.
+readiness, or alter customer drafts. **Defer is resumable review state, not a
+terminal decision**: it records the operator's pause, keeps the candidate out
+of routing, and leaves the same candidate available for a later explicit
+approve or reject action. Until that decision, the candidate remains a hard
+workflow gate where the operator is required to review the pattern before
+continuing support actions.
 
 ## Reuse paths
 
 ### Positive, evidence-backed reuse
 
-1. A completed diagnosis records a real catalog reference such as `request-id`.
-2. Deterministic discovery finds a recurring pattern; an optional GPT draft can
-   fill in safe declarative wording.
+1. Every completed supporting diagnosis records a real catalog reference such
+   as `request-id`.
+2. Deterministic discovery intersects those references across **all** completed
+   supporting diagnoses. Only IDs shared by every diagnosis become an automatic
+   `required` policy; divergent sets become `undecided` rather than a risky
+   union or first-diagnosis choice. An optional GPT draft can fill in safe
+   declarative wording, but cannot choose this policy.
 3. An operator reviews the supporting diagnoses, edits the policy if needed,
    and approves a `required` policy.
 4. A later matching ticket is recognized as the approved known cause, but it
@@ -123,7 +132,14 @@ and any GPT advisory provenance. The MCP and Approval Desk adapters call the
 same knowledge-evolution service, so they share candidate validation,
 promotion, and audit invariants.
 
-The deterministic showcase is network-free:
+The deterministic showcase is network-free and now proves both sides of
+reuse: a future ticket remains gated before required evidence, becomes an
+actionable known-cause workflow after the evidence arrives, and leaves a
+pre-promotion recommendation snapshot byte-for-byte unchanged. The promoted
+knowledge object is explicitly reported as version `v1`; this is not a claim of
+general multi-version editing yet.
+
+The showcase is network-free:
 
 ```powershell
 npm run demo:knowledge-evolution

@@ -606,6 +606,22 @@ describe("classifyTicket", () => {
     expect(result.confidence).toBeLessThan(0.75);
   });
 
+  it("uses matching metadata only to break an exact independent category tie", () => {
+    const classification = classifyTicket(makeTicket({
+      subject: "Invalid webhook signatures after secret rotation",
+      description:
+        "Webhook deliveries fail signature verification for the endpoint after a delivery ID was issued.",
+      category: "integration",
+      team: "integrations",
+      tags: ["webhook", "signature"],
+    }));
+
+    expect(classification.category).toBe("integration");
+    expect(classification.classificationConfidence.categoryScore).toBe(5);
+    expect(classification.classificationConfidence.runnerUpScore).toBe(5);
+    expect(classification.classificationConfidence.band).toBe("low");
+  });
+
   it("keeps metadata-only routing usable but marks it low confidence", () => {
     const result = classifyTicket(
       makeTicket({

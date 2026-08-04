@@ -731,7 +731,26 @@ function chooseScoredValue(
     ([leftValue, leftScore], [rightValue, rightScore]) =>
       rightScore - leftScore || leftValue.localeCompare(rightValue),
   );
-  const selectedValue = ranked[0]?.[0] ?? fallback;
+  const tiedTopValues = ranked.length > 1 && ranked[1]![1] === ranked[0]![1]
+    ? ranked.filter(([, score]) => score === ranked[0]![1]).map(([value]) => value)
+    : [];
+  const metadataScores = new Map<string, number>();
+  if (tiedTopValues.length > 1) {
+    const tied = new Set(tiedTopValues);
+    for (const { ruleId, target, weight } of signals) {
+      if (ruleId.startsWith("metadata-") && tied.has(target.slice(kind.length + 1))) {
+        const value = target.slice(kind.length + 1);
+        metadataScores.set(value, (metadataScores.get(value) ?? 0) + weight);
+      }
+    }
+  }
+  const selectedValue = tiedTopValues.length > 1
+    ? tiedTopValues.sort(
+        (left, right) =>
+          (metadataScores.get(right) ?? 0) - (metadataScores.get(left) ?? 0) ||
+          left.localeCompare(right),
+      )[0]!
+    : ranked[0]?.[0] ?? fallback;
   const selectedScore = ranked[0]?.[1] ?? 0;
   const runnerUpScore = ranked[1]?.[1] ?? 0;
   const contributingRuleIds = [

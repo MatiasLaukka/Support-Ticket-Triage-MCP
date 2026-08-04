@@ -507,12 +507,15 @@ export class TriageService {
   async submit(
     input: SubmitRecommendationInput,
     capability?: symbol,
+    classificationConfidence?: ClassificationConfidence,
   ): Promise<TriageRecommendation> {
     const parsed = SubmitRecommendationInputSchema.parse(input);
     if (capability === submitWithinTicketLockCapability) {
-      return this.submitValidated(parsed);
+      return this.submitValidated(parsed, classificationConfidence);
     }
-    return serializeTicket(parsed.ticketId, () => this.submitValidated(parsed));
+    return serializeTicket(parsed.ticketId, () =>
+      this.submitValidated(parsed, classificationConfidence),
+    );
   }
 
   private async submitValidated(
@@ -685,8 +688,9 @@ export class TriageService {
       ) {
         throw stale("Evaluation customer reply snapshot is stale.");
       }
-      const recommendation = await this.submitValidated(
+      const recommendation = await this.submit(
         recommendationInput,
+        submitWithinTicketLockCapability,
         classificationConfidence,
       );
       const recommendations =

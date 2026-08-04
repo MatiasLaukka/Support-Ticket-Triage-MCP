@@ -270,16 +270,20 @@ export const ClassificationConfidenceSchema = z
         message: "Category margin must equal category score minus runner-up score.",
       });
     }
-    const supportFactor = Math.min(1, value.categoryScore / 10);
-    const marginFactor = Math.min(1, value.categoryMargin / 10);
-    const diversityFactor = Math.min(1, value.independentSignalCount / 3);
-    const disagreementFactor = Math.min(1, value.disagreementCount / 2);
-    const raw = 0.45
-      + 0.25 * supportFactor
-      + 0.2 * marginFactor
-      + 0.1 * diversityFactor
-      - 0.15 * disagreementFactor;
-    const expectedConfidence = Math.round(Math.min(0.95, Math.max(0.35, raw)) * 10_000) / 10_000;
+    const expectedConfidence = value.uncertaintyReasons.includes("no-actionable-category")
+      ? 0.5
+      : (() => {
+          const supportFactor = Math.min(1, value.categoryScore / 10);
+          const marginFactor = Math.min(1, value.categoryMargin / 10);
+          const diversityFactor = Math.min(1, value.independentSignalCount / 3);
+          const disagreementFactor = Math.min(1, value.disagreementCount / 2);
+          const raw = 0.45
+            + 0.25 * supportFactor
+            + 0.2 * marginFactor
+            + 0.1 * diversityFactor
+            - 0.15 * disagreementFactor;
+          return Math.round(Math.min(0.95, Math.max(0.35, raw)) * 10_000) / 10_000;
+        })();
     const expectedBand = expectedConfidence >= 0.9
       ? "high"
       : expectedConfidence >= 0.75

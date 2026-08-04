@@ -167,6 +167,38 @@ describe("classifyTicket", () => {
     expect(classification.team).toBe("support");
   });
 
+  it("accepts the special no-actionable-category confidence provenance", () => {
+    const classification = classifyTicket(makeTicket({
+      subject: "Problem",
+      description: "It does not work.",
+      category: "other",
+      team: "support",
+      tags: [],
+    }));
+
+    expect(classification.category).toBe("other");
+    expect(classification.classificationConfidence).toMatchObject({
+      band: "low",
+      uncertaintyReasons: ["no-actionable-category"],
+    });
+    expect(ClassificationConfidenceSchema.parse(
+      classification.classificationConfidence,
+    )).toEqual(classification.classificationConfidence);
+  });
+
+  it("accepts low-band no-actionable details even when the generic score is high", () => {
+    expect(() => ClassificationConfidenceSchema.parse({
+      method: "uncertainty-aware-v1",
+      band: "low",
+      categoryScore: 9,
+      runnerUpScore: 0,
+      categoryMargin: 9,
+      independentSignalCount: 1,
+      disagreementCount: 0,
+      uncertaintyReasons: ["no-actionable-category"],
+    })).not.toThrow();
+  });
+
   it("routes blank page replies with browser evidence to product performance", () => {
     const ticket = makeTicket({
       subject: "Problem",

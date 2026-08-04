@@ -144,7 +144,7 @@ npm run demo:knowledge-evolution -- --verbose
 
 Expected: all commands exit 0, the full test suite is green, the diagnostic matrix remains 11/11, the lifecycle replay remains resolved, and the knowledge showcase reports future-ticket reuse plus historical immutability.
 
-- [ ] **Step 2: Commit and push**
+- [x] **Step 2: Commit and push**
 
 Create a focused commit:
 

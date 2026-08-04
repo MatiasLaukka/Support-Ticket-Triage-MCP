@@ -227,6 +227,73 @@ export const ClassificationSignalSchema = z
   })
   .strict();
 
+export const ClassificationConfidenceMethodSchema = z.literal(
+  "uncertainty-aware-v1",
+);
+export const ClassificationConfidenceBandSchema = z.enum([
+  "low",
+  "medium",
+  "high",
+]);
+export const ClassificationUncertaintyReasonSchema = z.enum([
+  "no-actionable-category",
+  "weak-category-support",
+  "close-category-competition",
+  "low-signal-diversity",
+  "metadata-disagreement",
+]);
+const FiniteNonnegativeNumberSchema = z.number().finite().nonnegative();
+
+export const ClassificationConfidenceSchema = z
+  .object({
+    method: ClassificationConfidenceMethodSchema,
+    band: ClassificationConfidenceBandSchema,
+    categoryScore: FiniteNonnegativeNumberSchema,
+    runnerUpScore: FiniteNonnegativeNumberSchema,
+    categoryMargin: FiniteNonnegativeNumberSchema,
+    independentSignalCount: z.number().int().nonnegative(),
+    disagreementCount: z.number().int().min(0).max(3),
+    uncertaintyReasons: z
+      .array(ClassificationUncertaintyReasonSchema)
+      .max(5)
+      .refine((reasons) => new Set(reasons).size === reasons.length, {
+        message: "Uncertainty reasons must be unique.",
+      }),
+  })
+  .strict()
+  .superRefine((value, context) => {
+    const expectedMargin = Math.max(0, value.categoryScore - value.runnerUpScore);
+    if (Math.abs(value.categoryMargin - expectedMargin) > 0.0001) {
+      context.addIssue({
+        code: "custom",
+        path: ["categoryMargin"],
+        message: "Category margin must equal category score minus runner-up score.",
+      });
+    }
+    const supportFactor = Math.min(1, value.categoryScore / 10);
+    const marginFactor = Math.min(1, value.categoryMargin / 10);
+    const diversityFactor = Math.min(1, value.independentSignalCount / 3);
+    const disagreementFactor = Math.min(1, value.disagreementCount / 2);
+    const raw = 0.45
+      + 0.25 * supportFactor
+      + 0.2 * marginFactor
+      + 0.1 * diversityFactor
+      - 0.15 * disagreementFactor;
+    const expectedConfidence = Math.round(Math.min(0.95, Math.max(0.35, raw)) * 10_000) / 10_000;
+    const expectedBand = expectedConfidence >= 0.9
+      ? "high"
+      : expectedConfidence >= 0.75
+        ? "medium"
+        : "low";
+    if (value.band !== expectedBand) {
+      context.addIssue({
+        code: "custom",
+        path: ["band"],
+        message: "Confidence band is inconsistent with the score snapshot.",
+      });
+    }
+  });
+
 export const AiPreferenceSchema = z.enum([
   "auto",
   "gpt-preferred",
@@ -479,6 +546,7 @@ export const TriageRecommendationSchema = z
     providedEvidence: z.array(EvidenceRequirementSchema).optional(),
     missingEvidence: z.array(EvidenceRequirementSchema).optional(),
     classificationSignals: z.array(ClassificationSignalSchema).optional(),
+    classificationConfidence: ClassificationConfidenceSchema.optional(),
     nextInvestigationSteps: UniqueNonBlankStringsSchema.optional(),
     knowledgeArticleIds: z.array(SlugSchema),
     draftCustomerResponse: NonBlankStringSchema,
@@ -729,4 +797,13 @@ export interface DiagnosisEvidenceReference {
   sourceRef?: string;
 }
 export type ClassificationSignal = z.infer<typeof ClassificationSignalSchema>;
+export type ClassificationConfidence = z.infer<
+  typeof ClassificationConfidenceSchema
+>;
+export type ClassificationConfidenceBand = z.infer<
+  typeof ClassificationConfidenceBandSchema
+>;
+export type ClassificationUncertaintyReason = z.infer<
+  typeof ClassificationUncertaintyReasonSchema
+>;
 export type ExpectedOutcome = z.infer<typeof ExpectedOutcomeSchema>;

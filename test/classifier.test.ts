@@ -4,7 +4,8 @@ import {
   classifyTicketFromContext,
 } from "../src/approval-desk/classifier.js";
 import { buildConversationContextForTicket } from "../src/approval-desk/conversation-context.js";
-import { TicketSchema, type Ticket } from "../src/domain.js";
+import { ClassificationConfidenceSchema, TicketSchema, type Ticket } from "../src/domain.js";
+import { calculateClassificationConfidence } from "../src/classifier-confidence.js";
 
 describe("classifyTicket", () => {
   it("preserves the supplied causal reply order in conversation context", () => {
@@ -573,6 +574,85 @@ describe("classifyTicket", () => {
     expect(result.confidence).toBeLessThan(0.75);
   });
 
+  it("keeps metadata-only routing usable but marks it low confidence", () => {
+    const result = classifyTicket(
+      makeTicket({
+        category: "api",
+        priority: "P1",
+        team: "api-platform",
+        subject: "Support request",
+        description: "Please help.",
+        tags: [],
+      }),
+    );
+
+    expect(result.category).toBe("api");
+    expect(result.team).toBe("api-platform");
+    expect(result.priority).toBe("P1");
+    expect(result.classificationConfidence).toMatchObject({
+      method: "uncertainty-aware-v1",
+      band: "low",
+      categoryScore: 1,
+      independentSignalCount: 0,
+    });
+    expect(result.classificationConfidence.uncertaintyReasons).toEqual(
+      expect.arrayContaining(["low-signal-diversity"]),
+    );
+    expect(ClassificationConfidenceSchema.parse(result.classificationConfidence)).toEqual(
+      result.classificationConfidence,
+    );
+  });
+
+  it("filters conflicting metadata when independent content evidence exists", () => {
+    const result = classifyTicket(
+      makeTicket({
+        category: "billing",
+        priority: "P1",
+        team: "billing",
+        subject: "Webhook signature validation failed",
+        description: "Webhook deliveries fail after a signing secret rotation.",
+        tags: [],
+      }),
+    );
+
+    expect(result.category).toBe("integration");
+    expect(result.team).toBe("integrations");
+    expect(result.classificationConfidence.categoryScore).toBe(5);
+    expect(result.classificationConfidence.uncertaintyReasons).toEqual(
+      expect.arrayContaining(["metadata-disagreement", "low-signal-diversity"]),
+    );
+  });
+
+  it("reduces confidence for close category competition", () => {
+    const result = classifyTicket(
+      makeTicket({
+        subject: "Invoice payment feature request",
+        description: "Please add a billing payment feature request for our team.",
+        tags: [],
+      }),
+    );
+
+    expect(result.classificationConfidence.categoryScore).toBe(5);
+    expect(result.classificationConfidence.runnerUpScore).toBe(5);
+    expect(result.classificationConfidence.categoryMargin).toBe(0);
+    expect(result.classificationConfidence.uncertaintyReasons).toContain(
+      "close-category-competition",
+    );
+    expect(result.confidence).toBeLessThan(0.75);
+  });
+
+  it("deduplicates independent rule IDs when calculating diversity", () => {
+    const result = calculateClassificationConfidence({
+      category: "integration",
+      categoryScore: 8,
+      runnerUpScore: 1,
+      independentRuleIds: ["issue-integration", "issue-integration", "product-integration"],
+      disagreementCount: 0,
+    });
+
+    expect(result.details.independentSignalCount).toBe(2);
+  });
+
   it("routes SMS campaign delivery issues to API Platform", () => {
     const result = classifyTicket(
       makeTicket({
@@ -603,7 +683,7 @@ describe("classifyTicket", () => {
     expect(result.knowledgeArticleIds).toContain("flow-trigger-troubleshooting");
   });
 
-  it("does not classify tickets using submitted metadata alone", () => {
+  it("uses submitted metadata as weak routing evidence when no content evidence exists", () => {
     const result = classifyTicket(
       makeTicket({
         category: "api",
@@ -615,9 +695,9 @@ describe("classifyTicket", () => {
       }),
     );
 
-    expect(result.category).toBe("other");
-    expect(result.priority).toBe("P3");
-    expect(result.team).toBe("support");
+    expect(result.category).toBe("api");
+    expect(result.priority).toBe("P1");
+    expect(result.team).toBe("api-platform");
   });
 
   it("emits routing signals when prompt injection triggers security precedence", () => {
@@ -638,7 +718,7 @@ describe("classifyTicket", () => {
     );
   });
 
-  it("does not route product categories from submitted tags alone", () => {
+  it("uses submitted classification tags as weak routing evidence", () => {
     const result = classifyTicket(
       makeTicket({
         subject: "Support request",
@@ -647,12 +727,12 @@ describe("classifyTicket", () => {
       }),
     );
 
-    expect(result.category).toBe("other");
+    expect(result.category).toBe("integration");
     expect(result.priority).toBe("P3");
-    expect(result.team).toBe("support");
+    expect(result.team).toBe("integrations");
   });
 
-  it("does not let metadata alone trigger security precedence", () => {
+  it("keeps metadata-only security routing distinct from security precedence", () => {
     const result = classifyTicket(
       makeTicket({
         category: "security",
@@ -663,9 +743,9 @@ describe("classifyTicket", () => {
       }),
     );
 
-    expect(result.category).toBe("other");
+    expect(result.category).toBe("security");
     expect(result.priority).toBe("P3");
-    expect(result.team).toBe("support");
+    expect(result.team).toBe("security");
     expect(result.requiredEscalations).not.toContain("security");
   });
 

@@ -1,11 +1,13 @@
 import type {
   Category,
   ClassificationSignal,
+  ClassificationConfidence,
   Priority,
   RequiredEscalation,
   Team,
   Ticket,
 } from "../domain.js";
+import { calculateClassificationConfidence } from "../classifier-confidence.js";
 import type { ConversationContext } from "./conversation-context.js";
 import { detectKnownCause } from "./known-cause-catalog.js";
 import { detectKnownEvent } from "./known-event-catalog.js";
@@ -17,6 +19,7 @@ export interface TicketClassification {
   knowledgeArticleIds: string[];
   requiredEscalations: RequiredEscalation[];
   confidence: number;
+  classificationConfidence: ClassificationConfidence;
   signals: ClassificationSignal[];
   knownCause?: string | null;
   knownEventId?: string | null;
@@ -49,6 +52,15 @@ interface Rule {
 interface RuleMatch {
   rule: Rule;
   signals: ClassificationSignal[];
+}
+
+export interface ClassificationScoreSnapshot<T extends string = string> {
+  selectedValue: T;
+  selectedScore: number;
+  runnerUpScore: number;
+  eligibleSignals: ClassificationSignal[];
+  hasIndependentEvidence: boolean;
+  contributingRuleIds: string[];
 }
 
 const CATEGORY_DEFAULT_TEAMS: Record<Category, Team> = {
@@ -524,10 +536,16 @@ function resolveClassification(
   matches: readonly RuleMatch[],
   knownCauseArticleIds: readonly string[],
 ): TicketClassification {
-  const category = chooseCategory(signals);
+  const categorySnapshot = chooseScoredValue(
+    signals,
+    "category",
+    "other",
+    matches,
+  );
+  const category = chooseCategoryFromSnapshot(signals, categorySnapshot);
   const requiredEscalations = chooseEscalations(signals, ticket);
-  const team = chooseTeam(signals, category, requiredEscalations);
-  const priority = choosePriority(signals, requiredEscalations, ticket);
+  const team = chooseTeam(signals, category, requiredEscalations, matches);
+  const priority = choosePriority(signals, requiredEscalations, ticket, matches);
   const knowledgeArticleIds = chooseKnowledgeArticles(
     matches,
     signals,
@@ -536,15 +554,43 @@ function resolveClassification(
   );
   const disagreementSignals = buildDisagreementSignals(ticket, { category, priority, team });
   const allSignals = [...signals, ...disagreementSignals];
-  const confidence = calculateConfidence(allSignals, category);
+  const confidenceResult = calculateClassificationConfidence({
+    category,
+    categoryScore: categorySnapshot.selectedScore,
+    runnerUpScore: categorySnapshot.runnerUpScore,
+    independentRuleIds: categorySnapshot.contributingRuleIds,
+    disagreementCount: disagreementSignals.length,
+  });
 
-  return { category, priority, team, knowledgeArticleIds, requiredEscalations, confidence, signals: allSignals };
+  return {
+    category,
+    priority,
+    team,
+    knowledgeArticleIds,
+    requiredEscalations,
+    confidence: confidenceResult.confidence,
+    classificationConfidence: confidenceResult.details,
+    signals: allSignals,
+  };
 }
 
-function chooseCategory(signals: ClassificationSignal[]): Category {
+function chooseCategory(
+  signals: ClassificationSignal[],
+  matches: readonly RuleMatch[] = [],
+): Category {
+  return chooseCategoryFromSnapshot(
+    signals,
+    chooseScoredValue(signals, "category", "other", matches),
+  );
+}
+
+function chooseCategoryFromSnapshot(
+  signals: readonly ClassificationSignal[],
+  snapshot: ClassificationScoreSnapshot,
+): Category {
   if (hasStrongRisk(signals, "security")) return "security";
   if (hasStrongRisk(signals, "outage")) return "incident";
-  return chooseScoredValue(signals, "category", "other") as Category;
+  return snapshot.selectedValue as Category;
 }
 
 function chooseEscalations(signals: ClassificationSignal[], ticket: Ticket): RequiredEscalation[] {
@@ -558,16 +604,32 @@ function chooseEscalations(signals: ClassificationSignal[], ticket: Ticket): Req
   return [...escalations];
 }
 
-function chooseTeam(signals: ClassificationSignal[], category: Category, escalations: RequiredEscalation[]): Team {
+function chooseTeam(
+  signals: ClassificationSignal[],
+  category: Category,
+  escalations: RequiredEscalation[],
+  matches: readonly RuleMatch[] = [],
+): Team {
   if (escalations.includes("security")) return "security";
   if (escalations.includes("outage")) return "incident-response";
-  return chooseScoredValue(signals, "team", CATEGORY_DEFAULT_TEAMS[category]) as Team;
+  return chooseScoredValue(
+    signals,
+    "team",
+    CATEGORY_DEFAULT_TEAMS[category],
+    matches,
+  ).selectedValue as Team;
 }
 
-function choosePriority(signals: ClassificationSignal[], escalations: RequiredEscalation[], ticket: Ticket): Priority {
+function choosePriority(
+  signals: ClassificationSignal[],
+  escalations: RequiredEscalation[],
+  ticket: Ticket,
+  matches: readonly RuleMatch[] = [],
+): Priority {
   if (escalations.includes("security")) return "P1";
   if (escalations.includes("outage")) return "P1";
-  const scored = chooseScoredValue(signals, "priority", "P3") as Priority;
+  const scored = chooseScoredValue(signals, "priority", "P3", matches)
+    .selectedValue as Priority;
   if (ticket.sla.breached) return atLeast(scored, "P2");
   return scored;
 }
@@ -639,28 +701,54 @@ function buildDisagreementSignals(ticket: Ticket, classification: Pick<TicketCla
   return disagreements;
 }
 
-function calculateConfidence(signals: ClassificationSignal[], category: Category): number {
-  if (category === "other") return 0.5;
-  const score = signals.filter(({ target }) => target === `category:${category}`).reduce((total, { weight }) => total + weight, 0);
-  return Math.min(0.95, Math.max(0.7, 0.65 + score / 30));
-}
-
-function chooseScoredValue(signals: ClassificationSignal[], kind: "category" | "priority" | "team", fallback: string): string {
+function chooseScoredValue(
+  signals: ClassificationSignal[],
+  kind: "category" | "priority" | "team",
+  fallback: string,
+  matches: readonly RuleMatch[] = [],
+): ClassificationScoreSnapshot {
   const scores = new Map<string, number>();
   const hasIndependentEvidence = signals.some(
     ({ ruleId, target }) =>
       target.startsWith(`${kind}:`) && !ruleId.startsWith("metadata-"),
   );
-  for (const { ruleId, target, weight } of signals) {
-    if (
-      target.startsWith(`${kind}:`) &&
-      (hasIndependentEvidence || !ruleId.startsWith("metadata-"))
-    ) {
-      const value = target.slice(kind.length + 1);
-      scores.set(value, (scores.get(value) ?? 0) + weight);
+  const signalRuleIds = new Map<ClassificationSignal, string>();
+  for (const match of matches) {
+    for (const matchedSignal of match.signals) {
+      signalRuleIds.set(matchedSignal, match.rule.id);
     }
   }
-  return [...scores.entries()].sort(([leftValue, leftScore], [rightValue, rightScore]) => rightScore - leftScore || leftValue.localeCompare(rightValue))[0]?.[0] ?? fallback;
+  const eligibleSignals = signals.filter(
+    ({ ruleId, target }) =>
+      target.startsWith(`${kind}:`) &&
+      (!hasIndependentEvidence || !ruleId.startsWith("metadata-")),
+  );
+  for (const { target, weight } of eligibleSignals) {
+    const value = target.slice(kind.length + 1);
+    scores.set(value, (scores.get(value) ?? 0) + weight);
+  }
+  const ranked = [...scores.entries()].sort(
+    ([leftValue, leftScore], [rightValue, rightScore]) =>
+      rightScore - leftScore || leftValue.localeCompare(rightValue),
+  );
+  const selectedValue = ranked[0]?.[0] ?? fallback;
+  const selectedScore = ranked[0]?.[1] ?? 0;
+  const runnerUpScore = ranked[1]?.[1] ?? 0;
+  const contributingRuleIds = [
+    ...new Set(
+      eligibleSignals
+        .filter(({ target }) => target === `${kind}:${selectedValue}`)
+        .map((entry) => signalRuleIds.get(entry) ?? entry.ruleId),
+    ),
+  ];
+  return {
+    selectedValue,
+    selectedScore,
+    runnerUpScore,
+    eligibleSignals,
+    hasIndependentEvidence,
+    contributingRuleIds,
+  };
 }
 
 function hasStrongRisk(

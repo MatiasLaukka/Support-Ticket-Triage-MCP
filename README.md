@@ -841,6 +841,19 @@ JSON validated by `QueueMetricsSchema`, and uses the same fixed timestamp and
 the CLI output is a consistency check rather than a second metrics
 implementation.
 
+For a single release-readiness check covering the complete portfolio journey,
+run:
+
+```powershell
+npm run verify:portfolio
+```
+
+This runs the build, typecheck, full Vitest suite, diagnostic evaluation,
+stateful lifecycle replay, knowledge-evolution promotion/reuse showcase, and
+deterministic queue-metrics showcase in sequence. It stops at the first
+failure, so the command is suitable for reproducing the evidence reported in
+this README without enabling live GPT providers.
+
 ## Reproducible Evaluation
 
 `npm run evaluate` compares

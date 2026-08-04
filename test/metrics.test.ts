@@ -84,7 +84,7 @@ describe("calculateQueueMetrics", () => {
       rejectedRecommendations: 1,
       acceptanceRate: 2 / 3,
       rejectionRate: 1 / 3,
-      averageConfidence: (0.9 + 0.6 + 0.75 + 0.95 + 0.8 + 0.7) / 6,
+      averageConfidence: 0.7833,
       averageApprovedConfidence: 0.75,
       confidenceBandCounts: { low: 2, medium: 2, high: 2 },
       escalationCounts: {
@@ -115,6 +115,26 @@ describe("calculateQueueMetrics", () => {
     expect(metrics.confidenceBandCounts).toEqual({ low: 0, medium: 0, high: 0 });
     expect(metrics.estimatedMinutesSaved).toBe(0);
     expect(metrics.potentialMinutesSaved).toBe(0);
+  });
+
+  it("rounds aggregate confidence metrics for stable transport output", () => {
+    const metrics = calculateQueueMetrics({
+      tickets: [],
+      recommendations: [
+        makeRecommendation("pending", 0.95, []),
+        makeRecommendation(
+          "pending",
+          0.9499,
+          [],
+          "TKT-1002",
+          "77777777-7777-4777-8777-777777777777",
+        ),
+      ],
+      now,
+      minutesPerAcceptedRecommendation: 8,
+    });
+
+    expect(metrics.averageConfidence).toBe(0.95);
   });
 });
 

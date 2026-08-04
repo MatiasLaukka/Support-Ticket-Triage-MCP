@@ -157,17 +157,21 @@ export function calculateQueueMetrics(input: QueueMetricsInput): QueueMetrics {
     averageConfidence:
       input.recommendations.length === 0
         ? null
-        : input.recommendations.reduce(
+        : roundMetric(
+            input.recommendations.reduce(
               (sum, recommendation) => sum + recommendation.confidence,
               0,
             ) / input.recommendations.length,
+          ),
     averageApprovedConfidence:
       approvedRecommendations === 0
         ? null
-        : input.recommendations
-            .filter(({ resolution }) => resolution === "approved")
-            .reduce((sum, recommendation) => sum + recommendation.confidence, 0) /
-          approvedRecommendations,
+        : roundMetric(
+            input.recommendations
+              .filter(({ resolution }) => resolution === "approved")
+              .reduce((sum, recommendation) => sum + recommendation.confidence, 0) /
+              approvedRecommendations,
+          ),
     confidenceBandCounts,
     escalationCounts,
     minutesPerAcceptedRecommendation:
@@ -177,6 +181,10 @@ export function calculateQueueMetrics(input: QueueMetricsInput): QueueMetrics {
     potentialMinutesSaved:
       pendingRecommendations * input.minutesPerAcceptedRecommendation,
   });
+}
+
+function roundMetric(value: number): number {
+  return Math.round(value * 10_000) / 10_000;
 }
 
 function countBy(

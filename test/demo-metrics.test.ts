@@ -12,6 +12,18 @@ describe("metrics showcase", () => {
     expect(packageJson.default.scripts["demo:metrics"]).toBe(
       "npm run build && node dist/scripts/demo-metrics.js",
     );
+    expect(packageJson.default.scripts["verify:portfolio"]).toContain(
+      "npx vitest run --dir test",
+    );
+    expect(packageJson.default.scripts["verify:portfolio"]).toContain(
+      "npm run evaluate:lifecycle-replay",
+    );
+    expect(packageJson.default.scripts["verify:portfolio"]).toContain(
+      "npm run demo:knowledge-evolution -- --verbose",
+    );
+    expect(packageJson.default.scripts["verify:portfolio"]).toContain(
+      "npm run demo:metrics",
+    );
 
     const result = await execFileAsync(
       process.execPath,

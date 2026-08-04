@@ -440,6 +440,76 @@ export const approvalDeskHtml = `<!doctype html>
         padding: 0.7rem;
       }
 
+      .pattern-action-bar {
+        background: rgba(248, 247, 255, 0.98);
+        border: 1px solid #c4b5fd;
+        border-radius: 18px;
+        box-shadow: 0 14px 34px rgba(79, 70, 229, 0.18);
+        padding: 0.7rem;
+      }
+
+      .pattern-action-bar[hidden],
+      .diagnosis-action-panel[hidden] {
+        display: none;
+      }
+
+      .pattern-action-bar .knowledge-review-panel {
+        box-shadow: none;
+        margin-top: 0.55rem;
+      }
+
+      .candidate-editor,
+      .candidate-rejection {
+        border-top: 1px solid var(--line);
+        margin-top: 0.65rem;
+        padding-top: 0.55rem;
+      }
+
+      .candidate-editor > summary,
+      .candidate-rejection > summary {
+        color: var(--muted);
+        cursor: pointer;
+        font-size: 0.82rem;
+        font-weight: 700;
+      }
+
+      .candidate-editor > label,
+      .candidate-editor details,
+      .candidate-rejection label {
+        display: block;
+        margin-top: 0.55rem;
+      }
+
+      .candidate-editor textarea,
+      .candidate-rejection textarea {
+        min-height: 3.4rem;
+      }
+
+      .evidence-choice-list {
+        background: var(--panel-soft);
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.45rem 0.7rem;
+        margin-top: 0.55rem;
+        padding: 0.55rem;
+      }
+
+      .evidence-choice-list label {
+        align-items: center;
+        color: var(--muted);
+        display: inline-flex;
+        font-size: 0.82rem;
+        gap: 0.3rem;
+      }
+
+      .diagnosis-action-panel {
+        border-top: 1px solid var(--line);
+        margin-top: 0.65rem;
+        padding-top: 0.65rem;
+      }
+
       .recommendation-setup-bar h3 {
         font-size: 0.95rem;
         margin: 0;
@@ -1207,9 +1277,9 @@ export const approvalDeskHtml = `<!doctype html>
           <div id="ticketPanel">
             <p class="hint">No ticket selected.</p>
           </div>
-          <section class="card diagnosis-panel" aria-label="Diagnosis review">
-            <h3>Diagnosis review</h3>
-            <div id="diagnosisPanel">
+          <section class="card diagnosis-panel" aria-label="Diagnosis summary">
+            <h3>Diagnosis summary</h3>
+            <div id="diagnosisSummaryPanel">
               <p class="hint">Select a ticket to review recorded diagnoses.</p>
             </div>
           </section>
@@ -1235,24 +1305,13 @@ export const approvalDeskHtml = `<!doctype html>
           </details>
           <div id="workflowActionStack" class="workflow-action-stack" data-dock="bottom-right">
             <section id="customerReplyFocus" class="customer-reply-focus" aria-label="Latest customer reply" hidden></section>
-            <section class="recommendation-setup-bar" aria-label="Workflow actions">
+            <section id="workflowActionBar" class="recommendation-setup-bar" aria-label="Workflow actions">
               <input id="confirmApproval" type="checkbox" hidden checked>
               <div class="bar-topline">
                 <h3 id="actionBarTitle">Evaluate ticket</h3>
                 <span id="actionBarHint" class="meta">Uses the full conversation timeline.</span>
-                <button id="discoverKnowledgeButton" type="button" class="secondary" title="Search for a reusable knowledge pattern">Find pattern</button>
                 <span id="knowledgeDiscoveryStatus" class="meta" aria-live="polite"></span>
               </div>
-              <section id="knowledgeJourneyBar" class="knowledge-journey-bar" aria-label="Knowledge evolution journey" hidden>
-                <div class="knowledge-journey-header">
-                  <strong>Knowledge evolution</strong>
-                  <span id="knowledgeJourneyStatus" aria-live="polite">Evaluate a ticket to begin.</span>
-                </div>
-                <ol id="knowledgeJourneySteps" class="knowledge-journey-steps"></ol>
-                <div class="bar-actions">
-                  <button id="reviewKnowledgePatternButton" type="button" class="secondary" hidden>Review candidate</button>
-                </div>
-              </section>
               <div id="setupControls" class="bar-mode">
                 <div class="setup-grid">
                   <label>
@@ -1330,9 +1389,16 @@ export const approvalDeskHtml = `<!doctype html>
                   <button id="rejectButton" type="button" class="danger" title="Reject and log feedback" disabled>Reject</button>
                 </div>
               </div>
+              <section id="diagnosisActionPanel" class="diagnosis-action-panel" aria-label="Diagnosis actions" hidden>
+                <h3>Diagnosis review and fix</h3>
+                <div id="diagnosisPanel">
+                  <p class="hint">Select a ticket to review recorded diagnoses.</p>
+                </div>
+              </section>
               <details id="advancedSettings" class="advanced-settings">
                 <summary>Advanced settings</summary>
                 <div class="advanced-settings-content">
+                  <button id="discoverKnowledgeButton" type="button" class="secondary" title="Search for a reusable knowledge pattern">Find pattern</button>
                   <div class="action-bar-position">
                     <label for="actionBarPosition">Move action bar</label>
                     <select id="actionBarPosition" aria-label="Move action bar">
@@ -1374,6 +1440,19 @@ export const approvalDeskHtml = `<!doctype html>
                   </div>
                 </div>
               </details>
+            </section>
+            <section id="patternActionBar" class="pattern-action-bar" aria-label="Pattern actions" hidden>
+              <section id="knowledgeJourneyBar" class="knowledge-journey-bar" aria-label="Knowledge evolution journey" hidden>
+                <div class="knowledge-journey-header">
+                  <strong>Knowledge evolution</strong>
+                  <span id="knowledgeJourneyStatus" aria-live="polite">Evaluate a ticket to begin.</span>
+                </div>
+                <ol id="knowledgeJourneySteps" class="knowledge-journey-steps"></ol>
+                <div class="bar-actions">
+                  <button id="reviewKnowledgePatternButton" type="button" class="secondary" hidden>Review pattern</button>
+                </div>
+              </section>
+              <div id="patternReviewPanel"></div>
             </section>
           </div>
         </section>
@@ -1453,6 +1532,8 @@ export const approvalDeskHtml = `<!doctype html>
         decisionControls: document.getElementById('decisionControls'),
         decisionSummary: document.getElementById('decisionSummary'),
         diagnosisPanel: document.getElementById('diagnosisPanel'),
+        diagnosisSummaryPanel: document.getElementById('diagnosisSummaryPanel'),
+        diagnosisActionPanel: document.getElementById('diagnosisActionPanel'),
         diagnoseButton: document.getElementById('diagnoseButton'),
         draftStyle: document.getElementById('draftStyle'),
         editApprovalControls: document.getElementById('editApprovalControls'),
@@ -1469,6 +1550,8 @@ export const approvalDeskHtml = `<!doctype html>
         queueStatus: document.getElementById('queueStatus'),
         predictedReply: document.getElementById('predictedReply'),
         recommendationPanel: document.getElementById('recommendationPanel'),
+        patternActionBar: document.getElementById('patternActionBar'),
+        patternReviewPanel: document.getElementById('patternReviewPanel'),
         priorityOverride: document.getElementById('priorityOverride'),
         refreshEvidence: document.getElementById('refreshEvidence'),
         refreshQueue: document.getElementById('refreshQueue'),
@@ -1732,19 +1815,24 @@ export const approvalDeskHtml = `<!doctype html>
       }
 
       function renderDiagnosisPanel() {
+        renderDiagnosisSummary();
         if (state.selectedTicket === null) {
+          els.diagnosisActionPanel.hidden = true;
           els.diagnosisPanel.innerHTML = '<p class="hint">Select a ticket to review recorded diagnoses.</p>';
           return;
         }
         if (state.diagnosisLoading === true) {
+          els.diagnosisActionPanel.hidden = true;
           els.diagnosisPanel.innerHTML = '<p class="hint">Loading diagnosis review...</p>';
           return;
         }
         const view = selectedDiagnosisView();
         if (view === null) {
+          els.diagnosisActionPanel.hidden = true;
           els.diagnosisPanel.innerHTML = '<p class="hint">No recorded diagnoses are available for this ticket yet.</p>';
           return;
         }
+        els.diagnosisActionPanel.hidden = false;
         const original = view.originalDiagnosis?.after?.diagnosis ?? {};
         const current = diagnosisContextForView(view) ?? {};
         const draft = diagnosisDraftForView(view) ?? {};
@@ -1825,6 +1913,35 @@ export const approvalDeskHtml = `<!doctype html>
             '</section>' +
             results +
           '</div>';
+      }
+
+      function renderDiagnosisSummary() {
+        if (els.diagnosisSummaryPanel === undefined) return;
+        if (state.selectedTicket === null) {
+          els.diagnosisSummaryPanel.innerHTML = '<p class="hint">Select a ticket to review recorded diagnoses.</p>';
+          return;
+        }
+        if (state.diagnosisLoading === true) {
+          els.diagnosisSummaryPanel.innerHTML = '<p class="hint">Loading diagnosis review...</p>';
+          return;
+        }
+        const view = selectedDiagnosisView();
+        if (view === null) {
+          els.diagnosisSummaryPanel.innerHTML = '<p class="hint">No recorded diagnoses are available for this ticket yet.</p>';
+          return;
+        }
+        const current = diagnosisContextForView(view) ?? {};
+        const stale = view.stale === true
+          ? '<p class="warning"><strong>Review required.</strong> ' + escapeHtml((view.staleReasons ?? []).map(safeStaleReason).join(' ')) + '</p>'
+          : '';
+        els.diagnosisSummaryPanel.innerHTML = stale +
+          '<div class="chips">' +
+            chip('Cause: ' + (current.causeType ?? 'unknown')) +
+            chip('Confidence: ' + (current.confidence ?? 'unknown')) +
+            chip('Owner: ' + (current.owner ?? 'unknown')) +
+          '</div>' +
+          '<p class="hint">' + escapeHtml(current.customerSafeSummary ?? 'No current reviewed diagnosis is available.') + '</p>' +
+          '<p class="meta">Diagnosis actions and fix controls are in the Workflow Bar.</p>';
       }
 
       async function loadDiagnoses(ticketId, ticketRequestId) {
@@ -2073,7 +2190,7 @@ export const approvalDeskHtml = `<!doctype html>
           els.recommendationPanel.innerHTML =
             '<section class="hero-card description"><strong>Step 1: Evaluate ticket</strong>' +
             '<p>Select a ticket, then use the action bar to evaluate classification, lifecycle state, evidence needs, and the next customer response.</p>' +
-            '</section>' + renderKnowledgeReviewPanel();
+            '</section>';
           state.stage = 'empty';
           els.editedCustomerResponse.value = '';
           clearApprovalInputs();
@@ -2105,7 +2222,7 @@ export const approvalDeskHtml = `<!doctype html>
             renderRecommendationChangeSummary(recommendation) +
             renderRecommendationReason(recommendation) +
             renderTechnicalEvidence(recommendation) +
-            renderPreviousRecommendations() + renderKnowledgeReviewPanel();
+            renderPreviousRecommendations();
         }
         if (!preserveApprovalInputs) {
           els.editedCustomerResponse.value = recommendation.draftCustomerResponse;
@@ -2189,6 +2306,8 @@ export const approvalDeskHtml = `<!doctype html>
       function renderRecommendationStageControls() {
         const hasRecommendation = state.recommendation !== null;
         const approvedWorkflow = isApprovedWorkflow();
+        const requiredReview = state.operatorGuidance?.requiredReview;
+        const reviewGateActive = requiredReview !== undefined;
         const waitingForReply = isTaskDoneWaitingForReply();
         const customerReplyReady = latestUnconsumedCustomerReply() !== null;
         const closeReady = shouldShowCloseTicketAction();
@@ -2209,14 +2328,19 @@ export const approvalDeskHtml = `<!doctype html>
         els.reviewDraftButton.textContent = 'Response';
         els.approveButton.textContent = 'Done';
         els.approveEditedButton.textContent = 'Done';
-        els.continueApproval.hidden = !hasRecommendation || approvedWorkflow || shouldShowCreateUpdatedRecommendation();
+        els.continueApproval.hidden = !hasRecommendation || approvedWorkflow || shouldShowCreateUpdatedRecommendation() || reviewGateActive;
         els.markSentButton.hidden = true;
         els.createUpdatedRecommendation.hidden = !shouldShowCreateUpdatedRecommendation();
         els.diagnoseButton.hidden = !diagnosisActionReady;
         els.fixButton.hidden = !fixActionReady;
         els.closeTicketButton.hidden = !closeReady;
-        els.approveButton.hidden = !hasRecommendation || shouldShowCreateUpdatedRecommendation() || closeReady;
-        els.startRejectButton.hidden = !hasRecommendation || approvedWorkflow || closeReady;
+        els.approveButton.hidden = !hasRecommendation || shouldShowCreateUpdatedRecommendation() || closeReady ||
+          (approvedWorkflow && isCurrentRecommendationSent());
+        els.approveButton.textContent = reviewGateActive ? 'Review' : 'Done';
+        els.approveButton.title = reviewGateActive
+          ? 'Review the required diagnosis or pattern action before continuing'
+          : 'Mark task done';
+        els.startRejectButton.hidden = !hasRecommendation || approvedWorkflow || closeReady || reviewGateActive;
         els.backToRecommendation.hidden = !(hasRecommendation && state.stage === 'approval');
         els.decisionChips.innerHTML = hasRecommendation ? renderDecisionChips(state.recommendation) : '';
         els.decisionSummary.textContent = hasRecommendation ? decisionSummaryText(state.recommendation) : 'Review the draft and evidence, then approve or edit.';
@@ -2226,6 +2350,31 @@ export const approvalDeskHtml = `<!doctype html>
         if (customerReplyReady || latestUnevaluatedWorkflowEvent() !== null) {
           els.createUpdatedRecommendation.textContent = createUpdatedRecommendationLabel();
         }
+        renderDiagnosisActionVisibility();
+        renderPatternActionBar();
+      }
+
+      function humanizeIdentifier(value) {
+        return String(value ?? '')
+          .replace(/[-_]+/g, ' ')
+          .replace(/\b\w/g, function (letter) { return letter.toUpperCase(); });
+      }
+
+      function renderDiagnosisActionVisibility() {
+        if (els.diagnosisActionPanel === undefined) return;
+        const hasDiagnosis = state.diagnosisLoading === false && selectedDiagnosisView() !== null;
+        els.diagnosisActionPanel.hidden = !hasDiagnosis;
+      }
+
+      function renderPatternActionBar() {
+        if (els.patternActionBar === undefined || els.patternReviewPanel === undefined) return;
+        const visible = state.knowledgeCandidate !== null ||
+          state.knowledgeDiscoveryPending ||
+          state.knowledgeDiscoveryStatus !== '';
+        els.patternActionBar.hidden = !visible;
+        els.patternReviewPanel.innerHTML = state.knowledgeCandidate === null
+          ? ''
+          : renderKnowledgeReviewPanel();
       }
 
       function renderKnowledgeJourney() {
@@ -2233,8 +2382,11 @@ export const approvalDeskHtml = `<!doctype html>
           return;
         }
         const hasTicket = state.selectedTicket !== null;
-        els.knowledgeJourneyBar.hidden = !hasTicket;
-        if (!hasTicket) {
+        const hasPatternActivity = state.knowledgeCandidate !== null ||
+          state.knowledgeDiscoveryPending ||
+          state.knowledgeDiscoveryStatus !== '';
+        els.knowledgeJourneyBar.hidden = !hasTicket || !hasPatternActivity;
+        if (!hasTicket || !hasPatternActivity) {
           return;
         }
         const journey = state.knowledgeJourneyState;
@@ -2374,6 +2526,21 @@ export const approvalDeskHtml = `<!doctype html>
         const evidenceRationale = candidate.evidencePolicy?.mode === 'none-required'
           ? (candidate.evidencePolicy.rationale ?? '')
           : '';
+        const evidenceOptions = [];
+        const addEvidenceOption = function (id) {
+          if (typeof id === 'string' && id.trim() !== '' && !evidenceOptions.includes(id.trim())) {
+            evidenceOptions.push(id.trim());
+          }
+        };
+        (candidate.evidencePolicy?.evidenceIds ?? []).forEach(addEvidenceOption);
+        (state.recommendation?.providedEvidence ?? []).forEach(function (item) { addEvidenceOption(item.id); });
+        (state.recommendation?.missingEvidence ?? []).forEach(function (item) { addEvidenceOption(item.id); });
+        const selectedEvidence = new Set((candidate.evidencePolicy?.evidenceIds ?? []).map(function (id) { return String(id); }));
+        const evidenceChoices = evidenceOptions.length === 0
+          ? '<p class="hint">No catalogued evidence is linked yet. Add an evidence ID below if the operator can verify one.</p>'
+          : '<div class="evidence-choice-list" aria-label="Potential evidence">' + evidenceOptions.map(function (id) {
+              return '<label><input type="checkbox" data-knowledge-evidence="true" value="' + escapeHtml(id) + '"' + (selectedEvidence.has(id) ? ' checked' : '') + '> ' + escapeHtml(humanizeIdentifier(id)) + '</label>';
+            }).join('') + '</div>';
         return '<section id="knowledgePatternReview" class="hero-card description knowledge-review-panel"><strong>Potential knowledge pattern</strong>' +
           '<p class="hint">This is a separate, explicit review gate. Approval affects future evaluations only; it does not alter historical recommendations or customer responses.</p>' +
           '<div class="details-grid">' +
@@ -2390,21 +2557,26 @@ export const approvalDeskHtml = `<!doctype html>
           '<p><strong>Support diagnoses/open tickets</strong> ' + escapeHtml(support.map(function (item) { return item.source + ': ' + (item.diagnosisId ?? item.ticketId); }).join(', ') || 'none') + '</p>' +
           '<p><strong>Contradictions</strong> ' + escapeHtml(formatList(candidate.contradictions)) + '</p>' +
           '<p><strong>Validation warnings</strong> ' + escapeHtml(formatList(candidate.validationWarnings)) + '</p>' +
-          '<div class="details-grid"><label>Proposed name <input id="knowledgeName" value="' + escapeHtml(candidate.name ?? '') + '"></label>' +
-          '<label>Owner team <input id="knowledgeOwner" value="' + escapeHtml(candidate.owner ?? '') + '"></label></div>' +
-          '<label>Summary <textarea id="knowledgeSummary">' + escapeHtml(candidate.summary ?? '') + '</textarea></label>' +
-          '<label>Trigger patterns <textarea id="knowledgeTriggerPatterns">' + escapeHtml(listText(candidate.triggerPatterns)) + '</textarea></label>' +
-          '<div class="details-grid"><label>Evidence policy <select id="knowledgeEvidenceMode"><option value="undecided"' + (candidate.evidencePolicy?.mode === 'undecided' ? ' selected' : '') + '>Undecided</option><option value="none-required"' + (candidate.evidencePolicy?.mode === 'none-required' ? ' selected' : '') + '>None required</option><option value="required"' + (candidate.evidencePolicy?.mode === 'required' ? ' selected' : '') + '>Required</option></select></label>' +
-          '<label>Required evidence IDs <textarea id="knowledgeEvidenceIds">' + escapeHtml(requiredEvidence) + '</textarea></label></div>' +
-          '<label>None-required rationale <textarea id="knowledgeEvidenceRationale" placeholder="Explain why this known cause needs no additional evidence.">' + escapeHtml(evidenceRationale) + '</textarea></label>' +
-          '<label>Time constraints <textarea id="knowledgeTimeConstraints">' + escapeHtml(listText(candidate.timeConstraints)) + '</textarea></label>' +
-          '<label>Diagnostic workflow <textarea id="knowledgeDiagnosticSteps">' + escapeHtml(listText(candidate.diagnosticSteps)) + '</textarea></label>' +
-          '<label>Fix workflow <textarea id="knowledgeFixSteps">' + escapeHtml(listText(candidate.fixSteps)) + '</textarea></label>' +
-          '<label>Verification workflow <textarea id="knowledgeVerificationSteps">' + escapeHtml(listText(candidate.verificationSteps)) + '</textarea></label>' +
-          '<label>Customer-safe explanation <textarea id="knowledgeCustomerSafeExplanation">' + escapeHtml(candidate.customerSafeExplanation ?? '') + '</textarea></label>' +
-          '<label>Operator rationale <textarea id="knowledgeOperatorRationale">' + escapeHtml(candidate.operatorRationale ?? '') + '</textarea></label>' +
-          '<label>Rejection reason <textarea id="knowledgeRejectReason" placeholder="Explain why this candidate is not approved."></textarea></label>' +
-          '<div class="actions"><button type="button" data-action="approve-knowledge">Approve for future evaluations</button><button type="button" class="secondary" data-action="draft-knowledge-with-gpt">Refresh with optional GPT</button><button type="button" class="secondary" data-action="defer-knowledge">Defer</button><button type="button" class="danger" data-action="reject-knowledge">Reject</button></div>' +
+          '<details class="candidate-editor" open><summary>Review and edit the proposed object</summary>' +
+            '<div class="details-grid"><label>Proposed name <input id="knowledgeName" value="' + escapeHtml(candidate.name ?? '') + '"></label>' +
+            '<label>Owner team <input id="knowledgeOwner" value="' + escapeHtml(candidate.owner ?? '') + '"></label></div>' +
+            '<label>Summary <textarea id="knowledgeSummary" rows="2">' + escapeHtml(candidate.summary ?? '') + '</textarea></label>' +
+            '<label>Trigger patterns <textarea id="knowledgeTriggerPatterns" rows="2">' + escapeHtml(listText(candidate.triggerPatterns)) + '</textarea></label>' +
+            '<div class="details-grid"><label>Evidence policy <select id="knowledgeEvidenceMode"><option value="undecided"' + (candidate.evidencePolicy?.mode === 'undecided' ? ' selected' : '') + '>Undecided</option><option value="none-required"' + (candidate.evidencePolicy?.mode === 'none-required' ? ' selected' : '') + '>None required</option><option value="required"' + (candidate.evidencePolicy?.mode === 'required' ? ' selected' : '') + '>Required</option></select></label>' +
+            '<label>Selected evidence <input id="knowledgeEvidenceIds" aria-label="Selected evidence" value="' + escapeHtml(requiredEvidence.replaceAll('\\n', ', ')) + '"></label></div>' +
+            evidenceChoices +
+            '<label>None-required rationale <textarea id="knowledgeEvidenceRationale" rows="2" placeholder="Explain why this known cause needs no additional evidence.">' + escapeHtml(evidenceRationale) + '</textarea></label>' +
+            '<details><summary>Workflow and communication fields</summary>' +
+              '<label>Time constraints <textarea id="knowledgeTimeConstraints" rows="2">' + escapeHtml(listText(candidate.timeConstraints)) + '</textarea></label>' +
+              '<label>Diagnostic workflow <textarea id="knowledgeDiagnosticSteps" rows="2">' + escapeHtml(listText(candidate.diagnosticSteps)) + '</textarea></label>' +
+              '<label>Fix workflow <textarea id="knowledgeFixSteps" rows="2">' + escapeHtml(listText(candidate.fixSteps)) + '</textarea></label>' +
+              '<label>Verification workflow <textarea id="knowledgeVerificationSteps" rows="2">' + escapeHtml(listText(candidate.verificationSteps)) + '</textarea></label>' +
+              '<label>Customer-safe explanation <textarea id="knowledgeCustomerSafeExplanation" rows="2">' + escapeHtml(candidate.customerSafeExplanation ?? '') + '</textarea></label>' +
+              '<label>Operator rationale <textarea id="knowledgeOperatorRationale" rows="2">' + escapeHtml(candidate.operatorRationale ?? '') + '</textarea></label>' +
+            '</details>' +
+          '</details>' +
+          '<details class="candidate-rejection"><summary>Reject candidate</summary><label>Rejection reason <textarea id="knowledgeRejectReason" rows="2" placeholder="Explain why this candidate is not approved."></textarea></label></details>' +
+          '<div class="actions"><button type="button" data-action="approve-knowledge">Approve</button><button type="button" class="secondary" data-action="draft-knowledge-with-gpt">Refresh</button><button type="button" class="secondary" data-action="defer-knowledge">Defer</button><button type="button" class="danger" data-action="reject-knowledge">Reject</button></div>' +
         '</section>';
       }
 
@@ -2451,8 +2623,31 @@ export const approvalDeskHtml = `<!doctype html>
       function shouldShowCreateUpdatedRecommendation() {
         return state.selectedTicket !== null &&
           state.recommendation !== null &&
+          !hasRequiredReviewGate() &&
           (latestUnconsumedCustomerReply() !== null || latestUnevaluatedWorkflowEvent() !== null) &&
           canCreateRecommendation();
+      }
+
+      function focusRequiredReview() {
+        const kind = state.operatorGuidance?.requiredReview?.kind;
+        if (kind === 'knowledge-pattern') {
+          focusKnowledgePattern();
+          return;
+        }
+        if (kind === 'diagnosis') {
+          const panel = els.diagnosisActionPanel;
+          if (panel != null && typeof panel.scrollIntoView === 'function') {
+            panel.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          }
+          const firstField = els.diagnosisPanel?.querySelector?.('textarea, input, select');
+          if (firstField !== null && firstField !== undefined && typeof firstField.focus === 'function') {
+            firstField.focus();
+          }
+        }
+      }
+
+      function hasRequiredReviewGate() {
+        return state.operatorGuidance?.requiredReview !== undefined;
       }
 
       function shouldShowDiagnoseAction() {
@@ -2468,6 +2663,7 @@ export const approvalDeskHtml = `<!doctype html>
       function shouldShowCloseTicketAction() {
         return state.selectedTicket !== null &&
           state.recommendation !== null &&
+          !hasRequiredReviewGate() &&
           ticketWorkflowState(state.selectedTicket) !== 'resolved' &&
           state.recommendation.supportState === 'ready-for-close' &&
           isTaskDoneWaitingForReply();
@@ -2484,6 +2680,7 @@ export const approvalDeskHtml = `<!doctype html>
 
       function shouldShowReplyControls() {
         return state.selectedTicket !== null &&
+          !hasRequiredReviewGate() &&
           !shouldShowCloseTicketAction() &&
           state.operatorGuidance?.nextAction !== 'record-diagnosis' &&
           state.operatorGuidance?.nextAction !== 'mark-fix-available';
@@ -2771,6 +2968,8 @@ export const approvalDeskHtml = `<!doctype html>
         state.knowledgeDiscoveryStatus = '';
         state.knowledgeDiscoveryPending = false;
         state.knowledgeJourneyState = 'idle';
+        els.patternReviewPanel.innerHTML = '';
+        els.patternActionBar.hidden = true;
         if (switchingTickets) {
           els.recommendationPanel.innerHTML =
             '<section class="hero-card description"><strong>Loading ticket...</strong>' +
@@ -2881,7 +3080,7 @@ export const approvalDeskHtml = `<!doctype html>
       }
 
       function knowledgeListValue(id) {
-        return (document.getElementById(id)?.value ?? '').split(/\\r?\\n/).map(function (value) {
+        return (document.getElementById(id)?.value ?? '').split(/[,\\r\\n]+/).map(function (value) {
           return value.trim();
         }).filter(Boolean);
       }
@@ -2932,6 +3131,17 @@ export const approvalDeskHtml = `<!doctype html>
         if (state.selectedTicket?.id !== ticketId || state.knowledgeRequestId !== knowledgeRequestId) {
           return;
         }
+        try {
+          const workflow = await requestJson('/api/tickets/' + encodeURIComponent(ticketId), undefined, { writeErrorToResult: false });
+          if (state.selectedTicket?.id === ticketId && state.knowledgeRequestId === knowledgeRequestId) {
+            state.operatorGuidance = workflow.operatorGuidance ?? state.operatorGuidance;
+            if (workflow.recommendationSummary !== undefined) {
+              state.selectedTicket = { ...state.selectedTicket, recommendationSummary: workflow.recommendationSummary };
+            }
+          }
+        } catch (_) {
+          // The review action itself succeeded; keep the local state and let the next refresh reconcile guidance.
+        }
         state.knowledgeCandidate = null;
         state.knowledgeJourneyState = action === 'approve' ? 'approved' : 'reviewed';
         state.knowledgeDiscoveryStatus = action === 'approve'
@@ -2943,6 +3153,10 @@ export const approvalDeskHtml = `<!doctype html>
 
       async function createRecommendation() {
         if (state.selectedTicket === null) {
+          return;
+        }
+        if (hasRequiredReviewGate()) {
+          focusRequiredReview();
           return;
         }
         if (isApprovedAwaitingSend()) {
@@ -4171,6 +4385,37 @@ export const approvalDeskHtml = `<!doctype html>
           void reviewKnowledgeCandidate('reject').catch(function (error) { setResult({ error: error.message }); });
         }
       });
+      els.patternActionBar.addEventListener('click', function (event) {
+        if (event.target?.dataset?.action === 'approve-knowledge') {
+          void reviewKnowledgeCandidate('approve').catch(function (error) { setResult({ error: error.message }); });
+        }
+        if (event.target?.dataset?.action === 'draft-knowledge-with-gpt' && state.selectedTicket !== null) {
+          const ticketId = state.selectedTicket.id;
+          const requestId = ++state.knowledgeRequestId;
+          void loadKnowledgeCandidate(ticketId, requestId, true).then(function () {
+            if (state.selectedTicket?.id === ticketId && state.knowledgeRequestId === requestId) {
+              renderRecommendation(true);
+              renderRecommendationStageControls();
+            }
+          }).catch(function (error) { setResult({ error: error.message }); });
+        }
+        if (event.target?.dataset?.action === 'defer-knowledge') {
+          void reviewKnowledgeCandidate('defer').catch(function (error) { setResult({ error: error.message }); });
+        }
+        if (event.target?.dataset?.action === 'reject-knowledge') {
+          void reviewKnowledgeCandidate('reject').catch(function (error) { setResult({ error: error.message }); });
+        }
+      });
+      els.patternActionBar.addEventListener('change', function (event) {
+        if (event.target?.dataset?.knowledgeEvidence !== 'true') return;
+        const checked = typeof document.querySelectorAll === 'function'
+          ? Array.from(document.querySelectorAll('[data-knowledge-evidence="true"]:checked')).map(function (item) { return item.value; })
+          : [];
+        const evidenceField = document.getElementById('knowledgeEvidenceIds');
+        if (evidenceField !== undefined && evidenceField !== null) {
+          evidenceField.value = checked.join(', ');
+        }
+      });
       els.diagnosisPanel.addEventListener('input', function (event) {
         const target = event.target;
         const draftField = target?.dataset?.diagnosisDraftField;
@@ -4281,9 +4526,17 @@ export const approvalDeskHtml = `<!doctype html>
         void closeTicket().catch(function (error) { setResult({ error: error.message }); });
       });
       els.approveButton.addEventListener('click', function () {
+        if (hasRequiredReviewGate()) {
+          focusRequiredReview();
+          return;
+        }
         void completeTask().catch(function (error) { setResult({ error: error.message }); });
       });
       els.approveEditedButton.addEventListener('click', function () {
+        if (hasRequiredReviewGate()) {
+          focusRequiredReview();
+          return;
+        }
         void completeTask().catch(function (error) { setResult({ error: error.message }); });
       });
       els.markSentButton.addEventListener('click', function () {

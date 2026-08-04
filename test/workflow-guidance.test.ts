@@ -127,7 +127,7 @@ function actionablePatternCandidate(): KnowledgeCandidate {
     verificationSteps: ["Ask the customer to retry the affected event."],
     customerSafeExplanation: "We identified a recurring issue and are reviewing the next safe step.",
     operatorRationale: "The candidate is supported by a completed diagnosis.",
-    owner: "engineering",
+    owner: "api-platform",
     version: 1,
     supportingDiagnosisIds: ["diagnosis-20000000-0000-4000-8000-000000000001"],
     supportingTicketIds: [ticketId],

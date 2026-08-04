@@ -21,6 +21,8 @@ export interface SeedTicketLifecycleObservation {
   diagnosisOutcome: "confirmed" | "likely" | "escalated";
   operatorStage: ReturnType<typeof buildOperatorGuidance>["stage"];
   operatorNextAction: ReturnType<typeof buildOperatorGuidance>["nextAction"];
+  lifecycleGate: "evidence-required" | "evidence-complete" | "known-cause" | "known-event-with-evidence";
+  lifecycleInvariantMismatches: string[];
   classificationMismatches: string[];
 }
 
@@ -31,6 +33,7 @@ export interface SeedTicketLifecycleReport {
   knownCauseCount: number;
   knownEventCount: number;
   closedSeedTicketCount: number;
+  lifecycleInvariantPassCount: number;
   observations: SeedTicketLifecycleObservation[];
 }
 
@@ -52,6 +55,9 @@ export function auditSeedTicketLifecycles(
     knownCauseCount: observations.filter(({ knownCause }) => knownCause !== null).length,
     knownEventCount: observations.filter(({ knownEventId }) => knownEventId !== null).length,
     closedSeedTicketCount: observations.filter(({ seedStatus }) => seedStatus === "resolved").length,
+    lifecycleInvariantPassCount: observations.filter(
+      ({ lifecycleInvariantMismatches }) => lifecycleInvariantMismatches.length === 0,
+    ).length,
     observations,
   };
 }
@@ -78,6 +84,21 @@ function observeTicket(
     audits: [],
   });
 
+  const missingEvidence = (recommendation.missingEvidence ?? []).map(({ label }) => label);
+  const lifecycleGate = missingEvidence.length > 0
+    ? recommendation.knownEventId === undefined || recommendation.knownEventId === null
+      ? "evidence-required" as const
+      : "known-event-with-evidence" as const
+    : recommendation.knownCause === undefined || recommendation.knownCause === null
+      ? "evidence-complete" as const
+      : "known-cause" as const;
+  const lifecycleInvariantMismatches = lifecycleInvariantFailures({
+    ticket,
+    recommendation,
+    guidance,
+    missingEvidence,
+  });
+
   return {
     ticketId: ticket.id,
     seedStatus: ticket.status,
@@ -87,14 +108,41 @@ function observeTicket(
     knownCause: recommendation.knownCause ?? null,
     knownEventId: recommendation.knownEventId ?? null,
     supportState: recommendation.supportState ?? null,
-    missingEvidence: (recommendation.missingEvidence ?? []).map(({ label }) => label),
+    missingEvidence,
     diagnosisOutcome: diagnosis.diagnosticState?.state === "escalated"
       ? "escalated"
       : diagnosis.confidence,
     operatorStage: guidance.stage,
     operatorNextAction: guidance.nextAction,
+    lifecycleGate,
+    lifecycleInvariantMismatches,
     classificationMismatches: compareClassification(recommendation, outcome),
   };
+}
+
+function lifecycleInvariantFailures(input: {
+  ticket: Ticket;
+  recommendation: TriageRecommendation;
+  guidance: ReturnType<typeof buildOperatorGuidance>;
+  missingEvidence: readonly string[];
+}): string[] {
+  const failures: string[] = [];
+  const evidenceBlockedState = ["needs-information", "information-received"].includes(
+    input.recommendation.supportState ?? "",
+  );
+  if (input.missingEvidence.length > 0 && !evidenceBlockedState) {
+    failures.push("missing evidence must keep the support state evidence-gated");
+  }
+  if (
+    input.missingEvidence.length > 0 &&
+    input.recommendation.supportState === "waiting-on-platform-fix"
+  ) {
+    failures.push("waiting-on-platform-fix requires zero missing evidence");
+  }
+  if (input.ticket.status === "resolved" && input.guidance.nextAction !== "none") {
+    failures.push("resolved tickets must not expose another operator action");
+  }
+  return failures;
 }
 
 function compareClassification(

@@ -19,7 +19,7 @@ The optional OpenAI mode is useful for a separate experiment, but the primary
 portfolio recording should use deterministic local rules so every viewer can
 reproduce it without an API key or network access.
 
-The action bar's collapsed **Advanced settings** includes a manual
+The Workflow Bar's collapsed **Advanced settings** includes a manual
 customer-reply composer, an automatic-reply toggle, and action-bar positioning
 for edge-case testing or screen recording. To add a manual customer reply,
 expand **Advanced settings**, check **Disable automatic customer replies**,
@@ -29,6 +29,11 @@ reload. The **Move action bar** selector supports bottom-right, bottom-left,
 bottom-center, top-left, top-center, and top-right; its position also resets on
 reload. These controls are intentionally not part of the primary recording;
 use the automatic reply generated after **Done** instead.
+
+When an evaluated ticket has an actionable diagnosis or knowledge candidate,
+the separate Pattern Bar or Workflow Bar becomes the review surface. **Done**
+changes to **Review** and downstream actions stay unavailable until that review
+is completed.
 
 2. Do not show terminals containing `OPENAI_API_KEY`.
 3. Keep the browser on the local Approval Desk URL.

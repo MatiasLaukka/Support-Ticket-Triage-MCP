@@ -23,6 +23,7 @@ async function main(): Promise<void> {
   console.log(`- Known-cause matches: ${report.knownCauseCount}`);
   console.log(`- Known-event matches: ${report.knownEventCount}`);
   console.log(`- Resolved seed tickets: ${report.closedSeedTicketCount}`);
+  console.log(`- Lifecycle invariants passing: ${report.lifecycleInvariantPassCount}/${report.ticketCount}`);
   console.log("\n## Ticket observations");
   for (const observation of report.observations) {
     const mismatches = observation.classificationMismatches.length === 0
@@ -31,7 +32,7 @@ async function main(): Promise<void> {
     console.log(
       `- ${observation.ticketId}: ${observation.seedStatus}; ${observation.category}/${observation.priority}/${observation.team}; ` +
       `cause=${observation.knownCause ?? "none"}; event=${observation.knownEventId ?? "none"}; ` +
-      `support=${observation.supportState ?? "unset"}; missing=${observation.missingEvidence.length}; ` +
+      `support=${observation.supportState ?? "unset"}; gate=${observation.lifecycleGate}; missing=${observation.missingEvidence.length}; ` +
       `diagnosis=${observation.diagnosisOutcome}; next=${observation.operatorNextAction}; ${mismatches}`,
     );
   }

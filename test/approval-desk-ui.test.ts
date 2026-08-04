@@ -24,6 +24,10 @@ describe("approvalDeskHtml", () => {
       approvalDeskHtml.indexOf("Developer/audit output"),
     );
     expect(approvalDeskHtml).toContain("Workflow actions");
+    expect(approvalDeskHtml).toContain('id="workflowActionBar"');
+    expect(approvalDeskHtml).toContain('id="patternActionBar"');
+    expect(approvalDeskHtml).toContain('id="diagnosisActionPanel"');
+    expect(approvalDeskHtml).toContain('id="patternReviewPanel"');
     expect(approvalDeskHtml).toContain("Edit fields");
     expect(approvalDeskHtml).toContain("Reject and log feedback");
     expect(approvalDeskHtml).toContain("Draft style");
@@ -424,18 +428,18 @@ describe("approvalDeskHtml", () => {
     await app.selectFirstTicket();
 
     expect(app.el("actionBarHint").textContent).toContain("Potential knowledge pattern");
-    expect(app.el("recommendationPanel").innerHTML).toContain("Approve for future evaluations");
-    expect(app.el("recommendationPanel").innerHTML).toContain("GPT advisory");
-    expect(app.el("recommendationPanel").innerHTML).toContain("advisory confidence: 0.91");
-    expect(app.el("recommendationPanel").innerHTML).toContain("Support diagnoses/open tickets");
-    expect(app.el("recommendationPanel").innerHTML).toContain("Contradictions");
-    expect(app.el("recommendationPanel").innerHTML).toContain("Trigger patterns");
-    expect(app.el("recommendationPanel").innerHTML).toContain("Diagnostic workflow");
-    expect(app.el("recommendationPanel").innerHTML).toContain("Fix workflow");
-    expect(app.el("recommendationPanel").innerHTML).toContain("Verification workflow");
-    expect(app.el("recommendationPanel").innerHTML).toContain("provider-error");
-    expect(app.el("recommendationPanel").innerHTML).toContain("Candidate provider was unavailable");
-    expect(app.el("recommendationPanel").innerHTML).toContain("historical recommendations");
+    expect(app.el("patternReviewPanel").innerHTML).toContain(">Approve</button>");
+    expect(app.el("patternReviewPanel").innerHTML).toContain("GPT advisory");
+    expect(app.el("patternReviewPanel").innerHTML).toContain("advisory confidence: 0.91");
+    expect(app.el("patternReviewPanel").innerHTML).toContain("Support diagnoses/open tickets");
+    expect(app.el("patternReviewPanel").innerHTML).toContain("Contradictions");
+    expect(app.el("patternReviewPanel").innerHTML).toContain("Trigger patterns");
+    expect(app.el("patternReviewPanel").innerHTML).toContain("Diagnostic workflow");
+    expect(app.el("patternReviewPanel").innerHTML).toContain("Fix workflow");
+    expect(app.el("patternReviewPanel").innerHTML).toContain("Verification workflow");
+    expect(app.el("patternReviewPanel").innerHTML).toContain("provider-error");
+    expect(app.el("patternReviewPanel").innerHTML).toContain("Candidate provider was unavailable");
+    expect(app.el("patternReviewPanel").innerHTML).toContain("historical recommendations");
   });
 
   it("guides the operator through the visible knowledge-evolution journey", async () => {
@@ -473,6 +477,88 @@ describe("approvalDeskHtml", () => {
     expect(app.el("knowledgeJourneySteps").innerHTML).toContain("Approve for future evaluations");
     expect(app.el("reviewKnowledgePatternButton").hidden).toBe(false);
     expect(() => app.el("reviewKnowledgePatternButton").dispatch("click")).not.toThrow();
+  });
+
+  it("turns Done into a review gate when the backend requires pattern approval", async () => {
+    const app = await startApprovalDeskApp({
+      ticketDetail: {
+        operatorGuidance: {
+          stage: "pattern-review",
+          nextAction: "review-pattern",
+          requiredReview: {
+            kind: "knowledge-pattern",
+            id: "known-cause-diagnosis-a",
+            reason: "Review the actionable knowledge pattern before continuing support actions.",
+          },
+        },
+      },
+      knowledgeCandidate: {
+        id: "known-cause-diagnosis-a",
+        name: "Recurring credential rotation cause",
+        summary: "A deployed service can retain a rotated credential.",
+        triggerPatterns: ["Requests return 401 after credential rotation."],
+        evidencePolicy: { mode: "required", evidenceIds: ["credential-rotation-evidence"] },
+        timeConstraints: ["Apply after a credential rotation."],
+        diagnosticSteps: ["Compare the deployed credential with the active credential."],
+        fixSteps: ["Refresh the deployed credential configuration."],
+        verificationSteps: ["Confirm a new request succeeds."],
+        deterministic: { score: 0.805, supportCount: 2, reasons: ["support"], meetsAlertThreshold: true },
+        gptAdvisory: { status: "not-used" },
+        support: [],
+        supportingDiagnosisIds: ["diagnosis-a"],
+        supportingTicketIds: ["TKT-1001"],
+        contradictions: [],
+        validationStatus: "valid",
+        validationWarnings: [],
+        customerSafeExplanation: "We are reviewing a recurring configuration issue.",
+        operatorRationale: "Completed diagnoses support operator review.",
+        owner: "api-platform",
+        version: 1,
+      },
+    });
+
+    await app.selectFirstTicket();
+
+    expect(app.el("approveButton").textContent).toBe("Review");
+    expect(app.el("approveButton").title).toContain("required diagnosis or pattern action");
+    await app.approve();
+    expect(app.requests.some((request) => request.path.endsWith("/approve"))).toBe(false);
+  });
+
+  it("removes the sent-response Done action while diagnosis is the next governed step", async () => {
+    const app = await startApprovalDeskApp({
+      ticketDetailRecommendation: {
+        ...fixtureRecommendation,
+        resolution: "approved",
+      },
+      ticketDetail: {
+        conversationTimeline: [
+          {
+            kind: "support-response-sent",
+            timestamp: "2026-06-10T08:50:00.000Z",
+            actor: "approval-desk",
+            recommendationId: fixtureRecommendation.id,
+            body: fixtureRecommendation.draftCustomerResponse,
+          },
+        ],
+        recommendationSummary: {
+          latestRecommendationId: fixtureRecommendation.id,
+          latestResolution: "approved",
+          hasSentResponse: true,
+        },
+        operatorGuidance: {
+          stage: "diagnosis-ready",
+          nextAction: "record-diagnosis",
+          reason: "The response was sent and the evidence gate is complete.",
+        },
+      },
+    });
+
+    await app.selectFirstTicket();
+
+    expect(app.el("diagnoseButton").hidden).toBe(false);
+    expect(app.el("approveButton").hidden).toBe(true);
+    expect(app.el("actionBarHint").textContent).not.toContain("mark done");
   });
 
   it("does not let a late knowledge review response update a newer ticket journey", async () => {
@@ -631,13 +717,13 @@ describe("approvalDeskHtml", () => {
 
     await app.selectTicket("TKT-1001");
     await settle(4);
-    expect(app.el("recommendationPanel").innerHTML).toContain("Prior ticket pattern");
+    expect(app.el("patternReviewPanel").innerHTML).toContain("Prior ticket pattern");
     await app.selectTicket("TKT-1002");
 
-    expect(app.el("recommendationPanel").innerHTML).not.toContain("Prior ticket pattern");
+    expect(app.el("patternReviewPanel").innerHTML).not.toContain("Prior ticket pattern");
     expect(app.el("actionBarHint").textContent).not.toContain("Potential knowledge pattern");
     await settle(20);
-    expect(app.el("recommendationPanel").innerHTML).not.toContain("Prior ticket pattern");
+    expect(app.el("patternReviewPanel").innerHTML).not.toContain("Prior ticket pattern");
   });
 
   it("removes the prior knowledge review panel before a delayed next-ticket detail arrives", async () => {
@@ -655,12 +741,12 @@ describe("approvalDeskHtml", () => {
 
     await app.selectTicket("TKT-1001");
     await settle(4);
-    expect(app.el("recommendationPanel").innerHTML).toContain("Prior ticket pattern");
+    expect(app.el("patternReviewPanel").innerHTML).toContain("Prior ticket pattern");
     await app.selectTicket("TKT-1002");
 
     expect(app.el("recommendationPanel").innerHTML).toContain("Loading ticket");
-    expect(app.el("recommendationPanel").innerHTML).not.toContain("Prior ticket pattern");
-    expect(app.el("recommendationPanel").innerHTML).not.toContain("approve-knowledge");
+    expect(app.el("patternReviewPanel").innerHTML).not.toContain("Prior ticket pattern");
+    expect(app.el("patternReviewPanel").innerHTML).not.toContain("approve-knowledge");
   });
 
   it("has demo reply samples for every evidence requirement", () => {
@@ -1235,7 +1321,7 @@ describe("approvalDeskHtml", () => {
     expect(app.el("customerReplyFocus").innerHTML).toContain("retry succeeded");
     expect(approvalDeskHtml).toContain("workflow-action-stack");
     expect(approvalDeskHtml.indexOf('id="customerReplyFocus"')).toBeLessThan(
-      approvalDeskHtml.indexOf('<section class="recommendation-setup-bar"'),
+      approvalDeskHtml.indexOf('id="workflowActionBar"'),
     );
     expect(app.el("createUpdatedRecommendation").hidden).toBe(false);
     expect(app.el("createUpdatedRecommendation").textContent).toBe("Evaluate");
@@ -1877,7 +1963,19 @@ describe("approvalDeskHtml", () => {
     expect(approvalDeskHtml).toContain("width: min(520px");
     expect(approvalDeskHtml).toContain("bar-chip-summary");
     expect(approvalDeskHtml.indexOf("<h3>Conversation workspace</h3>")).toBeLessThan(
-      approvalDeskHtml.indexOf('<section class="recommendation-setup-bar"'),
+      approvalDeskHtml.indexOf('id="workflowActionBar"'),
+    );
+  });
+
+  it("keeps diagnosis and pattern mutations inside the governed action bars", () => {
+    expect(approvalDeskHtml.indexOf('id="diagnosisPanel"')).toBeGreaterThan(
+      approvalDeskHtml.indexOf('id="workflowActionBar"'),
+    );
+    expect(approvalDeskHtml.indexOf('id="patternReviewPanel"')).toBeGreaterThan(
+      approvalDeskHtml.indexOf('id="patternActionBar"'),
+    );
+    expect(approvalDeskHtml.indexOf('id="discoverKnowledgeButton"')).toBeGreaterThan(
+      approvalDeskHtml.indexOf("Advanced settings"),
     );
   });
 
@@ -3433,6 +3531,8 @@ function createElements(): Record<string, FakeElement> {
       "decisionControls",
       "decisionSummary",
       "diagnosisPanel",
+      "diagnosisSummaryPanel",
+      "diagnosisActionPanel",
       "diagnoseButton",
       "draftStyle",
       "editApprovalControls",
@@ -3450,6 +3550,8 @@ function createElements(): Record<string, FakeElement> {
       "queueFilters",
       "queueStatus",
       "recommendationPanel",
+      "patternActionBar",
+      "patternReviewPanel",
       "refreshEvidence",
       "refreshQueue",
       "rejectButton",
@@ -3502,6 +3604,8 @@ function createElements(): Record<string, FakeElement> {
   elements.advancedSettings.open = false;
   elements.disableAutomaticReplies.checked = false;
   elements.knowledgeJourneyBar.hidden = true;
+  elements.patternActionBar.hidden = true;
+  elements.diagnosisActionPanel.hidden = true;
   elements.reviewKnowledgePatternButton.hidden = true;
   elements.fieldChoices.children = [
     "category",
@@ -3557,6 +3661,7 @@ class FakeElement {
   hidden = false;
   open = false;
   textContent = "";
+  title = "";
   type = "";
   value = "";
   private parent: FakeElement | undefined;

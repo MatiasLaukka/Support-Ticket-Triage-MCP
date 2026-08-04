@@ -18,6 +18,7 @@ describe("all-ticket lifecycle audit", () => {
 
     expect(report.ticketCount).toBe(30);
     expect(report.observations).toHaveLength(30);
+    expect(report.lifecycleInvariantPassCount).toBe(30);
     expect(report.observations.map(({ ticketId }) => ticketId)).toEqual(
       expect.arrayContaining(["TKT-1001", "TKT-1017", "TKT-1024", "TKT-1030"]),
     );
@@ -31,6 +32,14 @@ describe("all-ticket lifecycle audit", () => {
       operatorNextAction: "none",
       supportState: "ready-for-close",
       missingEvidence: [],
+    });
+    expect(report.observations.find(({ ticketId }) => ticketId === "TKT-1001")).toMatchObject({
+      lifecycleGate: "evidence-required",
+      lifecycleInvariantMismatches: [],
+    });
+    expect(report.observations.find(({ ticketId }) => ticketId === "TKT-1028")).toMatchObject({
+      lifecycleGate: "known-event-with-evidence",
+      lifecycleInvariantMismatches: [],
     });
   });
 });

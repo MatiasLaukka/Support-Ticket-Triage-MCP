@@ -17,7 +17,7 @@ function candidate(overrides: Partial<KnowledgeCandidate> = {}): KnowledgeCandid
     verificationSteps: ["Ask the customer to retry the affected event."],
     customerSafeExplanation: "We identified a recurring issue and are reviewing the next safe step.",
     operatorRationale: "The candidate is supported by a completed diagnosis.",
-    owner: "engineering",
+    owner: "api-platform",
     version: 1,
     supportingDiagnosisIds: ["diagnosis-1002"],
     supportingTicketIds: ["TKT-1002"],

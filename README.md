@@ -143,6 +143,13 @@ bottom-left, bottom-center, top-left, top-center, and top-right positions; its
 selection also resets on reload. These controls are not needed for the normal
 showcase flow, which uses the automatic reply generated after **Done**.
 
+The **Workflow Bar** owns evaluation, recommendation approval, diagnosis, Fix,
+verification, and close actions. The separate **Pattern Bar** appears only when
+knowledge discovery has an active candidate or is still running. An actionable
+diagnosis or pattern review is a hard workflow gate: **Done** changes to
+**Review**, focuses the relevant bar, and downstream support actions remain
+hidden until the operator completes the required review.
+
 The alternate incident walkthrough still works well with `TKT-1001`, which
 shows correlated event-ingestion delay handling and incident-response routing.
 
@@ -791,12 +798,15 @@ npm run evaluate:lifecycle
 ```
 
 This 30-ticket audit reports each ticket's seed status, category/routing,
-known-cause and known-event matches, evidence gate, diagnosis confidence, and
-operator next action. It is a baseline lifecycle audit rather than a claim that
-every ticket has been replayed through every chronological customer turn.
+known-cause and known-event matches, evidence gate, diagnosis confidence,
+operator next action, and the shared lifecycle invariants. It is a baseline
+lifecycle audit rather than a claim that every ticket has been replayed through
+every chronological customer turn; Lifecycle Replay remains a snapshot viewer
+for the separate diagnostic scenarios.
 The current seed audit reports 30/30 classification contracts, 28 tickets
-correctly waiting for evidence, 7 known-cause matches, 3 known-event matches,
-and one already-resolved ticket with zero evidence requests.
+correctly waiting for evidence, 30/30 lifecycle invariants, 7 known-cause
+matches, 3 known-event matches, and one already-resolved ticket with zero
+evidence requests.
 
 ### Article-backed diagnosis and GPT advisory diagnosis
 
@@ -980,14 +990,15 @@ refer to a deprecated evidence ID remain readable and executable; new
 promotions containing that ID are blocked and must use its replacement when
 one is defined.
 
-In the Approval Desk, select a ticket and use **Find pattern** in the action
-bar to run knowledge discovery explicitly. The search also runs when a ticket
-is selected, but the button makes the trigger visible and reports when the
-current completed-diagnosis evidence does not meet the candidate threshold.
-When a candidate is found, the review panel appears below the recommendation;
-the operator can inspect the supporting evidence, edit the declarative fields,
-and approve, reject, or defer it. The button never changes the ticket or
-promotes a candidate by itself.
+In the Approval Desk, select a ticket and open **Advanced settings** in the
+Workflow Bar to run **Find pattern** explicitly. Discovery also runs after an
+authoritative diagnosis is available, but the manual trigger makes the boundary
+visible and reports when the current completed-diagnosis evidence does not meet
+the candidate threshold. When a candidate is found, the separate **Pattern
+Bar** shows the supporting evidence and compact declarative editor. The
+operator can inspect the evidence choices, edit the proposed object, and
+**Approve**, **Refresh**, **Defer**, or **Reject** it. The button never changes
+the ticket or promotes a candidate by itself.
 
 Evidence policy remains the gate. For example, an approved
 `none-required` known cause whose deterministic trigger matches may use its

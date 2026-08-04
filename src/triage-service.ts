@@ -71,6 +71,9 @@ const NonBlankStringSchema = z.string().trim().min(1);
 const recommendationOperations = new Map<string, Promise<void>>();
 const ticketOperations = new Map<TicketId, Promise<void>>();
 const submitWithinTicketLockCapability = Symbol("submitWithinTicketLock");
+const submitClassificationConfidenceCapability = Symbol(
+  "submitClassificationConfidence",
+);
 const NEWER_REPLY_SUPERSESSION_REASON =
   "A newer customer reply requires a fresh recommendation.";
 
@@ -504,11 +507,28 @@ export class TriageService {
     this.uuid = dependencies.uuid ?? randomUUID;
   }
 
+  async submit(input: SubmitRecommendationInput, capability?: symbol): Promise<TriageRecommendation>;
+  async submit(
+    input: SubmitRecommendationInput,
+    capability: symbol | undefined,
+    classificationConfidence: ClassificationConfidence | undefined,
+    confidenceCapability: typeof submitClassificationConfidenceCapability,
+  ): Promise<TriageRecommendation>;
   async submit(
     input: SubmitRecommendationInput,
     capability?: symbol,
     classificationConfidence?: ClassificationConfidence,
+    confidenceCapability?: symbol,
   ): Promise<TriageRecommendation> {
+    if (
+      classificationConfidence !== undefined &&
+      confidenceCapability !== submitClassificationConfidenceCapability
+    ) {
+      throw new DomainError(
+        "Classifier confidence provenance requires the evaluation capability.",
+        "INVALID_CLASSIFICATION_PROVENANCE",
+      );
+    }
     const parsed = SubmitRecommendationInputSchema.parse(input);
     if (capability === submitWithinTicketLockCapability) {
       return this.submitValidated(parsed, classificationConfidence);
@@ -692,6 +712,7 @@ export class TriageService {
         recommendationInput,
         submitWithinTicketLockCapability,
         classificationConfidence,
+        submitClassificationConfidenceCapability,
       );
       const recommendations =
         await this.supersedePendingRecommendationsWithNewerReply({

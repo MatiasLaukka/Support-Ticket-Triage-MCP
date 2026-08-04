@@ -5,6 +5,7 @@ export type DomainErrorCode =
   | "TICKET_NOT_FOUND"
   | "RECOMMENDATION_NOT_FOUND"
   | "REVISION_CONFLICT"
+  | "INVALID_CLASSIFICATION_PROVENANCE"
   | "REPOSITORY_ERROR";
 
 export class DomainError extends Error {

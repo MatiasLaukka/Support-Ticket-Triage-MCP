@@ -63,6 +63,20 @@ describe("TriageService", () => {
     ).rejects.toThrow();
   });
 
+  it("rejects classifier confidence passed through the public submit seam", async () => {
+    const harness = makeHarness();
+
+    await expect(
+      (harness.service.submit as unknown as (...args: unknown[]) => Promise<unknown>)(
+        makeSubmitInput(),
+        undefined,
+        trustedClassificationConfidence,
+      ),
+    ).rejects.toMatchObject({
+      code: "INVALID_CLASSIFICATION_PROVENANCE",
+    });
+  });
+
   it("persists trusted classifier confidence on evaluation while allowing fixture input without it", async () => {
     const fixtureHarness = makeHarness();
     const fixtureWatermark = customerReplyWatermarkFromAudits(

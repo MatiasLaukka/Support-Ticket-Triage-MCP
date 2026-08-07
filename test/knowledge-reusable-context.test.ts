@@ -111,6 +111,31 @@ describe("reusable approved knowledge", () => {
     ]);
   });
 
+  it("replays offset-form exact-version events by instant so a later failed reuse excludes the head", async () => {
+    const result = await listReusableApproved({
+      snapshotReader: snapshotReader({
+        versions: [object("offset-order-guide", 1)],
+        heads: new Map([["offset-order-guide", 1]]),
+        events: [
+          { ...promotion("offset-order-guide", 1), occurredAt: "2026-08-07T09:00:00.000Z" },
+          {
+            ...event("offset-order-guide", 1, "knowledge-version-reactivated", {
+              health: "active", reactivatedVersion: 1, provenance: "reviewed version reactivated",
+            }),
+            occurredAt: "2026-08-07T10:00:00.000Z",
+          },
+          { ...contradiction("offset-order-guide"), sourceVersion: 1, occurredAt: "2026-08-07T08:00:00.000-04:00" },
+        ],
+      }),
+      asOf: "2026-08-07T13:00:00.000Z",
+    });
+
+    expect(result.contexts).toEqual([]);
+    expect(result.issues).toEqual([
+      { scope: "version", objectId: "offset-order-guide", version: 1, code: "unhealthy-version" },
+    ]);
+  });
+
   it("returns a ledger-unavailable result when the sole snapshot cannot be read", async () => {
     const reader: KnowledgeReuseSnapshotReader = { async snapshotForReuse() { throw new Error("ledger unavailable"); } };
 

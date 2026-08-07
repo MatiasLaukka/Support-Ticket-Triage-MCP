@@ -48,7 +48,7 @@ export function projectCandidateLearning(
   const relevant = events
     .filter((event) => event.candidateId === input.candidateId)
     .filter((event) => input.asOf === undefined || Date.parse(event.occurredAt) <= Date.parse(input.asOf))
-    .sort((left, right) => left.occurredAt.localeCompare(right.occurredAt) || left.id.localeCompare(right.id));
+    .sort((left, right) => Date.parse(left.occurredAt) - Date.parse(right.occurredAt) || left.id.localeCompare(right.id));
   let maturity: LearningMaturity = "observed";
   let health: LearningHealth = "active";
   let staleAt: string | undefined;
@@ -129,7 +129,7 @@ export function projectKnowledgeVersionLearning(
   const relevant = events
     .filter((event) => event.objectId === input.objectId && event.sourceVersion === sourceVersion)
     .filter((event) => Date.parse(event.occurredAt) <= Date.parse(asOf))
-    .sort((left, right) => left.occurredAt.localeCompare(right.occurredAt) || left.id.localeCompare(right.id));
+    .sort((left, right) => Date.parse(left.occurredAt) - Date.parse(right.occurredAt) || left.id.localeCompare(right.id));
   let maturity: LearningMaturity = "observed";
   let health: LearningHealth = "active";
   let staleAt: string | undefined;

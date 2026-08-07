@@ -24,6 +24,12 @@ export type ReusableKnowledgeResult = {
   issues: readonly ReusableKnowledgeIssue[];
 };
 
+/** Immutable provenance for a learned known-cause selected at evaluation time. */
+export type KnowledgeReference = { objectId: string; version: number };
+
+/** Production callers must provide the service-owned reusable snapshot, not broad history. */
+export type ProductionKnowledgeInput = { reusableKnowledge: ReusableKnowledgeResult };
+
 /**
  * The only reusable-knowledge projection. Its one atomic snapshot prevents a
  * historical head from being paired with a different ledger or version view.

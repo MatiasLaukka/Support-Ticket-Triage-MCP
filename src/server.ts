@@ -923,13 +923,13 @@ async function evaluateTicket(
   deps: TriageServerDependencies,
   input: z.infer<typeof EvaluateTicketInputSchema>,
 ): Promise<z.infer<typeof EvaluateTicketOutputSchema>> {
-  const [ticket, audits, allKnowledgeArticles, approvedObjects] = await Promise.all([
+  const reusableKnowledge = deps.knowledgeEvolution === undefined
+    ? { status: "ledger-unavailable" as const, contexts: [], issues: [{ scope: "snapshot" as const, code: "ledger-read-failed" as const }] }
+    : await deps.knowledgeEvolution.service.listReusableApproved({ asOf: deps.now().toISOString() });
+  const [ticket, audits, allKnowledgeArticles] = await Promise.all([
     deps.tickets.get(input.ticketId),
     deps.audits.list(input.ticketId),
     deps.knowledge.list(),
-    deps.knowledgeEvolution === undefined
-      ? Promise.resolve([])
-      : deps.knowledgeEvolution.service.listApproved(),
   ]);
   const customerReplies = customerRepliesFromAudits(ticket.id, audits);
   const previousSupportResponse = latestSupportResponseFromAudits(
@@ -943,7 +943,7 @@ async function evaluateTicket(
     ticket,
     actor: input.actor,
     allKnowledgeArticles,
-    approvedObjects,
+    reusableKnowledge,
     customerReplies,
     previousSupportResponse,
     diagnosisContext: persistedDiagnosticContext.diagnosis?.context,

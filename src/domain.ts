@@ -526,6 +526,25 @@ export const DuplicateCandidateSchema = z
   })
   .strict();
 
+export const KnowledgeReferenceSchema = z
+  .object({ objectId: SlugSchema, version: z.number().int().positive() })
+  .strict();
+
+const LearnedContextIssueSchema = z.discriminatedUnion("scope", [
+  z.object({ scope: z.literal("snapshot"), code: z.literal("ledger-read-failed") }).strict(),
+  z.object({
+    scope: z.literal("version"),
+    objectId: SlugSchema,
+    version: z.number().int().positive(),
+    code: z.enum(["missing-history", "inconsistent-history", "unhealthy-version"]),
+  }).strict(),
+]);
+
+export const LearnedContextSchema = z.object({
+  status: z.enum(["available", "ledger-unavailable"]),
+  issues: z.array(LearnedContextIssueSchema),
+}).strict();
+
 export const TriageRecommendationSchema = z
   .object({
     id: z.uuid(),
@@ -544,6 +563,8 @@ export const TriageRecommendationSchema = z
     missingInformation: z.array(NonBlankStringSchema),
     supportState: SupportStateSchema.optional(),
     knownCause: SlugSchema.nullable().optional(),
+    knownCauseRef: KnowledgeReferenceSchema.optional(),
+    learnedContext: LearnedContextSchema.optional(),
     knownEventId: KnownEventIdSchema.nullable().optional(),
     knownEventMatchReasons: UniqueNonBlankStringsSchema.optional(),
     requiredEvidence: z.array(EvidenceRequirementSchema).optional(),
@@ -589,7 +610,16 @@ export const TriageRecommendationSchema = z
         "escalationRequired must match whether escalationReasons is non-empty.",
       path: ["escalationRequired"],
     },
-  );
+  )
+  .superRefine((recommendation, context) => {
+    if (recommendation.knownCauseRef !== undefined && recommendation.knownCause == null) {
+      context.addIssue({
+        code: "custom",
+        path: ["knownCauseRef"],
+        message: "knownCauseRef requires knownCause.",
+      });
+    }
+  });
 
 export const RecommendationSchema = TriageRecommendationSchema;
 
@@ -787,6 +817,7 @@ export type Requester = z.infer<typeof RequesterSchema>;
 export type SLA = z.infer<typeof SLASchema>;
 export type Ticket = z.infer<typeof TicketSchema>;
 export type KnowledgeArticle = z.infer<typeof KnowledgeArticleSchema>;
+export type KnowledgeReference = z.infer<typeof KnowledgeReferenceSchema>;
 export type DuplicateCandidate = z.infer<typeof DuplicateCandidateSchema>;
 export type TriageRecommendation = z.infer<typeof TriageRecommendationSchema>;
 export type Recommendation = TriageRecommendation;

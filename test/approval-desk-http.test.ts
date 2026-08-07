@@ -25,6 +25,7 @@ import { createRuntimeDependencies } from "../src/runtime.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { createTriageServer } from "../src/server.js";
+import type { ReusableKnowledgeResult } from "../src/knowledge-evolution/reusable-context.js";
 
 const now = new Date("2026-06-10T09:00:00.000Z");
 const temporaryRoots: string[] = [];
@@ -3724,7 +3725,131 @@ describe("createApprovalDeskHttpServer", () => {
     });
     expect((await deps.tickets.get("TKT-1005")).revision).toBe(0);
   });
+  it("routes the same unavailable reusable-knowledge snapshot through HTTP and MCP evaluation", async () => {
+    const { deps, json } = await startFixture();
+    const calls: string[] = [];
+    deps.knowledgeEvolution.service.listReusableApproved = async ({ asOf }) => {
+      calls.push(asOf);
+      return {
+        status: "ledger-unavailable",
+        contexts: [],
+        issues: [{ scope: "snapshot", code: "ledger-read-failed" }],
+      };
+    };
+
+    const http = await json("/api/tickets/TKT-1010/recommendations", {
+      method: "POST",
+      body: JSON.stringify({ actor: "approval-desk" }),
+    });
+    expect(http.status, JSON.stringify(http.body)).toBe(201);
+    expect(http.body.recommendation).toMatchObject({
+      learnedContext: {
+        status: "ledger-unavailable",
+        issues: [{ scope: "snapshot", code: "ledger-read-failed" }],
+      },
+    });
+    expect(http.body.recommendation.knownCauseRef).toBeUndefined();
+
+    const server = createTriageServer(deps);
+    const client = new Client({ name: "reusable-context-parity", version: "1.0.0" });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    await server.connect(serverTransport);
+    await client.connect(clientTransport);
+    try {
+      const mcp = await client.callTool({
+        name: "evaluate_ticket",
+        arguments: { ticketId: "TKT-1010", actor: "approval-desk", aiPreference: "deterministic" },
+      });
+      expect(mcp.isError, mcpText(mcp as any)).not.toBe(true);
+      expect(mcp.structuredContent).toMatchObject({
+        recommendation: {
+          learnedContext: {
+            status: "ledger-unavailable",
+            issues: [{ scope: "snapshot", code: "ledger-read-failed" }],
+          },
+        },
+      });
+    } finally {
+      await Promise.allSettled([client.close(), server.close()]);
+    }
+    expect(calls).toEqual([now.toISOString(), now.toISOString()]);
+  });
+
+  it("pins an existing recommendation to v1 and only uses v2 after an explicit HTTP or MCP re-evaluation", async () => {
+    const { deps, json } = await startFixture();
+    let current = reusableCampaignEditorKnowledge(1);
+    deps.knowledgeEvolution.service.listReusableApproved = async () => current;
+
+    const first = await json("/api/tickets/TKT-1010/recommendations", {
+      method: "POST",
+      body: JSON.stringify({ actor: "approval-desk" }),
+    });
+    expect(first.status, JSON.stringify(first.body)).toBe(201);
+    expect(first.body.recommendation.knownCauseRef).toEqual({
+      objectId: "campaign-editor-guidance", version: 1,
+    });
+
+    current = reusableCampaignEditorKnowledge(2);
+    expect(await deps.recommendations.get(first.body.recommendation.id)).toMatchObject({
+      knownCauseRef: { objectId: "campaign-editor-guidance", version: 1 },
+    });
+
+    const reevaluated = await json("/api/tickets/TKT-1010/recommendations", {
+      method: "POST",
+      body: JSON.stringify({ actor: "approval-desk" }),
+    });
+    expect(reevaluated.status, JSON.stringify(reevaluated.body)).toBe(201);
+    expect(reevaluated.body.recommendation.knownCauseRef).toEqual({
+      objectId: "campaign-editor-guidance", version: 2,
+    });
+
+    const server = createTriageServer(deps);
+    const client = new Client({ name: "knowledge-version-pinning", version: "1.0.0" });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    await server.connect(serverTransport);
+    await client.connect(clientTransport);
+    try {
+      const mcp = await client.callTool({
+        name: "evaluate_ticket",
+        arguments: { ticketId: "TKT-1010", actor: "approval-desk", aiPreference: "deterministic" },
+      });
+      expect(mcp.isError, mcpText(mcp as any)).not.toBe(true);
+      expect(mcp.structuredContent).toMatchObject({
+        recommendation: { knownCauseRef: { objectId: "campaign-editor-guidance", version: 2 } },
+      });
+    } finally {
+      await Promise.allSettled([client.close(), server.close()]);
+    }
+    expect(await deps.recommendations.get(first.body.recommendation.id)).toMatchObject({
+      knownCauseRef: { objectId: "campaign-editor-guidance", version: 1 },
+    });
+  });
 });
+
+function reusableCampaignEditorKnowledge(version: number): ReusableKnowledgeResult {
+  return {
+    status: "available",
+    contexts: [{
+      object: {
+        id: "campaign-editor-guidance", version, learningGovernance: "ledger", kind: "known-cause",
+        name: "Campaign editor guidance", summary: "Controlled campaign editor recovery path.",
+        triggerPatterns: ["problem"],
+        evidencePolicy: { mode: "none-required", rationale: "The approved path can be applied immediately." },
+        timeConstraints: [], diagnosticSteps: ["Confirm the reported editor state."],
+        fixSteps: ["Use the controlled recovery path."], verificationSteps: ["Confirm the editor loads."],
+        customerSafeExplanation: "We can apply the documented campaign editor path.",
+        operatorRationale: "Approved exact-version test guidance.", owner: "product",
+        supportingDiagnosisIds: ["diagnosis-001"], supportingTicketIds: ["TKT-1010"],
+        provenance: { source: "test", recordedAt: "2026-06-10T08:00:00.000Z" }, status: "approved",
+        approval: { approvedBy: "support-lead", approvedAt: "2026-06-10T08:00:00.000Z" },
+      },
+      version,
+      learning: { maturity: "promoted", health: "active", eligibleForReuse: true },
+      eligibilitySource: "ledger-active",
+    }],
+    issues: [],
+  };
+}
 
 async function startFixture(
   options: Parameters<typeof createApprovalDeskHttpServer>[1] = {},

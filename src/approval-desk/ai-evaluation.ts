@@ -11,6 +11,7 @@ import {
   type Ticket,
 } from "../domain.js";
 import type { KnowledgeObject } from "../knowledge-evolution/domain.js";
+import type { ProductionKnowledgeInput } from "../knowledge-evolution/reusable-context.js";
 import type {
   DiagnosisContext,
   FixContext,
@@ -53,6 +54,7 @@ export async function evaluateTicketWithAi(input: {
   actor: string;
   allKnowledgeArticles: readonly KnowledgeArticle[];
   approvedObjects?: readonly KnowledgeObject[];
+  reusableKnowledge?: ProductionKnowledgeInput["reusableKnowledge"];
   customerReplies: readonly CustomerReply[];
   previousSupportResponse?: PreviousSupportResponse;
   diagnosisContext?: DiagnosisContext;
@@ -97,6 +99,7 @@ export async function evaluateTicketWithAi(input: {
     rejectedDiagnosis: input.rejectedDiagnosis,
     fixContext: input.fixContext,
     approvedObjects: input.approvedObjects,
+    reusableKnowledge: input.reusableKnowledge,
   });
   const selectedKnowledge = input.allKnowledgeArticles.filter((article) =>
     base.knowledgeArticleIds.includes(article.id),
@@ -114,6 +117,7 @@ export async function evaluateTicketWithAi(input: {
     rejectedDiagnosis: input.rejectedDiagnosis,
     fixContext: input.fixContext,
     approvedObjects: input.approvedObjects,
+    reusableKnowledge: input.reusableKnowledge,
     draftProvider: draftingPreference === "deterministic" || safety.detected
       ? undefined
       : input.draftProvider,

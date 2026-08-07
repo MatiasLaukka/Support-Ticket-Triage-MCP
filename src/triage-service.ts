@@ -20,6 +20,8 @@ import {
   EvidenceRequirementSchema,
   GptAssistSchema,
   IsoTimestampSchema,
+  KnowledgeReferenceSchema,
+  LearnedContextSchema,
   KnownEventIdSchema,
   PrioritySchema,
   RequiredEscalationSchema,
@@ -95,6 +97,8 @@ const SubmitRecommendationInputSchema = z
     missingInformation: z.array(NonBlankStringSchema),
     supportState: SupportStateSchema.optional(),
     knownCause: z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/).nullable().optional(),
+    knownCauseRef: KnowledgeReferenceSchema.optional(),
+    learnedContext: LearnedContextSchema.optional(),
     knownEventId: KnownEventIdSchema.nullable().optional(),
     knownEventMatchReasons: z.array(NonBlankStringSchema).optional(),
     requiredEvidence: z.array(EvidenceRequirementSchema).optional(),
@@ -284,6 +288,14 @@ export interface SubmitRecommendationInput {
   missingInformation: string[];
   supportState?: SupportState;
   knownCause?: string | null;
+  knownCauseRef?: { objectId: string; version: number };
+  learnedContext?: {
+    status: "available" | "ledger-unavailable";
+    issues: ReadonlyArray<
+      | { scope: "snapshot"; code: "ledger-read-failed" }
+      | { scope: "version"; objectId: string; version: number; code: "missing-history" | "inconsistent-history" | "unhealthy-version" }
+    >;
+  };
   knownEventId?: string | null;
   knownEventMatchReasons?: string[];
   requiredEvidence?: EvidenceRequirement[];
@@ -596,6 +608,12 @@ export class TriageService {
       ...(parsed.knownCause === undefined
         ? {}
         : { knownCause: parsed.knownCause }),
+      ...(parsed.knownCauseRef === undefined
+        ? {}
+        : { knownCauseRef: parsed.knownCauseRef }),
+      ...(parsed.learnedContext === undefined
+        ? {}
+        : { learnedContext: parsed.learnedContext }),
       ...(parsed.knownEventId === undefined
         ? {}
         : { knownEventId: parsed.knownEventId }),

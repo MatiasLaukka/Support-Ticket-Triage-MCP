@@ -689,11 +689,13 @@ async function createRecommendation(
 ): Promise<unknown> {
   const ticketId = TicketIdSchema.parse(id);
   const body = SubmitBodySchema.parse(await readJsonBody(request));
-  const [ticket, audits, allKnowledgeArticles, approvedObjects] = await Promise.all([
+  const reusableKnowledge = await deps.knowledgeEvolution.service.listReusableApproved({
+    asOf: deps.now().toISOString(),
+  });
+  const [ticket, audits, allKnowledgeArticles] = await Promise.all([
     deps.tickets.get(ticketId),
     deps.audits.list(ticketId),
     deps.knowledge.list(),
-    deps.knowledgeEvolution.service.listApproved(),
   ]);
   const persistedCustomerReplies = customerRepliesFromAudits(ticketId, audits);
   const previousSupportResponse = latestSupportResponseFromAudits(
@@ -717,7 +719,7 @@ async function createRecommendation(
     outcome,
     actor: body.actor,
     allKnowledgeArticles,
-    approvedObjects,
+    reusableKnowledge,
     customerReplies,
     previousSupportResponse,
     diagnosisContext: persistedDiagnosticContext.diagnosis?.context,

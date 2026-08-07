@@ -1,5 +1,6 @@
 import type { LearningEvent, LearningHealth, LearningMaturity } from "./learning-ledger.js";
 import { IsoTimestampSchema } from "../domain.js";
+import { z } from "zod";
 
 export interface KnowledgeLearningSummary {
   candidateId: string;
@@ -124,8 +125,9 @@ export function projectKnowledgeVersionLearning(
   input: { objectId: string; sourceVersion: number; asOf: string },
 ): KnowledgeVersionLearningSummary {
   const asOf = IsoTimestampSchema.parse(input.asOf);
+  const sourceVersion = z.number().int().positive().parse(input.sourceVersion);
   const relevant = events
-    .filter((event) => event.objectId === input.objectId && event.sourceVersion === input.sourceVersion)
+    .filter((event) => event.objectId === input.objectId && event.sourceVersion === sourceVersion)
     .filter((event) => event.occurredAt <= asOf)
     .sort((left, right) => left.occurredAt.localeCompare(right.occurredAt) || left.id.localeCompare(right.id));
   let maturity: LearningMaturity = "observed";
@@ -180,7 +182,7 @@ export function projectKnowledgeVersionLearning(
 
   return {
     objectId: input.objectId,
-    sourceVersion: input.sourceVersion,
+    sourceVersion,
     maturity,
     health,
     signalWeight,

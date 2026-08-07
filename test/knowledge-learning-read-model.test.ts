@@ -60,7 +60,7 @@ describe("knowledge learning read model", () => {
     expect(summary.supportingEventIds).toHaveLength(2);
   });
 
-  it("rejects exact-version projections without a valid fixed temporal cutoff", () => {
+  it("rejects exact-version projections without valid fixed temporal inputs", () => {
     expect(() => projectKnowledgeVersionLearning([], {
       objectId: "known-cause-api-delay",
       sourceVersion: 1,
@@ -70,6 +70,13 @@ describe("knowledge learning read model", () => {
       sourceVersion: 1,
       asOf: "not-a-timestamp",
     })).toThrow();
+    for (const sourceVersion of [undefined, 0, -1, 1.5, "1"]) {
+      expect(() => projectKnowledgeVersionLearning([], {
+        objectId: "known-cause-api-delay",
+        sourceVersion,
+        asOf: "2026-08-07T10:00:00.000Z",
+      } as never)).toThrow();
+    }
   });
 
   it("projects reusable health for the requested version without cross-version contamination", () => {

@@ -6,6 +6,20 @@ import type { KnowledgeAuditEvent } from "../src/knowledge-evolution/knowledge-a
 import type { CompletedDiagnosis, KnowledgeCandidate, KnowledgeObject } from "../src/knowledge-evolution/domain.js";
 
 describe("knowledge evolution service", () => {
+  it("rejects untyped invalid exact-version source versions instead of returning a default summary", async () => {
+    const service = createFixture().service();
+    const exactVersionSummary = service.learningVersionSummary as (input: unknown) => Promise<unknown>;
+
+    for (const sourceVersion of [undefined, 0, -1, 1.5, "1"]) {
+      await expect(exactVersionSummary({
+        candidateId: "candidate-001",
+        objectId: "known-cause-api-delay",
+        sourceVersion,
+        asOf: "2026-08-07T10:00:00.000Z",
+      })).rejects.toThrow();
+    }
+  });
+
   it("loads a legacy diagnosis without turning its synthetic evidence ID into reusable policy", async () => {
     const fixture = createFixture({ legacyEvidence: true });
 

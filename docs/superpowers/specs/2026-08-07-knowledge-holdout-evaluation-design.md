@@ -77,18 +77,25 @@ type ReusableKnowledgeContext = {
   eligibilitySource: "ledger-active" | "legacy-compatible";
 };
 
+type ReusableKnowledgeIssue =
+  | {
+      scope: "snapshot";
+      code: "ledger-read-failed";
+    }
+  | {
+      scope: "version";
+      objectId: string;
+      version: number;
+      code:
+        | "missing-history"
+        | "inconsistent-history"
+        | "unhealthy-version";
+    };
+
 type ReusableKnowledgeResult = {
   status: "available" | "ledger-unavailable";
   contexts: readonly ReusableKnowledgeContext[];
-  issues: readonly {
-    objectId: string;
-    version: number;
-    code:
-      | "missing-history"
-      | "inconsistent-history"
-      | "unhealthy-version"
-      | "ledger-read-failed";
-  }[];
+  issues: readonly ReusableKnowledgeIssue[];
 };
 ```
 
@@ -106,6 +113,14 @@ Object-level events without a matching `sourceVersion` cannot poison another
 version. An unhealthy current version never implicitly resurrects an older
 version; rollback or reactivation requires a separate explicit, attributed,
 auditable event.
+
+`asOf` is a temporal isolation boundary, not only an injected clock. Every
+knowledge version and every transition or health event considered by
+`listReusableApproved({ asOf })` must have become effective at or before
+`asOf`. The service resolves each object's approved head as it existed at that
+timestamp; it must not start from today's head and then apply historical
+filtering. No promotion, supersession, reactivation, stale, contradicted,
+deprecated, or other event occurring after `asOf` may influence the result.
 
 `listApproved()` returns the current approved head for each object without health
 filtering. `listVersions(objectId)` exposes the complete immutable version
@@ -179,7 +194,6 @@ type KnowledgeHoldoutSuite = {
 };
 
 type HoldoutTurn = {
-  ticket: Ticket;
   customerReplies: readonly {
     id: string;
     ticketId: string;
@@ -190,12 +204,16 @@ type HoldoutTurn = {
     sentAt: string;
     body: string;
   };
-  expectedState?: SupportState;
+  expected?: {
+    supportState?: SupportState;
+    knownCauseRef?: { objectId: string; version: number };
+    requiredEvidenceSatisfied?: boolean;
+  };
 };
 
 type KnowledgeHoldoutFixture = {
   id: string;
-  ticket: Ticket;
+  initialTicket: Ticket;
   expectedOutcome: ExpectedOutcome;
   turns: readonly HoldoutTurn[];
   expectedEvidenceIds: readonly string[];
@@ -206,6 +224,13 @@ type KnowledgeHoldoutFixture = {
   };
 };
 ```
+
+`initialTicket` is immutable fixture input. `customerReplies` is the complete
+customer conversation snapshot as of that turn, not only newly introduced
+messages. `previousSupportResponse`, when present, is the latest prior support
+response visible at that turn. The evaluator constructs each turn from these
+immutable inputs rather than carrying hidden mutable state from an earlier
+turn.
 
 The suite's fixed `asOf` is passed to every learning lookup, and its fixed
 clock is injected into every production evaluation. SLA checks, time
@@ -229,6 +254,11 @@ The fixture set contains:
 6. a contradicted-version recurrence;
 7. version-isolation cases where unhealthy v1 is replaced by explicitly active
    v2, and where active v1 remains in use while v2 is unapproved.
+
+Deprecated exclusion is covered by a reusable-context service regression at
+the exact-version boundary. It does not require another end-to-end holdout
+fixture; stale and contradicted behavior additionally receive dedicated
+holdout lanes.
 
 The main efficacy cases run baseline and healthy learned lanes. Health-safety
 cases run baseline, healthy, stale, and contradicted lanes as relevant. Version
@@ -270,6 +300,13 @@ version when declared, and required-evidence satisfaction when declared. It is
 not merely a match on broad `SupportState`. `turnsToExpectedState` is `null`
 when a lane never reaches the comparable target. `diagnosticTurnsSaved` is an
 integer only when both compared lanes reach the target; otherwise it is `null`.
+
+When a turn declares `expected`, `correctionRequired` compares the observed
+recommendation with that turn-level contract. This makes intermediate gates
+explicit: for example, a missing-evidence turn may require `needs-information`
+and `requiredEvidenceSatisfied: false` even when the final target is a
+known-cause state. Turns without an expected contract still receive the global
+safety checks, but do not claim an exact per-turn target match.
 
 Stale and contradicted lanes seed the learning ledger and then call the same
 `listReusableApproved({ asOf })` operation as production. They never manually
@@ -350,10 +387,21 @@ duplicated health or version variants.
 The evaluator uses deterministic mode with no provider construction and no
 network access. A regression test snapshots ticket revisions, recommendation
 count, operational audit count, learning-ledger event IDs, candidate IDs, and
-knowledge-object version IDs before scoring, then asserts all values are
-unchanged afterward. The evaluator must not append evaluation events;
+knowledge-object version IDs, and knowledge-object head mappings
+(`objectId -> current head version`) before scoring, then asserts all values
+are unchanged afterward. The evaluator must not append evaluation events;
 evaluation evidence is returned in the report and may be persisted separately
 only by an explicit future operation.
+
+The reusable service establishes one consistent ledger snapshot before
+returning contexts. If that snapshot cannot be established—for example, a
+ledger read fails partway through or the read cannot provide a consistent
+view—it returns `status: "ledger-unavailable"` with no contexts, so apparently
+valid partial results are never mixed with an unavailable snapshot. If the
+ledger snapshot is healthy but one ledger-governed version has malformed or
+missing exact-version history, the service returns `status: "available"`,
+excludes only that version, and emits a version-scoped issue; other verified
+contexts may remain reusable.
 
 ## Output and documentation
 
@@ -375,6 +423,8 @@ human labor savings.
 
 - Every production evaluation surface obtains reusable knowledge through
   `listReusableApproved({ asOf })`.
+- `asOf` excludes every post-`asOf` version and transition/health event and
+  resolves each object head as it existed at that timestamp.
 - Learning health cannot cross object-version boundaries.
 - Replacement promotion transactionally supersedes the old head, and explicit
   reactivation is the only path to reuse a historical version.
@@ -387,8 +437,14 @@ human labor savings.
 - The holdout demonstrates positive reuse without evidence-gate bypasses.
 - Stale, contradicted, deprecated, superseded, and wrong-version knowledge does
   not influence evaluation.
+- Deprecated exclusion is proven by the reusable-context service contract and
+  regression tests even though the end-to-end holdout focuses on stale and
+  contradicted lanes.
 - Every lane retains its full multi-turn results.
-- No operational or learning state changes during scoring.
+- Intermediate turn contracts detect unsafe early transitions, not only final
+  target mismatches.
+- No operational or learning state changes during scoring, including
+  knowledge-object head mappings.
 - The aggregate report separates efficacy, governance safety, and version
   correctness while distinguishing improvement, no change, and regression with
   the safety-first comparator.

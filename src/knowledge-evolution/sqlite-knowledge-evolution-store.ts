@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
 import { DomainError } from "../errors.js";
-import { KnowledgeCandidateSchema, KnowledgeObjectSchema, type KnowledgeCandidate, type KnowledgeObject } from "./domain.js";
+import { KnowledgeCandidateReadSchema, KnowledgeCandidateWriteSchema, KnowledgeObjectReadSchema, KnowledgeObjectWriteSchema, type KnowledgeCandidate, type KnowledgeObject } from "./domain.js";
 import { KnowledgeAuditEventSchema, type KnowledgeAuditEvent, type KnowledgeAuditFilters } from "./knowledge-audit-repository.js";
 import { LearningEventSchema, type LearningEvent } from "./learning-ledger.js";
 import { repositoryError } from "./repository-utils.js";
@@ -59,7 +59,7 @@ export class SqliteKnowledgeEvolutionStore {
   }
 
   async saveCandidate(candidate: KnowledgeCandidate): Promise<void> {
-    const parsed = KnowledgeCandidateSchema.safeParse(candidate);
+    const parsed = KnowledgeCandidateWriteSchema.safeParse(candidate);
     if (!parsed.success) throw repositoryError("Repository data is invalid.");
     try {
       this.database.prepare(`INSERT INTO knowledge_candidates(id, version, recorded_at, payload_json) VALUES (?, ?, ?, ?)`)
@@ -140,7 +140,7 @@ export class SqliteKnowledgeEvolutionStore {
     expectedCandidateVersion: number | undefined,
     audit: KnowledgeAuditEvent | undefined,
   ): Promise<KnowledgeObject> {
-    const parsed = KnowledgeObjectSchema.safeParse(approved);
+    const parsed = KnowledgeObjectWriteSchema.safeParse(approved);
     if (!parsed.success || candidateId !== parsed.data.id || parsed.data.status !== "approved") {
       throw repositoryError("Knowledge object does not match the candidate being promoted.");
     }
@@ -224,13 +224,13 @@ export class SqliteKnowledgeEvolutionStore {
   }
 
   private parseCandidate(value: string): KnowledgeCandidate {
-    const parsed = KnowledgeCandidateSchema.safeParse(parseJson(value));
+    const parsed = KnowledgeCandidateReadSchema.safeParse(parseJson(value));
     if (!parsed.success) throw repositoryError("Knowledge candidate data is invalid.");
     return parsed.data;
   }
 
   private parseObject(value: string): KnowledgeObject {
-    const parsed = KnowledgeObjectSchema.safeParse(parseJson(value));
+    const parsed = KnowledgeObjectReadSchema.safeParse(parseJson(value));
     if (!parsed.success) throw repositoryError("Knowledge object data is invalid.");
     return parsed.data;
   }

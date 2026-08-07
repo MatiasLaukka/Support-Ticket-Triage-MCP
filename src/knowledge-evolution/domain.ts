@@ -229,5 +229,5 @@ export type CompletedDiagnosis = z.input<typeof CompletedDiagnosisSchema>;
 export function evidenceReferenceIds(diagnosis: CompletedDiagnosis): string[] {
   return [...new Set(diagnosis.evidenceReferences?.map(({ id }) => id) ?? [])];
 }
-export type KnowledgeObject = z.infer<typeof KnowledgeObjectSchema>;
-export type KnowledgeCandidate = z.infer<typeof KnowledgeCandidateSchema>;
+export type KnowledgeObject = z.infer<typeof KnowledgeObjectSchema> & { learningGovernance?: LearningGovernance };
+export type KnowledgeCandidate = z.infer<typeof KnowledgeCandidateSchema> & { objectId?: string; sourceVersion?: number };

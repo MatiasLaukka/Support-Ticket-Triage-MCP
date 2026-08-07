@@ -54,10 +54,22 @@ describe("knowledge learning read model", () => {
     const summary = projectKnowledgeVersionLearning([
       event("33333333-3333-4333-8333-333333333333", { eventType: "candidate-promoted", payload: { maturity: "promoted", health: "active", provenance: "operator approved" } }),
       event("66666666-6666-4666-8666-666666666666", { eventType: "knowledge-reuse-failed", ticketId: "TKT-1003", payload: { matchReasons: ["similar wording"], failureReason: "Operator rejected the proposed reuse after review.", provenance: "operator correction" } }),
-    ], { objectId: "known-cause-api-delay", sourceVersion: 1 });
+    ], { objectId: "known-cause-api-delay", sourceVersion: 1, asOf: "2026-08-07T10:00:00.000Z" });
 
     expect(summary).toMatchObject({ health: "contradicted", eligibleForReuse: false, contradictionReasons: ["Operator rejected the proposed reuse after review."] });
     expect(summary.supportingEventIds).toHaveLength(2);
+  });
+
+  it("rejects exact-version projections without a valid fixed temporal cutoff", () => {
+    expect(() => projectKnowledgeVersionLearning([], {
+      objectId: "known-cause-api-delay",
+      sourceVersion: 1,
+    } as never)).toThrow();
+    expect(() => projectKnowledgeVersionLearning([], {
+      objectId: "known-cause-api-delay",
+      sourceVersion: 1,
+      asOf: "not-a-timestamp",
+    })).toThrow();
   });
 
   it("projects reusable health for the requested version without cross-version contamination", () => {

@@ -19,7 +19,7 @@ import { evaluateTicketWithAi } from "../src/approval-desk/ai-evaluation.js";
 import type { ClassificationReasoningProvider } from "../src/approval-desk/classification-reasoning-provider.js";
 import type { CustomerResponseDraftProvider } from "../src/approval-desk/draft-response-provider.js";
 import type { CandidateDraftProvider } from "../src/knowledge-evolution/candidate-draft-provider.js";
-import { KnowledgeCandidateSchema } from "../src/knowledge-evolution/domain.js";
+import { KnowledgeCandidateWriteSchema } from "../src/knowledge-evolution/domain.js";
 import { KnowledgeEvolutionService } from "../src/knowledge-evolution/service.js";
 import { createRuntimeDependencies } from "../src/runtime.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -1008,7 +1008,7 @@ describe("createApprovalDeskHttpServer", () => {
       rationale: "The diagnosis is current and supported.",
       reviewedAt: "2026-06-10T09:11:00.000Z",
     });
-    await deps.knowledgeEvolution.objects.saveCandidate(KnowledgeCandidateSchema.parse({
+    await deps.knowledgeEvolution.objects.saveCandidate(KnowledgeCandidateWriteSchema.parse({
       id: "known-cause-platform-delay",
       kind: "known-cause",
       name: "Recurring platform event delay",
@@ -1023,6 +1023,8 @@ describe("createApprovalDeskHttpServer", () => {
       operatorRationale: "The repeated diagnosis supports a reusable platform-delay workflow.",
       owner: "api-platform",
       version: 1,
+      objectId: "known-cause-platform-delay",
+      sourceVersion: 1,
       supportingDiagnosisIds: [`diagnosis-${originalDiagnosis.id}`],
       supportingTicketIds: ["TKT-1001", "TKT-1002"],
       provenance: {

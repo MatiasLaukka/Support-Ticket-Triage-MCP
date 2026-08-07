@@ -125,6 +125,22 @@ describe("learning ledger event contract", () => {
       sourceVersion: 1,
       payload: { health: "superseded", provenance: "Replacement was approved." },
     }).success).toBe(false);
+
+    expect(LearningEventSchema.safeParse({
+      ...base,
+      eventType: "knowledge-version-superseded",
+      objectId: "known-cause-api-delay",
+      sourceVersion: 1,
+      payload: { health: "superseded", replacementVersion: 1, provenance: "A version cannot replace itself." },
+    }).success).toBe(false);
+
+    expect(LearningEventSchema.safeParse({
+      ...base,
+      eventType: "knowledge-version-reactivated",
+      objectId: "known-cause-api-delay",
+      sourceVersion: 1,
+      payload: { health: "active", reactivatedVersion: 2, provenance: "The wrong version was named." },
+    }).success).toBe(false);
   });
 
   it("rejects missing identity fields and unsafe persisted text", () => {

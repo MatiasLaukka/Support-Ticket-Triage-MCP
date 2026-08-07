@@ -21,6 +21,8 @@ const candidate: KnowledgeCandidate = {
   provenance: { source: "completed-diagnoses", recordedAt: "2026-08-07T10:00:00.000Z" }, deterministicScores: { confidence: 0.9, support: 1 },
   deterministicReasons: ["Completed diagnosis support is available."], contradictions: [], validationStatus: "valid",
   evidencePolicyMetadata: { derivedEvidenceIds: ["request-id"], operatorAddedEvidenceIds: [] },
+  objectId: "known-cause-api-credential-rotation",
+  sourceVersion: 1,
 };
 const approved: KnowledgeObject = {
   id: candidate.id, kind: candidate.kind, name: candidate.name, summary: candidate.summary, triggerPatterns: candidate.triggerPatterns,
@@ -29,6 +31,7 @@ const approved: KnowledgeObject = {
   operatorRationale: candidate.operatorRationale, owner: candidate.owner, version: 1, status: "approved",
   supportingDiagnosisIds: candidate.supportingDiagnosisIds, supportingTicketIds: candidate.supportingTicketIds, provenance: candidate.provenance,
   approval: { approvedBy: "support-lead", approvedAt: "2026-08-07T10:05:00.000Z" },
+  learningGovernance: "ledger",
 };
 const audit: KnowledgeAuditEvent = {
   id: "audit-promotion-001", objectId: candidate.id, candidateId: candidate.id, action: "approved", actor: "support-lead",
@@ -83,6 +86,27 @@ describe("SqliteKnowledgeEvolutionStore", () => {
     await expect(store.listApproved()).resolves.toEqual([]);
     await expect(store.list({ action: "approved" })).resolves.toEqual([audit]);
     await expect(ledger.list({ eventType: "candidate-promoted" })).resolves.toEqual([]);
+    ledger.close();
+  });
+
+  it("enforces new SQLite write provenance and normalizes legacy SQLite payloads without rewriting them", async () => {
+    const { ledger, store } = await createStore();
+    const database = ledger.getDatabase();
+    const { objectId: _legacyObjectId, sourceVersion: _legacySourceVersion, ...candidateWithoutLineage } = candidate;
+    const { learningGovernance: _legacyGovernance, ...approvedWithoutGovernance } = approved;
+
+    await expect(store.saveCandidate({ ...candidateWithoutLineage, id: "new-candidate-without-lineage" })).rejects.toMatchObject({ code: "REPOSITORY_ERROR" });
+    database.prepare("INSERT INTO knowledge_candidates(id, version, recorded_at, payload_json) VALUES (?, ?, ?, ?)")
+      .run("legacy-candidate", 1, candidate.provenance.recordedAt, JSON.stringify({ ...candidateWithoutLineage, id: "legacy-candidate" }));
+    database.prepare("INSERT INTO knowledge_versions(object_id, version, approved_at, payload_json) VALUES (?, ?, ?, ?)")
+      .run("legacy-object", 1, "2026-08-07T10:05:00.000Z", JSON.stringify({ ...approvedWithoutGovernance, id: "legacy-object" }));
+
+    await expect(store.getCandidate("legacy-candidate")).resolves.toMatchObject({ objectId: "legacy-candidate", sourceVersion: 1 });
+    await expect(store.listApproved()).resolves.toMatchObject([{ id: "legacy-object", learningGovernance: "legacy" }]);
+    const rawCandidate = database.prepare("SELECT payload_json FROM knowledge_candidates WHERE id = ?").get("legacy-candidate") as { payload_json: string };
+    const rawObject = database.prepare("SELECT payload_json FROM knowledge_versions WHERE object_id = ?").get("legacy-object") as { payload_json: string };
+    expect(JSON.parse(rawCandidate.payload_json)).not.toHaveProperty("objectId");
+    expect(JSON.parse(rawObject.payload_json)).not.toHaveProperty("learningGovernance");
     ledger.close();
   });
 });

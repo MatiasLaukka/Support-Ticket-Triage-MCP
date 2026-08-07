@@ -6,7 +6,7 @@ import type { TicketRepository } from "../ticket-repository.js";
 import { draftKnowledgeCandidate, type CandidateDraftProvider } from "./candidate-draft-provider.js";
 import type { CandidateDraftPayload } from "./candidate-draft-contract.js";
 import { evidenceReferenceIds, type CompletedDiagnosis, type KnowledgeCandidate, type KnowledgeObject } from "./domain.js";
-import { KnowledgeCandidateSchema } from "./domain.js";
+import { KnowledgeCandidateWriteSchema } from "./domain.js";
 import { discoverCandidates, type KnowledgeDiscoveryResult } from "./discovery.js";
 import type { DiagnosisRepository } from "./diagnosis-repository.js";
 import type { KnowledgeAuditEvent, KnowledgeAuditRepository } from "./knowledge-audit-repository.js";
@@ -187,23 +187,20 @@ export class KnowledgeEvolutionService {
     return this.dependencies.objects.listApproved();
   }
 
-  async learningSummary(input: { candidateId: string; objectId?: string; sourceVersion?: number; asOf?: string }): Promise<KnowledgeLearningSummary> {
+  async learningSummary(input: { candidateId: string; asOf?: string }): Promise<KnowledgeLearningSummary> {
     const events = this.dependencies.ledger === undefined
       ? []
-      : await Promise.all([
-          this.dependencies.ledger.list({ candidateId: input.candidateId }),
-          this.dependencies.ledger.list({ objectId: input.objectId ?? input.candidateId }),
-        ]).then(([candidateEvents, objectEvents]) => {
-          const byId = new Map([...candidateEvents, ...objectEvents].map((event) => [event.id, event]));
-          return [...byId.values()];
-        });
-    if (input.objectId === undefined) return projectCandidateLearning(events, { candidateId: input.candidateId, asOf: input.asOf });
-    const sourceVersion = input.sourceVersion ?? (await this.dependencies.objects.listApproved())
-      .find((object) => object.id === input.objectId)?.version;
-    if (sourceVersion === undefined) return projectCandidateLearning(events, { candidateId: input.candidateId, asOf: input.asOf });
+      : await this.dependencies.ledger.list({ candidateId: input.candidateId });
+    return projectCandidateLearning(events, input);
+  }
+
+  async learningVersionSummary(input: { candidateId: string; objectId: string; sourceVersion: number; asOf: string }): Promise<KnowledgeLearningSummary> {
+    const events = this.dependencies.ledger === undefined
+      ? []
+      : await this.dependencies.ledger.list({ objectId: input.objectId });
     return {
       candidateId: input.candidateId,
-      ...projectKnowledgeVersionLearning(events, { objectId: input.objectId, sourceVersion, asOf: input.asOf }),
+      ...projectKnowledgeVersionLearning(events, input),
     };
   }
 
@@ -240,6 +237,8 @@ export class KnowledgeEvolutionService {
         discovery: _discovery,
         evidencePolicyMetadata: _evidencePolicyMetadata,
         evidencePolicy: _evidencePolicy,
+        objectId: _objectId,
+        sourceVersion: _sourceVersion,
         ...approvedFields
       } = reviewed;
       const object: KnowledgeObject = {
@@ -247,6 +246,7 @@ export class KnowledgeEvolutionService {
         evidencePolicy: reviewedPolicy,
         status: "approved",
         version: 1,
+        learningGovernance: "ledger",
         approval: { approvedBy: input.actorId.trim(), approvedAt: this.now().toISOString() },
       };
       let promoted: KnowledgeObject | undefined;
@@ -460,6 +460,8 @@ function deterministicCandidate(
     : { mode: "required" as const, evidenceIds };
   const value = {
     id: `known-cause-${sourceId}`,
+    objectId: `known-cause-${sourceId}`,
+    sourceVersion: 1,
     kind: "known-cause" as const,
     name: `Recurring ${diagnosis.ownerTeam} known cause`,
     summary: diagnosis.problem,
@@ -484,7 +486,7 @@ function deterministicCandidate(
     validationStatus: evidenceIds.length === 0 ? "invalid" as const : "valid" as const,
     evidencePolicyMetadata: { derivedEvidenceIds: evidenceIds, operatorAddedEvidenceIds: [] },
   };
-  const parsed = KnowledgeCandidateSchema.safeParse(value);
+  const parsed = KnowledgeCandidateWriteSchema.safeParse(value);
   return parsed.success ? parsed.data : undefined;
 }
 
@@ -502,6 +504,8 @@ function candidateFromDraft(
   const value = {
     ...fields,
     id: `known-cause-gpt-${sourceId}`,
+    objectId: `known-cause-gpt-${sourceId}`,
+    sourceVersion: 1,
     owner,
     version: 1,
     status: "candidate" as const,
@@ -513,7 +517,7 @@ function candidateFromDraft(
     validationStatus: draft.evidencePolicy.mode === "undecided" ? "invalid" as const : "valid" as const,
     evidencePolicyMetadata: evidencePolicyMetadataForDraft(draft, diagnoses),
   };
-  const parsed = KnowledgeCandidateSchema.safeParse(value);
+  const parsed = KnowledgeCandidateWriteSchema.safeParse(value);
   return parsed.success ? parsed.data : undefined;
 }
 
@@ -550,7 +554,7 @@ function applyEdits(candidate: KnowledgeCandidate, edits: CandidateEdits | undef
     };
     merged.validationStatus = merged.evidencePolicy.mode === "undecided" ? "invalid" : "valid";
   }
-  const parsed = KnowledgeCandidateSchema.safeParse(merged);
+  const parsed = KnowledgeCandidateWriteSchema.safeParse(merged);
   if (!parsed.success) throw new DomainError("Knowledge candidate edits are invalid.", "INVALID_APPROVAL_FIELDS");
   return parsed.data;
 }

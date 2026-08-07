@@ -514,7 +514,6 @@ export function createTriageServer(
     async ({ candidateId, asOf }) => toolResult(async () => ({
       learning: await knowledgeService(deps).learningSummary({
         candidateId,
-        objectId: candidateId,
         ...(asOf === undefined ? {} : { asOf }),
       }),
     })),

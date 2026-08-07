@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, open as openFile, rm, symlink, writeFile, type FileHandle } from "node:fs/promises";
+import { mkdtemp, mkdir, open as openFile, readFile, rm, symlink, writeFile, type FileHandle } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -34,11 +34,14 @@ const candidate: KnowledgeCandidate = {
   provenance: { source: "completed-diagnoses", recordedAt: "2026-07-29T10:05:00.000Z" },
   deterministicScores: { confidence: 0.9, support: 1 }, deterministicReasons: ["Two diagnoses share the same evidence-backed fix."], contradictions: [], validationStatus: "valid" as const,
   evidencePolicyMetadata: { derivedEvidenceIds: ["evidence-001"], operatorAddedEvidenceIds: [] },
+  objectId: "known-cause-api-credential-rotation",
+  sourceVersion: 1,
 };
-const { deterministicScores: _scores, deterministicReasons: _reasons, contradictions: _contradictions, validationStatus: _validation, evidencePolicyMetadata: _metadata, evidencePolicy: candidateEvidencePolicy, ...candidateFields } = candidate;
+const { deterministicScores: _scores, deterministicReasons: _reasons, contradictions: _contradictions, validationStatus: _validation, evidencePolicyMetadata: _metadata, evidencePolicy: candidateEvidencePolicy, objectId: _objectId, sourceVersion: _sourceVersion, ...candidateFields } = candidate;
 const approved: KnowledgeObject = {
   ...candidateFields, evidencePolicy: candidateEvidencePolicy as { mode: "required"; evidenceIds: string[] }, status: "approved" as const, version: 1,
   approval: { approvedBy: "support-lead", approvedAt: "2026-07-29T10:06:00.000Z" },
+  learningGovernance: "ledger",
 };
 
 describe("knowledge evolution repositories", () => {
@@ -122,6 +125,31 @@ describe("knowledge evolution repositories", () => {
     await writeFile(join(storage, "candidates", `${staleCandidateFileId}.json`), JSON.stringify(staleCandidate));
     const staleApproved: KnowledgeObject = { ...approved, id: staleCandidateFileId };
     await expect(repository.promote(staleCandidateFileId, staleApproved)).rejects.toMatchObject({ code: "REPOSITORY_ERROR" });
+  });
+
+  it("requires provenance on new JSON writes and normalizes legacy persisted records without rewriting them", async () => {
+    const storage = await root();
+    const candidates = join(storage, "candidates");
+    const approvedRoot = join(storage, "approved");
+    const repository = new KnowledgeObjectRepository(candidates, approvedRoot);
+    const { objectId: _legacyObjectId, sourceVersion: _legacySourceVersion, ...candidateWithoutLineage } = candidate;
+    const { learningGovernance: _legacyGovernance, ...approvedWithoutGovernance } = approved;
+
+    await expect(repository.saveCandidate({ ...candidateWithoutLineage, id: "new-candidate-without-lineage" })).rejects.toMatchObject({ code: "REPOSITORY_ERROR" });
+    await repository.saveCandidate(candidate);
+    await expect(repository.promote(candidate.id, approvedWithoutGovernance)).rejects.toMatchObject({ code: "REPOSITORY_ERROR" });
+
+    await mkdir(candidates, { recursive: true });
+    await mkdir(approvedRoot, { recursive: true });
+    const legacyCandidate = { ...candidateWithoutLineage, id: "legacy-candidate" };
+    const legacyObject = { ...approvedWithoutGovernance, id: "legacy-object" };
+    await writeFile(join(candidates, "legacy-candidate.json"), JSON.stringify(legacyCandidate));
+    await writeFile(join(approvedRoot, "legacy-object.json"), JSON.stringify(legacyObject));
+
+    await expect(repository.getCandidate("legacy-candidate")).resolves.toMatchObject({ objectId: "legacy-candidate", sourceVersion: 1 });
+    await expect(repository.listApproved()).resolves.toMatchObject([{ id: "legacy-object", learningGovernance: "legacy" }]);
+    expect(JSON.parse(await readFile(join(candidates, "legacy-candidate.json"), "utf8"))).not.toHaveProperty("objectId");
+    expect(JSON.parse(await readFile(join(approvedRoot, "legacy-object.json"), "utf8"))).not.toHaveProperty("learningGovernance");
   });
 
   it("removes only the approved object created by a recoverable promotion", async () => {

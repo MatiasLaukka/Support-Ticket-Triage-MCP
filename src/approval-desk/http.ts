@@ -805,7 +805,7 @@ async function getKnowledgeLearning(
   id: string,
 ): Promise<unknown> {
   const candidateId = KnowledgeCandidateIdSchema.parse(id);
-  return { learning: await deps.knowledgeEvolution.service.learningSummary({ candidateId, objectId: candidateId }) };
+  return { learning: await deps.knowledgeEvolution.service.learningSummary({ candidateId }) };
 }
 
 async function recordPlatformMitigation(

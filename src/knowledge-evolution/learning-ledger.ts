@@ -244,7 +244,14 @@ export const LearningEventSchema = z.discriminatedUnion("eventType", [
   z.object({ ...EventBase, eventType: z.literal("knowledge-version-superseded"), ...ObjectReferences, payload: VersionSupersededPayload }).strict(),
   z.object({ ...EventBase, eventType: z.literal("knowledge-version-reactivated"), ...ObjectReferences, payload: VersionReactivatedPayload }).strict(),
   z.object({ ...EventBase, eventType: z.literal("evaluation-recorded"), ticketId: TicketIdSchema, objectId: IdentifierSchema.optional(), sourceVersion: z.number().int().positive().optional(), payload: EvaluationPayload }).strict(),
-]);
+]).superRefine((event, context) => {
+  if (event.eventType === "knowledge-version-superseded" && event.payload.replacementVersion === event.sourceVersion) {
+    context.addIssue({ code: "custom", path: ["payload", "replacementVersion"], message: "A replacement version must differ from the superseded source version." });
+  }
+  if (event.eventType === "knowledge-version-reactivated" && event.payload.reactivatedVersion !== event.sourceVersion) {
+    context.addIssue({ code: "custom", path: ["payload", "reactivatedVersion"], message: "The reactivated version must match the event source version." });
+  }
+});
 
 export type LearningEventType = z.infer<typeof LearningEventTypeSchema>;
 export type LearningMaturity = z.infer<typeof LearningMaturitySchema>;

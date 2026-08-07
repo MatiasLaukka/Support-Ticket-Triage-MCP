@@ -1,4 +1,5 @@
 import type { LearningEvent, LearningHealth, LearningMaturity } from "./learning-ledger.js";
+import { IsoTimestampSchema } from "../domain.js";
 
 export interface KnowledgeLearningSummary {
   candidateId: string;
@@ -120,11 +121,12 @@ export function projectCandidateLearning(
 
 export function projectKnowledgeVersionLearning(
   events: readonly LearningEvent[],
-  input: { objectId: string; sourceVersion: number; asOf?: string },
+  input: { objectId: string; sourceVersion: number; asOf: string },
 ): KnowledgeVersionLearningSummary {
+  const asOf = IsoTimestampSchema.parse(input.asOf);
   const relevant = events
     .filter((event) => event.objectId === input.objectId && event.sourceVersion === input.sourceVersion)
-    .filter((event) => input.asOf === undefined || event.occurredAt <= input.asOf)
+    .filter((event) => event.occurredAt <= asOf)
     .sort((left, right) => left.occurredAt.localeCompare(right.occurredAt) || left.id.localeCompare(right.id));
   let maturity: LearningMaturity = "observed";
   let health: LearningHealth = "active";
@@ -168,7 +170,6 @@ export function projectKnowledgeVersionLearning(
   }
 
   if (hasSuccessfulReuse) maturity = "reuse-validated";
-  const asOf = input.asOf ?? new Date().toISOString();
   let signalWeight = maturityWeight[maturity];
   if (health === "stale" && staleAt !== undefined) {
     const ageDays = Math.max(0, (Date.parse(asOf) - Date.parse(staleAt)) / 86_400_000);

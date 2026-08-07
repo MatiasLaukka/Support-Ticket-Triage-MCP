@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import Database from "better-sqlite3";
 import { SqliteLearningLedger } from "../src/knowledge-evolution/sqlite-learning-ledger.js";
 import { SqliteKnowledgeEvolutionStore } from "../src/knowledge-evolution/sqlite-knowledge-evolution-store.js";
 import type { KnowledgeAuditEvent } from "../src/knowledge-evolution/knowledge-audit-repository.js";
@@ -309,6 +310,49 @@ describe("SqliteKnowledgeEvolutionStore", () => {
     expect(JSON.parse(rawObject.payload_json)).not.toHaveProperty("learningGovernance");
     ledger.close();
   });
+
+  it("migrates a pre-epoch SQLite database before creating epoch indexes and preserves offset-aware snapshots", async () => {
+    const root = mkdtempSync(join(tmpdir(), "triage-knowledge-old-schema-"));
+    roots.push(root);
+    const filePath = join(root, "learning.sqlite");
+    const oldDatabase = new Database(filePath);
+    oldDatabase.exec(`
+      CREATE TABLE schema_meta (key TEXT PRIMARY KEY NOT NULL, value TEXT NOT NULL);
+      CREATE TABLE learning_events (id TEXT PRIMARY KEY NOT NULL, occurred_at TEXT NOT NULL, event_type TEXT NOT NULL, actor TEXT NOT NULL, correlation_id TEXT NOT NULL, ticket_id TEXT, diagnosis_id TEXT, candidate_id TEXT, object_id TEXT, source_version INTEGER, payload_json TEXT NOT NULL, event_json TEXT NOT NULL);
+      CREATE TABLE knowledge_versions (object_id TEXT NOT NULL, version INTEGER NOT NULL, approved_at TEXT NOT NULL, learning_governance TEXT NOT NULL DEFAULT 'legacy', payload_json TEXT NOT NULL, PRIMARY KEY (object_id, version));
+      CREATE TABLE knowledge_object_heads (object_id TEXT PRIMARY KEY NOT NULL, version INTEGER NOT NULL);
+      CREATE TABLE knowledge_head_transitions (id INTEGER PRIMARY KEY AUTOINCREMENT, object_id TEXT NOT NULL, from_version INTEGER, to_version INTEGER NOT NULL, transition_kind TEXT NOT NULL, effective_at TEXT NOT NULL, correlation_id TEXT NOT NULL);
+      CREATE TABLE knowledge_candidates (id TEXT PRIMARY KEY NOT NULL, version INTEGER NOT NULL, recorded_at TEXT NOT NULL, payload_json TEXT NOT NULL);
+      CREATE TABLE knowledge_audits (id TEXT PRIMARY KEY NOT NULL, object_id TEXT, candidate_id TEXT, action TEXT NOT NULL, actor TEXT NOT NULL, timestamp TEXT NOT NULL, payload_json TEXT NOT NULL, learning_event_id TEXT);
+    `);
+    const versionTwo = { ...approved, version: 2, summary: "A revised credential rotation guide.", approval: { approvedBy: "support-lead", approvedAt: "2026-08-07T11:05:00.000Z" } };
+    oldDatabase.prepare("INSERT INTO knowledge_versions(object_id, version, approved_at, learning_governance, payload_json) VALUES (?, ?, ?, ?, ?)")
+      .run(candidate.id, 1, approved.approval!.approvedAt, "ledger", JSON.stringify(approved));
+    oldDatabase.prepare("INSERT INTO knowledge_versions(object_id, version, approved_at, learning_governance, payload_json) VALUES (?, ?, ?, ?, ?)")
+      .run(candidate.id, 2, versionTwo.approval.approvedAt, "ledger", JSON.stringify(versionTwo));
+    oldDatabase.prepare("INSERT INTO knowledge_object_heads(object_id, version) VALUES (?, ?)").run(candidate.id, 2);
+    oldDatabase.prepare("INSERT INTO knowledge_head_transitions(object_id, from_version, to_version, transition_kind, effective_at, correlation_id) VALUES (?, ?, ?, ?, ?, ?)")
+      .run(candidate.id, null, 1, "initial-promotion", approved.approval!.approvedAt, "00000000-0000-4000-8000-000000000000");
+    oldDatabase.prepare("INSERT INTO knowledge_head_transitions(object_id, from_version, to_version, transition_kind, effective_at, correlation_id) VALUES (?, ?, ?, ?, ?, ?)")
+      .run(candidate.id, 1, 2, "replacement", versionTwo.approval.approvedAt, "d4d7ee66-5bf3-41dc-8c9a-0bd827cd4444");
+    insertOldLearningEvent(oldDatabase, { ...versionEvent("candidate-promoted", 1, "00000000-0000-4000-8000-000000000000", approved.approval!.approvedAt), candidateId: candidate.id });
+    insertOldLearningEvent(oldDatabase, { ...versionEvent("candidate-promoted", 2, "d4d7ee66-5bf3-41dc-8c9a-0bd827cd4444", versionTwo.approval.approvedAt), id: "e239b7c0-49d6-4d39-bff6-33c75146e673" });
+    oldDatabase.close();
+
+    const ledger = new SqliteLearningLedger(filePath);
+    await ledger.initialize();
+    const store = new SqliteKnowledgeEvolutionStore(ledger.getDatabase());
+    await store.initialize();
+    const database = ledger.getDatabase();
+    expect(database.prepare("SELECT approved_at_epoch FROM knowledge_versions WHERE object_id = ? AND version = ?").get(candidate.id, 2)).toEqual({ approved_at_epoch: Date.parse(versionTwo.approval.approvedAt) });
+    expect(database.prepare("SELECT effective_at_epoch FROM knowledge_head_transitions WHERE to_version = ?").get(2)).toEqual({ effective_at_epoch: Date.parse(versionTwo.approval.approvedAt) });
+    expect(database.prepare("SELECT occurred_at_epoch FROM learning_events WHERE source_version = ?").get(2)).toEqual({ occurred_at_epoch: Date.parse(versionTwo.approval.approvedAt) });
+    const snapshot = await store.snapshotForReuse("2026-08-07T13:30:00.000+03:00");
+    expect(snapshot.versions).toMatchObject([{ version: 1 }]);
+    expect(snapshot.heads).toEqual(new Map([[candidate.id, 1]]));
+    expect(snapshot.events).toHaveLength(1);
+    ledger.close();
+  });
 });
 
 function replacementEvents() {
@@ -346,4 +390,11 @@ function reactivationEventsAt(reason: string, occurredAt: string) {
     supersededEvent: transitionEvent(versionEvent("knowledge-version-superseded", 2, correlationId, occurredAt, 1), { id: "e239b7c0-49d6-4d39-bff6-33c75146e671", payload: { health: "superseded", replacementVersion: 1, provenance: reason } }),
     reactivatedEvent: transitionEvent(versionEvent("knowledge-version-reactivated", 1, correlationId, occurredAt), { id: "e239b7c0-49d6-4d39-bff6-33c75146e672", payload: { health: "active", reactivatedVersion: 1, provenance: reason } }),
   };
+}
+
+function insertOldLearningEvent(database: Database.Database, event: LearningEvent): void {
+  database.prepare(`INSERT INTO learning_events(id, occurred_at, event_type, actor, correlation_id, ticket_id, diagnosis_id, candidate_id, object_id, source_version, payload_json, event_json)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    .run(event.id, event.occurredAt, event.eventType, event.actor, event.correlationId, event.ticketId ?? null, event.diagnosisId ?? null,
+      event.candidateId ?? null, event.objectId ?? null, event.sourceVersion ?? null, JSON.stringify(event.payload), JSON.stringify(event));
 }

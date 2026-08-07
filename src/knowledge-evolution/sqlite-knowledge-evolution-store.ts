@@ -67,9 +67,6 @@ export class SqliteKnowledgeEvolutionStore implements KnowledgeVersionStore {
         );
         CREATE INDEX IF NOT EXISTS knowledge_candidates_recorded_idx ON knowledge_candidates(recorded_at, id);
         CREATE INDEX IF NOT EXISTS knowledge_versions_object_idx ON knowledge_versions(object_id, version DESC);
-        CREATE INDEX IF NOT EXISTS knowledge_versions_effective_idx ON knowledge_versions(approved_at_epoch, object_id, version);
-        CREATE INDEX IF NOT EXISTS knowledge_head_transitions_asof_idx ON knowledge_head_transitions(effective_at_epoch, object_id, id);
-        CREATE INDEX IF NOT EXISTS learning_events_occurred_epoch_idx ON learning_events(occurred_at_epoch, id);
         CREATE INDEX IF NOT EXISTS knowledge_audits_candidate_idx ON knowledge_audits(candidate_id, action);
       `);
       this.ensureColumn("knowledge_versions", "learning_governance", "TEXT NOT NULL DEFAULT 'legacy'");
@@ -79,6 +76,13 @@ export class SqliteKnowledgeEvolutionStore implements KnowledgeVersionStore {
       this.backfillEpochs("knowledge_versions", "object_id || ':' || version", "approved_at", "approved_at_epoch");
       this.backfillEpochs("knowledge_head_transitions", "id", "effective_at", "effective_at_epoch");
       this.backfillEpochs("learning_events", "id", "occurred_at", "occurred_at_epoch");
+      this.database.exec(`
+        DROP INDEX IF EXISTS knowledge_versions_effective_idx;
+        DROP INDEX IF EXISTS knowledge_head_transitions_asof_idx;
+        CREATE INDEX knowledge_versions_effective_idx ON knowledge_versions(approved_at_epoch, object_id, version);
+        CREATE INDEX knowledge_head_transitions_asof_idx ON knowledge_head_transitions(effective_at_epoch, object_id, id);
+        CREATE INDEX IF NOT EXISTS learning_events_occurred_epoch_idx ON learning_events(occurred_at_epoch, id);
+      `);
       this.database.exec(`
         INSERT OR IGNORE INTO knowledge_object_heads(object_id, version)
         SELECT object_id, MAX(version) FROM knowledge_versions GROUP BY object_id;

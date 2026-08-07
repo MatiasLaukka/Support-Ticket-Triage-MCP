@@ -54,12 +54,12 @@ export class SqliteLearningLedger implements LearningLedger {
         CREATE INDEX IF NOT EXISTS learning_events_type_idx ON learning_events(event_type);
         CREATE INDEX IF NOT EXISTS learning_events_ticket_idx ON learning_events(ticket_id);
         CREATE INDEX IF NOT EXISTS learning_events_object_idx ON learning_events(object_id);
-        CREATE INDEX IF NOT EXISTS learning_events_occurred_epoch_idx ON learning_events(occurred_at_epoch, id);
         INSERT INTO schema_meta(key, value) VALUES ('learning-ledger', '1')
           ON CONFLICT(key) DO NOTHING;
       `);
       this.ensureColumn("learning_events", "occurred_at_epoch", "INTEGER");
       this.backfillEpochs();
+      this.database.exec("CREATE INDEX IF NOT EXISTS learning_events_occurred_epoch_idx ON learning_events(occurred_at_epoch, id)");
       this.initialized = true;
     } catch (error) {
       throw new LearningLedgerError("Learning ledger schema could not be initialized.", "PERSISTENCE_ERROR", { cause: error });

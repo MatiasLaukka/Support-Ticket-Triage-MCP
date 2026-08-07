@@ -12,6 +12,10 @@ interface AuditRow { payload_json: string; }
 interface EventRow { event_json: string; }
 interface HeadTransitionRow { object_id: string; to_version: number; }
 interface HeadRow { object_id: string; version: number; }
+interface VersionRow extends JsonRow { approved_at: string; }
+type SupersededEvent = Extract<LearningEvent, { eventType: "knowledge-version-superseded" }>;
+type PromotedEvent = Extract<LearningEvent, { eventType: "candidate-promoted" }>;
+type ReactivatedEvent = Extract<LearningEvent, { eventType: "knowledge-version-reactivated" }>;
 
 export class SqliteKnowledgeEvolutionStore implements KnowledgeVersionStore {
   constructor(
@@ -174,10 +178,18 @@ export class SqliteKnowledgeEvolutionStore implements KnowledgeVersionStore {
     const { candidateId, expectedCandidateVersion, expectedHeadVersion, promotionAudit, supersededEvent, promotionEvent } = input;
     const parsed = KnowledgeObjectWriteSchema.safeParse({ ...input.approved, version: expectedHeadVersion + 1, learningGovernance: "ledger" });
     if (!parsed.success || parsed.data.status !== "approved") throw repositoryError("Replacement knowledge object is invalid.");
-    this.assertVersionEvent(supersededEvent, parsed.data.id, expectedHeadVersion, "knowledge-version-superseded");
-    this.assertVersionEvent(promotionEvent, parsed.data.id, expectedHeadVersion + 1, "candidate-promoted");
+    const approval = parsed.data.approval;
+    if (approval === undefined) throw repositoryError("Approved knowledge objects require approval metadata.");
+    const supersession = this.parseSupersededEvent(supersededEvent, parsed.data.id, expectedHeadVersion);
+    const promotion = this.parsePromotedEvent(promotionEvent, parsed.data.id, expectedHeadVersion + 1);
     const audit = KnowledgeAuditEventSchema.safeParse(promotionAudit);
-    if (!audit.success || audit.data.action !== "approved" || audit.data.candidateId !== candidateId || audit.data.objectId !== parsed.data.id) {
+    if (!audit.success || audit.data.action !== "approved" || audit.data.candidateId !== candidateId || audit.data.objectId !== parsed.data.id ||
+      audit.data.actor !== approval.approvedBy || audit.data.timestamp !== approval.approvedAt ||
+      supersession.correlationId !== promotion.correlationId ||
+      supersession.occurredAt !== approval.approvedAt || promotion.occurredAt !== approval.approvedAt ||
+      supersession.actor !== approval.approvedBy || promotion.actor !== approval.approvedBy ||
+      supersession.candidateId !== undefined || promotion.candidateId !== candidateId ||
+      supersession.payload.replacementVersion !== expectedHeadVersion + 1) {
       throw repositoryError("Promotion audit is invalid.");
     }
     try {
@@ -191,11 +203,11 @@ export class SqliteKnowledgeEvolutionStore implements KnowledgeVersionStore {
         }
         this.assertHead(parsed.data.id, expectedHeadVersion);
         this.database.prepare("INSERT INTO knowledge_versions(object_id, version, approved_at, learning_governance, payload_json) VALUES (?, ?, ?, ?, ?)")
-          .run(parsed.data.id, parsed.data.version, parsed.data.approval!.approvedAt, "ledger", JSON.stringify(parsed.data));
+          .run(parsed.data.id, parsed.data.version, approval.approvedAt, "ledger", JSON.stringify(parsed.data));
         const updated = this.database.prepare("UPDATE knowledge_object_heads SET version = ? WHERE object_id = ? AND version = ?")
           .run(parsed.data.version, parsed.data.id, expectedHeadVersion);
         if (updated.changes !== 1) throw new DomainError("Knowledge object head is stale.", "STALE_APPROVAL");
-        this.insertTransition(parsed.data.id, expectedHeadVersion, parsed.data.version, "replacement", parsed.data.approval!.approvedAt, promotionEvent.correlationId);
+        this.insertTransition(parsed.data.id, expectedHeadVersion, parsed.data.version, "replacement", approval.approvedAt, promotion.correlationId);
         this.insertAudit(promotionAudit);
         this.insertLearningEvent(supersededEvent);
         this.insertLearningEvent(promotionEvent);
@@ -210,18 +222,33 @@ export class SqliteKnowledgeEvolutionStore implements KnowledgeVersionStore {
       throw new DomainError("Actor is not authorized to reactivate knowledge versions.", "INVALID_APPROVAL_FIELDS");
     }
     if (input.actorId.trim() === "" || input.reason.trim() === "") throw new DomainError("An actor and reason are required for reactivation.", "INVALID_APPROVAL_FIELDS");
-    this.assertVersionEvent(input.supersededEvent, input.objectId, input.expectedHeadVersion, "knowledge-version-superseded");
-    this.assertVersionEvent(input.reactivatedEvent, input.objectId, input.sourceVersion, "knowledge-version-reactivated");
-    if (input.supersededEvent.correlationId !== input.reactivatedEvent.correlationId) throw repositoryError("Reactivation events must share a correlation ID.");
+    const actorId = input.actorId.trim();
+    const reason = input.reason.trim();
+    const supersession = this.parseSupersededEvent(input.supersededEvent, input.objectId, input.expectedHeadVersion);
+    const reactivation = this.parseReactivatedEvent(input.reactivatedEvent, input.objectId, input.sourceVersion);
+    if (supersession.correlationId !== reactivation.correlationId ||
+      supersession.occurredAt !== input.occurredAt || reactivation.occurredAt !== input.occurredAt ||
+      supersession.actor !== actorId || reactivation.actor !== actorId ||
+      supersession.candidateId !== undefined || reactivation.candidateId !== undefined ||
+      supersession.payload.replacementVersion !== input.sourceVersion ||
+      supersession.payload.provenance !== reason || reactivation.payload.provenance !== reason) {
+      throw repositoryError("Reactivation events do not match the requested transition.");
+    }
     try {
       const transaction = this.database.transaction(() => {
         this.assertHead(input.objectId, input.expectedHeadVersion);
-        const target = this.database.prepare("SELECT payload_json FROM knowledge_versions WHERE object_id = ? AND version = ?").get(input.objectId, input.sourceVersion) as JsonRow | undefined;
+        const target = this.database.prepare("SELECT payload_json, approved_at FROM knowledge_versions WHERE object_id = ? AND version = ?").get(input.objectId, input.sourceVersion) as VersionRow | undefined;
         if (target === undefined) throw repositoryError("Knowledge version was not found.");
+        const displaced = this.database.prepare("SELECT approved_at FROM knowledge_versions WHERE object_id = ? AND version = ?").get(input.objectId, input.expectedHeadVersion) as { approved_at?: string } | undefined;
+        const latestTransition = this.database.prepare("SELECT effective_at FROM knowledge_head_transitions WHERE object_id = ? ORDER BY effective_at DESC, id DESC LIMIT 1").get(input.objectId) as { effective_at?: string } | undefined;
+        if (displaced?.approved_at === undefined || latestTransition?.effective_at === undefined ||
+          input.occurredAt < target.approved_at || input.occurredAt < displaced.approved_at || input.occurredAt < latestTransition.effective_at) {
+          throw repositoryError("Knowledge reactivation cannot precede an effective version transition.");
+        }
         const updated = this.database.prepare("UPDATE knowledge_object_heads SET version = ? WHERE object_id = ? AND version = ?")
           .run(input.sourceVersion, input.objectId, input.expectedHeadVersion);
         if (updated.changes !== 1) throw new DomainError("Knowledge object head is stale.", "STALE_APPROVAL");
-        this.insertTransition(input.objectId, input.expectedHeadVersion, input.sourceVersion, "reactivation", input.occurredAt, input.reactivatedEvent.correlationId);
+        this.insertTransition(input.objectId, input.expectedHeadVersion, input.sourceVersion, "reactivation", input.occurredAt, reactivation.correlationId);
         this.insertLearningEvent(input.supersededEvent);
         this.insertLearningEvent(input.reactivatedEvent);
       });
@@ -386,11 +413,28 @@ export class SqliteKnowledgeEvolutionStore implements KnowledgeVersionStore {
       .run(objectId, fromVersion, toVersion, kind, effectiveAt, correlationId);
   }
 
-  private assertVersionEvent(event: LearningEvent, objectId: string, sourceVersion: number, eventType: LearningEvent["eventType"]): void {
+  private parseSupersededEvent(event: LearningEvent, objectId: string, sourceVersion: number): SupersededEvent {
     const parsed = LearningEventSchema.safeParse(event);
-    if (!parsed.success || parsed.data.eventType !== eventType || parsed.data.objectId !== objectId || parsed.data.sourceVersion !== sourceVersion) {
+    if (!parsed.success || parsed.data.eventType !== "knowledge-version-superseded" || parsed.data.objectId !== objectId || parsed.data.sourceVersion !== sourceVersion) {
       throw repositoryError("Knowledge version transition event is invalid.");
     }
+    return parsed.data;
+  }
+
+  private parsePromotedEvent(event: LearningEvent, objectId: string, sourceVersion: number): PromotedEvent {
+    const parsed = LearningEventSchema.safeParse(event);
+    if (!parsed.success || parsed.data.eventType !== "candidate-promoted" || parsed.data.objectId !== objectId || parsed.data.sourceVersion !== sourceVersion) {
+      throw repositoryError("Knowledge version transition event is invalid.");
+    }
+    return parsed.data;
+  }
+
+  private parseReactivatedEvent(event: LearningEvent, objectId: string, sourceVersion: number): ReactivatedEvent {
+    const parsed = LearningEventSchema.safeParse(event);
+    if (!parsed.success || parsed.data.eventType !== "knowledge-version-reactivated" || parsed.data.objectId !== objectId || parsed.data.sourceVersion !== sourceVersion) {
+      throw repositoryError("Knowledge version transition event is invalid.");
+    }
+    return parsed.data;
   }
 
   private insertLearningEvent(event: LearningEvent): void {

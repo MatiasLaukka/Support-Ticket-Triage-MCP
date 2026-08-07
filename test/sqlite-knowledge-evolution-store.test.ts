@@ -6,6 +6,7 @@ import { SqliteLearningLedger } from "../src/knowledge-evolution/sqlite-learning
 import { SqliteKnowledgeEvolutionStore } from "../src/knowledge-evolution/sqlite-knowledge-evolution-store.js";
 import type { KnowledgeAuditEvent } from "../src/knowledge-evolution/knowledge-audit-repository.js";
 import type { KnowledgeCandidate, KnowledgeObject } from "../src/knowledge-evolution/domain.js";
+import type { LearningEvent } from "../src/knowledge-evolution/learning-ledger.js";
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
@@ -45,7 +46,7 @@ function versionEvent(
   correlationId: string,
   occurredAt: string,
   replacementVersion?: number,
-) {
+): LearningEvent {
   return eventType === "candidate-promoted"
     ? {
         id: "e239b7c0-49d6-4d39-bff6-33c75146e661", occurredAt, actor: "support-lead", correlationId,
@@ -117,21 +118,96 @@ describe("SqliteKnowledgeEvolutionStore", () => {
       supersededEvent: versionEvent("knowledge-version-superseded", 1, "d4d7ee66-5bf3-41dc-8c9a-0bd827cd4444", "2026-08-07T11:05:00.000Z", 2),
       promotionEvent: versionEvent("candidate-promoted", 2, "d4d7ee66-5bf3-41dc-8c9a-0bd827cd4444", "2026-08-07T11:05:00.000Z"),
     });
+    const displacedReason = "The prior version remains the controlled guidance.";
+    await expect(store.reactivateVersion({
+      objectId: candidate.id, sourceVersion: 1, expectedHeadVersion: 2, actorId: "support-lead", reason: displacedReason, occurredAt: "2026-08-07T10:30:00.000Z",
+      supersededEvent: transitionEvent(versionEvent("knowledge-version-superseded", 2, "4a0e71a2-3d34-4de2-a473-52ed9e777e26", "2026-08-07T10:30:00.000Z", 1), { id: "e239b7c0-49d6-4d39-bff6-33c75146e667", payload: { health: "superseded", replacementVersion: 1, provenance: displacedReason } }),
+      reactivatedEvent: transitionEvent(versionEvent("knowledge-version-reactivated", 1, "4a0e71a2-3d34-4de2-a473-52ed9e777e26", "2026-08-07T10:30:00.000Z"), { id: "e239b7c0-49d6-4d39-bff6-33c75146e668", payload: { health: "active", reactivatedVersion: 1, provenance: displacedReason } }),
+    })).rejects.toMatchObject({ code: "REPOSITORY_ERROR" });
+    await expect(store.listHeadMappings()).resolves.toEqual(new Map([[candidate.id, 2]]));
+
     const correlationId = "b2037092-30bb-4c2b-8f32-2c9d5edf806f";
     const restored = await store.reactivateVersion({
-      objectId: candidate.id, sourceVersion: 1, expectedHeadVersion: 2, actorId: "support-lead", reason: "The prior version remains the controlled guidance.", occurredAt: "2026-08-07T12:00:00.000Z",
-      supersededEvent: { ...versionEvent("knowledge-version-superseded", 2, correlationId, "2026-08-07T12:00:00.000Z", 1), id: "e239b7c0-49d6-4d39-bff6-33c75146e664" },
-      reactivatedEvent: versionEvent("knowledge-version-reactivated", 1, correlationId, "2026-08-07T12:00:00.000Z"),
+      objectId: candidate.id, sourceVersion: 1, expectedHeadVersion: 2, actorId: "support-lead", reason: displacedReason, occurredAt: "2026-08-07T12:00:00.000Z",
+      supersededEvent: transitionEvent(versionEvent("knowledge-version-superseded", 2, correlationId, "2026-08-07T12:00:00.000Z", 1), { id: "e239b7c0-49d6-4d39-bff6-33c75146e664", payload: { health: "superseded", replacementVersion: 1, provenance: displacedReason } }),
+      reactivatedEvent: transitionEvent(versionEvent("knowledge-version-reactivated", 1, correlationId, "2026-08-07T12:00:00.000Z"), { payload: { health: "active", reactivatedVersion: 1, provenance: displacedReason } }),
     });
 
     expect(restored.version).toBe(1);
     await expect(store.listHeadMappings()).resolves.toEqual(new Map([[candidate.id, 1]]));
+    const targetReason = "The replacement is being checked before its approval time.";
     await expect(store.reactivateVersion({
-      objectId: candidate.id, sourceVersion: 2, expectedHeadVersion: 2, actorId: "support-lead", reason: "Stale retry.", occurredAt: "2026-08-07T12:05:00.000Z",
-      supersededEvent: { ...versionEvent("knowledge-version-superseded", 2, "1a2bc478-d148-4499-91a2-97f6ba03b714", "2026-08-07T12:05:00.000Z", 1), id: "e239b7c0-49d6-4d39-bff6-33c75146e665" },
-      reactivatedEvent: { ...versionEvent("knowledge-version-reactivated", 2, "1a2bc478-d148-4499-91a2-97f6ba03b714", "2026-08-07T12:05:00.000Z"), id: "e239b7c0-49d6-4d39-bff6-33c75146e666" },
+      objectId: candidate.id, sourceVersion: 2, expectedHeadVersion: 1, actorId: "support-lead", reason: targetReason, occurredAt: "2026-08-07T10:30:00.000Z",
+      supersededEvent: transitionEvent(versionEvent("knowledge-version-superseded", 1, "fa981a8c-559b-49f2-a793-e76aa299c288", "2026-08-07T10:30:00.000Z", 2), { id: "e239b7c0-49d6-4d39-bff6-33c75146e669", payload: { health: "superseded", replacementVersion: 2, provenance: targetReason } }),
+      reactivatedEvent: transitionEvent(versionEvent("knowledge-version-reactivated", 2, "fa981a8c-559b-49f2-a793-e76aa299c288", "2026-08-07T10:30:00.000Z"), { id: "e239b7c0-49d6-4d39-bff6-33c75146e670", payload: { health: "active", reactivatedVersion: 2, provenance: targetReason } }),
+    })).rejects.toMatchObject({ code: "REPOSITORY_ERROR" });
+    await expect(store.reactivateVersion({
+      objectId: candidate.id, sourceVersion: 1, expectedHeadVersion: 2, actorId: "support-lead", reason: "Stale retry.", occurredAt: "2026-08-07T12:05:00.000Z",
+      supersededEvent: transitionEvent(versionEvent("knowledge-version-superseded", 2, "1a2bc478-d148-4499-91a2-97f6ba03b714", "2026-08-07T12:05:00.000Z", 1), { id: "e239b7c0-49d6-4d39-bff6-33c75146e665", payload: { health: "superseded", replacementVersion: 1, provenance: "Stale retry." } }),
+      reactivatedEvent: transitionEvent(versionEvent("knowledge-version-reactivated", 1, "1a2bc478-d148-4499-91a2-97f6ba03b714", "2026-08-07T12:05:00.000Z"), { id: "e239b7c0-49d6-4d39-bff6-33c75146e666", payload: { health: "active", reactivatedVersion: 1, provenance: "Stale retry." } }),
     })).rejects.toMatchObject({ code: "STALE_APPROVAL" });
     ledger.close();
+  });
+
+  it("rejects forged replacement event provenance without changing versions, heads, audits, or ledger events", async () => {
+    const cases = [
+      (events: ReturnType<typeof replacementEvents>) => ({ ...events, supersededEvent: { ...events.supersededEvent, correlationId: "7c438ae3-4f47-4974-bdcc-51b827ee8d72" } }),
+      (events: ReturnType<typeof replacementEvents>) => ({ ...events, promotionEvent: { ...events.promotionEvent, occurredAt: "2026-08-07T11:06:00.000Z" } }),
+      (events: ReturnType<typeof replacementEvents>) => ({ ...events, promotionEvent: { ...events.promotionEvent, actor: "untrusted-actor" } }),
+      (events: ReturnType<typeof replacementEvents>) => ({ ...events, promotionEvent: { ...events.promotionEvent, candidateId: "different-candidate" } }),
+    ];
+    for (const mutate of cases) {
+      const { ledger, store } = await createStore();
+      await store.saveCandidate(candidate);
+      await store.promoteWithAudit(candidate.id, approved, candidate.version, audit);
+      const revision = { ...candidate, id: "known-cause-api-credential-rotation-revision", objectId: candidate.id, sourceVersion: 1, version: 1 };
+      await store.saveCandidate(revision);
+      const events = replacementEvents();
+      await expect(store.promoteReplacement({
+        candidateId: revision.id,
+        approved: { ...approved, approval: { approvedBy: "support-lead", approvedAt: "2026-08-07T11:05:00.000Z" } },
+        expectedCandidateVersion: 1, expectedHeadVersion: 1,
+        promotionAudit: { ...audit, id: "audit-promotion-002", candidateId: revision.id, timestamp: "2026-08-07T11:05:00.000Z" },
+        ...mutate(events),
+      })).rejects.toMatchObject({ code: "REPOSITORY_ERROR" });
+      await expect(store.listVersions(candidate.id)).resolves.toHaveLength(1);
+      await expect(store.listHeadMappings()).resolves.toEqual(new Map([[candidate.id, 1]]));
+      await expect(store.list({ action: "approved" })).resolves.toEqual([audit]);
+      await expect(ledger.list({ eventType: "candidate-promoted" })).resolves.toHaveLength(1);
+      ledger.close();
+    }
+  });
+
+  it("rejects forged reactivation event provenance without changing the active head", async () => {
+    const reason = "The prior version remains the controlled guidance.";
+    const cases: Array<(events: ReturnType<typeof reactivationEvents>) => ReturnType<typeof reactivationEvents>> = [
+      (events) => ({ ...events, supersededEvent: transitionEvent(events.supersededEvent, { correlationId: "2c276ea1-c23f-440f-9016-48d8a1dd4c1d" }) }),
+      (events) => ({ ...events, reactivatedEvent: transitionEvent(events.reactivatedEvent, { occurredAt: "2026-08-07T12:01:00.000Z" }) }),
+      (events) => ({ ...events, reactivatedEvent: transitionEvent(events.reactivatedEvent, { actor: "untrusted-actor" }) }),
+      (events) => ({ ...events, reactivatedEvent: transitionEvent(events.reactivatedEvent, { payload: { health: "active", reactivatedVersion: 1, provenance: "forged reason" } }) }),
+    ];
+    for (const mutate of cases) {
+      const { ledger, store } = await createStore({ reactivationAuthorizer: (actor) => actor === "support-lead" });
+      await store.saveCandidate(candidate);
+      await store.promoteWithAudit(candidate.id, approved, candidate.version, audit);
+      const revision = { ...candidate, id: "known-cause-api-credential-rotation-revision", objectId: candidate.id, sourceVersion: 1, version: 1 };
+      await store.saveCandidate(revision);
+      const replacementTransition = replacementEvents();
+      await store.promoteReplacement({
+        candidateId: revision.id,
+        approved: { ...approved, approval: { approvedBy: "support-lead", approvedAt: "2026-08-07T11:05:00.000Z" } },
+        expectedCandidateVersion: 1, expectedHeadVersion: 1,
+        promotionAudit: { ...audit, id: "audit-promotion-002", candidateId: revision.id, timestamp: "2026-08-07T11:05:00.000Z" },
+        ...replacementTransition,
+      });
+      await expect(store.reactivateVersion({
+        objectId: candidate.id, sourceVersion: 1, expectedHeadVersion: 2, actorId: "support-lead", reason, occurredAt: "2026-08-07T12:00:00.000Z",
+        ...mutate(reactivationEvents(reason)),
+      })).rejects.toMatchObject({ code: "REPOSITORY_ERROR" });
+      await expect(store.listHeadMappings()).resolves.toEqual(new Map([[candidate.id, 2]]));
+      await expect(store.listVersions(candidate.id)).resolves.toHaveLength(2);
+      ledger.close();
+    }
   });
 
   it("round trips candidates, immutable approvals, audit, and promotion learning event after reopen", async () => {
@@ -194,3 +270,23 @@ describe("SqliteKnowledgeEvolutionStore", () => {
     ledger.close();
   });
 });
+
+function replacementEvents() {
+  const correlationId = "d4d7ee66-5bf3-41dc-8c9a-0bd827cd4444";
+  return {
+    supersededEvent: versionEvent("knowledge-version-superseded", 1, correlationId, "2026-08-07T11:05:00.000Z", 2),
+    promotionEvent: versionEvent("candidate-promoted", 2, correlationId, "2026-08-07T11:05:00.000Z"),
+  };
+}
+
+function transitionEvent(base: LearningEvent, patch: Record<string, unknown>): LearningEvent {
+  return { ...base, ...patch } as LearningEvent;
+}
+
+function reactivationEvents(reason: string) {
+  const correlationId = "b2037092-30bb-4c2b-8f32-2c9d5edf806f";
+  return {
+    supersededEvent: transitionEvent(versionEvent("knowledge-version-superseded", 2, correlationId, "2026-08-07T12:00:00.000Z", 1), { id: "e239b7c0-49d6-4d39-bff6-33c75146e671", payload: { health: "superseded", replacementVersion: 1, provenance: reason } }),
+    reactivatedEvent: transitionEvent(versionEvent("knowledge-version-reactivated", 1, correlationId, "2026-08-07T12:00:00.000Z"), { id: "e239b7c0-49d6-4d39-bff6-33c75146e672", payload: { health: "active", reactivatedVersion: 1, provenance: reason } }),
+  };
+}

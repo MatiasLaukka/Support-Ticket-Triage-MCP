@@ -415,7 +415,7 @@ export interface TriageServerDependencies {
   classificationReasoningProvider?: ClassificationReasoningProvider;
   draftProvider?: CustomerResponseDraftProvider;
   env?: NodeJS.ProcessEnv;
-  knowledgeEvolution?: {
+  knowledgeEvolution: {
     service: KnowledgeEvolutionService;
     objects?: Pick<KnowledgeObjectRepository, "listCandidates">;
     audits?: Pick<KnowledgeAuditRepository, "list">;
@@ -923,9 +923,9 @@ async function evaluateTicket(
   deps: TriageServerDependencies,
   input: z.infer<typeof EvaluateTicketInputSchema>,
 ): Promise<z.infer<typeof EvaluateTicketOutputSchema>> {
-  const reusableKnowledge = deps.knowledgeEvolution === undefined
-    ? { status: "ledger-unavailable" as const, contexts: [], issues: [{ scope: "snapshot" as const, code: "ledger-read-failed" as const }] }
-    : await deps.knowledgeEvolution.service.listReusableApproved({ asOf: deps.now().toISOString() });
+  const reusableKnowledge = await knowledgeService(deps).listReusableApproved({
+    asOf: deps.now().toISOString(),
+  });
   const [ticket, audits, allKnowledgeArticles] = await Promise.all([
     deps.tickets.get(input.ticketId),
     deps.audits.list(input.ticketId),

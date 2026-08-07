@@ -52,6 +52,34 @@ afterEach(async () => {
 });
 
 describe("TriageService", () => {
+  it("rejects direct evaluation with a mismatched learned known-cause reference", async () => {
+    const harness = makeHarness();
+    const evaluatedCustomerReplyWatermark = customerReplyWatermarkFromAudits(
+      await harness.audit.list("TKT-1001"),
+    );
+
+    await expect(harness.service.submitEvaluation({
+      ...makeSubmitInput(),
+      knownCause: "cause-a",
+      knownCauseRef: { objectId: "cause-b", version: 1 },
+      evaluatedCustomerReplyWatermark,
+    })).rejects.toThrow(/knownCauseRef/);
+  });
+
+  it("rejects a direct learned reference that lacks authoritative reusable-context validation", async () => {
+    const harness = makeHarness();
+    const evaluatedCustomerReplyWatermark = customerReplyWatermarkFromAudits(
+      await harness.audit.list("TKT-1001"),
+    );
+
+    await expect(harness.service.submitEvaluation({
+      ...makeSubmitInput(),
+      knownCause: "cause-a",
+      knownCauseRef: { objectId: "cause-a", version: 1 },
+      evaluatedCustomerReplyWatermark,
+    })).rejects.toThrow(/authoritative reusable knowledge/);
+  });
+
   it("rejects classifier confidence provenance from generic submission", async () => {
     const harness = makeHarness();
 

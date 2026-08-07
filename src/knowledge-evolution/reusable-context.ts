@@ -30,6 +30,33 @@ export type KnowledgeReference = { objectId: string; version: number };
 /** Production callers must provide the service-owned reusable snapshot, not broad history. */
 export type ProductionKnowledgeInput = { reusableKnowledge: ReusableKnowledgeResult };
 
+/** Internal, opaque proof that a reference was selected from this exact result. */
+export type ValidatedKnownCauseReference = { readonly reference: KnowledgeReference };
+const validatedKnownCauseReferences = new WeakSet<object>();
+
+export function validateKnownCauseReference(
+  reusableKnowledge: ReusableKnowledgeResult,
+  reference: KnowledgeReference,
+): ValidatedKnownCauseReference {
+  if (!reusableKnowledge.contexts.some((context) =>
+    context.object.id === reference.objectId && context.version === reference.version)) {
+    throw new Error("Known-cause reference is not present in the supplied reusable knowledge context.");
+  }
+  const validation = { reference: { ...reference } };
+  validatedKnownCauseReferences.add(validation);
+  return validation;
+}
+
+export function isValidatedKnownCauseReference(
+  value: unknown,
+  reference: KnowledgeReference,
+): value is ValidatedKnownCauseReference {
+  return typeof value === "object" && value !== null &&
+    validatedKnownCauseReferences.has(value) &&
+    (value as ValidatedKnownCauseReference).reference.objectId === reference.objectId &&
+    (value as ValidatedKnownCauseReference).reference.version === reference.version;
+}
+
 /**
  * The only reusable-knowledge projection. Its one atomic snapshot prevents a
  * historical head from being paired with a different ledger or version view.

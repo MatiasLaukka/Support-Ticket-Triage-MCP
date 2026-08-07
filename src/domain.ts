@@ -619,6 +619,13 @@ export const TriageRecommendationSchema = z
         message: "knownCauseRef requires knownCause.",
       });
     }
+    if (recommendation.knownCauseRef !== undefined && recommendation.knownCause !== recommendation.knownCauseRef.objectId) {
+      context.addIssue({
+        code: "custom",
+        path: ["knownCauseRef", "objectId"],
+        message: "knownCauseRef.objectId must match knownCause.",
+      });
+    }
   });
 
 export const RecommendationSchema = TriageRecommendationSchema;

@@ -18,7 +18,10 @@ import {
   type Ticket,
 } from "../domain.js";
 import type { KnowledgeObject } from "../knowledge-evolution/domain.js";
-import type { ProductionKnowledgeInput } from "../knowledge-evolution/reusable-context.js";
+import {
+  validateKnownCauseReference,
+  type ProductionKnowledgeInput,
+} from "../knowledge-evolution/reusable-context.js";
 import type {
   SubmitEvaluationInput,
 } from "../triage-service.js";
@@ -155,7 +158,9 @@ export function buildApprovalDeskRecommendationInput(input: {
     reusableKnowledge: input.reusableKnowledge,
   });
   const evidenceReadiness = lifecycle.evidenceReadiness;
-  assertReusableReference(evidenceReadiness.knownCauseRef, input.reusableKnowledge);
+  const knownCauseReferenceValidation = evidenceReadiness.knownCauseRef === undefined || input.reusableKnowledge === undefined
+    ? undefined
+    : validateKnownCauseReference(input.reusableKnowledge, evidenceReadiness.knownCauseRef);
   const conversationContext = buildConversationContext({
     customerReplies: input.customerReplies ?? [],
     ticketId: ticket.id,
@@ -233,6 +238,9 @@ export function buildApprovalDeskRecommendationInput(input: {
     ...(evidenceReadiness.knownCauseRef === undefined
       ? {}
       : { knownCauseRef: evidenceReadiness.knownCauseRef }),
+    ...(knownCauseReferenceValidation === undefined
+      ? {}
+      : { knownCauseReferenceValidation }),
     ...(input.reusableKnowledge === undefined
       ? {}
       : {
@@ -1070,17 +1078,6 @@ function formatRecommendedNextAction(
     return "Continue platform-impact review and share the next customer update.";
   }
   return "Review the supporting evidence, then approve or reject this recommendation.";
-}
-
-function assertReusableReference(
-  reference: { objectId: string; version: number } | undefined,
-  reusableKnowledge: ProductionKnowledgeInput["reusableKnowledge"] | undefined,
-): void {
-  if (reference === undefined || reusableKnowledge === undefined) return;
-  if (!reusableKnowledge.contexts.some((context) =>
-    context.object.id === reference.objectId && context.version === reference.version)) {
-    throw new Error("Known-cause reference is not present in the supplied reusable knowledge context.");
-  }
 }
 
 function analyzeCustomerReplyLifecycle(input: {

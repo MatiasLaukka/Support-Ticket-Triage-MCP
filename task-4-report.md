@@ -22,3 +22,9 @@
 - Targeted route tests passed for ledger-unavailable HTTP/MCP observability and HTTP v1 -> promotion v2 -> pinned v1 -> explicit HTTP/MCP v2 evaluation.
 - `npm run typecheck` passed.
 - `npm test` and a full `vitest run --dir test --reporter=dot` were run after the focused suites; the runner emitted the complete progress stream without failures.
+
+## Fix round 1
+
+- MCP now requires the knowledge-evolution dependency and fails closed if it is absent; only named test adapters may supply the ledger-unavailable fixture.
+- `knownCauseRef.objectId` must equal `knownCause`, and persistence additionally requires an opaque validation token produced from the exact authoritative reusable context. Raw or forged direct references are rejected.
+- Verification: 221 focused tests passed; full `npm test` passed after the fix.

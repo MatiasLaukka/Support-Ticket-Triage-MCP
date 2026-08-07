@@ -220,6 +220,17 @@ async function connect(
     now: () => now,
     minutesPerAcceptedRecommendation,
     env: {},
+    knowledgeEvolution: {
+      service: {
+        async listReusableApproved() {
+          return {
+            status: "ledger-unavailable" as const,
+            contexts: [],
+            issues: [{ scope: "snapshot" as const, code: "ledger-read-failed" as const }],
+          };
+        },
+      } as never,
+    },
   });
   const client = new Client({ name: "server-read-test", version: "1.0.0" });
   const [clientTransport, serverTransport] =

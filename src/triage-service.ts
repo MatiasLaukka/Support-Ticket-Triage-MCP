@@ -65,6 +65,10 @@ import type { LearningCaptureContext, LearningCaptureService } from "./knowledge
 import type { DiagnosisReviewInput } from "./approval-desk/diagnosis-review.js";
 import { hasCustomerReplyAfterRecommendation } from "./approval-desk/workflow-causal-context.js";
 import { getKnownEvent } from "./approval-desk/known-event-catalog.js";
+import {
+  isValidatedKnownCauseReference,
+  type ValidatedKnownCauseReference,
+} from "./knowledge-evolution/reusable-context.js";
 export type {
   DiagnosisReviewInput,
 } from "./approval-desk/diagnosis-review.js";
@@ -125,7 +129,16 @@ const SubmitRecommendationInputSchema = z
     actor: NonBlankStringSchema,
     submittedAt: IsoTimestampSchema,
   })
-  .strict();
+  .strict()
+  .superRefine((input, context) => {
+    if (input.knownCauseRef !== undefined && input.knownCause !== input.knownCauseRef.objectId) {
+      context.addIssue({
+        code: "custom",
+        path: ["knownCauseRef"],
+        message: "knownCauseRef.objectId must match knownCause.",
+      });
+    }
+  });
 
 const RejectRecommendationInputSchema = z
   .object({
@@ -289,6 +302,8 @@ export interface SubmitRecommendationInput {
   supportState?: SupportState;
   knownCause?: string | null;
   knownCauseRef?: { objectId: string; version: number };
+  /** Opaque validation created only by the reusable-knowledge selection path. */
+  knownCauseReferenceValidation?: ValidatedKnownCauseReference;
   learnedContext?: {
     status: "available" | "ledger-unavailable";
     issues: ReadonlyArray<
@@ -512,6 +527,33 @@ export function customerReplyWatermarkFromAudits(
       };
 }
 
+function assertTrustedKnownCauseReference(
+  input: Pick<SubmitRecommendationInput, "knownCause" | "knownCauseRef">,
+  validation: ValidatedKnownCauseReference | undefined,
+): void {
+  if (input.knownCauseRef === undefined) {
+    if (validation !== undefined) {
+      throw new DomainError(
+        "Known-cause reference validation requires a known-cause reference.",
+        "INVALID_APPROVAL_FIELDS",
+      );
+    }
+    return;
+  }
+  if (input.knownCause !== input.knownCauseRef.objectId) {
+    throw new DomainError(
+      "knownCauseRef.objectId must match knownCause.",
+      "INVALID_APPROVAL_FIELDS",
+    );
+  }
+  if (!isValidatedKnownCauseReference(validation, input.knownCauseRef)) {
+    throw new DomainError(
+      "Known-cause references require authoritative reusable knowledge validation.",
+      "INVALID_APPROVAL_FIELDS",
+    );
+  }
+}
+
 export class TriageService {
   private readonly now: () => Date;
   private readonly uuid: () => string;
@@ -527,12 +569,14 @@ export class TriageService {
     capability: symbol | undefined,
     classificationConfidence: ClassificationConfidence | undefined,
     confidenceCapability: typeof submitClassificationConfidenceCapability,
+    knownCauseReferenceValidation?: ValidatedKnownCauseReference,
   ): Promise<TriageRecommendation>;
   async submit(
     input: SubmitRecommendationInput,
     capability?: symbol,
     classificationConfidence?: ClassificationConfidence,
     confidenceCapability?: symbol,
+    knownCauseReferenceValidation?: ValidatedKnownCauseReference,
   ): Promise<TriageRecommendation> {
     if (
       classificationConfidence !== undefined &&
@@ -543,7 +587,9 @@ export class TriageService {
         "INVALID_CLASSIFICATION_PROVENANCE",
       );
     }
-    const parsed = SubmitRecommendationInputSchema.parse(input);
+    assertTrustedKnownCauseReference(input, knownCauseReferenceValidation);
+    const { knownCauseReferenceValidation: _validation, ...serializableInput } = input;
+    const parsed = SubmitRecommendationInputSchema.parse(serializableInput);
     if (capability === submitWithinTicketLockCapability) {
       return this.submitValidated(parsed, classificationConfidence);
     }
@@ -731,7 +777,9 @@ export class TriageService {
     recommendation: TriageRecommendation;
     recommendations: TriageRecommendation[];
   }> {
-    const parsed = SubmitEvaluationInputSchema.parse(input);
+    const { knownCauseReferenceValidation, ...serializableInput } = input;
+    assertTrustedKnownCauseReference(serializableInput, knownCauseReferenceValidation);
+    const parsed = SubmitEvaluationInputSchema.parse(serializableInput);
     const { customerReplyWatermarksMatch } = await import(
       "./approval-desk/diagnosis-review.js"
     );
@@ -757,6 +805,7 @@ export class TriageService {
         submitWithinTicketLockCapability,
         classificationConfidence,
         submitClassificationConfidenceCapability,
+        knownCauseReferenceValidation,
       );
       const recommendations =
         await this.supersedePendingRecommendationsWithNewerReply({

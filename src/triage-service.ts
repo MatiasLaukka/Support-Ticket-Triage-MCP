@@ -59,6 +59,7 @@ import {
   type DiagnosticStateSnapshot,
 } from "./approval-desk/diagnostic-state.js";
 import type { CompletedDiagnosis } from "./knowledge-evolution/domain.js";
+import type { LearningCaptureContext, LearningCaptureService } from "./knowledge-evolution/learning-capture.js";
 import type { DiagnosisReviewInput } from "./approval-desk/diagnosis-review.js";
 import { hasCustomerReplyAfterRecommendation } from "./approval-desk/workflow-causal-context.js";
 import { getKnownEvent } from "./approval-desk/known-event-catalog.js";
@@ -479,6 +480,7 @@ export interface TriageServiceDependencies {
   recommendations: RecommendationStore;
   audit: AuditStore;
   diagnoses?: { save(record: CompletedDiagnosis): Promise<void>; remove(id: CompletedDiagnosis["id"]): Promise<void> };
+  learningCapture?: LearningCaptureService;
   now?: () => Date;
   uuid?: () => string;
 }
@@ -536,6 +538,30 @@ export class TriageService {
     return serializeTicket(parsed.ticketId, () =>
       this.submitValidated(parsed, classificationConfidence),
     );
+  }
+
+  private async captureLearning(event: AuditEvent, context: LearningCaptureContext = {}): Promise<void> {
+    if (this.dependencies.learningCapture === undefined) return;
+    try {
+      await this.dependencies.learningCapture.recordAuditOutcome(event, context);
+    } catch {
+      const failure = AuditEventSchema.safeParse({
+        id: this.uuid(),
+        timestamp: this.now().toISOString(),
+        actor: "learning-ledger",
+        action: "learning-capture-failed",
+        ticketId: event.ticketId,
+        before: { sourceAuditId: event.id, sourceAction: event.action },
+        after: { status: "failed" },
+        rationale: "The operational result was retained, but its learning record could not be persisted.",
+        knowledgeArticleIds: event.knowledgeArticleIds,
+        result: "rejected",
+        rejectionReason: "Learning ledger capture failed.",
+      });
+      if (failure.success) {
+        try { await this.dependencies.audit.append(failure.data); } catch { /* learning failure must not block operational work */ }
+      }
+    }
   }
 
   private async submitValidated(
@@ -926,9 +952,17 @@ export class TriageService {
             auditError,
           );
         }
+        await this.captureLearning(auditEvent, {
+          diagnosisId: auditEvent.id,
+          evidenceIds: (diagnosis.diagnosis.evidenceReferences ?? []).map(({ id }) => id),
+        });
         return auditEvent;
       }
       await this.dependencies.audit.append(auditEvent);
+      await this.captureLearning(auditEvent, {
+        diagnosisId: auditEvent.id,
+        evidenceIds: (diagnosis.diagnosis.evidenceReferences ?? []).map(({ id }) => id),
+      });
       return auditEvent;
     });
   }
@@ -1058,6 +1092,12 @@ export class TriageService {
         result: "success",
       });
       await this.dependencies.audit.append(auditEvent);
+      if (review.decision === "approve") {
+        await this.captureLearning(auditEvent, {
+          diagnosisId: original.id,
+          evidenceIds: (originalDiagnosis.data.evidenceReferences ?? []).map(({ id }) => id),
+        });
+      }
       return auditEvent;
     });
   }
@@ -1165,6 +1205,7 @@ export class TriageService {
         result: "success",
       });
       await this.dependencies.audit.append(auditEvent);
+      await this.captureLearning(auditEvent, { knownEventId: eventId });
       return auditEvent;
     });
   }
@@ -1243,6 +1284,11 @@ export class TriageService {
             return event;
           },
         );
+      const latestDiagnosis = (await import("./approval-desk/workflow-guidance.js")).latestAuthoritativeDiagnosis(close.ticketId, audits);
+      await this.captureLearning(auditEvent, {
+        ...(latestDiagnosis === undefined ? {} : { diagnosisId: latestDiagnosis.diagnosisId }),
+        verificationType: "customer-confirmed",
+      });
       return { ticket: updated, auditEvent };
     });
   }
@@ -1348,6 +1394,11 @@ export class TriageService {
         }),
       );
       await this.dependencies.audit.appendBatch(events);
+      const evidenceIds: string[] = [];
+      await Promise.all(events.map((event) => this.captureLearning(event, {
+        diagnosisId: input.diagnosisId,
+        evidenceIds,
+      })));
       return events;
     });
   }

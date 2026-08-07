@@ -681,6 +681,7 @@ export const AuditActionSchema = z.enum([
   "platform-mitigation-available",
   "ticket-updated",
   "approval-rejected",
+  "learning-capture-failed",
 ]);
 
 export const AuditEventSchema = z
@@ -717,7 +718,9 @@ export const AuditEventSchema = z
     }
 
     const expectedResult =
-      event.action === "approval-rejected" ? "rejected" : "success";
+      event.action === "approval-rejected" || event.action === "learning-capture-failed"
+        ? "rejected"
+        : "success";
     if (event.result !== expectedResult) {
       context.addIssue({
         code: "custom",

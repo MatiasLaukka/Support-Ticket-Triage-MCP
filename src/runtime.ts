@@ -12,6 +12,7 @@ import { createControlledKnowledgeCandidateDraftProvider } from "./approval-desk
 import { createOpenAiKnowledgeCandidateDraftProvider } from "./knowledge-evolution/openai-candidate-draft-provider.js";
 import { SqliteLearningLedger } from "./knowledge-evolution/sqlite-learning-ledger.js";
 import { SqliteKnowledgeEvolutionStore } from "./knowledge-evolution/sqlite-knowledge-evolution-store.js";
+import { LearningCaptureService } from "./knowledge-evolution/learning-capture.js";
 import { DEFAULT_MINUTES_PER_ACCEPTED_RECOMMENDATION } from "./metrics.js";
 
 const STARTUP_PATH_MESSAGES = {
@@ -161,6 +162,7 @@ export async function createRuntimeDependencies(
   await ledger.initialize();
   const store = new SqliteKnowledgeEvolutionStore(ledger.getDatabase());
   await store.initialize();
+  const learningCapture = new LearningCaptureService(ledger);
   const knowledgeEvolution = {
     diagnoses,
     objects: store,
@@ -184,6 +186,7 @@ export async function createRuntimeDependencies(
     recommendations,
     audit: audits,
     diagnoses,
+    learningCapture,
     now,
   });
 

@@ -238,5 +238,7 @@ function summarizeAuditEvent(event: AuditEvent): string {
       return "Ticket fields were updated.";
     case "approval-rejected":
       return `Approval attempt was blocked: ${event.rationale}`;
+    case "learning-capture-failed":
+      return "Learning capture failed; the operational ticket result was retained.";
   }
 }

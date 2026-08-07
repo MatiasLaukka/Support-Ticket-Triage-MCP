@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { IsoTimestampSchema, TicketIdSchema } from "../domain.js";
+import { IsoTimestampSchema, KnownEventIdSchema, TicketIdSchema } from "../domain.js";
 
 const IdentifierSchema = z
   .string()
@@ -95,11 +95,17 @@ const EventBase = {
   candidateId: IdentifierSchema.optional(),
   objectId: IdentifierSchema.optional(),
   sourceVersion: z.number().int().positive().optional(),
+  knownEventId: KnownEventIdSchema.optional(),
 };
 
 const DiagnosisReferences = {
   ticketId: TicketIdSchema,
   diagnosisId: IdentifierSchema,
+};
+
+const FixReferences = {
+  ticketId: TicketIdSchema,
+  diagnosisId: IdentifierSchema.optional(),
 };
 
 const CandidateReferences = {
@@ -128,7 +134,7 @@ const FixPayload = z
 
 const OutcomePayload = z
   .object({
-    evidenceIds: EvidenceIdsSchema.min(1),
+    evidenceIds: EvidenceIdsSchema,
     verificationType: VerificationTypeSchema,
     outcomeStatus: z.literal("resolved"),
     provenance: ProvenanceSchema,
@@ -207,7 +213,7 @@ const EvaluationPayload = z
 export const LearningEventSchema = z.discriminatedUnion("eventType", [
   z.object({ ...EventBase, eventType: z.literal("diagnosis-recorded"), ...DiagnosisReferences, payload: DiagnosisPayload }).strict(),
   z.object({ ...EventBase, eventType: z.literal("diagnosis-approved"), ...DiagnosisReferences, payload: DiagnosisPayload }).strict(),
-  z.object({ ...EventBase, eventType: z.literal("fix-available"), ...DiagnosisReferences, payload: FixPayload }).strict(),
+  z.object({ ...EventBase, eventType: z.literal("fix-available"), ...FixReferences, payload: FixPayload }).strict(),
   z.object({ ...EventBase, eventType: z.literal("outcome-verified"), ...DiagnosisReferences, payload: OutcomePayload }).strict(),
   z.object({ ...EventBase, eventType: z.literal("candidate-created"), ...CandidateReferences, payload: CandidateCreatedPayload }).strict(),
   z.object({ ...EventBase, eventType: z.literal("candidate-deferred"), ...CandidateReferences, payload: CandidateDeferredPayload }).strict(),

@@ -26,7 +26,9 @@ export interface KnowledgeEvolutionServiceDependencies {
   tickets: Pick<TicketRepository, "snapshot" | "get">;
   knowledge: Pick<KnowledgeRepository, "list">;
   diagnoses: Pick<DiagnosisRepository, "list">;
-  objects: Pick<KnowledgeObjectRepository, "listCandidates" | "getCandidate" | "saveCandidate" | "removeCandidate" | "listApproved" | "promote" | "removeApproved">;
+  objects: Pick<KnowledgeObjectRepository, "listCandidates" | "getCandidate" | "saveCandidate" | "removeCandidate" | "listApproved" | "promote" | "removeApproved"> & {
+    promoteWithAudit?: (candidateId: string, approved: KnowledgeObject, expectedCandidateVersion: number | undefined, audit: KnowledgeAuditEvent) => Promise<KnowledgeObject>;
+  };
   audits: Pick<KnowledgeAuditRepository, "append" | "appendIfNoPriorAction" | "list">;
   draftProvider?: CandidateDraftProvider;
   promotionAuthorizer: (actorId: string) => boolean;
@@ -212,27 +214,33 @@ export class KnowledgeEvolutionService {
         approval: { approvedBy: input.actorId.trim(), approvedAt: this.now().toISOString() },
       };
       let promoted: KnowledgeObject | undefined;
+      const promotionAudit: KnowledgeAuditEvent = {
+        id: this.nextAuditId(),
+        timestamp: this.now().toISOString(),
+        objectId: object.id,
+        candidateId: candidate.id,
+        action: "approved",
+        actor: input.actorId,
+        supportIds: supportIds(candidate),
+        scores: candidate.deterministicScores,
+        provenanceSummary: candidate.provenance.source,
+        reviewedFields: input.edits === undefined ? [] : Object.keys(input.edits).sort(),
+        result: "approved",
+        notes: reviewed.operatorRationale,
+        evidencePolicyMetadata: {
+          approvedPolicy: reviewedPolicy,
+          ...reviewed.evidencePolicyMetadata,
+        },
+      };
+      const transactionAware = this.dependencies.objects.promoteWithAudit !== undefined;
       try {
-        promoted = await this.dependencies.objects.promote(candidate.id, object, candidate.version);
-        await this.appendAudit({
-          objectId: promoted.id,
-          candidateId: candidate.id,
-          action: "approved",
-          actor: input.actorId,
-          supportIds: supportIds(candidate),
-          scores: candidate.deterministicScores,
-          provenanceSummary: candidate.provenance.source,
-          reviewedFields: input.edits === undefined ? [] : Object.keys(input.edits).sort(),
-          result: "approved",
-          notes: reviewed.operatorRationale,
-          evidencePolicyMetadata: {
-            approvedPolicy: reviewedPolicy,
-            ...reviewed.evidencePolicyMetadata,
-          },
-        });
+        promoted = transactionAware
+          ? await this.dependencies.objects.promoteWithAudit!(candidate.id, object, candidate.version, promotionAudit)
+          : await this.dependencies.objects.promote(candidate.id, object, candidate.version);
+        if (!transactionAware) await this.dependencies.audits.append(promotionAudit);
         return promoted;
       } catch (error) {
-        if (promoted !== undefined) {
+        if (promoted !== undefined && !transactionAware) {
           try { await this.dependencies.objects.removeApproved(candidate.id); }
           catch { throw new DomainError("Approved knowledge object could not be rolled back after audit failure.", "REPOSITORY_ERROR"); }
         }

@@ -33,14 +33,18 @@ export type ProductionKnowledgeInput = { reusableKnowledge: ReusableKnowledgeRes
 /** Internal, opaque proof that a reference was selected from this exact result. */
 export type ValidatedKnownCauseReference = { readonly reference: KnowledgeReference };
 const validatedKnownCauseReferences = new WeakSet<object>();
+const registeredReusableReferences = new WeakMap<object, ReadonlySet<string>>();
 
 export function validateKnownCauseReference(
   reusableKnowledge: ReusableKnowledgeResult,
   reference: KnowledgeReference,
 ): ValidatedKnownCauseReference {
-  if (!reusableKnowledge.contexts.some((context) =>
-    context.object.id === reference.objectId && context.version === reference.version)) {
-    throw new Error("Known-cause reference is not present in the supplied reusable knowledge context.");
+  const references = registeredReusableReferences.get(reusableKnowledge);
+  if (references === undefined) {
+    throw new Error("Known-cause references require a service-owned reusable knowledge result.");
+  }
+  if (!references.has(referenceKey(reference))) {
+    throw new Error("Known-cause reference is not present in the registered reusable knowledge context.");
   }
   const validation = { reference: { ...reference } };
   validatedKnownCauseReferences.add(validation);
@@ -73,10 +77,30 @@ export async function listReusableApproved(input: {
   }
 
   try {
-    return projectSnapshot(snapshot, input.asOf);
+    return registerReusableKnowledgeResult(projectSnapshot(snapshot, input.asOf));
   } catch {
     return unavailable();
   }
+}
+
+function registerReusableKnowledgeResult(result: ReusableKnowledgeResult): ReusableKnowledgeResult {
+  registeredReusableReferences.set(
+    result,
+    new Set(result.contexts.map((context) => referenceKey({ objectId: context.object.id, version: context.version }))),
+  );
+  return deepFreeze(result);
+}
+
+function referenceKey(reference: KnowledgeReference): string {
+  return `${reference.objectId}\u0000${reference.version}`;
+}
+
+function deepFreeze<T>(value: T): T {
+  if (value !== null && typeof value === "object" && !Object.isFrozen(value)) {
+    for (const nested of Object.values(value)) deepFreeze(nested);
+    Object.freeze(value);
+  }
+  return value;
 }
 
 function projectSnapshot(snapshot: KnowledgeReuseSnapshot, asOf: string): ReusableKnowledgeResult {
@@ -157,5 +181,9 @@ function versionIssue(objectId: string, version: number, code: Extract<ReusableK
 }
 
 function unavailable(): ReusableKnowledgeResult {
-  return { status: "ledger-unavailable", contexts: [], issues: [{ scope: "snapshot", code: "ledger-read-failed" }] };
+  return registerReusableKnowledgeResult({
+    status: "ledger-unavailable",
+    contexts: [],
+    issues: [{ scope: "snapshot", code: "ledger-read-failed" }],
+  });
 }

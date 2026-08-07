@@ -28,3 +28,9 @@
 - MCP now requires the knowledge-evolution dependency and fails closed if it is absent; only named test adapters may supply the ledger-unavailable fixture.
 - `knownCauseRef.objectId` must equal `knownCause`, and persistence additionally requires an opaque validation token produced from the exact authoritative reusable context. Raw or forged direct references are rejected.
 - Verification: 221 focused tests passed; full `npm test` passed after the fix.
+
+## Fix round 2
+
+- Reusable knowledge results are registered and deep-frozen by `listReusableApproved`; token issuance now rejects caller-authored structural lookalikes and relies on immutable registered exact-version keys.
+- A regression proves fabricated snapshots cannot mint a persistence token, while real service results retain exact-version and v1-to-v2 pinning behavior.
+- Full `npm test` passed after the registry hardening.

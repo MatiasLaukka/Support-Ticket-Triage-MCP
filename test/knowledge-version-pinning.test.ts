@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { TicketSchema } from "../src/domain.js";
 import { buildApprovalDeskRecommendationInput } from "../src/approval-desk/recommendation-builder.js";
-import type { ReusableKnowledgeResult } from "../src/knowledge-evolution/reusable-context.js";
+import {
+  listReusableApproved,
+  type ReusableKnowledgeResult,
+} from "../src/knowledge-evolution/reusable-context.js";
+import type { KnowledgeObject } from "../src/knowledge-evolution/domain.js";
 
 const ticket = TicketSchema.parse({
   id: "TKT-1001",
@@ -29,12 +33,12 @@ const outcome = {
 };
 
 describe("exact reusable knowledge provenance", () => {
-  it("only applies an approved object supplied by the reusable context and persists its exact version reference", () => {
+  it("only applies an approved object supplied by the reusable context and persists its exact version reference", async () => {
     const learned = buildApprovalDeskRecommendationInput({
       ticket,
       outcome,
       actor: "approval-desk",
-      reusableKnowledge: reusableKnowledge("none-required", 1),
+      reusableKnowledge: await reusableKnowledge("none-required", 1),
     });
     const baseline = buildApprovalDeskRecommendationInput({ ticket, outcome, actor: "approval-desk" });
 
@@ -48,12 +52,12 @@ describe("exact reusable knowledge provenance", () => {
     expect(baseline.knownCauseRef).toBeUndefined();
   });
 
-  it("keeps learned causes with required evidence in needs-information and exposes unavailable-ledger fallback", () => {
+  it("keeps learned causes with required evidence in needs-information and exposes unavailable-ledger fallback", async () => {
     const required = buildApprovalDeskRecommendationInput({
       ticket,
       outcome,
       actor: "approval-desk",
-      reusableKnowledge: reusableKnowledge("required", 1),
+      reusableKnowledge: await reusableKnowledge("required", 1),
     });
     const unavailable = buildApprovalDeskRecommendationInput({
       ticket,
@@ -82,14 +86,11 @@ describe("exact reusable knowledge provenance", () => {
   });
 });
 
-function reusableKnowledge(
+async function reusableKnowledge(
   mode: "none-required" | "required",
   version: number,
-): ReusableKnowledgeResult {
-  return {
-    status: "available",
-    contexts: [{
-      object: {
+): Promise<ReusableKnowledgeResult> {
+  const object: KnowledgeObject = {
         id: "token-fault",
         version,
         learningGovernance: "ledger",
@@ -100,7 +101,7 @@ function reusableKnowledge(
         evidencePolicy: mode === "required"
           ? { mode, evidenceIds: ["request-id"] }
           : { mode, rationale: "No additional evidence is required for this controlled support path." },
-        timeConstraints: [],
+        timeConstraints: ["Review the current incident."],
         diagnosticSteps: ["Confirm the token fault."],
         fixSteps: ["Apply the controlled fix."],
         verificationSteps: ["Verify recovery."],
@@ -112,11 +113,27 @@ function reusableKnowledge(
         provenance: { source: "test", recordedAt: "2026-08-07T10:00:00.000Z" },
         status: "approved",
         approval: { approvedBy: "support-lead", approvedAt: "2026-08-07T10:00:00.000Z" },
-      },
-      version,
-      learning: { maturity: "promoted", health: "active", eligibleForReuse: true },
-      eligibilitySource: "ledger-active",
-    }],
-    issues: [],
   };
+  return listReusableApproved({
+    asOf: "2026-08-07T12:00:00.000Z",
+    snapshotReader: {
+      async snapshotForReuse() {
+        return {
+          versions: [object],
+          heads: new Map([[object.id, version]]),
+          events: [{
+            id: "00000000-0000-4000-8000-000000000001",
+            occurredAt: "2026-08-07T10:00:00.000Z",
+            actor: "support-lead",
+            correlationId: "10000000-0000-4000-8000-000000000001",
+            candidateId: "candidate-001",
+            objectId: object.id,
+            sourceVersion: version,
+            eventType: "candidate-promoted",
+            payload: { maturity: "promoted", health: "active", provenance: "approved exact version" },
+          }],
+        };
+      },
+    },
+  });
 }

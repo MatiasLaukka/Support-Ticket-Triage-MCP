@@ -3,7 +3,8 @@
 ## Commits
 
 - `45ac1d8 feat: persist exact reusable knowledge provenance`
-- Fix round 1: pending commit for MCP dependency and forged-reference rejection.
+- `9f92369 fix: require verified knowledge provenance`
+- Fix round 2: pending commit for service-owned reusable-result registration.
 
 ## Initial delivery
 
@@ -29,3 +30,10 @@
 - `approvedObjects` remains a legacy fixture/non-production comparison-evaluator seam, not a production HTTP/MCP reuse feed.
 - The MCP adapter is contained in test files and returns only a ledger-unavailable result. Runtime production construction supplies the real knowledge-evolution service.
 - Catalog causes and historical records remain reference-free unless the actual reusable selection path created the exact reference.
+
+## Fix round 2
+
+- `listReusableApproved` registers each returned reusable-result object in a module-private `WeakMap` keyed by immutable `(objectId, version)` context keys, then deep-freezes the result.
+- The validation-token issuer rejects unregistered caller-authored structural results and checks only the registry keys, not mutable caller-provided context arrays. The `WeakSet` validation token remains opaque to persistence.
+- Regression proof: fabricating a structurally valid reusable result cannot mint a token and direct persistence remains rejected; a real result from `listReusableApproved` continues to support exact-version recommendation and HTTP/MCP pinning flows.
+- Verification: targeted fabrication/real-result tests passed; full `npm test` passed after the fix.

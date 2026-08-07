@@ -19,13 +19,16 @@ import { evaluateTicketWithAi } from "../src/approval-desk/ai-evaluation.js";
 import type { ClassificationReasoningProvider } from "../src/approval-desk/classification-reasoning-provider.js";
 import type { CustomerResponseDraftProvider } from "../src/approval-desk/draft-response-provider.js";
 import type { CandidateDraftProvider } from "../src/knowledge-evolution/candidate-draft-provider.js";
-import { KnowledgeCandidateWriteSchema } from "../src/knowledge-evolution/domain.js";
+import { KnowledgeCandidateWriteSchema, type KnowledgeObject } from "../src/knowledge-evolution/domain.js";
 import { KnowledgeEvolutionService } from "../src/knowledge-evolution/service.js";
 import { createRuntimeDependencies } from "../src/runtime.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { createTriageServer } from "../src/server.js";
-import type { ReusableKnowledgeResult } from "../src/knowledge-evolution/reusable-context.js";
+import {
+  listReusableApproved,
+  type ReusableKnowledgeResult,
+} from "../src/knowledge-evolution/reusable-context.js";
 
 const now = new Date("2026-06-10T09:00:00.000Z");
 const temporaryRoots: string[] = [];
@@ -3777,7 +3780,7 @@ describe("createApprovalDeskHttpServer", () => {
 
   it("pins an existing recommendation to v1 and only uses v2 after an explicit HTTP or MCP re-evaluation", async () => {
     const { deps, json } = await startFixture();
-    let current = reusableCampaignEditorKnowledge(1);
+    let current = await reusableCampaignEditorKnowledge(1);
     deps.knowledgeEvolution.service.listReusableApproved = async () => current;
 
     const first = await json("/api/tickets/TKT-1010/recommendations", {
@@ -3789,7 +3792,7 @@ describe("createApprovalDeskHttpServer", () => {
       objectId: "campaign-editor-guidance", version: 1,
     });
 
-    current = reusableCampaignEditorKnowledge(2);
+    current = await reusableCampaignEditorKnowledge(2);
     expect(await deps.recommendations.get(first.body.recommendation.id)).toMatchObject({
       knownCauseRef: { objectId: "campaign-editor-guidance", version: 1 },
     });
@@ -3826,29 +3829,42 @@ describe("createApprovalDeskHttpServer", () => {
   });
 });
 
-function reusableCampaignEditorKnowledge(version: number): ReusableKnowledgeResult {
-  return {
-    status: "available",
-    contexts: [{
-      object: {
+async function reusableCampaignEditorKnowledge(version: number): Promise<ReusableKnowledgeResult> {
+  const object: KnowledgeObject = {
         id: "campaign-editor-guidance", version, learningGovernance: "ledger", kind: "known-cause",
         name: "Campaign editor guidance", summary: "Controlled campaign editor recovery path.",
         triggerPatterns: ["problem"],
         evidencePolicy: { mode: "none-required", rationale: "The approved path can be applied immediately." },
-        timeConstraints: [], diagnosticSteps: ["Confirm the reported editor state."],
+        timeConstraints: ["Review the current incident."], diagnosticSteps: ["Confirm the reported editor state."],
         fixSteps: ["Use the controlled recovery path."], verificationSteps: ["Confirm the editor loads."],
         customerSafeExplanation: "We can apply the documented campaign editor path.",
         operatorRationale: "Approved exact-version test guidance.", owner: "product",
         supportingDiagnosisIds: ["diagnosis-001"], supportingTicketIds: ["TKT-1010"],
         provenance: { source: "test", recordedAt: "2026-06-10T08:00:00.000Z" }, status: "approved",
         approval: { approvedBy: "support-lead", approvedAt: "2026-06-10T08:00:00.000Z" },
-      },
-      version,
-      learning: { maturity: "promoted", health: "active", eligibleForReuse: true },
-      eligibilitySource: "ledger-active",
-    }],
-    issues: [],
   };
+  return listReusableApproved({
+    asOf: "2026-06-10T09:00:00.000Z",
+    snapshotReader: {
+      async snapshotForReuse() {
+        return {
+          versions: [object],
+          heads: new Map([[object.id, version]]),
+          events: [{
+            id: "00000000-0000-4000-8000-000000000002",
+            occurredAt: "2026-06-10T08:00:00.000Z",
+            actor: "support-lead",
+            correlationId: "10000000-0000-4000-8000-000000000002",
+            candidateId: "candidate-001",
+            objectId: object.id,
+            sourceVersion: version,
+            eventType: "candidate-promoted",
+            payload: { maturity: "promoted", health: "active", provenance: "approved exact version" },
+          }],
+        };
+      },
+    },
+  });
 }
 
 async function startFixture(

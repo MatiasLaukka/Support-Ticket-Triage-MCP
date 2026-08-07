@@ -671,6 +671,58 @@ describe("classifyTicket", () => {
     );
   });
 
+  it("keeps metadata in the score snapshot when GPT is the only non-metadata signal", () => {
+    const result = classifyTicketFromContext(
+      buildConversationContextForTicket({
+        ticket: makeTicket({
+          category: "billing",
+          subject: "Support request",
+          description: "Please help.",
+          tags: [],
+        }),
+      }),
+      [
+        {
+          ruleId: "gpt-advisory-integration-category",
+          target: "category:integration",
+          weight: 2,
+          reason: "GPT suggested an integration issue.",
+        },
+      ],
+    );
+
+    expect(result.category).toBe("integration");
+    expect(result.classificationConfidence.categoryScore).toBe(2);
+    expect(result.classificationConfidence.runnerUpScore).toBe(1);
+    expect(result.classificationConfidence.independentSignalCount).toBe(0);
+  });
+
+  it("keeps metadata in the score snapshot when a known-cause signal is the only non-metadata signal", () => {
+    const result = classifyTicketFromContext(
+      buildConversationContextForTicket({
+        ticket: makeTicket({
+          category: "billing",
+          subject: "Support request",
+          description: "Please help.",
+          tags: [],
+        }),
+      }),
+      [
+        {
+          ruleId: "known-cause-webhook-secret-rotation-category",
+          target: "category:integration",
+          weight: 2,
+          reason: "A known cause suggested an integration issue.",
+        },
+      ],
+    );
+
+    expect(result.category).toBe("integration");
+    expect(result.classificationConfidence.categoryScore).toBe(2);
+    expect(result.classificationConfidence.runnerUpScore).toBe(1);
+    expect(result.classificationConfidence.independentSignalCount).toBe(0);
+  });
+
   it("reduces confidence for close category competition", () => {
     const result = classifyTicket(
       makeTicket({

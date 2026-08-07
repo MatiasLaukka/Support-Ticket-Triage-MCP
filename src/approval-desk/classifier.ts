@@ -7,7 +7,10 @@ import type {
   Team,
   Ticket,
 } from "../domain.js";
-import { calculateClassificationConfidence } from "../classifier-confidence.js";
+import {
+  calculateClassificationConfidence,
+  eligibleIndependentRuleIds,
+} from "../classifier-confidence.js";
 import type { ConversationContext } from "./conversation-context.js";
 import { detectKnownCause } from "./known-cause-catalog.js";
 import { detectKnownEvent } from "./known-event-catalog.js";
@@ -708,16 +711,20 @@ function chooseScoredValue(
   matches: readonly RuleMatch[] = [],
 ): ClassificationScoreSnapshot {
   const scores = new Map<string, number>();
-  const hasIndependentEvidence = signals.some(
-    ({ ruleId, target }) =>
-      target.startsWith(`${kind}:`) && !ruleId.startsWith("metadata-"),
-  );
   const signalRuleIds = new Map<ClassificationSignal, string>();
   for (const match of matches) {
     for (const matchedSignal of match.signals) {
       signalRuleIds.set(matchedSignal, match.rule.id);
     }
   }
+  const ruleIdForSignal = (entry: ClassificationSignal): string =>
+    signalRuleIds.get(entry) ?? entry.ruleId;
+  const independentRuleIds = eligibleIndependentRuleIds(
+    signals
+      .filter(({ target }) => target.startsWith(`${kind}:`))
+      .map(ruleIdForSignal),
+  );
+  const hasIndependentEvidence = independentRuleIds.length > 0;
   const eligibleSignals = signals.filter(
     ({ ruleId, target }) =>
       target.startsWith(`${kind}:`) &&

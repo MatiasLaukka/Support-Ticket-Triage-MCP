@@ -11,6 +11,7 @@ import { createRuntimeDependencies } from "../src/runtime.js";
 
 const temporaryRoots: string[] = [];
 const servers: Array<ReturnType<typeof createApprovalDeskHttpServer>> = [];
+const ledgers: Array<{ close: () => void }> = [];
 
 afterEach(async () => {
   await Promise.allSettled(
@@ -23,6 +24,7 @@ afterEach(async () => {
         ),
     ),
   );
+  for (const ledger of ledgers.splice(0)) ledger.close();
   await Promise.all(
     temporaryRoots.splice(0).map((root) =>
       rm(root, { recursive: true, force: true }),
@@ -184,6 +186,7 @@ async function startFixture(options: {
       TRIAGE_KNOWLEDGE_ROOT: resolve("data/knowledge"),
     },
   });
+  ledgers.push(deps.knowledgeEvolution.ledger);
   const server = createApprovalDeskHttpServer(deps, {
     lifecycleReplayReportPath: reportPath,
     lifecycleReplayControlledReportPath: controlledReportPath,

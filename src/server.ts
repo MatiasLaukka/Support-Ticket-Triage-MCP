@@ -81,6 +81,10 @@ import type { KnowledgeEvolutionService } from "./knowledge-evolution/service.js
 import type { KnowledgeAuditRepository } from "./knowledge-evolution/knowledge-audit-repository.js";
 import type { KnowledgeObjectRepository } from "./knowledge-evolution/knowledge-object-repository.js";
 import {
+  LearningHealthSchema,
+  LearningMaturitySchema,
+} from "./knowledge-evolution/learning-ledger.js";
+import {
   KnowledgeCandidateApprovalOutputSchema,
   KnowledgeCandidateEditsSchema,
   KnowledgeCandidateIdSchema,
@@ -319,6 +323,23 @@ const EvaluateTicketOutputSchema = z
     operatorGuidance: OperatorGuidanceSchema,
   })
   .strict();
+const KnowledgeLearningOutputSchema = z
+  .object({
+    learning: z
+      .object({
+        candidateId: KnowledgeCandidateIdSchema,
+        objectId: KnowledgeCandidateIdSchema.optional(),
+        maturity: LearningMaturitySchema,
+        health: LearningHealthSchema,
+        signalWeight: z.number().finite().nonnegative(),
+        eligibleForReuse: z.boolean(),
+        supportingEventIds: z.array(z.uuid()),
+        staleReasons: z.array(z.string()),
+        contradictionReasons: z.array(z.string()),
+      })
+      .strict(),
+  })
+  .strict();
 const ApprovalOutputSchema = z
   .object({
     ticket: TicketSchema,
@@ -487,6 +508,7 @@ export function createTriageServer(
     {
       description: "Read the deterministic maturity, health, and reuse projection for a governed knowledge candidate.",
       inputSchema: z.object({ candidateId: KnowledgeCandidateIdSchema, asOf: IsoTimestampSchema.optional() }).strict(),
+      outputSchema: KnowledgeLearningOutputSchema,
       annotations: ReadOnlyAnnotations,
     },
     async ({ candidateId, asOf }) => toolResult(async () => ({

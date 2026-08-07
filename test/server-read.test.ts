@@ -306,6 +306,7 @@ describe("createTriageServer read protocol", () => {
       "find_similar_tickets",
       "get_audit_events",
       "get_knowledge_candidate",
+      "get_knowledge_learning",
       "get_queue_metrics",
       "get_ticket",
       "get_ticket_diagnoses",

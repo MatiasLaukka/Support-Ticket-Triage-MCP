@@ -639,6 +639,7 @@ describe("governed diagnosis review lifecycle", () => {
   it("keeps a complete-evidence diagnosis review, selected fix, revalidation, and closure causally ordered", async () => {
     const dataRoot = await mkdtemp(join(tmpdir(), "diagnosis-review-lifecycle-"));
     let currentNow = "2026-06-10T09:00:00.000Z";
+    let closeLedger: (() => void) | undefined;
     try {
       const deps = await createRuntimeDependencies({
         env: {
@@ -648,6 +649,7 @@ describe("governed diagnosis review lifecycle", () => {
         },
         now: () => new Date(currentNow),
       });
+      closeLedger = deps.knowledgeEvolution.ledger.close.bind(deps.knowledgeEvolution.ledger);
       const service = deps.service;
       const evidence = [{
         id: "event-and-request-identifiers",
@@ -926,6 +928,7 @@ describe("governed diagnosis review lifecycle", () => {
         }),
       ]));
     } finally {
+      closeLedger?.();
       await rm(dataRoot, { recursive: true, force: true });
     }
   });

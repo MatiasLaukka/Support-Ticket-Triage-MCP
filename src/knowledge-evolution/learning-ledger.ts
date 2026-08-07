@@ -226,6 +226,16 @@ export type LearningHealth = z.infer<typeof LearningHealthSchema>;
 export type VerificationType = z.infer<typeof VerificationTypeSchema>;
 export type LearningEvent = z.infer<typeof LearningEventSchema>;
 
+/** Stable JSON representation used for idempotency comparisons across adapters. */
+export function canonicalLearningJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalLearningJson).join(",")}]`;
+  if (value !== null && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    return `{${Object.keys(record).sort().map((key) => `${JSON.stringify(key)}:${canonicalLearningJson(record[key])}`).join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
 export interface LearningEventFilters {
   eventType?: LearningEventType;
   eventTypes?: readonly LearningEventType[];

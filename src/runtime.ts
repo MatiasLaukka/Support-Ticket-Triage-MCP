@@ -6,12 +6,12 @@ import { RecommendationRepository } from "./recommendation-repository.js";
 import { TicketRepository } from "./ticket-repository.js";
 import { TriageService } from "./triage-service.js";
 import { DiagnosisRepository } from "./knowledge-evolution/diagnosis-repository.js";
-import { KnowledgeObjectRepository } from "./knowledge-evolution/knowledge-object-repository.js";
-import { KnowledgeAuditRepository } from "./knowledge-evolution/knowledge-audit-repository.js";
 import { KnowledgeEvolutionService } from "./knowledge-evolution/service.js";
 import type { CandidateDraftProvider } from "./knowledge-evolution/candidate-draft-provider.js";
 import { createControlledKnowledgeCandidateDraftProvider } from "./approval-desk/controlled-evaluation-providers.js";
 import { createOpenAiKnowledgeCandidateDraftProvider } from "./knowledge-evolution/openai-candidate-draft-provider.js";
+import { SqliteLearningLedger } from "./knowledge-evolution/sqlite-learning-ledger.js";
+import { SqliteKnowledgeEvolutionStore } from "./knowledge-evolution/sqlite-knowledge-evolution-store.js";
 import { DEFAULT_MINUTES_PER_ACCEPTED_RECOMMENDATION } from "./metrics.js";
 
 const STARTUP_PATH_MESSAGES = {
@@ -19,6 +19,7 @@ const STARTUP_PATH_MESSAGES = {
   TRIAGE_SEED_FILE: "TRIAGE_SEED_FILE must not be blank.",
   TRIAGE_KNOWLEDGE_ROOT: "TRIAGE_KNOWLEDGE_ROOT must not be blank.",
   TRIAGE_KNOWLEDGE_APPROVERS: "TRIAGE_KNOWLEDGE_APPROVERS must contain at least one actor.",
+  TRIAGE_LEARNING_LEDGER_PATH: "TRIAGE_LEARNING_LEDGER_PATH must not be blank.",
 } as const;
 
 export class StartupConfigError extends Error {
@@ -43,7 +44,7 @@ export interface RuntimePaths {
   knowledgeRoot: string;
   recommendationsRoot: string;
   auditFile: string;
-  knowledgeEvolution: { diagnosesRoot: string; candidatesRoot: string; approvedRoot: string; auditFile: string };
+  knowledgeEvolution: { diagnosesRoot: string; candidatesRoot: string; approvedRoot: string; auditFile: string; learningLedgerFile: string };
 }
 
 export interface RuntimeDependencies {
@@ -51,7 +52,7 @@ export interface RuntimeDependencies {
   knowledge: KnowledgeRepository;
   recommendations: RecommendationRepository;
   audits: AuditRepository;
-  knowledgeEvolution: { diagnoses: DiagnosisRepository; objects: KnowledgeObjectRepository; audits: KnowledgeAuditRepository; service: KnowledgeEvolutionService };
+  knowledgeEvolution: { diagnoses: DiagnosisRepository; objects: SqliteKnowledgeEvolutionStore; audits: SqliteKnowledgeEvolutionStore; ledger: SqliteLearningLedger; service: KnowledgeEvolutionService };
   service: TriageService;
   now: () => Date;
   minutesPerAcceptedRecommendation: number;
@@ -137,7 +138,13 @@ export async function createRuntimeDependencies(
   );
   const recommendationsRoot = resolve(dataRoot, "recommendations");
   const auditFile = resolve(dataRoot, "audit", "events.jsonl");
-  const knowledgeEvolutionPaths = { diagnosesRoot: resolve(dataRoot, "knowledge-evolution", "diagnoses"), candidatesRoot: resolve(dataRoot, "knowledge-evolution", "candidates"), approvedRoot: resolve(dataRoot, "knowledge-evolution", "approved"), auditFile: resolve(dataRoot, "knowledge-evolution", "audit", "events.jsonl") };
+  const knowledgeEvolutionPaths = {
+    diagnosesRoot: resolve(dataRoot, "knowledge-evolution", "diagnoses"),
+    candidatesRoot: resolve(dataRoot, "knowledge-evolution", "candidates"),
+    approvedRoot: resolve(dataRoot, "knowledge-evolution", "approved"),
+    auditFile: resolve(dataRoot, "knowledge-evolution", "audit", "events.jsonl"),
+    learningLedgerFile: environmentPath("TRIAGE_LEARNING_LEDGER_PATH", resolve(dataRoot, "knowledge-evolution", "learning.sqlite"), env, cwd),
+  };
   const minutesPerAcceptedRecommendation = minutesSaved(env);
   const approvers = knowledgeApprovers(env);
   const now = options.now ?? (() => new Date());
@@ -150,18 +157,21 @@ export async function createRuntimeDependencies(
   const recommendations = new RecommendationRepository(recommendationsRoot);
   const audits = new AuditRepository(auditFile);
   const diagnoses = new DiagnosisRepository(knowledgeEvolutionPaths.diagnosesRoot);
-  const objects = new KnowledgeObjectRepository(knowledgeEvolutionPaths.candidatesRoot, knowledgeEvolutionPaths.approvedRoot);
-  const knowledgeAudits = new KnowledgeAuditRepository(knowledgeEvolutionPaths.auditFile);
+  const ledger = new SqliteLearningLedger(knowledgeEvolutionPaths.learningLedgerFile);
+  await ledger.initialize();
+  const store = new SqliteKnowledgeEvolutionStore(ledger.getDatabase());
+  await store.initialize();
   const knowledgeEvolution = {
     diagnoses,
-    objects,
-    audits: knowledgeAudits,
+    objects: store,
+    audits: store,
+    ledger,
     service: new KnowledgeEvolutionService({
       tickets,
       knowledge,
       diagnoses,
-      objects,
-      audits: knowledgeAudits,
+      objects: store,
+      audits: store,
       promotionAuthorizer: (actorId) => approvers.has(actorId),
       ...(knowledgeCandidateDraftProvider === undefined
         ? {}

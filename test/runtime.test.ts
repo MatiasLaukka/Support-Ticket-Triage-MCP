@@ -15,8 +15,10 @@ import { createControlledKnowledgeCandidateDraftProvider } from "../src/approval
 import { DEFAULT_MINUTES_PER_ACCEPTED_RECOMMENDATION } from "../src/metrics.js";
 
 const temporaryRoots: string[] = [];
+const openLedgers: Array<{ close: () => void }> = [];
 
 afterEach(async () => {
+  for (const ledger of openLedgers.splice(0)) ledger.close();
   await Promise.all(
     temporaryRoots
       .splice(0)
@@ -69,6 +71,7 @@ describe("runtime configuration", () => {
       },
       now: () => fixedNow,
     });
+    openLedgers.push(deps.knowledgeEvolution.ledger);
 
     await expect(deps.tickets.get("TKT-1005")).resolves.toMatchObject({
       id: "TKT-1005",
@@ -80,10 +83,30 @@ describe("runtime configuration", () => {
       candidatesRoot: resolve(dataRoot, "knowledge-evolution", "candidates"),
       approvedRoot: resolve(dataRoot, "knowledge-evolution", "approved"),
       auditFile: resolve(dataRoot, "knowledge-evolution", "audit", "events.jsonl"),
+      learningLedgerFile: resolve(dataRoot, "knowledge-evolution", "learning.sqlite"),
     });
     await expect(deps.knowledgeEvolution.diagnoses.list()).resolves.toEqual([]);
     await expect(deps.knowledgeEvolution.objects.listCandidates()).resolves.toEqual([]);
     expect(deps.knowledgeEvolution.service).toBeDefined();
+    await expect(deps.knowledgeEvolution.ledger.list()).resolves.toEqual([]);
+  });
+
+  it("rejects a blank learning-ledger path and accepts an explicit override", async () => {
+    expect(() => environmentPath("TRIAGE_LEARNING_LEDGER_PATH", "data/runtime/knowledge-evolution/learning.sqlite", { TRIAGE_LEARNING_LEDGER_PATH: "   " })).toThrow("TRIAGE_LEARNING_LEDGER_PATH must not be blank.");
+    const dataRoot = await mkdtemp(join(tmpdir(), "triage-runtime-ledger-"));
+    temporaryRoots.push(dataRoot);
+    const customLedger = join(dataRoot, "custom", "learning.sqlite");
+    const deps = await createRuntimeDependencies({
+      env: {
+        TRIAGE_DATA_ROOT: dataRoot,
+        TRIAGE_SEED_FILE: resolve("data", "seed", "tickets.json"),
+        TRIAGE_KNOWLEDGE_ROOT: resolve("data", "knowledge"),
+        TRIAGE_LEARNING_LEDGER_PATH: customLedger,
+      },
+    });
+    openLedgers.push(deps.knowledgeEvolution.ledger);
+    expect(deps.paths.knowledgeEvolution.learningLedgerFile).toBe(resolve(customLedger));
+    await expect(deps.knowledgeEvolution.ledger.list()).resolves.toEqual([]);
   });
 
   it("persists a completed diagnosis recorded through the production service", async () => {
@@ -92,6 +115,7 @@ describe("runtime configuration", () => {
     const deps = await createRuntimeDependencies({
       env: { TRIAGE_DATA_ROOT: dataRoot, TRIAGE_SEED_FILE: resolve("data", "seed", "tickets.json"), TRIAGE_KNOWLEDGE_ROOT: resolve("data", "knowledge") },
     });
+    openLedgers.push(deps.knowledgeEvolution.ledger);
 
     const ticket = await deps.tickets.get("TKT-1005");
     const diagnosis = diagnosisContextForTicket(ticket, TriageRecommendationSchema.parse({
@@ -170,6 +194,7 @@ describe("runtime configuration", () => {
       },
       knowledgeCandidateDraftProvider: createControlledKnowledgeCandidateDraftProvider(),
     });
+    openLedgers.push(deps.knowledgeEvolution.ledger);
     await deps.knowledgeEvolution.diagnoses.save({
       id: "diagnosis-runtime-provider",
       ticketId: "TKT-1001",

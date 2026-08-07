@@ -29,6 +29,7 @@ import { createTriageServer } from "../src/server.js";
 const now = new Date("2026-06-10T09:00:00.000Z");
 const temporaryRoots: string[] = [];
 const servers: Array<ReturnType<typeof createApprovalDeskHttpServer>> = [];
+const ledgers: Array<{ close: () => void }> = [];
 
 function mcpText(result: { content: Array<{ type: string; text?: string }> }): string {
   return result.content.find((item) => item.type === "text")?.text ?? "";
@@ -84,6 +85,7 @@ afterEach(async () => {
         }),
     ),
   );
+  for (const ledger of ledgers.splice(0)) ledger.close();
   await Promise.all(
     temporaryRoots
       .splice(0)
@@ -3743,6 +3745,7 @@ async function startFixture(
     },
     now: fixtureOptions.now ?? (() => now),
   });
+  ledgers.push(deps.knowledgeEvolution.ledger);
   const server = createApprovalDeskHttpServer(deps, options);
   servers.push(server);
   await new Promise<void>((resolveListen) => {

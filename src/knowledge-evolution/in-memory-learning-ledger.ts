@@ -14,6 +14,7 @@ function cloneEvent(event: LearningEvent): LearningEvent {
 export class InMemoryLearningLedger implements LearningLedger {
   private readonly events = new Map<string, LearningEvent>();
   private initialized = false;
+  private writeLock: Promise<void> = Promise.resolve();
 
   async initialize(): Promise<void> {
     this.initialized = true;
@@ -25,7 +26,7 @@ export class InMemoryLearningLedger implements LearningLedger {
     if (!parsed.success) {
       throw new LearningLedgerError("Learning event failed schema validation.", "INVALID_EVENT", { cause: parsed.error });
     }
-    this.appendParsed(parsed.data);
+    await this.withWriteLock(() => this.appendParsed(parsed.data));
   }
 
   async appendBatch(events: readonly LearningEvent[]): Promise<void> {
@@ -35,23 +36,32 @@ export class InMemoryLearningLedger implements LearningLedger {
     if (invalid !== undefined && !invalid.success) {
       throw new LearningLedgerError("Learning event batch failed schema validation.", "INVALID_EVENT", { cause: invalid.error });
     }
-    const staged = new Map(this.events);
-    for (const result of parsed) {
-      if (!result.success) continue;
-      const prior = staged.get(result.data.id);
-      if (prior !== undefined && canonicalLearningJson(prior) !== canonicalLearningJson(result.data)) {
-        throw new LearningLedgerError(`Learning event ID ${result.data.id} conflicts with existing content.`, "EVENT_CONFLICT");
+    await this.withWriteLock(() => {
+      const staged = new Map(this.events);
+      for (const result of parsed) {
+        if (!result.success) continue;
+        const prior = staged.get(result.data.id);
+        if (prior !== undefined && canonicalLearningJson(prior) !== canonicalLearningJson(result.data)) {
+          throw new LearningLedgerError(`Learning event ID ${result.data.id} conflicts with existing content.`, "EVENT_CONFLICT");
+        }
+        staged.set(result.data.id, cloneEvent(result.data));
       }
-      staged.set(result.data.id, cloneEvent(result.data));
-    }
-    this.events.clear();
-    for (const [id, event] of staged) this.events.set(id, event);
+      this.events.clear();
+      for (const [id, event] of staged) this.events.set(id, event);
+    });
+  }
+
+  async snapshot(): Promise<readonly LearningEvent[]> {
+    this.ensureInitialized();
+    return this.withWriteLock(() => [...this.events.values()]
+      .sort((left, right) => left.occurredAt.localeCompare(right.occurredAt) || left.id.localeCompare(right.id))
+      .map(cloneEvent));
   }
 
   async list(filters: LearningEventFilters = {}): Promise<LearningEvent[]> {
-    this.ensureInitialized();
+    const events = await this.snapshot();
     const eventTypes = filters.eventTypes === undefined ? undefined : new Set(filters.eventTypes);
-    return [...this.events.values()]
+    return events
       .filter((event) => {
         if (filters.eventType !== undefined && event.eventType !== filters.eventType) return false;
         if (eventTypes !== undefined && !eventTypes.has(event.eventType)) return false;
@@ -63,13 +73,12 @@ export class InMemoryLearningLedger implements LearningLedger {
         if (filters.occurredBefore !== undefined && event.occurredAt > filters.occurredBefore) return false;
         return true;
       })
-      .sort((left, right) => left.occurredAt.localeCompare(right.occurredAt) || left.id.localeCompare(right.id))
       .map(cloneEvent);
   }
 
   async has(id: string): Promise<boolean> {
     this.ensureInitialized();
-    return this.events.has(id);
+    return this.withWriteLock(() => this.events.has(id));
   }
 
   private appendParsed(event: LearningEvent): void {
@@ -85,5 +94,17 @@ export class InMemoryLearningLedger implements LearningLedger {
 
   private ensureInitialized(): void {
     if (!this.initialized) throw new LearningLedgerError("Learning ledger has not been initialized.", "PERSISTENCE_ERROR");
+  }
+
+  private async withWriteLock<T>(operation: () => T): Promise<T> {
+    const prior = this.writeLock;
+    let release: (() => void) | undefined;
+    this.writeLock = new Promise<void>((resolve) => { release = resolve; });
+    await prior;
+    try {
+      return operation();
+    } finally {
+      release!();
+    }
   }
 }

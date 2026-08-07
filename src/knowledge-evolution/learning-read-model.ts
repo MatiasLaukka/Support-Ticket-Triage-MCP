@@ -12,6 +12,18 @@ export interface KnowledgeLearningSummary {
   contradictionReasons: string[];
 }
 
+export interface KnowledgeVersionLearningSummary {
+  objectId: string;
+  sourceVersion: number;
+  maturity: LearningMaturity;
+  health: LearningHealth;
+  signalWeight: number;
+  eligibleForReuse: boolean;
+  supportingEventIds: string[];
+  staleReasons: string[];
+  contradictionReasons: string[];
+}
+
 const maturityRank: Record<LearningMaturity, number> = {
   observed: 0,
   "diagnosis-supported": 1,
@@ -27,12 +39,13 @@ const maturityWeight: Record<LearningMaturity, number> = {
   promoted: 0.9,
 };
 
-export function projectKnowledgeLearning(
+export function projectCandidateLearning(
   events: readonly LearningEvent[],
-  input: { candidateId: string; objectId?: string; asOf?: string },
+  input: { candidateId: string; asOf?: string },
 ): KnowledgeLearningSummary {
   const relevant = events
-    .filter((event) => event.candidateId === input.candidateId || (input.objectId !== undefined && event.objectId === input.objectId))
+    .filter((event) => event.candidateId === input.candidateId)
+    .filter((event) => input.asOf === undefined || event.occurredAt <= input.asOf)
     .sort((left, right) => left.occurredAt.localeCompare(right.occurredAt) || left.id.localeCompare(right.id));
   let maturity: LearningMaturity = "observed";
   let health: LearningHealth = "active";
@@ -95,7 +108,78 @@ export function projectKnowledgeLearning(
 
   return {
     candidateId: input.candidateId,
-    ...(input.objectId === undefined ? {} : { objectId: input.objectId }),
+    maturity,
+    health,
+    signalWeight,
+    eligibleForReuse: health === "active" && (maturity === "promoted" || maturity === "reuse-validated"),
+    supportingEventIds: [...new Set(supportingEventIds)],
+    staleReasons: [...new Set(staleReasons)],
+    contradictionReasons: [...new Set(contradictionReasons)],
+  };
+}
+
+export function projectKnowledgeVersionLearning(
+  events: readonly LearningEvent[],
+  input: { objectId: string; sourceVersion: number; asOf?: string },
+): KnowledgeVersionLearningSummary {
+  const relevant = events
+    .filter((event) => event.objectId === input.objectId && event.sourceVersion === input.sourceVersion)
+    .filter((event) => input.asOf === undefined || event.occurredAt <= input.asOf)
+    .sort((left, right) => left.occurredAt.localeCompare(right.occurredAt) || left.id.localeCompare(right.id));
+  let maturity: LearningMaturity = "observed";
+  let health: LearningHealth = "active";
+  let staleAt: string | undefined;
+  const staleReasons: string[] = [];
+  const contradictionReasons: string[] = [];
+  const supportingEventIds: string[] = [];
+  let hasSuccessfulReuse = false;
+
+  for (const event of relevant) {
+    supportingEventIds.push(event.id);
+    switch (event.eventType) {
+      case "candidate-promoted":
+        maturity = maxMaturity(maturity, "promoted");
+        break;
+      case "knowledge-reused":
+        hasSuccessfulReuse = true;
+        maturity = "reuse-validated";
+        break;
+      case "knowledge-marked-stale":
+        health = "stale";
+        staleAt = event.occurredAt;
+        staleReasons.push(...event.payload.staleReasons.filter((reason) => !staleReasons.includes(reason)));
+        break;
+      case "knowledge-reuse-failed":
+        health = "contradicted";
+        contradictionReasons.push(event.payload.failureReason);
+        break;
+      case "knowledge-deprecated":
+        health = "deprecated";
+        break;
+      case "knowledge-version-superseded":
+        health = "superseded";
+        break;
+      case "knowledge-version-reactivated":
+        health = "active";
+        break;
+      default:
+        break;
+    }
+  }
+
+  if (hasSuccessfulReuse) maturity = "reuse-validated";
+  const asOf = input.asOf ?? new Date().toISOString();
+  let signalWeight = maturityWeight[maturity];
+  if (health === "stale" && staleAt !== undefined) {
+    const ageDays = Math.max(0, (Date.parse(asOf) - Date.parse(staleAt)) / 86_400_000);
+    signalWeight *= Math.max(0.1, Math.exp(-ageDays / 30));
+  }
+  if (health === "contradicted" || health === "deprecated" || health === "superseded") signalWeight = 0;
+  signalWeight = Math.round(signalWeight * 10_000) / 10_000;
+
+  return {
+    objectId: input.objectId,
+    sourceVersion: input.sourceVersion,
     maturity,
     health,
     signalWeight,

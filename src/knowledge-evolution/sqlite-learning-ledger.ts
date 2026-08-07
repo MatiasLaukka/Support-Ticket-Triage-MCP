@@ -98,43 +98,29 @@ export class SqliteLearningLedger implements LearningLedger {
   }
 
   async list(filters: LearningEventFilters = {}): Promise<LearningEvent[]> {
+    const events = await this.snapshot();
+    const eventTypes = filters.eventTypes === undefined ? undefined : new Set(filters.eventTypes);
+    return events.filter((event) => {
+      if (filters.eventType !== undefined && event.eventType !== filters.eventType) return false;
+      if (eventTypes !== undefined && !eventTypes.has(event.eventType)) return false;
+      if (filters.ticketId !== undefined && event.ticketId !== filters.ticketId) return false;
+      if (filters.diagnosisId !== undefined && event.diagnosisId !== filters.diagnosisId) return false;
+      if (filters.candidateId !== undefined && event.candidateId !== filters.candidateId) return false;
+      if (filters.objectId !== undefined && event.objectId !== filters.objectId) return false;
+      if (filters.occurredAfter !== undefined && event.occurredAt < filters.occurredAfter) return false;
+      if (filters.occurredBefore !== undefined && event.occurredAt > filters.occurredBefore) return false;
+      return true;
+    });
+  }
+
+  async snapshot(): Promise<readonly LearningEvent[]> {
     this.ensureInitialized();
-    const clauses: string[] = [];
-    const parameters: unknown[] = [];
-    if (filters.eventType !== undefined) {
-      clauses.push("event_type = ?");
-      parameters.push(filters.eventType);
-    }
-    if (filters.eventTypes !== undefined) {
-      if (filters.eventTypes.length === 0) return [];
-      clauses.push(`event_type IN (${filters.eventTypes.map(() => "?").join(", ")})`);
-      parameters.push(...filters.eventTypes);
-    }
-    for (const [column, value] of [
-      ["ticket_id", filters.ticketId],
-      ["diagnosis_id", filters.diagnosisId],
-      ["candidate_id", filters.candidateId],
-      ["object_id", filters.objectId],
-    ] as const) {
-      if (value !== undefined) {
-        clauses.push(`${column} = ?`);
-        parameters.push(value);
-      }
-    }
-    if (filters.occurredAfter !== undefined) {
-      clauses.push("occurred_at >= ?");
-      parameters.push(filters.occurredAfter);
-    }
-    if (filters.occurredBefore !== undefined) {
-      clauses.push("occurred_at <= ?");
-      parameters.push(filters.occurredBefore);
-    }
-    const where = clauses.length === 0 ? "" : `WHERE ${clauses.join(" AND ")}`;
     try {
-      const rows = this.database.prepare(
-        `SELECT event_json FROM learning_events ${where} ORDER BY occurred_at ASC, id ASC`,
-      ).all(...parameters) as Array<{ event_json: string }>;
-      return rows.map((row) => {
+      const readSnapshot = this.database.transaction(() => {
+        const rows = this.database.prepare(
+          "SELECT event_json FROM learning_events ORDER BY occurred_at ASC, id ASC",
+        ).all() as Array<{ event_json: string }>;
+        return rows.map((row) => {
         let decoded: unknown;
         try {
           decoded = JSON.parse(row.event_json) as unknown;
@@ -145,6 +131,8 @@ export class SqliteLearningLedger implements LearningLedger {
         if (!parsed.success) throw new LearningLedgerError("Learning ledger contains an invalid event.", "PERSISTENCE_ERROR", { cause: parsed.error });
         return parsed.data;
       });
+      });
+      return readSnapshot();
     } catch (error) {
       if (error instanceof LearningLedgerError) throw error;
       throw new LearningLedgerError("Learning events could not be queried.", "PERSISTENCE_ERROR", { cause: error });

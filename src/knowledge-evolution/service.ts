@@ -13,7 +13,7 @@ import type { KnowledgeAuditEvent, KnowledgeAuditRepository } from "./knowledge-
 import type { KnowledgeObjectRepository } from "./knowledge-object-repository.js";
 import { findEvidenceRequirement } from "../evidence-catalog.js";
 import type { LearningEvent, LearningLedger } from "./learning-ledger.js";
-import { projectKnowledgeLearning, type KnowledgeLearningSummary } from "./learning-read-model.js";
+import { projectCandidateLearning, projectKnowledgeVersionLearning, type KnowledgeLearningSummary } from "./learning-read-model.js";
 
 const editableFields = [
   "name", "summary", "triggerPatterns", "evidencePolicy", "timeConstraints",
@@ -187,7 +187,7 @@ export class KnowledgeEvolutionService {
     return this.dependencies.objects.listApproved();
   }
 
-  async learningSummary(input: { candidateId: string; objectId?: string; asOf?: string }): Promise<KnowledgeLearningSummary> {
+  async learningSummary(input: { candidateId: string; objectId?: string; sourceVersion?: number; asOf?: string }): Promise<KnowledgeLearningSummary> {
     const events = this.dependencies.ledger === undefined
       ? []
       : await Promise.all([
@@ -197,7 +197,14 @@ export class KnowledgeEvolutionService {
           const byId = new Map([...candidateEvents, ...objectEvents].map((event) => [event.id, event]));
           return [...byId.values()];
         });
-    return projectKnowledgeLearning(events, input);
+    if (input.objectId === undefined) return projectCandidateLearning(events, { candidateId: input.candidateId, asOf: input.asOf });
+    const sourceVersion = input.sourceVersion ?? (await this.dependencies.objects.listApproved())
+      .find((object) => object.id === input.objectId)?.version;
+    if (sourceVersion === undefined) return projectCandidateLearning(events, { candidateId: input.candidateId, asOf: input.asOf });
+    return {
+      candidateId: input.candidateId,
+      ...projectKnowledgeVersionLearning(events, { objectId: input.objectId, sourceVersion, asOf: input.asOf }),
+    };
   }
 
   async approve(input: { candidateId: string; actorId: string; edits?: CandidateEdits; expectedVersion: number }): Promise<KnowledgeObject> {

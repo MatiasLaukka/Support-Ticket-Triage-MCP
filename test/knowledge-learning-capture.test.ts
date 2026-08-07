@@ -69,6 +69,7 @@ class RecordingLedger implements LearningLedger {
     if (!this.events.some((prior) => prior.id === event.id)) this.events.push(event);
   }
   async appendBatch(events: readonly LearningEvent[]): Promise<void> { for (const event of events) await this.append(event); }
+  async snapshot(): Promise<readonly LearningEvent[]> { return this.events.map((event) => JSON.parse(JSON.stringify(event)) as LearningEvent); }
   async list(): Promise<LearningEvent[]> { return this.events.map((event) => JSON.parse(JSON.stringify(event)) as LearningEvent); }
   async has(id: string): Promise<boolean> { return this.events.some((event) => event.id === id); }
 }
@@ -116,6 +117,7 @@ describe("LearningCaptureService", () => {
       initialize: async () => undefined,
       append: async () => { throw new LearningLedgerError("offline", "PERSISTENCE_ERROR"); },
       appendBatch: async () => undefined,
+      snapshot: async () => [],
       list: async () => [],
       has: async () => false,
     };
@@ -128,6 +130,7 @@ describe("LearningCaptureService", () => {
       initialize: async () => undefined,
       append: async () => { throw new LearningLedgerError("offline", "PERSISTENCE_ERROR"); },
       appendBatch: async () => undefined,
+      snapshot: async () => [],
       list: async () => [],
       has: async () => false,
     };

@@ -28,6 +28,8 @@ describe("learning ledger event contract", () => {
       "knowledge-reuse-failed",
       "knowledge-marked-stale",
       "knowledge-deprecated",
+      "knowledge-version-superseded",
+      "knowledge-version-reactivated",
       "evaluation-recorded",
     ]);
   });
@@ -88,6 +90,40 @@ describe("learning ledger event contract", () => {
       ...base,
       eventType: "candidate-promoted",
       payload: { maturity: "promoted", health: "active", provenance: "operator approved" },
+    }).success).toBe(false);
+  });
+
+  it("validates exact-version supersession and reactivation transitions", () => {
+    expect(LearningEventSchema.safeParse({
+      ...base,
+      eventType: "knowledge-version-superseded",
+      objectId: "known-cause-api-delay",
+      sourceVersion: 1,
+      payload: {
+        health: "superseded",
+        replacementVersion: 2,
+        provenance: "Operator approved the replacement version.",
+      },
+    }).success).toBe(true);
+
+    expect(LearningEventSchema.safeParse({
+      ...base,
+      eventType: "knowledge-version-reactivated",
+      objectId: "known-cause-api-delay",
+      sourceVersion: 1,
+      payload: {
+        health: "active",
+        reactivatedVersion: 1,
+        provenance: "Operator explicitly reactivated the historical version.",
+      },
+    }).success).toBe(true);
+
+    expect(LearningEventSchema.safeParse({
+      ...base,
+      eventType: "knowledge-version-superseded",
+      objectId: "known-cause-api-delay",
+      sourceVersion: 1,
+      payload: { health: "superseded", provenance: "Replacement was approved." },
     }).success).toBe(false);
   });
 

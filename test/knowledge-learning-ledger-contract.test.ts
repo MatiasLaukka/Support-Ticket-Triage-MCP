@@ -95,6 +95,29 @@ export function runLearningLedgerContract(createLedger: () => LearningLedger | P
       (listed[0]!.payload as { provenance: string }).provenance = "mutated locally";
       await expect(ledger.list()).resolves.toMatchObject([{ payload: { provenance: "operator-reviewed diagnosis record" } }]);
     });
+
+    it("returns a defensive, chronologically stable snapshot after an atomic batch", async () => {
+      const ledger = await createLedger();
+      await ledger.initialize();
+      await ledger.append(diagnosisEvent("11111111-1111-4111-8111-111111111111", "2026-08-07T10:02:00.000Z"));
+      await ledger.appendBatch([
+        promotedEvent("33333333-3333-4333-8333-333333333333"),
+        diagnosisEvent("44444444-4444-4444-8444-444444444444", "2026-08-07T10:01:00.000Z", "TKT-1002"),
+      ]);
+
+      const snapshot = await (ledger as LearningLedger & { snapshot(): Promise<readonly LearningEvent[]> }).snapshot();
+      const repeated = await (ledger as LearningLedger & { snapshot(): Promise<readonly LearningEvent[]> }).snapshot();
+      expect(snapshot).toEqual(repeated);
+      expect(snapshot.map((event) => event.id)).toEqual([
+        "33333333-3333-4333-8333-333333333333",
+        "44444444-4444-4444-8444-444444444444",
+        "11111111-1111-4111-8111-111111111111",
+      ]);
+
+      (snapshot[0]!.payload as { provenance: string }).provenance = "mutated locally";
+      const subsequentSnapshot = await (ledger as LearningLedger & { snapshot(): Promise<readonly LearningEvent[]> }).snapshot();
+      expect(subsequentSnapshot[0]).toMatchObject({ payload: { provenance: "operator approved" } });
+    });
   });
 }
 

@@ -52,6 +52,8 @@ export const LearningEventTypeSchema = z.enum([
   "knowledge-reuse-failed",
   "knowledge-marked-stale",
   "knowledge-deprecated",
+  "knowledge-version-superseded",
+  "knowledge-version-reactivated",
   "evaluation-recorded",
 ]);
 
@@ -203,6 +205,22 @@ const DeprecatedPayload = z
   })
   .strict();
 
+const VersionSupersededPayload = z
+  .object({
+    health: z.literal("superseded"),
+    replacementVersion: z.number().int().positive(),
+    provenance: ProvenanceSchema,
+  })
+  .strict();
+
+const VersionReactivatedPayload = z
+  .object({
+    health: z.literal("active"),
+    reactivatedVersion: z.number().int().positive(),
+    provenance: ProvenanceSchema,
+  })
+  .strict();
+
 const EvaluationPayload = z
   .object({
     matchReasons: SafeReasonsSchema,
@@ -223,6 +241,8 @@ export const LearningEventSchema = z.discriminatedUnion("eventType", [
   z.object({ ...EventBase, eventType: z.literal("knowledge-reuse-failed"), ...ObjectReferences, ticketId: TicketIdSchema, payload: FailedReusePayload }).strict(),
   z.object({ ...EventBase, eventType: z.literal("knowledge-marked-stale"), ...ObjectReferences, payload: StalePayload }).strict(),
   z.object({ ...EventBase, eventType: z.literal("knowledge-deprecated"), ...ObjectReferences, payload: DeprecatedPayload }).strict(),
+  z.object({ ...EventBase, eventType: z.literal("knowledge-version-superseded"), ...ObjectReferences, payload: VersionSupersededPayload }).strict(),
+  z.object({ ...EventBase, eventType: z.literal("knowledge-version-reactivated"), ...ObjectReferences, payload: VersionReactivatedPayload }).strict(),
   z.object({ ...EventBase, eventType: z.literal("evaluation-recorded"), ticketId: TicketIdSchema, objectId: IdentifierSchema.optional(), sourceVersion: z.number().int().positive().optional(), payload: EvaluationPayload }).strict(),
 ]);
 
@@ -257,6 +277,7 @@ export interface LearningLedger {
   initialize(): Promise<void>;
   append(event: LearningEvent): Promise<void>;
   appendBatch(events: readonly LearningEvent[]): Promise<void>;
+  snapshot(): Promise<readonly LearningEvent[]>;
   list(filters?: LearningEventFilters): Promise<LearningEvent[]>;
   has(id: string): Promise<boolean>;
 }

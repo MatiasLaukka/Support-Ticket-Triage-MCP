@@ -17,6 +17,20 @@ observed evidence
 The loop adds reusable operational knowledge without allowing GPT or a
 similarity score to change a ticket on its own.
 
+The learning plane is now backed by a durable **SQLite learning ledger** in the
+runtime. It stores sanitized append-only learning events plus candidate,
+immutable-version, and knowledge-audit projections. A duplicate event ID with
+the same content is a no-op; the same ID with different content is rejected.
+Promotion writes the approved version, promotion audit, and learning event in
+one transaction. This makes the history queryable without making it a second
+workflow engine.
+
+The operational plane remains authoritative for ticket and conversation state,
+classification, evidence readiness, diagnosis, fixes, verification, lifecycle
+transitions, and customer-facing responses. The ledger records outcomes and
+proposes future knowledge only. This is governed self-improvement, not
+autonomous model retraining.
+
 ## Three evidence layers
 
 ### 1. Observed diagnosis evidence
@@ -144,7 +158,19 @@ The showcase is network-free:
 ```powershell
 npm run demo:knowledge-evolution
 npm run demo:knowledge-evolution -- --verbose
+npm run demo:learning-ledger
 ```
+
+`demo:learning-ledger` runs the same controlled showcase with a temporary
+SQLite ledger and adds the learning-plane proof: maturity advances from
+diagnosis support through verified outcome and reuse, failed reuse is retained
+as a contradiction signal, stale history decays without deletion, and the
+historical pre-promotion recommendation remains byte-for-byte unchanged.
+
+The first SQLite slice is intentionally scoped. Operational tickets,
+conversations, recommendations, and operational JSONL audits remain on their
+existing repository adapters. A later migration can move them behind the same
+interfaces without changing authority or historical version pins.
 
 For regression coverage of both reuse paths, run the focused integration tests:
 

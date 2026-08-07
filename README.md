@@ -1046,6 +1046,43 @@ approves or rejects it. Approval Desk and MCP use the same knowledge service,
 while lifecycle replay and AI comparison project the same approved object
 context through the shared evidence and diagnostic workflow.
 
+#### Durable learning ledger
+
+The knowledge-evolution learning plane now has a durable **SQLite learning
+ledger**. It records sanitized, append-oriented events for diagnosis support,
+verified outcomes, candidate review, immutable object versions, reuse, stale
+signals, contradictions, and evaluation evidence. Candidate/version/audit
+promotion is transaction-safe, and duplicate event IDs are idempotent.
+
+This is governed knowledge evolution, not autonomous model retraining. The
+operational plane remains authoritative for classification, evidence readiness,
+diagnosis, fixes, verification, lifecycle transitions, and customer drafts.
+The ledger only records verified outcomes and proposes reusable knowledge;
+GPT-generated fields remain advisory, and a named operator must approve a
+version before it can affect a future evaluation.
+
+Learning maturity and health are separate axes: `observed`,
+`diagnosis-supported`, `outcome-verified`, `reuse-validated`, and `promoted`
+describe the strength of evidence, while `active`, `stale`, `contradicted`,
+`deprecated`, and `superseded` describe whether that evidence is currently
+usable. Stale history remains queryable with decayed signal weight but cannot
+bypass an evidence gate. New evaluations use the latest active version;
+in-progress tickets remain pinned to their original version, so historical
+recommendations remain unchanged.
+
+Run the deterministic ledger showcase without an API key or network access:
+
+```powershell
+npm run demo:learning-ledger
+```
+
+The output demonstrates candidate creation, explicit human promotion, a
+verified outcome, successful and failed reuse signals, stale decay, and
+historical immutability. The first SQLite slice intentionally does not migrate
+the operational ticket, conversation, recommendation, or audit stores; those
+remain local JSON/JSONL adapters until a later migration with equivalent
+repository contracts.
+
 #### Evidence provenance and policy boundaries
 
 Knowledge evolution keeps three related, but deliberately different, records:
@@ -1182,8 +1219,11 @@ webhook payloads, provider comments, and imported macros remain untrusted.
   miss paraphrases and produce lexical false positives.
 - Policy is deterministic and intentionally narrow. Human review remains
   necessary for ambiguous facts, conflicting policy, and customer messaging.
-- The runtime uses JSON files and JSONL audit data. It is designed for one
-  local process, not multiple writers or distributed transactions.
+- Operational tickets, conversations, recommendations, and their audit data
+  still use local JSON/JSONL repositories. Knowledge candidates, immutable
+  versions, knowledge audits, and learning events use the SQLite learning
+  ledger, which is designed for one local process rather than distributed
+  writers.
 - Locks are in-process. Ticket update, recommendation resolution, and audit
   append include compensation paths, but they are not cross-process ACID
   transactions.

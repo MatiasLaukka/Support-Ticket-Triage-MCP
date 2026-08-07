@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -68,5 +68,19 @@ describe("knowledge evolution showcase", () => {
     expect(report.output).toContain("Discovery open-ticket corroboration: 1");
     expect(report.output).toContain("Similarity reasons:");
     expect(report.output).toContain("Contradictions: none");
+  });
+
+  it("documents the bounded SQLite learning loop", async () => {
+    const readme = await readFile(resolve("README.md"), "utf8");
+    const caseStudy = await readFile(resolve("docs", "case-study.md"), "utf8");
+    const roadmap = await readFile(resolve("docs", "roadmap.md"), "utf8");
+
+    expect(readme).toMatch(/SQLite\s+learning\s+ledger/);
+    expect(readme).toContain("not autonomous model retraining");
+    expect(readme).toContain("maturity and health");
+    expect(readme).toMatch(/historical\s+recommendations remain unchanged/);
+    expect(caseStudy).toContain("operational plane remains authoritative");
+    expect(caseStudy).toContain("outcome-verified");
+    expect(roadmap).toContain("Full operational SQLite migration");
   });
 });

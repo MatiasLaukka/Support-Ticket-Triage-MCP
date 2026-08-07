@@ -64,6 +64,23 @@ The key design choice is separation of responsibilities. The model may help
 interpret messy customer language and write the response, but it does not own
 authorization, hard safety escalation, mutation, or audit.
 
+The system has a second, deliberately subordinate learning plane. The
+**operational plane remains authoritative** for ticket state, evidence gates,
+diagnosis, fixes, verification, lifecycle transitions, and customer drafts.
+After an operator-approved diagnosis reaches a governed fix and a customer-
+confirmed or technically verified outcome, the learning plane records a
+sanitized event in the SQLite learning ledger. Deterministic discovery can then
+propose a candidate knowledge object; optional GPT drafting only fills
+reviewable parameters, and an authorized operator must promote an immutable
+version before it can influence a future evaluation.
+
+Learning maturity is explicit (`observed`, `diagnosis-supported`,
+`outcome-verified`, `reuse-validated`, `promoted`) and separate from health
+(`active`, `stale`, `contradicted`, `deprecated`, `superseded`). Historical
+recommendations and versions are never rewritten. A stale object remains
+queryable with decayed recurrence weight, but never bypasses evidence gates.
+This is a human-governed learning loop, not autonomous model retraining.
+
 ## Demo Scenario
 
 The fastest browser demo uses `TKT-1010`, a deliberately vague ticket that
@@ -114,6 +131,21 @@ successful diagnosis merely because the ticket has complete checklist fields.
 This split makes the authority boundary visible: the diagnostic matrix tests
 many families without mutation, while the replay proves chronological state
 transitions using the production service and MCP path.
+
+## Durable learning showcase
+
+Run the local showcase with:
+
+```powershell
+npm run demo:learning-ledger
+```
+
+It uses a temporary SQLite database and controlled providers. The report shows
+deterministic candidate discovery, explicit support-lead promotion, a verified
+outcome, later successful reuse, a failed reuse signal, stale decay, and a
+byte-for-byte unchanged pre-promotion recommendation. The demo is intentionally
+bounded: it proves governed knowledge evolution and reusable evidence, not
+autonomous retraining or automatic production policy changes.
 
 ## Safety Properties
 

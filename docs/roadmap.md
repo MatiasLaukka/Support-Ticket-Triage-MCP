@@ -69,6 +69,17 @@ should target quality without weakening governance:
 
 These are useful later, but should stay behind the same approval boundary:
 
+- **SQLite learning ledger (implemented):** durable, queryable learning events,
+  candidate/version/audit transaction boundaries, verified outcome capture,
+  maturity/health projections, stale and contradiction signals, and a
+  deterministic future-ticket reuse showcase. The operational plane remains
+  authoritative and the JSON/in-memory adapters remain available for tests and
+  replay.
+- **Full operational SQLite migration:** move tickets, conversations,
+  recommendations, operational audit history, and replay snapshots behind
+  repository contracts while preserving stable IDs, timestamps, version pins,
+  and historical meaning. This is intentionally separate from the first
+  learning-ledger slice.
 - Zendesk or Jira read adapter for imported tickets;
 - provider-specific field mapping and revision checks;
 - durable recommendation store outside local JSON files;

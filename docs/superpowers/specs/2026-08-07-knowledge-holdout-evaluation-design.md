@@ -18,7 +18,9 @@ gates, unhealthy-version withdrawal, and exact-version provenance.
 
 - GPT calls, GPT provider construction, or live network access;
 - a second classifier, diagnostic engine, or scoring simulator;
-- automatic promotion, rollback, reactivation, or customer-facing mutation;
+- holdout-triggered automatic promotion, rollback, reactivation, or
+  customer-facing mutation; version transitions remain explicit domain
+  operations;
 - changing operational ticket state while scoring;
 - claiming measured human correction behavior from synthetic fixtures;
 - migrating operational ticket, conversation, recommendation, or audit stores
@@ -78,6 +80,15 @@ type ReusableKnowledgeContext = {
 type ReusableKnowledgeResult = {
   status: "available" | "ledger-unavailable";
   contexts: readonly ReusableKnowledgeContext[];
+  issues: readonly {
+    objectId: string;
+    version: number;
+    code:
+      | "missing-history"
+      | "inconsistent-history"
+      | "unhealthy-version"
+      | "ledger-read-failed";
+  }[];
 };
 ```
 
@@ -96,13 +107,37 @@ version. An unhealthy current version never implicitly resurrects an older
 version; rollback or reactivation requires a separate explicit, attributed,
 auditable event.
 
-`listApproved()` remains broad so review, history, and audit surfaces can show
-stale, contradicted, deprecated, and superseded versions. Only
-`listReusableApproved()` supplies learned context to evaluations.
+`listApproved()` returns the current approved head for each object without health
+filtering. `listVersions(objectId)` exposes the complete immutable version
+history for review and audit. Only `listReusableApproved()` supplies learned
+context to evaluations.
+
+### Minimal version-transition mechanism
+
+Versioned replacement is an explicit domain operation, not a fixture-only
+state. A replacement promotion transaction:
+
+1. validates the expected current head version;
+2. inserts the immutable replacement version;
+3. moves the object head to the replacement version;
+4. records a `knowledge-version-superseded` event for the previous version;
+5. records the promotion event for the new version;
+6. commits the version, audit, and learning events atomically.
+
+An explicit `reactivateVersion({ objectId, sourceVersion, actorId, reason })`
+operation may move the head back to a historical version and records a
+`knowledge-version-reactivated` event. No read path infers rollback from stale,
+contradicted, or missing history. A version that is not the current head is
+never reusable unless this explicit operation makes it active again.
 
 When learning storage is unavailable, ordinary deterministic triage continues
 with no learned context. The system must not claim that learned reuse was
 available or silently assume that approved objects are healthy.
+
+Persistence compatibility is tested for every adapter: an old JSON object and
+an old SQLite payload read as `legacy` without rewriting the historical record,
+while every newly promoted version persists `ledger`. Canonical write schemas
+must not allow a new promotion to omit the governance marker accidentally.
 
 ## Recommendation provenance
 
@@ -121,12 +156,28 @@ compatible for catalog causes and historical records. New approved-object reuse
 must populate `knownCauseRef`, allowing wrong-version reuse, replacement
 version behavior, and historical pinning to be scored directly.
 
+The recommendation builder enforces these invariants:
+
+```text
+knownCauseRef is present → knownCause === knownCauseRef.objectId
+approved-object reuse → knownCauseRef is present
+knownCauseRef → exact object/version was present in the supplied reusable contexts
+```
+
+Callers and fixtures cannot manufacture version provenance independently of the
+reusable context returned by the shared service.
+
 ## Holdout fixture model
 
 Every fixture has an explicit fixed timestamp and a scoring oracle that is never
 passed into production evaluation:
 
 ```ts
+type KnowledgeHoldoutSuite = {
+  asOf: string;
+  fixtures: readonly KnowledgeHoldoutFixture[];
+};
+
 type HoldoutTurn = {
   ticket: Ticket;
   customerReplies: readonly {
@@ -147,15 +198,19 @@ type KnowledgeHoldoutFixture = {
   ticket: Ticket;
   expectedOutcome: ExpectedOutcome;
   turns: readonly HoldoutTurn[];
-  expectedKnowledgeVersion?: {
-    objectId: string;
-    version: number;
-  };
   expectedEvidenceIds: readonly string[];
-  expectedFinalState: SupportState;
-  expectedCorrectionRequired: boolean;
+  expectedTarget: {
+    supportState: SupportState;
+    knownCauseRef?: { objectId: string; version: number };
+    requiredEvidenceSatisfied?: boolean;
+  };
 };
 ```
+
+The suite's fixed `asOf` is passed to every learning lookup, and its fixed
+clock is injected into every production evaluation. SLA checks, time
+constraints, and other current-time rules therefore use the same deterministic
+timestamp as stale projection.
 
 `expectedOutcome` is used only by the scorer. It is never supplied as
 `outcome` to `evaluateTicketWithAi`, because that parameter intentionally
@@ -201,6 +256,7 @@ type HoldoutTurnResult = {
   providedEvidenceIds: readonly string[];
   missingEvidenceIds: readonly string[];
   supportState: SupportState;
+  targetReached: boolean;
   unsafeLifecycleChanges: number;
   correctionRequired: boolean;
 };
@@ -208,9 +264,12 @@ type HoldoutTurnResult = {
 
 Each turn retains the recommendation, exact `knownCauseRef` when present,
 requested/provided/missing evidence IDs, lifecycle state, unsafe transition
-count, and correction-required result. `turnsToExpectedState` is `null` when a
-lane never reaches the comparable target. `diagnosticTurnsSaved` is an integer
-only when both compared lanes reach the target; otherwise it is `null`.
+count, and correction-required result. `targetReached` means the turn matches
+the fixture's complete `expectedTarget`: support state, exact known-cause
+version when declared, and required-evidence satisfaction when declared. It is
+not merely a match on broad `SupportState`. `turnsToExpectedState` is `null`
+when a lane never reaches the comparable target. `diagnosticTurnsSaved` is an
+integer only when both compared lanes reach the target; otherwise it is `null`.
 
 Stale and contradicted lanes seed the learning ledger and then call the same
 `listReusableApproved({ asOf })` operation as production. They never manually
@@ -225,10 +284,11 @@ Per-case deltas include:
 
 ```ts
 delta: {
-  matchedKnowledge: boolean;
+  learnedMatchedExpectedKnowledge: boolean;
   unnecessaryEvidence: number;
   missingNecessaryEvidence: number;
   diagnosticTurnsSaved: number | null;
+  repeatedEvidenceRequestCount: number;
   unsafeLifecycleChanges: number;
   correctionRequired: boolean;
 }
@@ -241,16 +301,22 @@ delta: {
 - moving beyond an escalation or ambiguity gate;
 - reaching a later lifecycle state than the fixture permits.
 
+Evidence-gate bypasses are a subset of `unsafeLifecycleChanges` and remain a
+separate headline metric.
+
 Evidence metrics use declared fixture expectations:
 
 ```text
-unnecessary evidence = requested IDs - expected IDs
-missing necessary evidence = expected IDs - requested IDs
+unnecessary evidence = unique requested IDs - expected IDs
+missing necessary evidence = expected IDs - unique requested IDs
 evidence precision = necessary requested evidence / all requested evidence
 missing-evidence rate = missing necessary evidence / all expected evidence
 ```
 
-Zero-denominator metrics are `null`.
+Evidence IDs are deduplicated across all turns for the precision and
+missing-evidence metrics. Repeated requests are counted separately as
+`repeatedEvidenceRequestCount` so repeated questions remain visible without
+inflating evidence requirements. Zero-denominator metrics are `null`.
 
 `operatorCorrectionRequired` means that the learned lane violated the fixture
 contract. It is not presented as observed human correction behavior.
@@ -263,20 +329,31 @@ improvement: correct reuse appears, unnecessary evidence decreases, diagnostic
 turns decrease, or baseline misses the target while learned reaches it. All
 other cases are **unchanged**.
 
-The aggregate reports knowledge-match precision/recall, evidence precision,
-missing-evidence rate, unnecessary evidence, diagnostic turns saved,
-correction-required rate, stale false-positive rate, contradicted false-positive
-rate, combined unhealthy-reuse false-positive rate, unsafe activation count,
-evidence-gate bypass count, and benefited/unchanged/regressed case counts.
+The aggregate has three non-overlapping views:
+
+- **Efficacy cohort:** main true-positive, missing-evidence, near-miss, and
+  unrelated cases contribute knowledge-match precision/recall, evidence
+  precision, missing-evidence rate, unnecessary evidence, diagnostic turns
+  saved, correction-required rate, and benefited/unchanged/regressed counts.
+- **Governance cohort:** stale and contradicted lanes contribute stale,
+  contradicted, and combined unhealthy-reuse false-positive rates, unsafe
+  activation count, and evidence-gate bypass count.
+- **Version cohort:** replacement and draft-isolation lanes contribute
+  wrong-version reuse, explicit replacement correctness, and version-pinning
+  results.
+
+Global safety counts may span every lane, but efficacy denominators never count
+duplicated health or version variants.
 
 ## Read-only guarantees
 
 The evaluator uses deterministic mode with no provider construction and no
 network access. A regression test snapshots ticket revisions, recommendation
-count, operational audit count, and learning-ledger event IDs before scoring,
-then asserts all values are unchanged afterward. The evaluator must not append
-evaluation events; evaluation evidence is returned in the report and may be
-persisted separately only by an explicit future operation.
+count, operational audit count, learning-ledger event IDs, candidate IDs, and
+knowledge-object version IDs before scoring, then asserts all values are
+unchanged afterward. The evaluator must not append evaluation events;
+evaluation evidence is returned in the report and may be persisted separately
+only by an explicit future operation.
 
 ## Output and documentation
 
@@ -286,17 +363,23 @@ Add a deterministic command such as:
 npm run evaluate:knowledge-holdout
 ```
 
-The report includes the frozen `asOf`, lane availability status, every fixture's
+The report includes the frozen `asOf`, injected production clock, lane
+availability status and structured reusable-context issues, every fixture's
 turn-by-turn result, exact knowledge provenance, baseline/learned deltas, and
-the aggregate safety/efficacy scorecard. README and `docs/demo-results.md`
-should present the result as evidence of governed knowledge reuse, not as a
-claim of autonomous model retraining or measured human labor savings.
+the separate efficacy, governance, and version scorecards. README and
+`docs/demo-results.md` should present the result as evidence of governed
+knowledge reuse, not as a claim of autonomous model retraining or measured
+human labor savings.
 
 ## Success criteria
 
 - Every production evaluation surface obtains reusable knowledge through
   `listReusableApproved({ asOf })`.
 - Learning health cannot cross object-version boundaries.
+- Replacement promotion transactionally supersedes the old head, and explicit
+  reactivation is the only path to reuse a historical version.
+- `listReusableApproved()` returns structured exclusion issues, while
+  `listVersions()` preserves complete historical inspection.
 - Ledger failure excludes learned context while deterministic triage remains
   available.
 - Expected outcomes are scoring-only oracles.
@@ -306,5 +389,6 @@ claim of autonomous model retraining or measured human labor savings.
   not influence evaluation.
 - Every lane retains its full multi-turn results.
 - No operational or learning state changes during scoring.
-- The aggregate report distinguishes improvement, no change, and regression
-  using the safety-first comparator.
+- The aggregate report separates efficacy, governance safety, and version
+  correctness while distinguishing improvement, no change, and regression with
+  the safety-first comparator.

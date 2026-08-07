@@ -31,6 +31,8 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
+    "@types/better-sqlite3": "^9.6.0",
+    "better-sqlite3": "^13.0.3",
     "zod": "^4.4.3"
   },
   "devDependencies": {

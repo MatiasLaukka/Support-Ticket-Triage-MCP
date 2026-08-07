@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { LearningEvent, LearningLedger } from "../src/knowledge-evolution/learning-ledger.js";
 import { LearningLedgerError } from "../src/knowledge-evolution/learning-ledger.js";
 import { InMemoryLearningLedger } from "../src/knowledge-evolution/in-memory-learning-ledger.js";
+import { SqliteLearningLedger } from "../src/knowledge-evolution/sqlite-learning-ledger.js";
 
 const diagnosisEvent = (id: string, occurredAt: string, ticketId = "TKT-1001"): LearningEvent => ({
   id,
@@ -98,3 +99,4 @@ export function runLearningLedgerContract(createLedger: () => LearningLedger | P
 }
 
 runLearningLedgerContract(() => new InMemoryLearningLedger());
+runLearningLedgerContract(() => new SqliteLearningLedger(":memory:"));

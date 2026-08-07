@@ -12,6 +12,8 @@ import type { DiagnosisRepository } from "./diagnosis-repository.js";
 import type { KnowledgeAuditEvent, KnowledgeAuditRepository } from "./knowledge-audit-repository.js";
 import type { KnowledgeObjectRepository } from "./knowledge-object-repository.js";
 import { findEvidenceRequirement } from "../evidence-catalog.js";
+import type { LearningEvent, LearningLedger } from "./learning-ledger.js";
+import { projectKnowledgeLearning, type KnowledgeLearningSummary } from "./learning-read-model.js";
 
 const editableFields = [
   "name", "summary", "triggerPatterns", "evidencePolicy", "timeConstraints",
@@ -34,6 +36,7 @@ export interface KnowledgeEvolutionServiceDependencies {
   promotionAuthorizer: (actorId: string) => boolean;
   now?: () => Date;
   nextAuditId?: () => string;
+  ledger?: LearningLedger;
 }
 
 export interface KnowledgeDiscoveryServiceResult extends KnowledgeDiscoveryResult {
@@ -152,6 +155,19 @@ export class KnowledgeEvolutionService {
           notes: candidate.operatorRationale,
         });
         existingIds.add(candidate.id);
+        await this.appendLearning({
+          id: randomUUID(),
+          occurredAt: candidate.provenance.recordedAt,
+          actor: input.actorId,
+          correlationId: randomUUID(),
+          candidateId: candidate.id,
+          eventType: "candidate-created",
+          payload: {
+            maturity: candidate.validationStatus === "valid" ? "diagnosis-supported" : "observed",
+            supportingEventIds: [],
+            provenance: "Deterministic candidate discovery.",
+          },
+        });
       } catch (error) {
         if (saved) {
           try { await this.dependencies.objects.removeCandidate(candidate.id); }
@@ -169,6 +185,19 @@ export class KnowledgeEvolutionService {
 
   async listApproved(): Promise<KnowledgeObject[]> {
     return this.dependencies.objects.listApproved();
+  }
+
+  async learningSummary(input: { candidateId: string; objectId?: string; asOf?: string }): Promise<KnowledgeLearningSummary> {
+    const events = this.dependencies.ledger === undefined
+      ? []
+      : await Promise.all([
+          this.dependencies.ledger.list({ candidateId: input.candidateId }),
+          this.dependencies.ledger.list({ objectId: input.objectId ?? input.candidateId }),
+        ]).then(([candidateEvents, objectEvents]) => {
+          const byId = new Map([...candidateEvents, ...objectEvents].map((event) => [event.id, event]));
+          return [...byId.values()];
+        });
+    return projectKnowledgeLearning(events, input);
   }
 
   async approve(input: { candidateId: string; actorId: string; edits?: CandidateEdits; expectedVersion: number }): Promise<KnowledgeObject> {
@@ -238,6 +267,19 @@ export class KnowledgeEvolutionService {
           ? await this.dependencies.objects.promoteWithAudit!(candidate.id, object, candidate.version, promotionAudit)
           : await this.dependencies.objects.promote(candidate.id, object, candidate.version);
         if (!transactionAware) await this.dependencies.audits.append(promotionAudit);
+        if (!transactionAware) {
+          await this.appendLearning({
+            id: randomUUID(),
+            occurredAt: promotionAudit.timestamp,
+            actor: promotionAudit.actor,
+            correlationId: promotionAudit.id,
+            candidateId: candidate.id,
+            objectId: promoted.id,
+            sourceVersion: promoted.version,
+            eventType: "candidate-promoted",
+            payload: { maturity: "promoted", health: "active", provenance: "Operator approved a knowledge-object version." },
+          });
+        }
         return promoted;
       } catch (error) {
         if (promoted !== undefined && !transactionAware) {
@@ -268,6 +310,15 @@ export class KnowledgeEvolutionService {
         rejectionReason: reason,
         notes: reason,
       });
+      await this.appendLearning({
+        id: randomUUID(),
+        occurredAt: this.now().toISOString(),
+        actor: input.actorId,
+        correlationId: randomUUID(),
+        candidateId: candidate.id,
+        eventType: "candidate-rejected",
+        payload: { rejectionReason: reason, provenance: "Operator rejected a knowledge candidate." },
+      });
     });
   }
 
@@ -288,7 +339,84 @@ export class KnowledgeEvolutionService {
         result: "deferred",
         notes: "Review deferred without changing the candidate.",
       });
+      await this.appendLearning({
+        id: randomUUID(),
+        occurredAt: this.now().toISOString(),
+        actor: input.actorId,
+        correlationId: randomUUID(),
+        candidateId: candidate.id,
+        eventType: "candidate-deferred",
+        payload: {
+          maturity: candidate.validationStatus === "valid" ? "diagnosis-supported" : "observed",
+          provenance: "Operator deferred candidate review.",
+        },
+      });
     });
+  }
+
+  async recordReuse(input: {
+    objectId: string;
+    sourceVersion: number;
+    ticketId: TicketId;
+    actorId: string;
+    matchReasons: readonly string[];
+    evidenceIds?: readonly string[];
+    success: boolean;
+    failureReason?: string;
+  }): Promise<void> {
+    assertActor(input.actorId);
+    if (input.success) {
+      await this.appendLearning({
+        id: randomUUID(),
+        occurredAt: this.now().toISOString(),
+        actor: input.actorId,
+        correlationId: randomUUID(),
+        ticketId: input.ticketId,
+        objectId: input.objectId,
+        sourceVersion: input.sourceVersion,
+        eventType: "knowledge-reused",
+        payload: {
+          matchReasons: [...input.matchReasons],
+          evidenceIds: [...(input.evidenceIds ?? [])],
+          provenance: "Governed knowledge reuse was recorded.",
+        },
+      });
+      return;
+    }
+    await this.appendLearning({
+      id: randomUUID(),
+      occurredAt: this.now().toISOString(),
+      actor: input.actorId,
+      correlationId: randomUUID(),
+      ticketId: input.ticketId,
+      objectId: input.objectId,
+      sourceVersion: input.sourceVersion,
+      eventType: "knowledge-reuse-failed",
+      payload: {
+        matchReasons: [...input.matchReasons],
+        failureReason: input.failureReason ?? "Operator correction invalidated the proposed reuse.",
+        provenance: "Governed knowledge reuse was rejected.",
+      },
+    });
+  }
+
+  async markStale(input: { objectId: string; sourceVersion: number; actorId: string; reasons: readonly string[] }): Promise<void> {
+    assertActor(input.actorId);
+    await this.appendLearning({
+      id: randomUUID(),
+      occurredAt: this.now().toISOString(),
+      actor: input.actorId,
+      correlationId: randomUUID(),
+      objectId: input.objectId,
+      sourceVersion: input.sourceVersion,
+      eventType: "knowledge-marked-stale",
+      payload: { health: "stale", staleReasons: [...input.reasons], provenance: "Operator marked knowledge stale." },
+    });
+  }
+
+  private async appendLearning(event: LearningEvent): Promise<void> {
+    if (this.dependencies.ledger === undefined) return;
+    try { await this.dependencies.ledger.append(event); } catch { /* learning capture must not block knowledge review */ }
   }
 
   private async appendAudit(event: Omit<KnowledgeAuditEvent, "id" | "timestamp">): Promise<void> {

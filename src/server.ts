@@ -483,6 +483,22 @@ export function createTriageServer(
   );
 
   server.registerTool(
+    "get_knowledge_learning",
+    {
+      description: "Read the deterministic maturity, health, and reuse projection for a governed knowledge candidate.",
+      inputSchema: z.object({ candidateId: KnowledgeCandidateIdSchema, asOf: IsoTimestampSchema.optional() }).strict(),
+      annotations: ReadOnlyAnnotations,
+    },
+    async ({ candidateId, asOf }) => toolResult(async () => ({
+      learning: await knowledgeService(deps).learningSummary({
+        candidateId,
+        objectId: candidateId,
+        ...(asOf === undefined ? {} : { asOf }),
+      }),
+    })),
+  );
+
+  server.registerTool(
     "approve_knowledge_candidate",
     {
       description: "Explicitly approve a reviewed knowledge candidate for future evaluations; historical recommendations are unchanged.",

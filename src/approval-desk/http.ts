@@ -451,6 +451,10 @@ function matchRoute(
   }
 
   const knowledgeCandidate = /^\/api\/knowledge-candidates\/([^/]+)$/.exec(pathname);
+  const knowledgeLearning = /^\/api\/knowledge-candidates\/([^/]+)\/learning$/.exec(pathname);
+  if (method === "GET" && knowledgeLearning !== null) {
+    return { status: 200, handle: (context) => getKnowledgeLearning(context, knowledgeLearning[1]!) };
+  }
   if (method === "GET" && knowledgeCandidate !== null) {
     return { status: 200, handle: (context) => getKnowledgeCandidate(context, knowledgeCandidate[1]!) };
   }
@@ -794,6 +798,14 @@ async function recordDiagnosis(
       },
     }),
   };
+}
+
+async function getKnowledgeLearning(
+  { deps }: RouteContext,
+  id: string,
+): Promise<unknown> {
+  const candidateId = KnowledgeCandidateIdSchema.parse(id);
+  return { learning: await deps.knowledgeEvolution.service.learningSummary({ candidateId, objectId: candidateId }) };
 }
 
 async function recordPlatformMitigation(

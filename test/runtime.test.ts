@@ -181,6 +181,7 @@ describe("runtime configuration", () => {
     await expect(deps.knowledgeEvolution.objects.listCandidates()).resolves.toMatchObject([
       { evidencePolicy: { mode: "required", evidenceIds: ["request-id"] } },
     ]);
+    await expect(deps.knowledgeEvolution.ledger.list({ eventType: "candidate-created" })).resolves.toHaveLength(1);
   });
 
   it("injects an optional candidate draft provider through the runtime boundary", async () => {

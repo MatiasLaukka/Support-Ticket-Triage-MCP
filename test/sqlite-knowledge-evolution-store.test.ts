@@ -104,6 +104,46 @@ describe("SqliteKnowledgeEvolutionStore", () => {
     ledger.close();
   });
 
+  it("uses UTC instants for offset-form as-of snapshots so future versions, heads, and events do not leak", async () => {
+    const { ledger, store } = await createStore();
+    await store.saveCandidate(candidate);
+    await store.promoteWithAudit(candidate.id, approved, candidate.version, audit);
+    const revision = { ...candidate, id: "known-cause-api-credential-rotation-revision", objectId: candidate.id, sourceVersion: 1, version: 1 };
+    await store.saveCandidate(revision);
+    await store.promoteReplacement(replacementPromotion(revision, "2026-08-07T11:05:00.000Z"));
+
+    const asOf = "2026-08-07T13:30:00.000+03:00"; // 10:30Z; replacement is 11:05Z.
+    await expect(store.listVersionsAsOf(asOf)).resolves.toMatchObject([{ version: 1 }]);
+    await expect(store.listHeadMappingsAsOf(asOf)).resolves.toEqual(new Map([[candidate.id, 1]]));
+    const snapshot = await store.snapshotForReuse(asOf);
+    expect(snapshot.versions).toMatchObject([{ version: 1 }]);
+    expect(snapshot.heads).toEqual(new Map([[candidate.id, 1]]));
+    expect(snapshot.events).toHaveLength(1);
+    ledger.close();
+  });
+
+  it("rejects an offset-form reactivation that is instant-earlier than the current version and leaves the historical snapshot isolated", async () => {
+    const { ledger, store } = await createStore({ reactivationAuthorizer: (actor) => actor === "support-lead" });
+    await store.saveCandidate(candidate);
+    await store.promoteWithAudit(candidate.id, approved, candidate.version, audit);
+    const revision = { ...candidate, id: "known-cause-api-credential-rotation-revision", objectId: candidate.id, sourceVersion: 1, version: 1 };
+    await store.saveCandidate(revision);
+    await store.promoteReplacement(replacementPromotion(revision, "2026-08-07T11:05:00.000Z"));
+    const reason = "The reactivation must not be backdated by an offset.";
+    const occurredAt = "2026-08-07T12:00:00.000+02:00"; // 10:00Z; before v2 at 11:05Z.
+    const events = reactivationEventsAt(reason, occurredAt);
+
+    await expect(store.reactivateVersion({
+      objectId: candidate.id, sourceVersion: 1, expectedHeadVersion: 2, actorId: "support-lead", reason, occurredAt,
+      ...events,
+    })).rejects.toMatchObject({ code: "REPOSITORY_ERROR" });
+    const snapshot = await store.snapshotForReuse("2026-08-07T13:30:00.000+03:00");
+    expect(snapshot.versions).toMatchObject([{ version: 1 }]);
+    expect(snapshot.heads).toEqual(new Map([[candidate.id, 1]]));
+    expect(snapshot.events).toHaveLength(1);
+    ledger.close();
+  });
+
   it("reactivates an existing version only with an authorized compare-and-swap head", async () => {
     const { ledger, store } = await createStore({ reactivationAuthorizer: (actor) => actor === "support-lead" });
     await store.saveCandidate(candidate);
@@ -258,8 +298,8 @@ describe("SqliteKnowledgeEvolutionStore", () => {
     await expect(store.saveCandidate({ ...candidateWithoutLineage, id: "new-candidate-without-lineage" })).rejects.toMatchObject({ code: "REPOSITORY_ERROR" });
     database.prepare("INSERT INTO knowledge_candidates(id, version, recorded_at, payload_json) VALUES (?, ?, ?, ?)")
       .run("legacy-candidate", 1, candidate.provenance.recordedAt, JSON.stringify({ ...candidateWithoutLineage, id: "legacy-candidate" }));
-    database.prepare("INSERT INTO knowledge_versions(object_id, version, approved_at, payload_json) VALUES (?, ?, ?, ?)")
-      .run("legacy-object", 1, "2026-08-07T10:05:00.000Z", JSON.stringify({ ...approvedWithoutGovernance, id: "legacy-object" }));
+    database.prepare("INSERT INTO knowledge_versions(object_id, version, approved_at, approved_at_epoch, payload_json) VALUES (?, ?, ?, ?, ?)")
+      .run("legacy-object", 1, "2026-08-07T10:05:00.000Z", Date.parse("2026-08-07T10:05:00.000Z"), JSON.stringify({ ...approvedWithoutGovernance, id: "legacy-object" }));
 
     await expect(store.getCandidate("legacy-candidate")).resolves.toMatchObject({ objectId: "legacy-candidate", sourceVersion: 1 });
     await expect(store.listApproved()).resolves.toMatchObject([{ id: "legacy-object", learningGovernance: "legacy" }]);
@@ -279,14 +319,31 @@ function replacementEvents() {
   };
 }
 
+function replacementPromotion(revision: KnowledgeCandidate, approvedAt: string) {
+  const correlationId = "d4d7ee66-5bf3-41dc-8c9a-0bd827cd4444";
+  return {
+    candidateId: revision.id,
+    approved: { ...approved, approval: { approvedBy: "support-lead", approvedAt } },
+    expectedCandidateVersion: 1,
+    expectedHeadVersion: 1,
+    promotionAudit: { ...audit, id: "audit-promotion-002", candidateId: revision.id, timestamp: approvedAt },
+    supersededEvent: versionEvent("knowledge-version-superseded", 1, correlationId, approvedAt, 2),
+    promotionEvent: versionEvent("candidate-promoted", 2, correlationId, approvedAt),
+  };
+}
+
 function transitionEvent(base: LearningEvent, patch: Record<string, unknown>): LearningEvent {
   return { ...base, ...patch } as LearningEvent;
 }
 
 function reactivationEvents(reason: string) {
+  return reactivationEventsAt(reason, "2026-08-07T12:00:00.000Z");
+}
+
+function reactivationEventsAt(reason: string, occurredAt: string) {
   const correlationId = "b2037092-30bb-4c2b-8f32-2c9d5edf806f";
   return {
-    supersededEvent: transitionEvent(versionEvent("knowledge-version-superseded", 2, correlationId, "2026-08-07T12:00:00.000Z", 1), { id: "e239b7c0-49d6-4d39-bff6-33c75146e671", payload: { health: "superseded", replacementVersion: 1, provenance: reason } }),
-    reactivatedEvent: transitionEvent(versionEvent("knowledge-version-reactivated", 1, correlationId, "2026-08-07T12:00:00.000Z"), { id: "e239b7c0-49d6-4d39-bff6-33c75146e672", payload: { health: "active", reactivatedVersion: 1, provenance: reason } }),
+    supersededEvent: transitionEvent(versionEvent("knowledge-version-superseded", 2, correlationId, occurredAt, 1), { id: "e239b7c0-49d6-4d39-bff6-33c75146e671", payload: { health: "superseded", replacementVersion: 1, provenance: reason } }),
+    reactivatedEvent: transitionEvent(versionEvent("knowledge-version-reactivated", 1, correlationId, occurredAt), { id: "e239b7c0-49d6-4d39-bff6-33c75146e672", payload: { health: "active", reactivatedVersion: 1, provenance: reason } }),
   };
 }

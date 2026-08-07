@@ -39,6 +39,7 @@ export class SqliteLearningLedger implements LearningLedger {
         CREATE TABLE IF NOT EXISTS learning_events (
           id TEXT PRIMARY KEY NOT NULL,
           occurred_at TEXT NOT NULL,
+          occurred_at_epoch INTEGER NOT NULL,
           event_type TEXT NOT NULL,
           actor TEXT NOT NULL,
           correlation_id TEXT NOT NULL,
@@ -53,9 +54,12 @@ export class SqliteLearningLedger implements LearningLedger {
         CREATE INDEX IF NOT EXISTS learning_events_type_idx ON learning_events(event_type);
         CREATE INDEX IF NOT EXISTS learning_events_ticket_idx ON learning_events(ticket_id);
         CREATE INDEX IF NOT EXISTS learning_events_object_idx ON learning_events(object_id);
+        CREATE INDEX IF NOT EXISTS learning_events_occurred_epoch_idx ON learning_events(occurred_at_epoch, id);
         INSERT INTO schema_meta(key, value) VALUES ('learning-ledger', '1')
           ON CONFLICT(key) DO NOTHING;
       `);
+      this.ensureColumn("learning_events", "occurred_at_epoch", "INTEGER");
+      this.backfillEpochs();
       this.initialized = true;
     } catch (error) {
       throw new LearningLedgerError("Learning ledger schema could not be initialized.", "PERSISTENCE_ERROR", { cause: error });
@@ -99,6 +103,8 @@ export class SqliteLearningLedger implements LearningLedger {
 
   async list(filters: LearningEventFilters = {}): Promise<LearningEvent[]> {
     const events = await this.snapshot();
+    const occurredAfter = filters.occurredAfter === undefined ? undefined : timestampMs(filters.occurredAfter);
+    const occurredBefore = filters.occurredBefore === undefined ? undefined : timestampMs(filters.occurredBefore);
     const eventTypes = filters.eventTypes === undefined ? undefined : new Set(filters.eventTypes);
     return events.filter((event) => {
       if (filters.eventType !== undefined && event.eventType !== filters.eventType) return false;
@@ -107,8 +113,9 @@ export class SqliteLearningLedger implements LearningLedger {
       if (filters.diagnosisId !== undefined && event.diagnosisId !== filters.diagnosisId) return false;
       if (filters.candidateId !== undefined && event.candidateId !== filters.candidateId) return false;
       if (filters.objectId !== undefined && event.objectId !== filters.objectId) return false;
-      if (filters.occurredAfter !== undefined && event.occurredAt < filters.occurredAfter) return false;
-      if (filters.occurredBefore !== undefined && event.occurredAt > filters.occurredBefore) return false;
+      const occurredAt = timestampMs(event.occurredAt);
+      if (occurredAfter !== undefined && occurredAt < occurredAfter) return false;
+      if (occurredBefore !== undefined && occurredAt > occurredBefore) return false;
       return true;
     });
   }
@@ -118,7 +125,7 @@ export class SqliteLearningLedger implements LearningLedger {
     try {
       const readSnapshot = this.database.transaction(() => {
         const rows = this.database.prepare(
-          "SELECT event_json FROM learning_events ORDER BY occurred_at ASC, id ASC",
+          "SELECT event_json FROM learning_events ORDER BY occurred_at_epoch ASC, id ASC",
         ).all() as Array<{ event_json: string }>;
         return rows.map((row) => {
         let decoded: unknown;
@@ -170,13 +177,14 @@ export class SqliteLearningLedger implements LearningLedger {
     }
     this.database.prepare(`
       INSERT INTO learning_events (
-        id, occurred_at, event_type, actor, correlation_id,
+        id, occurred_at, occurred_at_epoch, event_type, actor, correlation_id,
         ticket_id, diagnosis_id, candidate_id, object_id, source_version,
         payload_json, event_json
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       event.id,
       event.occurredAt,
+      timestampMs(event.occurredAt),
       event.eventType,
       event.actor,
       event.correlationId,
@@ -193,4 +201,24 @@ export class SqliteLearningLedger implements LearningLedger {
   private ensureInitialized(): void {
     if (!this.initialized) throw new LearningLedgerError("Learning ledger has not been initialized.", "PERSISTENCE_ERROR");
   }
+
+  private ensureColumn(table: string, column: string, definition: string): void {
+    const columns = this.database.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+    if (!columns.some((entry) => entry.name === column)) this.database.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+  }
+
+  private backfillEpochs(): void {
+    const rows = this.database.prepare("SELECT id, occurred_at FROM learning_events WHERE occurred_at_epoch IS NULL").all() as Array<{ id: string; occurred_at: string }>;
+    const update = this.database.prepare("UPDATE learning_events SET occurred_at_epoch = ? WHERE id = ?");
+    const transaction = this.database.transaction(() => {
+      for (const row of rows) update.run(timestampMs(row.occurred_at), row.id);
+    });
+    transaction();
+  }
+}
+
+function timestampMs(value: string): number {
+  const parsed = Date.parse(value);
+  if (!Number.isFinite(parsed)) throw new LearningLedgerError("Learning timestamp is invalid.", "PERSISTENCE_ERROR");
+  return parsed;
 }

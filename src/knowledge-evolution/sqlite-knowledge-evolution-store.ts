@@ -12,7 +12,7 @@ interface AuditRow { payload_json: string; }
 interface EventRow { event_json: string; }
 interface HeadTransitionRow { object_id: string; to_version: number; }
 interface HeadRow { object_id: string; version: number; }
-interface VersionRow extends JsonRow { approved_at: string; }
+interface VersionRow extends JsonRow { approved_at: string; approved_at_epoch: number; }
 type SupersededEvent = Extract<LearningEvent, { eventType: "knowledge-version-superseded" }>;
 type PromotedEvent = Extract<LearningEvent, { eventType: "candidate-promoted" }>;
 type ReactivatedEvent = Extract<LearningEvent, { eventType: "knowledge-version-reactivated" }>;
@@ -36,6 +36,7 @@ export class SqliteKnowledgeEvolutionStore implements KnowledgeVersionStore {
           object_id TEXT NOT NULL,
           version INTEGER NOT NULL,
           approved_at TEXT NOT NULL,
+          approved_at_epoch INTEGER NOT NULL,
           learning_governance TEXT NOT NULL DEFAULT 'legacy',
           payload_json TEXT NOT NULL,
           PRIMARY KEY (object_id, version)
@@ -51,6 +52,7 @@ export class SqliteKnowledgeEvolutionStore implements KnowledgeVersionStore {
           to_version INTEGER NOT NULL,
           transition_kind TEXT NOT NULL,
           effective_at TEXT NOT NULL,
+          effective_at_epoch INTEGER NOT NULL,
           correlation_id TEXT NOT NULL
         );
         CREATE TABLE IF NOT EXISTS knowledge_audits (
@@ -65,16 +67,23 @@ export class SqliteKnowledgeEvolutionStore implements KnowledgeVersionStore {
         );
         CREATE INDEX IF NOT EXISTS knowledge_candidates_recorded_idx ON knowledge_candidates(recorded_at, id);
         CREATE INDEX IF NOT EXISTS knowledge_versions_object_idx ON knowledge_versions(object_id, version DESC);
-        CREATE INDEX IF NOT EXISTS knowledge_versions_effective_idx ON knowledge_versions(approved_at, object_id, version);
-        CREATE INDEX IF NOT EXISTS knowledge_head_transitions_asof_idx ON knowledge_head_transitions(effective_at, object_id, id);
+        CREATE INDEX IF NOT EXISTS knowledge_versions_effective_idx ON knowledge_versions(approved_at_epoch, object_id, version);
+        CREATE INDEX IF NOT EXISTS knowledge_head_transitions_asof_idx ON knowledge_head_transitions(effective_at_epoch, object_id, id);
+        CREATE INDEX IF NOT EXISTS learning_events_occurred_epoch_idx ON learning_events(occurred_at_epoch, id);
         CREATE INDEX IF NOT EXISTS knowledge_audits_candidate_idx ON knowledge_audits(candidate_id, action);
       `);
       this.ensureColumn("knowledge_versions", "learning_governance", "TEXT NOT NULL DEFAULT 'legacy'");
+      this.ensureColumn("knowledge_versions", "approved_at_epoch", "INTEGER");
+      this.ensureColumn("knowledge_head_transitions", "effective_at_epoch", "INTEGER");
+      this.ensureColumn("learning_events", "occurred_at_epoch", "INTEGER");
+      this.backfillEpochs("knowledge_versions", "object_id || ':' || version", "approved_at", "approved_at_epoch");
+      this.backfillEpochs("knowledge_head_transitions", "id", "effective_at", "effective_at_epoch");
+      this.backfillEpochs("learning_events", "id", "occurred_at", "occurred_at_epoch");
       this.database.exec(`
         INSERT OR IGNORE INTO knowledge_object_heads(object_id, version)
         SELECT object_id, MAX(version) FROM knowledge_versions GROUP BY object_id;
-        INSERT INTO knowledge_head_transitions(object_id, from_version, to_version, transition_kind, effective_at, correlation_id)
-        SELECT versions.object_id, NULL, heads.version, 'legacy-backfill', versions.approved_at, '00000000-0000-4000-8000-000000000000'
+        INSERT INTO knowledge_head_transitions(object_id, from_version, to_version, transition_kind, effective_at, effective_at_epoch, correlation_id)
+        SELECT versions.object_id, NULL, heads.version, 'legacy-backfill', versions.approved_at, versions.approved_at_epoch, '00000000-0000-4000-8000-000000000000'
         FROM knowledge_object_heads AS heads
         JOIN knowledge_versions AS versions ON versions.object_id = heads.object_id AND versions.version = heads.version
         WHERE NOT EXISTS (SELECT 1 FROM knowledge_head_transitions AS transitions WHERE transitions.object_id = heads.object_id);
@@ -119,7 +128,7 @@ export class SqliteKnowledgeEvolutionStore implements KnowledgeVersionStore {
       WHERE heads.version = versions.version
         OR (heads.object_id IS NULL AND versions.learning_governance = 'legacy'
           AND versions.version = (SELECT MAX(legacy_versions.version) FROM knowledge_versions AS legacy_versions WHERE legacy_versions.object_id = versions.object_id))
-      ORDER BY versions.approved_at ASC, versions.object_id ASC
+      ORDER BY versions.approved_at_epoch ASC, versions.object_id ASC
     `).all() as JsonRow[];
     return rows.map((row) => this.parseObject(row.payload_json));
   }
@@ -130,7 +139,7 @@ export class SqliteKnowledgeEvolutionStore implements KnowledgeVersionStore {
   }
 
   async listVersionsAsOf(asOf: string): Promise<KnowledgeObject[]> {
-    const rows = this.database.prepare("SELECT payload_json FROM knowledge_versions WHERE approved_at <= ? ORDER BY approved_at ASC, object_id ASC, version ASC").all(asOf) as JsonRow[];
+    const rows = this.database.prepare("SELECT payload_json FROM knowledge_versions WHERE approved_at_epoch <= ? ORDER BY approved_at_epoch ASC, object_id ASC, version ASC").all(timestampMs(asOf)) as JsonRow[];
     return rows.map((row) => this.parseObject(row.payload_json));
   }
 
@@ -143,15 +152,16 @@ export class SqliteKnowledgeEvolutionStore implements KnowledgeVersionStore {
   }
 
   async snapshotForReuse(asOf: string): Promise<KnowledgeReuseSnapshot> {
+    const asOfEpoch = timestampMs(asOf);
     const transaction = this.database.transaction(() => {
-      const versions = this.database.prepare("SELECT payload_json FROM knowledge_versions WHERE approved_at <= ? ORDER BY approved_at ASC, object_id ASC, version ASC")
-        .all(asOf) as JsonRow[];
+      const versions = this.database.prepare("SELECT payload_json FROM knowledge_versions WHERE approved_at_epoch <= ? ORDER BY approved_at_epoch ASC, object_id ASC, version ASC")
+        .all(asOfEpoch) as JsonRow[];
       const transitionRows = this.database.prepare(`SELECT object_id, to_version FROM knowledge_head_transitions
-        WHERE effective_at <= ? ORDER BY effective_at ASC, id ASC`).all(asOf) as HeadTransitionRow[];
+        WHERE effective_at_epoch <= ? ORDER BY effective_at_epoch ASC, id ASC`).all(asOfEpoch) as HeadTransitionRow[];
       const heads = new Map<string, number>();
       for (const transition of transitionRows) heads.set(transition.object_id, transition.to_version);
-      const eventRows = this.database.prepare("SELECT event_json FROM learning_events WHERE occurred_at <= ? ORDER BY occurred_at ASC, id ASC")
-        .all(asOf) as EventRow[];
+      const eventRows = this.database.prepare("SELECT event_json FROM learning_events WHERE occurred_at_epoch <= ? ORDER BY occurred_at_epoch ASC, id ASC")
+        .all(asOfEpoch) as EventRow[];
       return {
         versions: versions.map((row) => this.parseObject(row.payload_json)),
         heads,
@@ -202,8 +212,8 @@ export class SqliteKnowledgeEvolutionStore implements KnowledgeVersionStore {
           throw repositoryError("Knowledge replacement candidate does not match the current head.");
         }
         this.assertHead(parsed.data.id, expectedHeadVersion);
-        this.database.prepare("INSERT INTO knowledge_versions(object_id, version, approved_at, learning_governance, payload_json) VALUES (?, ?, ?, ?, ?)")
-          .run(parsed.data.id, parsed.data.version, approval.approvedAt, "ledger", JSON.stringify(parsed.data));
+        this.database.prepare("INSERT INTO knowledge_versions(object_id, version, approved_at, approved_at_epoch, learning_governance, payload_json) VALUES (?, ?, ?, ?, ?, ?)")
+          .run(parsed.data.id, parsed.data.version, approval.approvedAt, timestampMs(approval.approvedAt), "ledger", JSON.stringify(parsed.data));
         const updated = this.database.prepare("UPDATE knowledge_object_heads SET version = ? WHERE object_id = ? AND version = ?")
           .run(parsed.data.version, parsed.data.id, expectedHeadVersion);
         if (updated.changes !== 1) throw new DomainError("Knowledge object head is stale.", "STALE_APPROVAL");
@@ -237,12 +247,13 @@ export class SqliteKnowledgeEvolutionStore implements KnowledgeVersionStore {
     try {
       const transaction = this.database.transaction(() => {
         this.assertHead(input.objectId, input.expectedHeadVersion);
-        const target = this.database.prepare("SELECT payload_json, approved_at FROM knowledge_versions WHERE object_id = ? AND version = ?").get(input.objectId, input.sourceVersion) as VersionRow | undefined;
+        const target = this.database.prepare("SELECT payload_json, approved_at, approved_at_epoch FROM knowledge_versions WHERE object_id = ? AND version = ?").get(input.objectId, input.sourceVersion) as VersionRow | undefined;
         if (target === undefined) throw repositoryError("Knowledge version was not found.");
-        const displaced = this.database.prepare("SELECT approved_at FROM knowledge_versions WHERE object_id = ? AND version = ?").get(input.objectId, input.expectedHeadVersion) as { approved_at?: string } | undefined;
-        const latestTransition = this.database.prepare("SELECT effective_at FROM knowledge_head_transitions WHERE object_id = ? ORDER BY effective_at DESC, id DESC LIMIT 1").get(input.objectId) as { effective_at?: string } | undefined;
-        if (displaced?.approved_at === undefined || latestTransition?.effective_at === undefined ||
-          input.occurredAt < target.approved_at || input.occurredAt < displaced.approved_at || input.occurredAt < latestTransition.effective_at) {
+        const displaced = this.database.prepare("SELECT approved_at_epoch FROM knowledge_versions WHERE object_id = ? AND version = ?").get(input.objectId, input.expectedHeadVersion) as { approved_at_epoch?: number } | undefined;
+        const latestTransition = this.database.prepare("SELECT effective_at_epoch FROM knowledge_head_transitions WHERE object_id = ? ORDER BY effective_at_epoch DESC, id DESC LIMIT 1").get(input.objectId) as { effective_at_epoch?: number } | undefined;
+        const occurredAtEpoch = timestampMs(input.occurredAt);
+        if (displaced?.approved_at_epoch === undefined || latestTransition?.effective_at_epoch === undefined ||
+          occurredAtEpoch < target.approved_at_epoch || occurredAtEpoch < displaced.approved_at_epoch || occurredAtEpoch < latestTransition.effective_at_epoch) {
           throw repositoryError("Knowledge reactivation cannot precede an effective version transition.");
         }
         const updated = this.database.prepare("UPDATE knowledge_object_heads SET version = ? WHERE object_id = ? AND version = ?")
@@ -318,8 +329,8 @@ export class SqliteKnowledgeEvolutionStore implements KnowledgeVersionStore {
         }
         const existing = this.database.prepare("SELECT 1 AS found FROM knowledge_versions WHERE object_id = ? LIMIT 1").get(candidateId) as { found?: number } | undefined;
         if (existing?.found === 1) throw repositoryError("Knowledge candidate has already been promoted.");
-        this.database.prepare("INSERT INTO knowledge_versions(object_id, version, approved_at, learning_governance, payload_json) VALUES (?, ?, ?, ?, ?)")
-          .run(parsed.data.id, parsed.data.version, approval.approvedAt, "ledger", JSON.stringify(parsed.data));
+        this.database.prepare("INSERT INTO knowledge_versions(object_id, version, approved_at, approved_at_epoch, learning_governance, payload_json) VALUES (?, ?, ?, ?, ?, ?)")
+          .run(parsed.data.id, parsed.data.version, approval.approvedAt, timestampMs(approval.approvedAt), "ledger", JSON.stringify(parsed.data));
         this.database.prepare("INSERT INTO knowledge_object_heads(object_id, version) VALUES (?, ?)").run(parsed.data.id, parsed.data.version);
         const correlationId = randomUUID();
         this.insertTransition(parsed.data.id, null, parsed.data.version, "initial-promotion", approval.approvedAt, correlationId);
@@ -340,23 +351,7 @@ export class SqliteKnowledgeEvolutionStore implements KnowledgeVersionStore {
               provenance: "Operator approved a knowledge-object version.",
             },
           };
-          const eventParsed = LearningEventSchema.safeParse(learningEvent);
-          if (!eventParsed.success) throw repositoryError("Promotion learning event is invalid.");
-          this.database.prepare(`
-            INSERT INTO learning_events(id, occurred_at, event_type, actor, correlation_id, candidate_id, object_id, source_version, payload_json, event_json)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-          `).run(
-            learningEvent.id,
-            learningEvent.occurredAt,
-            learningEvent.eventType,
-            learningEvent.actor,
-            learningEvent.correlationId,
-            learningEvent.candidateId,
-            learningEvent.objectId,
-            learningEvent.sourceVersion,
-            JSON.stringify(learningEvent.payload),
-            JSON.stringify(learningEvent),
-          );
+          this.insertLearningEvent(learningEvent);
         }
       });
       transaction();
@@ -391,14 +386,24 @@ export class SqliteKnowledgeEvolutionStore implements KnowledgeVersionStore {
     if (!columns.some((entry) => entry.name === column)) this.database.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
   }
 
+  private backfillEpochs(table: "knowledge_versions" | "knowledge_head_transitions" | "learning_events", key: string, timestampColumn: string, epochColumn: string): void {
+    const rows = this.database.prepare(`SELECT ${key} AS row_key, ${timestampColumn} AS timestamp FROM ${table} WHERE ${epochColumn} IS NULL`).all() as Array<{ row_key: string | number; timestamp: string }>;
+    const update = this.database.prepare(`UPDATE ${table} SET ${epochColumn} = ? WHERE ${key} = ?`);
+    const transaction = this.database.transaction(() => {
+      for (const row of rows) update.run(timestampMs(row.timestamp), row.row_key);
+    });
+    transaction();
+  }
+
   private async readHeads(query: string, ...params: unknown[]): Promise<ReadonlyMap<string, number>> {
     const rows = this.database.prepare(query).all(...params) as HeadRow[];
     return new Map(rows.map((row) => [row.object_id, row.version]));
   }
 
   private async replayHeads(asOf: string): Promise<ReadonlyMap<string, number>> {
+    const asOfEpoch = timestampMs(asOf);
     const rows = this.database.prepare(`SELECT object_id, to_version FROM knowledge_head_transitions
-      WHERE effective_at <= ? ORDER BY effective_at ASC, id ASC`).all(asOf) as HeadTransitionRow[];
+      WHERE effective_at_epoch <= ? ORDER BY effective_at_epoch ASC, id ASC`).all(asOfEpoch) as HeadTransitionRow[];
     return new Map(rows.map((row) => [row.object_id, row.to_version]));
   }
 
@@ -408,9 +413,9 @@ export class SqliteKnowledgeEvolutionStore implements KnowledgeVersionStore {
   }
 
   private insertTransition(objectId: string, fromVersion: number | null, toVersion: number, kind: string, effectiveAt: string, correlationId: string): void {
-    this.database.prepare(`INSERT INTO knowledge_head_transitions(object_id, from_version, to_version, transition_kind, effective_at, correlation_id)
-      VALUES (?, ?, ?, ?, ?, ?)`)
-      .run(objectId, fromVersion, toVersion, kind, effectiveAt, correlationId);
+    this.database.prepare(`INSERT INTO knowledge_head_transitions(object_id, from_version, to_version, transition_kind, effective_at, effective_at_epoch, correlation_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?)`)
+      .run(objectId, fromVersion, toVersion, kind, effectiveAt, timestampMs(effectiveAt), correlationId);
   }
 
   private parseSupersededEvent(event: LearningEvent, objectId: string, sourceVersion: number): SupersededEvent {
@@ -440,9 +445,9 @@ export class SqliteKnowledgeEvolutionStore implements KnowledgeVersionStore {
   private insertLearningEvent(event: LearningEvent): void {
     const parsed = LearningEventSchema.safeParse(event);
     if (!parsed.success) throw repositoryError("Knowledge learning event is invalid.");
-    this.database.prepare(`INSERT INTO learning_events(id, occurred_at, event_type, actor, correlation_id, candidate_id, object_id, source_version, payload_json, event_json)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-      .run(parsed.data.id, parsed.data.occurredAt, parsed.data.eventType, parsed.data.actor, parsed.data.correlationId,
+    this.database.prepare(`INSERT INTO learning_events(id, occurred_at, occurred_at_epoch, event_type, actor, correlation_id, candidate_id, object_id, source_version, payload_json, event_json)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run(parsed.data.id, parsed.data.occurredAt, timestampMs(parsed.data.occurredAt), parsed.data.eventType, parsed.data.actor, parsed.data.correlationId,
         parsed.data.candidateId ?? null, parsed.data.objectId ?? null, parsed.data.sourceVersion ?? null,
         JSON.stringify(parsed.data.payload), JSON.stringify(parsed.data));
   }
@@ -486,4 +491,10 @@ function parseJson(value: string): unknown {
 
 function isUniqueViolation(error: unknown): boolean {
   return error instanceof Error && /unique constraint/i.test(error.message);
+}
+
+function timestampMs(value: string): number {
+  const parsed = Date.parse(value);
+  if (!Number.isFinite(parsed)) throw repositoryError("Knowledge timestamp is invalid.");
+  return parsed;
 }

@@ -40,6 +40,7 @@ export function projectKnowledgeLearning(
   const staleReasons: string[] = [];
   const contradictionReasons: string[] = [];
   const supportingEventIds: string[] = [];
+  let hasSuccessfulReuse = false;
 
   for (const event of relevant) {
     supportingEventIds.push(event.id);
@@ -55,15 +56,18 @@ export function projectKnowledgeLearning(
         maturity = maxMaturity(maturity, "outcome-verified");
         break;
       case "knowledge-reused":
+        hasSuccessfulReuse = true;
         maturity = "reuse-validated";
         break;
       case "candidate-promoted":
         maturity = maxMaturity(maturity, "promoted");
-        health = "active";
+        if (staleAt === undefined || event.occurredAt > staleAt) health = "active";
         break;
       case "knowledge-marked-stale":
-        health = "stale";
-        staleAt = event.occurredAt;
+        if (staleAt === undefined || event.occurredAt >= staleAt) {
+          health = "stale";
+          staleAt = event.occurredAt;
+        }
         staleReasons.push(...event.payload.staleReasons.filter((reason) => !staleReasons.includes(reason)));
         break;
       case "knowledge-reuse-failed":
@@ -77,6 +81,8 @@ export function projectKnowledgeLearning(
         break;
     }
   }
+
+  if (hasSuccessfulReuse) maturity = "reuse-validated";
 
   const asOf = input.asOf ?? new Date().toISOString();
   let signalWeight = maturityWeight[maturity];

@@ -46,6 +46,22 @@ For transport consistency, compare the CLI JSON with `get_queue_metrics`,
 All four surfaces call the shared `calculateQueueMetrics` implementation and
 validate against `QueueMetricsSchema`.
 
+## SQLite Learning Ledger Showcase
+
+The governed learning loop has a repeatable local showcase:
+
+```powershell
+npm run demo:learning-ledger
+```
+
+It uses controlled local drafting only and a disposable SQLite database. The
+report demonstrates deterministic candidate discovery, explicit human
+promotion, a technically verified outcome, a later-ticket reuse event, a
+failed reuse retained as contradiction evidence, a stale signal with decayed
+weight, and byte-for-byte preservation of the historical recommendation.
+The operational ticket stores remain authoritative; the ledger is a durable
+learning and provenance plane.
+
 ## Resettable Skill Showcase Results
 
 The separate command-line showcase uses fresh temporary state and exercises

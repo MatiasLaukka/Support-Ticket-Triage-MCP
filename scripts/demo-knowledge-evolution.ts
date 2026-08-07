@@ -35,6 +35,14 @@ export interface KnowledgeEvolutionShowcaseReport {
     afterEvidence: ReuseObservation;
     historicalRecommendationUnchanged: boolean;
   };
+  learning: {
+    maturityBeforeStale: string;
+    healthBeforeStale: string;
+    healthAfterStale: string;
+    verifiedOutcomeCount: number;
+    failedReuseRecorded: boolean;
+    historicalRecommendationUnchanged: boolean;
+  };
   output: string;
 }
 
@@ -111,6 +119,51 @@ export async function runKnowledgeEvolutionShowcase(
       body: "Request ID: req-2099 confirms the accepted event processing attempt.",
     }],
   });
+  await deps.knowledgeEvolution.service.recordReuse({
+    objectId: approved.id,
+    sourceVersion: approved.version,
+    ticketId: futureTicket.id,
+    actorId: "support-lead",
+    matchReasons: ["shared evidence-backed diagnosis", "shared owner workflow"],
+    evidenceIds: ["request-id"],
+    success: true,
+  });
+  await deps.knowledgeEvolution.service.recordReuse({
+    objectId: "known-cause-unrelated-reuse",
+    sourceVersion: approved.version,
+    ticketId: "TKT-1004",
+    actorId: "support-lead",
+    matchReasons: ["similar wording only"],
+    success: false,
+    failureReason: "Operator rejected reuse because the affected scope diverged.",
+  });
+  await deps.knowledgeEvolution.ledger.append({
+    id: "77777777-7777-4777-8777-777777777777",
+    occurredAt: "2026-08-01T12:06:00.000Z",
+    actor: "support-lead",
+    correlationId: "88888888-8888-4888-8888-888888888888",
+    ticketId: "TKT-1001",
+    diagnosisId: "diagnosis-001",
+    candidateId,
+    objectId: approved.id,
+    sourceVersion: approved.version,
+    eventType: "outcome-verified",
+    payload: {
+      evidenceIds: ["request-id"],
+      verificationType: "technically-verified",
+      outcomeStatus: "resolved",
+      provenance: "Controlled technical verification fixture.",
+    },
+  });
+  const learningBeforeStale = await deps.knowledgeEvolution.service.learningSummary({ candidateId, objectId: approved.id, asOf: "2026-08-01T12:07:00.000Z" });
+  await deps.knowledgeEvolution.service.markStale({
+    objectId: approved.id,
+    sourceVersion: approved.version,
+    actorId: "support-lead",
+    reasons: ["Showcase stale-signal demonstration."],
+  });
+  const learningAfterStale = await deps.knowledgeEvolution.service.learningSummary({ candidateId, objectId: approved.id, asOf: "2026-09-01T12:07:00.000Z" });
+  const failedReuseEvents = await deps.knowledgeEvolution.ledger.list({ eventType: "knowledge-reuse-failed" });
   const historicalAfter = stableJson(await deps.recommendations.get(historicalRecommendationId));
   const futureTicketReuse = {
     ticketId: futureTicket.id,
@@ -141,6 +194,14 @@ export async function runKnowledgeEvolutionShowcase(
     `- After v1 promotion: ${formatReuseObservation(futureTicketReuse.postPromotion)}.`,
     `- After required evidence: ${formatReuseObservation(futureTicketReuse.afterEvidence)}.`,
     `- Historical recommendation: ${futureTicketReuse.historicalRecommendationUnchanged ? "byte-for-byte unchanged" : "CHANGED"}.`,
+    "",
+    "## Learning ledger",
+    "",
+    `- Before stale signal: maturity=${learningBeforeStale.maturity}; health=${learningBeforeStale.health}; reuseEligible=${learningBeforeStale.eligibleForReuse}.`,
+    `- Verified outcomes recorded: ${learningBeforeStale.supportingEventIds.includes("77777777-7777-4777-8777-777777777777") ? 1 : 0}.`,
+    `- Failed reuse retained: ${failedReuseEvents.length > 0}.`,
+    `- After stale signal: health=${learningAfterStale.health}; decayedSignalWeight=${learningAfterStale.signalWeight}; reuseEligible=${learningAfterStale.eligibleForReuse}.`,
+    `- Historical recommendation: ${futureTicketReuse.historicalRecommendationUnchanged ? "byte-for-byte unchanged" : "CHANGED"}.`,
     ...(options.verbose ? [
       "",
       "## Sanitized evidence",
@@ -160,6 +221,7 @@ export async function runKnowledgeEvolutionShowcase(
       ...auditEvents.map((event) => `- ${event.action}: actor=${event.actor}; result=${event.result}.`),
     ] : []),
   ].join("\n");
+  deps.knowledgeEvolution.ledger.close();
   return {
     mode: "controlled",
     gptStatus: discovery.gptAdvisory.status,
@@ -168,6 +230,14 @@ export async function runKnowledgeEvolutionShowcase(
     approval: { actor: "support-lead", status: "approved" },
     auditActions,
     futureTicketReuse,
+    learning: {
+      maturityBeforeStale: learningBeforeStale.maturity,
+      healthBeforeStale: learningBeforeStale.health,
+      healthAfterStale: learningAfterStale.health,
+      verifiedOutcomeCount: learningBeforeStale.supportingEventIds.includes("77777777-7777-4777-8777-777777777777") ? 1 : 0,
+      failedReuseRecorded: failedReuseEvents.length > 0,
+      historicalRecommendationUnchanged: futureTicketReuse.historicalRecommendationUnchanged,
+    },
     output,
   };
 }

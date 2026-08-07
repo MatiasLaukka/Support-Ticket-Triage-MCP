@@ -25,6 +25,7 @@
     "demo:approval-desk": "node dist/scripts/demo-approval-desk.js",
     "demo:skill-showcase": "node dist/scripts/demo-skill-showcase.js",
     "demo:knowledge-evolution": "npm run build && node dist/scripts/demo-knowledge-evolution.js",
+    "demo:learning-ledger": "npm run build && node dist/scripts/demo-learning-ledger.js",
     "demo:metrics": "npm run build && node dist/scripts/demo-metrics.js",
     "demo:showcase": "node dist/scripts/demo-approval-desk.js",
     "verify:portfolio": "npm run build && npm run typecheck && npx vitest run --dir test && npm run evaluate:diagnostics && npm run evaluate:lifecycle-replay && npm run demo:knowledge-evolution -- --verbose && npm run demo:metrics"

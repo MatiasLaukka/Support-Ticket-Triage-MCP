@@ -3,6 +3,7 @@ import type { Ticket } from "../src/domain.js";
 import { KnowledgeEvolutionService } from "../src/knowledge-evolution/service.js";
 import type { CandidateDraftProvider } from "../src/knowledge-evolution/candidate-draft-provider.js";
 import type { KnowledgeAuditEvent } from "../src/knowledge-evolution/knowledge-audit-repository.js";
+import type { KnowledgeVersionStore } from "../src/knowledge-evolution/knowledge-version-store.js";
 import type { CompletedDiagnosis, KnowledgeCandidate, KnowledgeObject } from "../src/knowledge-evolution/domain.js";
 
 describe("knowledge evolution service", () => {
@@ -247,6 +248,25 @@ describe("knowledge evolution service", () => {
       reviewedFields: ["summary"],
       provenanceSummary: "completed-diagnoses",
     }]);
+  });
+
+  it("creates a reviewable revision from the active source and promotes a derived replacement version", async () => {
+    const fixture = createFixture();
+    const service = fixture.service();
+    await service.discover({ actorId: "support-lead", includeGpt: false });
+    const initial = await service.approve({ candidateId: "known-cause-diagnosis-001", actorId: "support-lead", expectedVersion: 1 });
+
+    const revision = await service.proposeRevision({
+      objectId: initial.id,
+      sourceVersion: initial.version,
+      actorId: "support-lead",
+      edits: { summary: "A reviewed replacement for stale API credentials." },
+    });
+    const replacement = await service.approveRevision({ candidateId: revision.id, actorId: "support-lead" });
+
+    expect(revision).toMatchObject({ objectId: initial.id, sourceVersion: 1, status: "candidate", version: 1 });
+    expect(replacement).toMatchObject({ id: initial.id, version: 2, summary: "A reviewed replacement for stale API credentials.", learningGovernance: "ledger" });
+    await expect(service.proposeRevision({ objectId: initial.id, sourceVersion: 1, actorId: "support-lead" })).rejects.toMatchObject({ code: "STALE_APPROVAL" });
   });
 
   it("rejects unsupported edits, blank actors, stale versions, and duplicate promotions", async () => {
@@ -535,6 +555,17 @@ function createFixture(options: {
       return object;
     },
     async removeApproved(candidateId: string) { const index = approved.findIndex((item) => item.id === candidateId); if (index < 0) throw repositoryError("Approved object was not found."); approved.splice(index, 1); },
+    async listVersions(objectId: string) { return approved.filter((object) => object.id === objectId); },
+    async listHeadMappings() { return new Map(approved.map((object) => [object.id, object.version])); },
+    async promoteReplacement(input: Parameters<KnowledgeVersionStore["promoteReplacement"]>[0]) {
+      const candidate = candidates.find((item) => item.id === input.candidateId);
+      const current = approved.find((object) => object.id === input.approved.id);
+      if (candidate?.version !== input.expectedCandidateVersion || current?.version !== input.expectedHeadVersion) throw Object.assign(new Error("Knowledge object head is stale."), { code: "STALE_APPROVAL" });
+      const replacement = { ...input.approved, version: input.expectedHeadVersion + 1 } as KnowledgeObject;
+      approved.splice(approved.indexOf(current), 1, replacement);
+      events.push(input.promotionAudit);
+      return replacement;
+    },
   };
   let remainingAuditFailures = options.failApprovedAuditOnce ? 1 : 0;
   let remainingCandidateAuditFailures = options.failCandidateCreatedAuditOnce ? 1 : 0;

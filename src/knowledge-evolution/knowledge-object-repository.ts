@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import { DomainError } from "../errors.js";
 import { KnowledgeCandidateReadSchema, KnowledgeCandidateWriteSchema, KnowledgeObjectReadSchema, KnowledgeObjectWriteSchema, type KnowledgeCandidate, type KnowledgeObject } from "./domain.js";
 import { isMissing, listJson, readJson, repositoryError, serialize, writeNewJson } from "./repository-utils.js";
+import type { KnowledgeReuseSnapshot, KnowledgeVersionStore } from "./knowledge-version-store.js";
 
 const order = <T extends { id: string; provenance: { recordedAt: string } }>(a: T, b: T) => a.provenance.recordedAt.localeCompare(b.provenance.recordedAt) || a.id.localeCompare(b.id);
 
@@ -51,4 +52,26 @@ export class KnowledgeObjectRepository {
     });
   }
   async listApproved(): Promise<KnowledgeObject[]> { return serialize(this.approvedRoot, () => listJson(this.approvedRoot, KnowledgeObjectReadSchema, order)); }
+  async listVersions(objectId: string): Promise<KnowledgeObject[]> {
+    return (await this.listApproved()).filter((object) => object.id === objectId);
+  }
+  async listVersionsAsOf(asOf: string): Promise<KnowledgeObject[]> {
+    return (await this.listApproved()).filter((object) => object.approval?.approvedAt !== undefined && object.approval.approvedAt <= asOf);
+  }
+  async listHeadMappings(): Promise<ReadonlyMap<string, number>> {
+    return new Map((await this.listApproved()).map((object) => [object.id, object.version]));
+  }
+  async listHeadMappingsAsOf(asOf: string): Promise<ReadonlyMap<string, number>> {
+    return new Map((await this.listVersionsAsOf(asOf)).map((object) => [object.id, object.version]));
+  }
+  async snapshotForReuse(asOf: string): Promise<KnowledgeReuseSnapshot> {
+    const versions = await this.listVersionsAsOf(asOf);
+    return { events: [], versions, heads: new Map(versions.map((object) => [object.id, object.version])) };
+  }
+  async promoteReplacement(_input: Parameters<KnowledgeVersionStore["promoteReplacement"]>[0]): Promise<KnowledgeObject> {
+    throw new DomainError("JSON storage does not support version transitions.", "UNSUPPORTED_VERSION_TRANSITION");
+  }
+  async reactivateVersion(_input: Parameters<KnowledgeVersionStore["reactivateVersion"]>[0]): Promise<KnowledgeObject> {
+    throw new DomainError("JSON storage does not support version transitions.", "UNSUPPORTED_VERSION_TRANSITION");
+  }
 }

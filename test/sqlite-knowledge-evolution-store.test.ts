@@ -39,17 +39,101 @@ const audit: KnowledgeAuditEvent = {
   provenanceSummary: "completed-diagnoses", reviewedFields: [], result: "approved", notes: "Operator approved the candidate.",
 };
 
-async function createStore() {
+function versionEvent(
+  eventType: "candidate-promoted" | "knowledge-version-superseded" | "knowledge-version-reactivated",
+  sourceVersion: number,
+  correlationId: string,
+  occurredAt: string,
+  replacementVersion?: number,
+) {
+  return eventType === "candidate-promoted"
+    ? {
+        id: "e239b7c0-49d6-4d39-bff6-33c75146e661", occurredAt, actor: "support-lead", correlationId,
+        candidateId: "known-cause-api-credential-rotation-revision", objectId: candidate.id, sourceVersion,
+        eventType, payload: { maturity: "promoted" as const, health: "active" as const, provenance: "Operator approved the replacement." },
+      }
+    : eventType === "knowledge-version-superseded" ? {
+        id: "e239b7c0-49d6-4d39-bff6-33c75146e662", occurredAt, actor: "support-lead", correlationId,
+        objectId: candidate.id, sourceVersion, eventType,
+        payload: { health: "superseded" as const, replacementVersion: replacementVersion!, provenance: "Operator superseded the prior version." },
+      } : {
+        id: "e239b7c0-49d6-4d39-bff6-33c75146e663", occurredAt, actor: "support-lead", correlationId,
+        objectId: candidate.id, sourceVersion, eventType,
+        payload: { health: "active" as const, reactivatedVersion: sourceVersion, provenance: "Operator reactivated the historical version." },
+      };
+}
+
+async function createStore(options: ConstructorParameters<typeof SqliteKnowledgeEvolutionStore>[1] = {}) {
   const root = mkdtempSync(join(tmpdir(), "triage-knowledge-store-"));
   roots.push(root);
   const ledger = new SqliteLearningLedger(join(root, "learning.sqlite"));
   await ledger.initialize();
-  const store = new SqliteKnowledgeEvolutionStore(ledger.getDatabase());
+  const store = new SqliteKnowledgeEvolutionStore(ledger.getDatabase(), options);
   await store.initialize();
   return { ledger, store };
 }
 
 describe("SqliteKnowledgeEvolutionStore", () => {
+  it("keeps immutable replacement history and reconstructs the historical head", async () => {
+    const { ledger, store } = await createStore();
+    await store.saveCandidate(candidate);
+    await store.promoteWithAudit(candidate.id, approved, candidate.version, audit);
+
+    const replacementCandidate = { ...candidate, id: "known-cause-api-credential-rotation-revision", objectId: candidate.id, sourceVersion: 1, version: 1 };
+    await store.saveCandidate(replacementCandidate);
+    const correlationId = "d4d7ee66-5bf3-41dc-8c9a-0bd827cd4444";
+    const replacement = await store.promoteReplacement({
+      candidateId: replacementCandidate.id,
+      approved: { ...approved, id: candidate.id, summary: "A revised credential rotation guide.", approval: { approvedBy: "support-lead", approvedAt: "2026-08-07T11:05:00.000Z" } },
+      expectedCandidateVersion: 1,
+      expectedHeadVersion: 1,
+      promotionAudit: { ...audit, id: "audit-promotion-002", candidateId: replacementCandidate.id, timestamp: "2026-08-07T11:05:00.000Z" },
+      supersededEvent: versionEvent("knowledge-version-superseded", 1, correlationId, "2026-08-07T11:05:00.000Z", 2),
+      promotionEvent: versionEvent("candidate-promoted", 2, correlationId, "2026-08-07T11:05:00.000Z"),
+    });
+
+    expect(replacement).toMatchObject({ version: 2, learningGovernance: "ledger" });
+    await expect(store.listVersions(candidate.id)).resolves.toMatchObject([{ version: 1 }, { version: 2 }]);
+    await expect(store.listApproved()).resolves.toMatchObject([{ version: 2 }]);
+    await expect(store.listHeadMappingsAsOf("2026-08-07T10:30:00.000Z")).resolves.toEqual(new Map([[candidate.id, 1]]));
+    const snapshot = await store.snapshotForReuse("2026-08-07T10:30:00.000Z");
+    expect(snapshot.versions).toMatchObject([{ version: 1 }]);
+    expect(snapshot.heads).toEqual(new Map([[candidate.id, 1]]));
+    expect(snapshot.events.every((event) => event.occurredAt <= "2026-08-07T10:30:00.000Z")).toBe(true);
+    ledger.close();
+  });
+
+  it("reactivates an existing version only with an authorized compare-and-swap head", async () => {
+    const { ledger, store } = await createStore({ reactivationAuthorizer: (actor) => actor === "support-lead" });
+    await store.saveCandidate(candidate);
+    await store.promoteWithAudit(candidate.id, approved, candidate.version, audit);
+    const replacementCandidate = { ...candidate, id: "known-cause-api-credential-rotation-revision", objectId: candidate.id, sourceVersion: 1, version: 1 };
+    await store.saveCandidate(replacementCandidate);
+    await store.promoteReplacement({
+      candidateId: replacementCandidate.id,
+      approved: { ...approved, id: candidate.id, approval: { approvedBy: "support-lead", approvedAt: "2026-08-07T11:05:00.000Z" } },
+      expectedCandidateVersion: 1, expectedHeadVersion: 1,
+      promotionAudit: { ...audit, id: "audit-promotion-002", candidateId: replacementCandidate.id, timestamp: "2026-08-07T11:05:00.000Z" },
+      supersededEvent: versionEvent("knowledge-version-superseded", 1, "d4d7ee66-5bf3-41dc-8c9a-0bd827cd4444", "2026-08-07T11:05:00.000Z", 2),
+      promotionEvent: versionEvent("candidate-promoted", 2, "d4d7ee66-5bf3-41dc-8c9a-0bd827cd4444", "2026-08-07T11:05:00.000Z"),
+    });
+    const correlationId = "b2037092-30bb-4c2b-8f32-2c9d5edf806f";
+    const restored = await store.reactivateVersion({
+      objectId: candidate.id, sourceVersion: 1, expectedHeadVersion: 2, actorId: "support-lead", reason: "The prior version remains the controlled guidance.", occurredAt: "2026-08-07T12:00:00.000Z",
+      supersededEvent: { ...versionEvent("knowledge-version-superseded", 2, correlationId, "2026-08-07T12:00:00.000Z", 1), id: "e239b7c0-49d6-4d39-bff6-33c75146e664" },
+      reactivatedEvent: versionEvent("knowledge-version-reactivated", 1, correlationId, "2026-08-07T12:00:00.000Z"),
+    });
+
+    expect(restored.version).toBe(1);
+    await expect(store.listHeadMappings()).resolves.toEqual(new Map([[candidate.id, 1]]));
+    await expect(store.reactivateVersion({
+      objectId: candidate.id, sourceVersion: 2, expectedHeadVersion: 2, actorId: "support-lead", reason: "Stale retry.", occurredAt: "2026-08-07T12:05:00.000Z",
+      supersededEvent: { ...versionEvent("knowledge-version-superseded", 2, "1a2bc478-d148-4499-91a2-97f6ba03b714", "2026-08-07T12:05:00.000Z", 1), id: "e239b7c0-49d6-4d39-bff6-33c75146e665" },
+      reactivatedEvent: { ...versionEvent("knowledge-version-reactivated", 2, "1a2bc478-d148-4499-91a2-97f6ba03b714", "2026-08-07T12:05:00.000Z"), id: "e239b7c0-49d6-4d39-bff6-33c75146e666" },
+    })).rejects.toMatchObject({ code: "STALE_APPROVAL" });
+    ledger.close();
+  });
+
   it("round trips candidates, immutable approvals, audit, and promotion learning event after reopen", async () => {
     const first = await createStore();
     await first.store.saveCandidate(candidate);

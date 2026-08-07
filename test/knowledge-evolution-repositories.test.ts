@@ -152,6 +152,17 @@ describe("knowledge evolution repositories", () => {
     expect(JSON.parse(await readFile(join(approvedRoot, "legacy-object.json"), "utf8"))).not.toHaveProperty("learningGovernance");
   });
 
+  it("keeps JSON version transitions explicitly unsupported while retaining the legacy v1 read path", async () => {
+    const storage = await root();
+    const repository = new KnowledgeObjectRepository(join(storage, "candidates"), join(storage, "approved"));
+    await repository.saveCandidate(candidate);
+    await repository.promote(candidate.id, approved);
+
+    await expect(repository.promoteReplacement({} as never)).rejects.toMatchObject({ code: "UNSUPPORTED_VERSION_TRANSITION" });
+    await expect(repository.reactivateVersion({} as never)).rejects.toMatchObject({ code: "UNSUPPORTED_VERSION_TRANSITION" });
+    await expect(repository.listHeadMappings()).resolves.toEqual(new Map([[approved.id, 1]]));
+  });
+
   it("removes only the approved object created by a recoverable promotion", async () => {
     const storage = await root();
     const repository = new KnowledgeObjectRepository(join(storage, "candidates"), join(storage, "approved"));

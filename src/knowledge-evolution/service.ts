@@ -13,6 +13,7 @@ import type { KnowledgeAuditEvent, KnowledgeAuditRepository } from "./knowledge-
 import type { KnowledgeObjectRepository } from "./knowledge-object-repository.js";
 import { findEvidenceRequirement } from "../evidence-catalog.js";
 import type { LearningEvent, LearningLedger } from "./learning-ledger.js";
+import type { KnowledgeVersionStore, KnowledgeRevisionOperations } from "./knowledge-version-store.js";
 import { projectCandidateLearning, projectKnowledgeVersionLearning, type KnowledgeLearningSummary } from "./learning-read-model.js";
 
 const editableFields = [
@@ -30,7 +31,7 @@ export interface KnowledgeEvolutionServiceDependencies {
   diagnoses: Pick<DiagnosisRepository, "list">;
   objects: Pick<KnowledgeObjectRepository, "listCandidates" | "getCandidate" | "saveCandidate" | "removeCandidate" | "listApproved" | "promote" | "removeApproved"> & {
     promoteWithAudit?: (candidateId: string, approved: KnowledgeObject, expectedCandidateVersion: number | undefined, audit: KnowledgeAuditEvent) => Promise<KnowledgeObject>;
-  };
+  } & Partial<Pick<KnowledgeVersionStore, "listVersions" | "listHeadMappings" | "promoteReplacement">>;
   audits: Pick<KnowledgeAuditRepository, "append" | "appendIfNoPriorAction" | "list">;
   draftProvider?: CandidateDraftProvider;
   promotionAuthorizer: (actorId: string) => boolean;
@@ -49,7 +50,7 @@ export interface KnowledgeDiscoveryServiceResult extends KnowledgeDiscoveryResul
   };
 }
 
-export class KnowledgeEvolutionService {
+export class KnowledgeEvolutionService implements KnowledgeRevisionOperations {
   private readonly now: () => Date;
   private readonly nextAuditId: () => string;
 
@@ -295,6 +296,110 @@ export class KnowledgeEvolutionService {
         }
         throw error;
       }
+    });
+  }
+
+  async proposeRevision(input: { objectId: string; sourceVersion: number; actorId: string; edits?: CandidateEdits }): Promise<KnowledgeCandidate> {
+    assertActor(input.actorId);
+    if (!this.dependencies.promotionAuthorizer(input.actorId.trim())) {
+      throw new DomainError("Actor is not authorized to propose knowledge revisions.", "INVALID_APPROVAL_FIELDS");
+    }
+    const { listVersions, listHeadMappings } = this.dependencies.objects;
+    if (listVersions === undefined || listHeadMappings === undefined) {
+      throw new DomainError("The configured knowledge store does not support version revisions.", "UNSUPPORTED_VERSION_TRANSITION");
+    }
+    const [heads, versions] = await Promise.all([listHeadMappings(), listVersions(input.objectId)]);
+    if (heads.get(input.objectId) !== input.sourceVersion) {
+      throw new DomainError("Knowledge source version is not the active head.", "STALE_APPROVAL");
+    }
+    const source = versions.find((version) => version.version === input.sourceVersion);
+    if (source === undefined) throw new DomainError("Knowledge source version was not found.", "REPOSITORY_ERROR");
+    const { status: _status, approval: _approval, learningGovernance: _governance, ...sourceFields } = source;
+    const candidate: KnowledgeCandidate = applyEdits({
+      ...sourceFields,
+      id: `revision-${randomUUID()}`,
+      objectId: source.id,
+      sourceVersion: source.version,
+      version: 1,
+      status: "candidate",
+      provenance: { source: "knowledge-version-revision", recordedAt: this.now().toISOString() },
+      deterministicScores: { confidence: 0.9, support: Math.max(1, source.supportingDiagnosisIds.length) },
+      deterministicReasons: ["An authorized operator proposed a revision from the active knowledge version."],
+      contradictions: [],
+      validationStatus: "valid",
+      evidencePolicyMetadata: {
+        derivedEvidenceIds: source.evidencePolicy.mode === "required" ? [...source.evidencePolicy.evidenceIds] : [],
+        operatorAddedEvidenceIds: [],
+      },
+    }, input.edits);
+    await this.dependencies.objects.saveCandidate(candidate);
+    return candidate;
+  }
+
+  async approveRevision(input: { candidateId: string; actorId: string }): Promise<KnowledgeObject> {
+    assertActor(input.actorId);
+    if (!this.dependencies.promotionAuthorizer(input.actorId.trim())) {
+      throw new DomainError("Actor is not authorized to approve knowledge revisions.", "INVALID_APPROVAL_FIELDS");
+    }
+    const { promoteReplacement, listHeadMappings } = this.dependencies.objects;
+    if (promoteReplacement === undefined || listHeadMappings === undefined) {
+      throw new DomainError("The configured knowledge store does not support version revisions.", "UNSUPPORTED_VERSION_TRANSITION");
+    }
+    return serializeCandidate(input.candidateId, async () => {
+      const candidate = await this.dependencies.objects.getCandidate(input.candidateId);
+      if (candidate.objectId === undefined || candidate.sourceVersion === undefined) throw new DomainError("Knowledge revision lineage is missing.", "INVALID_APPROVAL_FIELDS");
+      const [heads, reviewEvents, diagnoses, tickets] = await Promise.all([
+        listHeadMappings(),
+        this.dependencies.audits.list({ candidateId: candidate.id }),
+        this.dependencies.diagnoses.list(),
+        this.dependencies.tickets.snapshot(),
+      ]);
+      const expectedHeadVersion = heads.get(candidate.objectId);
+      if (expectedHeadVersion !== candidate.sourceVersion) throw new DomainError("Knowledge source version is not the active head.", "STALE_APPROVAL");
+      assertPromotable(candidate, reviewEvents);
+      assertReferences(candidate, diagnoses, tickets);
+      const policy = candidate.evidencePolicy;
+      if (policy.mode === "undecided") throw new DomainError("Knowledge candidate requires an explicit evidence policy before approval.", "INVALID_APPROVAL_FIELDS");
+      const {
+        deterministicScores, deterministicReasons: _reasons, contradictions: _contradictions, validationStatus: _validation,
+        gptProvenance: _gptProvenance, discovery: _discovery, evidencePolicyMetadata: _metadata,
+        evidencePolicy: _candidatePolicy, objectId: _objectId, sourceVersion: _sourceVersion, version: _version,
+        status: _status, ...objectFields
+      } = candidate;
+      const occurredAt = this.now().toISOString();
+      const correlationId = randomUUID();
+      const nextVersion = expectedHeadVersion + 1;
+      const approved = {
+        ...objectFields,
+        id: candidate.objectId,
+        evidencePolicy: policy,
+        status: "approved" as const,
+        learningGovernance: "ledger" as const,
+        approval: { approvedBy: input.actorId.trim(), approvedAt: occurredAt },
+      };
+      const promotionAudit: KnowledgeAuditEvent = {
+        id: this.nextAuditId(), timestamp: occurredAt, objectId: candidate.objectId, candidateId: candidate.id,
+        action: "approved", actor: input.actorId.trim(), supportIds: supportIds(candidate), scores: deterministicScores,
+        provenanceSummary: candidate.provenance.source, reviewedFields: [], result: "approved", notes: candidate.operatorRationale,
+        evidencePolicyMetadata: { approvedPolicy: policy, ...candidate.evidencePolicyMetadata },
+      };
+      return promoteReplacement({
+        candidateId: candidate.id,
+        approved,
+        expectedCandidateVersion: candidate.version,
+        expectedHeadVersion,
+        promotionAudit,
+        supersededEvent: {
+          id: randomUUID(), occurredAt, actor: input.actorId.trim(), correlationId,
+          objectId: candidate.objectId, sourceVersion: expectedHeadVersion, eventType: "knowledge-version-superseded",
+          payload: { health: "superseded", replacementVersion: nextVersion, provenance: "Operator approved a replacement knowledge-object version." },
+        },
+        promotionEvent: {
+          id: randomUUID(), occurredAt, actor: input.actorId.trim(), correlationId, candidateId: candidate.id,
+          objectId: candidate.objectId, sourceVersion: nextVersion, eventType: "candidate-promoted",
+          payload: { maturity: "promoted", health: "active", provenance: "Operator approved a replacement knowledge-object version." },
+        },
+      });
     });
   }
 

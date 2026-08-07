@@ -178,6 +178,7 @@ export async function createRuntimeDependencies(
       ...(knowledgeCandidateDraftProvider === undefined
         ? {}
         : { draftProvider: knowledgeCandidateDraftProvider }),
+      ledger,
       now,
     }),
   };

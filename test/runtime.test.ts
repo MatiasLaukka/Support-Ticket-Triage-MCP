@@ -182,6 +182,15 @@ describe("runtime configuration", () => {
       { evidencePolicy: { mode: "required", evidenceIds: ["request-id"] } },
     ]);
     await expect(deps.knowledgeEvolution.ledger.list({ eventType: "candidate-created" })).resolves.toHaveLength(1);
+    const [candidate] = await deps.knowledgeEvolution.objects.listCandidates();
+    expect(candidate).toBeDefined();
+    await expect(deps.knowledgeEvolution.service.learningSummary({
+      candidateId: candidate!.id,
+    })).resolves.toMatchObject({
+      candidateId: candidate!.id,
+      maturity: "diagnosis-supported",
+      supportingEventIds: [expect.any(String)],
+    });
   });
 
   it("injects an optional candidate draft provider through the runtime boundary", async () => {

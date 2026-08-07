@@ -15,6 +15,7 @@ import { findEvidenceRequirement } from "../evidence-catalog.js";
 import type { LearningEvent, LearningLedger } from "./learning-ledger.js";
 import type { KnowledgeVersionStore, KnowledgeRevisionOperations } from "./knowledge-version-store.js";
 import { projectCandidateLearning, projectKnowledgeVersionLearning, type KnowledgeLearningSummary } from "./learning-read-model.js";
+import { listReusableApproved, type ReusableKnowledgeResult } from "./reusable-context.js";
 
 const editableFields = [
   "name", "summary", "triggerPatterns", "evidencePolicy", "timeConstraints",
@@ -31,7 +32,7 @@ export interface KnowledgeEvolutionServiceDependencies {
   diagnoses: Pick<DiagnosisRepository, "list">;
   objects: Pick<KnowledgeObjectRepository, "listCandidates" | "getCandidate" | "saveCandidate" | "removeCandidate" | "listApproved" | "promote" | "removeApproved"> & {
     promoteWithAudit?: (candidateId: string, approved: KnowledgeObject, expectedCandidateVersion: number | undefined, audit: KnowledgeAuditEvent) => Promise<KnowledgeObject>;
-  } & Partial<Pick<KnowledgeVersionStore, "listVersions" | "listHeadMappings" | "promoteReplacement">>;
+  } & Partial<Pick<KnowledgeVersionStore, "listVersions" | "listHeadMappings" | "promoteReplacement" | "snapshotForReuse">>;
   audits: Pick<KnowledgeAuditRepository, "append" | "appendIfNoPriorAction" | "list">;
   draftProvider?: CandidateDraftProvider;
   promotionAuthorizer: (actorId: string) => boolean;
@@ -186,6 +187,14 @@ export class KnowledgeEvolutionService implements KnowledgeRevisionOperations {
 
   async listApproved(): Promise<KnowledgeObject[]> {
     return this.dependencies.objects.listApproved();
+  }
+
+  async listReusableApproved(input: { asOf: string }): Promise<ReusableKnowledgeResult> {
+    const snapshotForReuse = this.dependencies.objects.snapshotForReuse;
+    if (snapshotForReuse === undefined) {
+      return { status: "ledger-unavailable", contexts: [], issues: [{ scope: "snapshot", code: "ledger-read-failed" }] };
+    }
+    return listReusableApproved({ snapshotReader: { snapshotForReuse: snapshotForReuse.bind(this.dependencies.objects) }, asOf: input.asOf });
   }
 
   async learningSummary(input: { candidateId: string; asOf?: string }): Promise<KnowledgeLearningSummary> {

@@ -47,7 +47,7 @@ export function projectCandidateLearning(
 ): KnowledgeLearningSummary {
   const relevant = events
     .filter((event) => event.candidateId === input.candidateId)
-    .filter((event) => input.asOf === undefined || event.occurredAt <= input.asOf)
+    .filter((event) => input.asOf === undefined || Date.parse(event.occurredAt) <= Date.parse(input.asOf))
     .sort((left, right) => left.occurredAt.localeCompare(right.occurredAt) || left.id.localeCompare(right.id));
   let maturity: LearningMaturity = "observed";
   let health: LearningHealth = "active";
@@ -128,7 +128,7 @@ export function projectKnowledgeVersionLearning(
   const sourceVersion = z.number().int().positive().parse(input.sourceVersion);
   const relevant = events
     .filter((event) => event.objectId === input.objectId && event.sourceVersion === sourceVersion)
-    .filter((event) => event.occurredAt <= asOf)
+    .filter((event) => Date.parse(event.occurredAt) <= Date.parse(asOf))
     .sort((left, right) => left.occurredAt.localeCompare(right.occurredAt) || left.id.localeCompare(right.id));
   let maturity: LearningMaturity = "observed";
   let health: LearningHealth = "active";

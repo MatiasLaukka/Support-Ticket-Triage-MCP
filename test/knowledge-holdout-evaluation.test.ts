@@ -5,7 +5,7 @@ import {
 } from "../src/knowledge-evolution/holdout-fixtures.js";
 import { evaluateKnowledgeHoldoutFixture } from "../src/knowledge-evolution/holdout-evaluation.js";
 import { KnowledgeEvolutionService } from "../src/knowledge-evolution/service.js";
-import { KnowledgeObjectWriteSchema } from "../src/knowledge-evolution/domain.js";
+import { KnowledgeCandidateWriteSchema, KnowledgeObjectWriteSchema, type KnowledgeCandidate } from "../src/knowledge-evolution/domain.js";
 import type { LearningEvent } from "../src/knowledge-evolution/learning-ledger.js";
 
 describe("production-path knowledge holdout fixtures", () => {
@@ -19,6 +19,7 @@ describe("production-path knowledge holdout fixtures", () => {
       "unrelated",
       "stale-version",
       "contradicted-version",
+      "draft-version-isolation",
       "replacement-and-draft-isolation",
     ]);
 
@@ -33,6 +34,7 @@ describe("production-path knowledge holdout fixtures", () => {
     expect(fixtures.find(({ id }) => id === "stale-version")?.lifecycle).toBe("stale");
     expect(fixtures.find(({ id }) => id === "contradicted-version")?.lifecycle).toBe("contradicted");
     expect(fixtures.find(({ id }) => id === "replacement-and-draft-isolation")?.lifecycle).toBe("replacement-draft");
+    expect(fixtures.find(({ id }) => id === "draft-version-isolation")?.lifecycle).toBe("draft-only");
   });
 
   it("runs each fixture against its own setup-complete lifecycle state", async () => {
@@ -54,8 +56,20 @@ describe("production-path knowledge holdout fixtures", () => {
       if (fixture.lifecycle === "replacement-draft") {
         expect(reusable.contexts.map(({ version }) => version)).toEqual([2]);
         expect(result.learned.finalRecommendation.knownCauseRef).toEqual({ objectId: "credential-rotation", version: 2 });
-        expect(lane.state.candidateIds).toContain("draft-credential-rotation-v3");
+        expect(lane.state.candidates).toEqual(expect.arrayContaining([
+          expect.objectContaining({ id: "revision-credential-rotation-v3", objectId: "credential-rotation", sourceVersion: 2, status: "candidate" }),
+        ]));
         expect(lane.state.versionIds).not.toContain("credential-rotation:3");
+      }
+      if (fixture.lifecycle === "draft-only") {
+        expect(reusable.contexts.map(({ version }) => version)).toEqual([1]);
+        expect(result.learned.finalRecommendation.knownCauseRef).toEqual({ objectId: "credential-rotation", version: 1 });
+        expect(lane.state.candidates).toEqual([expect.objectContaining({
+          id: "revision-credential-rotation-v2", objectId: "credential-rotation", sourceVersion: 1, version: 1, status: "candidate",
+        })]);
+        expect(lane.state.versionIds).toEqual(["credential-rotation:1"]);
+        expect(lane.state.heads).toEqual([{ objectId: "credential-rotation", headVersion: 1 }]);
+        expect(lane.state.events.map(({ eventType }) => eventType)).toEqual(["candidate-promoted"]);
       }
     }
   });
@@ -104,7 +118,7 @@ function createLane(fixture: KnowledgeHoldoutFixture) {
   const state = {
     ticketRevisions: [{ ticketId: fixture.initialTicket.id, revision: fixture.initialTicket.revision }],
     recommendationCount: 0, operationalAuditCount: 0,
-    learningEventIds: [] as string[], candidateIds: [] as string[], versionIds: [] as string[],
+    learningEventIds: [] as string[], candidates: [] as KnowledgeCandidate[], versionIds: [] as string[],
     heads: [] as { objectId: string; headVersion: number }[], versions: [] as typeof v1[],
     events: [] as LearningEvent[],
   };
@@ -116,16 +130,17 @@ function createLane(fixture: KnowledgeHoldoutFixture) {
   if (fixture.lifecycle === "contradicted") state.events.push(contradicted(fixture.initialTicket.id));
   if (fixture.lifecycle === "replacement-draft") {
     state.versions.push(v2); state.versionIds.push("credential-rotation:2"); state.heads[0] = { objectId: "credential-rotation", headVersion: 2 };
-    state.candidateIds.push("draft-credential-rotation-v3");
+    state.candidates.push(draftCandidate(fixture, 3, 2));
     state.events.push(superseded(), promoted(2));
   }
+  if (fixture.lifecycle === "draft-only") state.candidates.push(draftCandidate(fixture, 2, 1));
   state.learningEventIds.push(...state.events.map(({ id }) => id));
   const service = new KnowledgeEvolutionService({
     objects: { async snapshotForReuse() { return { versions: state.versions, heads: new Map(state.heads.map(({ objectId, headVersion }) => [objectId, headVersion])), events: state.events }; } },
   } as never);
   return { state, service, knowledgeEvolution: service, snapshot: async () => ({
     ticketRevisions: structuredClone(state.ticketRevisions), recommendationCount: state.recommendationCount,
-    operationalAuditCount: state.operationalAuditCount, learningEventIds: [...state.learningEventIds], candidateIds: [...state.candidateIds],
+    operationalAuditCount: state.operationalAuditCount, learningEventIds: [...state.learningEventIds], candidateIds: state.candidates.map(({ id }) => id),
     versionIds: [...state.versionIds], heads: structuredClone(state.heads),
   }) };
 }
@@ -144,6 +159,25 @@ function object(fixture: KnowledgeHoldoutFixture, version: number) {
   });
 }
 
+function draftCandidate(fixture: KnowledgeHoldoutFixture, revisionVersion: number, sourceVersion: number): KnowledgeCandidate {
+  const source = object(fixture, sourceVersion);
+  const { learningGovernance: _governance, status: _status, approval: _approval, version: _version, id: _id, ...fields } = source;
+  return KnowledgeCandidateWriteSchema.parse({
+    ...fields,
+    id: `revision-credential-rotation-v${revisionVersion}`,
+    objectId: "credential-rotation",
+    sourceVersion,
+    version: 1,
+    status: "candidate",
+    provenance: { source: "knowledge-version-revision", recordedAt: "2026-08-08T09:00:00.000Z" },
+    deterministicScores: { confidence: 0.9, support: 1 },
+    deterministicReasons: ["Fixed holdout revision candidate."],
+    contradictions: [],
+    validationStatus: "valid",
+    evidencePolicyMetadata: { derivedEvidenceIds: ["request-id"], operatorAddedEvidenceIds: [] },
+  });
+}
+
 function eventBase(sourceVersion: number) { return { id: `00000000-0000-4000-8000-${String(sourceVersion).padStart(12, "0")}`, occurredAt: "2026-08-08T08:00:00.000Z", actor: "support-lead", correlationId: `10000000-0000-4000-8000-${String(sourceVersion).padStart(12, "0")}`, objectId: "credential-rotation", sourceVersion }; }
 function promoted(version: number): LearningEvent { return { ...eventBase(version), id: `00000000-0000-4000-8001-${String(version).padStart(12, "0")}`, candidateId: `candidate-credential-rotation-v${version}`, eventType: "candidate-promoted", payload: { maturity: "promoted", health: "active", provenance: "fixed holdout promotion" } }; }
 function stale(): LearningEvent { return { ...eventBase(1), id: "00000000-0000-4000-8002-000000000001", eventType: "knowledge-marked-stale", payload: { health: "stale", staleReasons: ["Fixed holdout stale signal."], provenance: "fixed holdout stale" } }; }
@@ -155,7 +189,7 @@ function mutate(state: ReturnType<typeof createLane>["state"], kind: "ticket" | 
   if (kind === "recommendation") state.recommendationCount += 1;
   if (kind === "audit") state.operationalAuditCount += 1;
   if (kind === "learning") state.learningEventIds.push("mutation-event");
-  if (kind === "candidate") state.candidateIds.push("mutation-candidate");
+  if (kind === "candidate") state.candidates.push({ id: "mutation-candidate" } as KnowledgeCandidate);
   if (kind === "version") state.versionIds.push("credential-rotation:99");
   if (kind === "head") state.heads[0] = { objectId: "credential-rotation", headVersion: 99 };
 }

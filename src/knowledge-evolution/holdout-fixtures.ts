@@ -2,7 +2,7 @@ import { TicketSchema, type ExpectedOutcome, type RequiredEscalation, type Suppo
 import type { CustomerReply, PreviousSupportResponse } from "../approval-desk/ai-evaluation.js";
 import type { KnowledgeReference } from "./reusable-context.js";
 
-export type HoldoutLifecycle = "healthy" | "none" | "stale" | "contradicted" | "replacement-draft";
+export type HoldoutLifecycle = "healthy" | "none" | "stale" | "contradicted" | "draft-only" | "replacement-draft";
 
 export type HoldoutTurn = {
   /** Complete conversation snapshot at this turn; evaluators must never append hidden state. */
@@ -81,12 +81,13 @@ export function knowledgeHoldoutFixtures(): readonly KnowledgeHoldoutFixture[] {
     fixture("unrelated", "none", "Where can I download my billing invoice?", [emptyTurn({ supportState: "diagnosing" })], [], { supportState: "diagnosing" }),
     fixture("stale-version", "stale", "Credential rotation request fails", [suppliedTurn("TKT-5105", { supportState: "needs-information", requiredEvidenceSatisfied: true })], ["request-id"], { supportState: "needs-information", requiredEvidenceSatisfied: true }),
     fixture("contradicted-version", "contradicted", "Credential rotation request fails", [suppliedTurn("TKT-5106", { supportState: "needs-information", requiredEvidenceSatisfied: true })], ["request-id"], { supportState: "needs-information", requiredEvidenceSatisfied: true }),
+    fixture("draft-version-isolation", "draft-only", "Credential rotation request fails", [suppliedTurn("TKT-5107", { supportState: "known-cause", knownCauseRef: cause, requiredEvidenceSatisfied: true })], ["request-id"], { supportState: "known-cause", knownCauseRef: cause, requiredEvidenceSatisfied: true }),
     fixture("replacement-and-draft-isolation", "replacement-draft", "Credential rotation request fails", [suppliedTurn("TKT-5107", { supportState: "known-cause", knownCauseRef: replacement, requiredEvidenceSatisfied: true })], ["request-id"], { supportState: "known-cause", knownCauseRef: replacement, requiredEvidenceSatisfied: true }),
   ]);
 }
 
 function fixture(id: string, lifecycle: HoldoutLifecycle, subject: string, turns: readonly HoldoutTurn[], expectedEvidenceIds: readonly string[], expectedTarget: KnowledgeHoldoutFixture["expectedTarget"]): KnowledgeHoldoutFixture {
-  const ordinal = String(5101 + ["sufficient-evidence-true-positive", "missing-evidence-then-supplied", "near-miss", "unrelated", "stale-version", "contradicted-version", "replacement-and-draft-isolation"].indexOf(id)).padStart(4, "0");
+  const ordinal = String(5101 + ["sufficient-evidence-true-positive", "missing-evidence-then-supplied", "near-miss", "unrelated", "stale-version", "contradicted-version", "draft-version-isolation", "replacement-and-draft-isolation"].indexOf(id)).padStart(4, "0");
   const initialTicket = ticket(`TKT-${ordinal}`, subject);
   const normalizedTurns = turns.map((turn) => freeze({
     ...turn,

@@ -44,13 +44,15 @@ export type KnowledgeHoldoutFixture = {
   };
 };
 
-const baseOutcome = (ticketId: string): ExpectedOutcome => ({
+const baseOutcome = (ticketId: string, subject: string): ExpectedOutcome => ({
   ticketId,
-  category: "api",
+  category: subject.toLowerCase().includes("billing") ? "billing" : "api",
   acceptablePriorities: ["P2"],
-  team: "api-platform",
+  team: subject.toLowerCase().includes("billing") ? "billing" : "api-platform",
   requiredEscalations: [],
-  knowledgeArticleIds: [],
+  knowledgeArticleIds: subject.toLowerCase().includes("billing")
+    ? ["billing-and-invoices"]
+    : subject.toLowerCase().includes("successful") ? [] : ["api-reference"],
 });
 
 function ticket(id: string, subject: string, description = subject): Ticket {
@@ -87,10 +89,10 @@ export function knowledgeHoldoutFixtures(): readonly KnowledgeHoldoutFixture[] {
   return freeze([
     fixture("sufficient-evidence-true-positive", "healthy", { cohort: "efficacy", efficacyScenario: "true-positive" }, "Credential rotation request fails with request ID", [suppliedTurn("TKT-5101", { supportState: "known-cause", knownCauseRef: cause, requiredEvidenceSatisfied: true })], ["request-id"], { supportState: "known-cause", knownCauseRef: cause, requiredEvidenceSatisfied: true }),
     fixture("missing-evidence-then-supplied", "healthy", { cohort: "efficacy", efficacyScenario: "true-positive" }, "Credential rotation request fails", [emptyTurn({ supportState: "needs-information", knownCauseRef: cause, requiredEvidenceSatisfied: false }), suppliedTurn("TKT-5102", { supportState: "known-cause", knownCauseRef: cause, requiredEvidenceSatisfied: true })], ["request-id"], { supportState: "known-cause", knownCauseRef: cause, requiredEvidenceSatisfied: true }),
-    fixture("near-miss", "healthy", { cohort: "efficacy", efficacyScenario: "near-miss" }, "Credential rotation question for a successful request", [emptyTurn({ supportState: "needs-information", requiredEvidenceSatisfied: false })], ["request-id"], { supportState: "needs-information", requiredEvidenceSatisfied: false }),
-    fixture("unrelated", "none", { cohort: "efficacy", efficacyScenario: "unrelated" }, "Where can I download my billing invoice?", [emptyTurn({ supportState: "diagnosing" })], [], { supportState: "diagnosing" }),
-    fixture("stale-version", "stale", { cohort: "governance", forbiddenKnowledgeRef: cause }, "Credential rotation request fails", [suppliedTurn("TKT-5105", { supportState: "needs-information", requiredEvidenceSatisfied: true })], ["request-id"], { supportState: "needs-information", requiredEvidenceSatisfied: true }),
-    fixture("contradicted-version", "contradicted", { cohort: "governance", forbiddenKnowledgeRef: cause }, "Credential rotation request fails", [suppliedTurn("TKT-5106", { supportState: "needs-information", requiredEvidenceSatisfied: true })], ["request-id"], { supportState: "needs-information", requiredEvidenceSatisfied: true }),
+    fixture("near-miss", "healthy", { cohort: "efficacy", efficacyScenario: "near-miss" }, "Credential rotation question for a successful request", [emptyTurn({ supportState: "diagnosing", requiredEvidenceSatisfied: true })], ["request-id"], { supportState: "diagnosing", requiredEvidenceSatisfied: true }),
+    fixture("unrelated", "none", { cohort: "efficacy", efficacyScenario: "unrelated" }, "Where can I download my billing invoice?", [emptyTurn({ supportState: "needs-information" })], [], { supportState: "needs-information" }),
+    fixture("stale-version", "stale", { cohort: "governance", forbiddenKnowledgeRef: cause }, "Credential rotation request fails", [suppliedTurn("TKT-5105", { supportState: "information-received", requiredEvidenceSatisfied: true })], ["request-id"], { supportState: "information-received", requiredEvidenceSatisfied: true }),
+    fixture("contradicted-version", "contradicted", { cohort: "governance", forbiddenKnowledgeRef: cause }, "Credential rotation request fails", [suppliedTurn("TKT-5106", { supportState: "information-received", requiredEvidenceSatisfied: true })], ["request-id"], { supportState: "information-received", requiredEvidenceSatisfied: true }),
     fixture("draft-version-isolation", "draft-only", { cohort: "version", versionScenario: "pinning" }, "Credential rotation request fails", [suppliedTurn("TKT-5107", { supportState: "known-cause", knownCauseRef: cause, requiredEvidenceSatisfied: true })], ["request-id"], { supportState: "known-cause", knownCauseRef: cause, requiredEvidenceSatisfied: true }),
     fixture("replacement-and-draft-isolation", "replacement-draft", { cohort: "version", versionScenario: "replacement" }, "Credential rotation request fails", [suppliedTurn("TKT-5107", { supportState: "known-cause", knownCauseRef: replacement, requiredEvidenceSatisfied: true })], ["request-id"], { supportState: "known-cause", knownCauseRef: replacement, requiredEvidenceSatisfied: true }),
   ]);
@@ -104,7 +106,7 @@ function fixture(id: string, lifecycle: HoldoutLifecycle, scorecard: KnowledgeHo
     customerReplies: turn.customerReplies.length === 0 ? turn.customerReplies : turn.customerReplies.map((reply) => freeze({ ...reply, ticketId: initialTicket.id })),
     expected: turn.expected === undefined ? undefined : freeze({ ...turn.expected, requiredEscalations: freeze([...(turn.expected.requiredEscalations ?? [])]) }),
   }));
-  return freeze({ id, lifecycle, scorecard: freeze({ ...scorecard }), initialTicket, expectedOutcome: baseOutcome(initialTicket.id), turns: freeze(normalizedTurns), expectedEvidenceIds: freeze([...expectedEvidenceIds]), expectedTarget });
+  return freeze({ id, lifecycle, scorecard: freeze({ ...scorecard }), initialTicket, expectedOutcome: baseOutcome(initialTicket.id, subject), turns: freeze(normalizedTurns), expectedEvidenceIds: freeze([...expectedEvidenceIds]), expectedTarget });
 }
 
 function freeze<T>(value: T): T {

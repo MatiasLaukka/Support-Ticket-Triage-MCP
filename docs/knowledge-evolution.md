@@ -182,3 +182,22 @@ The diagnostic harness evaluates lifecycle and evidence gates without mutating
 knowledge stores. Candidate discovery and promotion are tested through the
 knowledge-evolution service and its repositories, keeping evaluation snapshots
 separate from durable operator actions.
+
+## Multi-turn holdout and scorecards
+
+Run `npm run evaluate:knowledge-holdout` to exercise fixed future-ticket
+fixtures through the same reusable-context service and production evaluator
+used by MCP and Approval Desk. The baseline lane has no learned context; the
+learned lane receives the exact historical snapshot from
+`listReusableApproved({ asOf })`. Complete customer-reply snapshots are
+retained per turn, with no hidden evaluator conversation state and no expected
+outcome shortcut passed into production evaluation.
+
+The holdout covers evidence arriving over multiple turns, near misses,
+unrelated requests, stale and contradicted exact versions, an approved
+replacement, and an unapproved revision candidate. Its scorecard keeps
+efficacy, governance safety, and exact-version correctness separate. Generated
+JSON and Markdown reports are allowlisted: they contain fixture IDs, evidence
+IDs, lifecycle/version signals, and aggregate metrics, but no customer reply
+bodies, prompts, drafts, or rationales. This is controlled synthetic evidence,
+not a live-model or human-time benchmark.

@@ -849,10 +849,10 @@ npm run verify:portfolio
 ```
 
 This runs the build, typecheck, full Vitest suite, diagnostic evaluation,
-stateful lifecycle replay, knowledge-evolution promotion/reuse showcase, and
-deterministic queue-metrics showcase in sequence. It stops at the first
-failure, so the command is suitable for reproducing the evidence reported in
-this README without enabling live GPT providers.
+stateful lifecycle replay, deterministic knowledge holdout, knowledge-evolution
+promotion/reuse showcase, and deterministic queue-metrics showcase in sequence.
+It stops at the first failure, so the command is suitable for reproducing the
+evidence reported in this README without enabling live GPT providers.
 
 ## Reproducible Evaluation
 
@@ -898,6 +898,31 @@ The current seed audit reports 30/30 classification contracts, 28 tickets
 correctly waiting for evidence, 30/30 lifecycle invariants, 7 known-cause
 matches, 3 known-event matches, and one already-resolved ticket with zero
 evidence requests.
+
+### Deterministic knowledge holdout
+
+The governed-learning proof is a fixed, multi-turn holdout rather than a
+single snapshot or a live-model benchmark. Run it with:
+
+```powershell
+npm run evaluate:knowledge-holdout
+```
+
+The command evaluates baseline and learned lanes through the same
+`listReusableApproved({ asOf })` and `evaluateTicketWithAi` production path,
+then writes sanitized artifacts to
+`reports/knowledge-holdout/controlled-latest.json` and
+`reports/knowledge-holdout/controlled-latest.md`. The fixtures cover complete
+evidence, evidence arriving on a later customer turn, near misses, unrelated
+questions, stale and contradicted knowledge, an approved replacement, and an
+unapproved revision draft. Every turn is retained, and scoring verifies that
+the evaluator changed no ticket, recommendation, audit, learning, candidate,
+version, or head state.
+
+The report separates efficacy, governance safety, and exact-version scorecards.
+It is controlled synthetic evidence: it demonstrates governed reuse and
+historical/version isolation, but it makes no claim about human time saved or
+live GPT performance.
 
 ### Article-backed diagnosis and GPT advisory diagnosis
 

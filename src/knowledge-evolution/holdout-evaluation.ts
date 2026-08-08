@@ -1,4 +1,4 @@
-import type { KnowledgeArticle, SupportState } from "../domain.js";
+import type { KnowledgeArticle, RequiredEscalation, SupportState } from "../domain.js";
 import { evaluateTicketWithAi, type CustomerReply, type PreviousSupportResponse } from "../approval-desk/ai-evaluation.js";
 import type { KnowledgeEvolutionService } from "./service.js";
 import type { KnowledgeReference, ReusableKnowledgeResult } from "./reusable-context.js";
@@ -17,7 +17,7 @@ export type HoldoutStateSnapshot = {
 };
 
 export type UnsafeLifecycleViolation = {
-  code: "evidence-gate-bypassed" | "unexpected-support-state" | "wrong-known-cause-version" | "unexpected-known-event" | "target-not-reached";
+  code: "evidence-gate-bypassed" | "unexpected-support-state" | "wrong-known-cause-version" | "unexpected-known-event" | "unexpected-escalations" | "target-not-reached";
   turn: number;
 };
 
@@ -28,6 +28,7 @@ export type HoldoutTurnResult = {
   requestedEvidenceIds: readonly string[];
   providedEvidenceIds: readonly string[];
   missingEvidenceIds: readonly string[];
+  requiredEscalations: readonly RequiredEscalation[];
   supportState?: SupportState;
   targetMatched: boolean;
   correctionStatus: "not-required" | "correct" | "incorrect";
@@ -48,6 +49,12 @@ export type HoldoutLaneResult = {
 
 export type KnowledgeHoldoutEvaluation = { baseline: HoldoutLaneResult; learned: HoldoutLaneResult };
 
+/** A fixture-specific isolated state source. Setup must finish before this is returned. */
+export type IsolatedHoldoutLane = {
+  knowledgeEvolution: Pick<KnowledgeEvolutionService, "listReusableApproved">;
+  snapshot: () => Promise<HoldoutStateSnapshot>;
+};
+
 export async function evaluateKnowledgeHoldoutFixture(input: {
   fixture: KnowledgeHoldoutFixture;
   knowledgeEvolution: Pick<KnowledgeEvolutionService, "listReusableApproved">;
@@ -55,13 +62,17 @@ export async function evaluateKnowledgeHoldoutFixture(input: {
   asOf: string;
   actor: string;
   snapshot: () => Promise<HoldoutStateSnapshot>;
+  createIsolatedLane?: (fixture: KnowledgeHoldoutFixture) => Promise<IsolatedHoldoutLane>;
   responseStyle?: "auto" | "balanced" | "concise" | "empathetic" | "technical" | "executive-update";
 }): Promise<KnowledgeHoldoutEvaluation> {
+  const isolated = input.createIsolatedLane === undefined
+    ? { knowledgeEvolution: input.knowledgeEvolution, snapshot: input.snapshot }
+    : await input.createIsolatedLane(input.fixture);
   // Setup is intentionally complete before this snapshot. Everything below is read-only.
-  const before = await input.snapshot();
-  const learned = await input.knowledgeEvolution.listReusableApproved({ asOf: input.asOf });
-  const baseline = await evaluateLane({ ...input, before, reusableKnowledge: undefined });
-  const learnedLane = await evaluateLane({ ...input, before, reusableKnowledge: learned });
+  const before = await isolated.snapshot();
+  const learned = await isolated.knowledgeEvolution.listReusableApproved({ asOf: input.asOf });
+  const baseline = await evaluateLane({ ...input, before, snapshot: isolated.snapshot, reusableKnowledge: undefined });
+  const learnedLane = await evaluateLane({ ...input, before, snapshot: isolated.snapshot, reusableKnowledge: learned });
   return { baseline, learned: learnedLane };
 }
 
@@ -112,6 +123,7 @@ function scoreTurn(fixture: KnowledgeHoldoutFixture, expectedTurn: HoldoutTurn, 
   const requestedEvidenceIds = (recommendation.requiredEvidence ?? []).map(({ id }) => id).sort();
   const providedEvidenceIds = (recommendation.providedEvidence ?? []).map(({ id }) => id).sort();
   const missingEvidenceIds = (recommendation.missingEvidence ?? []).map(({ id }) => id).sort();
+  const requiredEscalations = [...(recommendation.escalationReasons ?? [])].sort();
   const evidenceSatisfied = fixture.expectedEvidenceIds.every((id) => !missingEvidenceIds.includes(id));
   const contract = expectedTurn.expected;
   const violations: UnsafeLifecycleViolation[] = [];
@@ -127,6 +139,9 @@ function scoreTurn(fixture: KnowledgeHoldoutFixture, expectedTurn: HoldoutTurn, 
   if (contract?.knownEventId !== undefined && recommendation.knownEventId !== contract.knownEventId) {
     violations.push({ code: "unexpected-known-event", turn });
   }
+  if (contract?.requiredEscalations !== undefined && !sameSet(requiredEscalations, contract.requiredEscalations)) {
+    violations.push({ code: "unexpected-escalations", turn });
+  }
   const targetMatched = matchesTarget(fixture, recommendation, evidenceSatisfied);
   if (turn === fixture.turns.length && !targetMatched) violations.push({ code: "target-not-reached", turn });
   return {
@@ -136,6 +151,7 @@ function scoreTurn(fixture: KnowledgeHoldoutFixture, expectedTurn: HoldoutTurn, 
     requestedEvidenceIds,
     providedEvidenceIds,
     missingEvidenceIds,
+    requiredEscalations,
     ...(recommendation.supportState === undefined ? {} : { supportState: recommendation.supportState }),
     targetMatched,
     correctionStatus: contract === undefined ? "not-required" : violations.length === 0 ? "correct" : "incorrect",

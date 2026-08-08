@@ -3,7 +3,7 @@ import {
   knowledgeHoldoutFixtures,
   type KnowledgeHoldoutFixture,
 } from "../src/knowledge-evolution/holdout-fixtures.js";
-import { evaluateKnowledgeHoldoutFixture } from "../src/knowledge-evolution/holdout-evaluation.js";
+import { evaluateKnowledgeHoldoutFixture, scoreKnowledgeHoldoutResults, type HoldoutLaneResult } from "../src/knowledge-evolution/holdout-evaluation.js";
 import { KnowledgeEvolutionService } from "../src/knowledge-evolution/service.js";
 import { KnowledgeCandidateWriteSchema, KnowledgeObjectWriteSchema, type KnowledgeCandidate } from "../src/knowledge-evolution/domain.js";
 import type { LearningEvent } from "../src/knowledge-evolution/learning-ledger.js";
@@ -110,7 +110,100 @@ describe("production-path knowledge holdout fixtures", () => {
   });
 });
 
+describe("knowledge holdout scorecards", () => {
+  it("separates baseline and learned efficacy denominators while scoring exact-version matches", () => {
+    const fixtures = knowledgeHoldoutFixtures();
+    const result = scoreKnowledgeHoldoutResults([
+      scored(fixtures, "sufficient-evidence-true-positive", lane({ requested: ["request-id", "workspace-id"], target: true, turnsToTarget: 2 }), lane({ ref: { objectId: "credential-rotation", version: 1 }, requested: ["request-id"], target: true, turnsToTarget: 1 })),
+      scored(fixtures, "missing-evidence-then-supplied", lane({ requested: ["request-id"], target: true, turnsToTarget: 2 }), lane({ ref: { objectId: "credential-rotation", version: 1 }, requested: ["request-id", "request-id"], target: true, turnsToTarget: 1 })),
+      scored(fixtures, "near-miss", lane({ requested: ["request-id"], target: true }), lane({ ref: { objectId: "credential-rotation", version: 1 }, requested: ["request-id"], target: true, correction: true })),
+      scored(fixtures, "unrelated", lane({ target: true }), lane({ target: true })),
+    ]);
+
+    expect(result.efficacy.knowledgeMatchPrecision).toBe(2 / 3);
+    expect(result.efficacy.knowledgeMatchRecall).toBe(1);
+    expect(result.efficacy.baseline.knowledgeMatchPrecision).toBeNull();
+    expect(result.efficacy.learned.byScenario.truePositive.knowledgeMatchRecall).toBe(1);
+    expect(result.efficacy.learned.byScenario.nearMiss.knowledgeMatchPrecision).toBe(0);
+    expect(result.efficacy.learned.byScenario.unrelated.knowledgeMatchRecall).toBeNull();
+    expect(result.efficacy.baseline.unnecessaryEvidenceTotal).toBe(1);
+    expect(result.efficacy.baseline.evidencePrecision).toBe(3 / 4);
+    expect(result.efficacy.unnecessaryEvidenceTotal).toBe(0);
+    expect(result.efficacy.evidencePrecision).toBe(1);
+    expect(result.efficacy.missingNecessaryEvidenceTotal).toBe(0);
+    expect(result.efficacy.diagnosticTurnsSavedTotal).toBe(2);
+    expect(result.efficacy.benefited).toBe(2);
+    expect(result.efficacy.regressed).toBe(1);
+    expect(result.cases[1]!.delta.repeatedEvidenceRequestCount).toBe(1);
+  });
+
+  it("keeps count totals at zero, returns null only for zero rate denominators, and never writes while scoring", () => {
+    const fixtures = knowledgeHoldoutFixtures();
+    const evaluation = scored(fixtures, "unrelated", lane({ target: true }), lane({ target: true }));
+    const before = structuredClone(evaluation);
+    const result = scoreKnowledgeHoldoutResults([evaluation]);
+
+    expect(result.efficacy.evidencePrecision).toBeNull();
+    expect(result.efficacy.missingEvidenceRate).toBeNull();
+    expect(result.efficacy.correctionRequiredRate).toBe(0);
+    expect(result.efficacy.unnecessaryEvidenceTotal).toBe(0);
+    expect(result.efficacy.missingNecessaryEvidenceTotal).toBe(0);
+    expect(result.efficacy.diagnosticTurnsSavedTotal).toBe(0);
+    expect(evaluation).toEqual(before);
+  });
+
+  it("scores stale and contradicted target reuse as unsafe, preserves evidence-gate bypass as its subset, and detects version drift", () => {
+    const fixtures = knowledgeHoldoutFixtures();
+    const unsafe = [{ code: "evidence-gate-bypassed" as const, turn: 1 }];
+    const result = scoreKnowledgeHoldoutResults([
+      scored(fixtures, "sufficient-evidence-true-positive", lane({ target: true }), lane({ target: true, unsafe })),
+      scored(fixtures, "stale-version", lane({ target: true }), lane({ ref: { objectId: "credential-rotation", version: 1 }, target: true, unsafe })),
+      scored(fixtures, "contradicted-version", lane({ target: true }), lane({ ref: { objectId: "credential-rotation", version: 1 }, target: true, unsafe })),
+      scored(fixtures, "replacement-and-draft-isolation", lane({ target: true }), lane({ ref: { objectId: "credential-rotation", version: 1 }, target: true })),
+      scored(fixtures, "draft-version-isolation", lane({ target: true }), lane({ ref: { objectId: "credential-rotation", version: 2 }, target: true })),
+    ]);
+
+    expect(result.governance.staleFalsePositiveRate).toBe(1);
+    expect(result.governance.contradictedFalsePositiveRate).toBe(1);
+    expect(result.governance.unhealthyFalsePositiveRate).toBe(1);
+    expect(result.governance.unsafeLifecycleChanges).toBe(3);
+    expect(result.governance.evidenceGateBypass).toBe(3);
+    expect(result.version.wrongVersionReuse).toBe(2);
+    expect(result.version.replacementCorrectnessRate).toBe(0);
+    expect(result.version.versionPinningRate).toBe(0);
+  });
+});
+
 const asOf = "2026-08-08T12:00:00.000Z";
+
+function scored(fixtures: readonly KnowledgeHoldoutFixture[], id: string, baseline: HoldoutLaneResult, learned: HoldoutLaneResult) {
+  return { fixture: fixtures.find((fixture) => fixture.id === id)!, baseline, learned };
+}
+
+function lane(input: {
+  ref?: { objectId: string; version: number };
+  requested?: readonly string[];
+  target: boolean;
+  turnsToTarget?: number;
+  unsafe?: readonly { code: "evidence-gate-bypassed"; turn: number }[];
+  correction?: boolean;
+}): HoldoutLaneResult {
+  const recommendation = { knownCauseRef: input.ref, requiredEvidence: (input.requested ?? []).map((id) => ({ id })) } as never;
+  const unsafeLifecycleViolations = input.unsafe ?? [];
+  return {
+    turns: [{ turn: 1, recommendation, ...(input.ref === undefined ? {} : { knownCauseRef: input.ref }), requestedEvidenceIds: input.requested ?? [], providedEvidenceIds: [], missingEvidenceIds: [], requiredEscalations: [], targetMatched: input.target, correctionStatus: input.correction ? "incorrect" : "not-required", unsafeLifecycleViolations }],
+    finalRecommendation: recommendation,
+    targetReached: input.target,
+    turnsToExpectedTarget: input.turnsToTarget ?? (input.target ? 1 : null),
+    outcomeMatched: true,
+    unsafeLifecycleViolations,
+    unsafeLifecycleChanges: [...new Set(unsafeLifecycleViolations.map(({ code }) => code))],
+    before: emptySnapshot(),
+    after: emptySnapshot(),
+  };
+}
+
+function emptySnapshot() { return { ticketRevisions: [], recommendationCount: 0, operationalAuditCount: 0, learningEventIds: [], candidateIds: [], versionIds: [], heads: [] }; }
 
 function createLane(fixture: KnowledgeHoldoutFixture) {
   const v1 = object(fixture, 1);

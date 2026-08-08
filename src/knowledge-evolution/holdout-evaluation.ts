@@ -2,7 +2,7 @@ import type { KnowledgeArticle, RequiredEscalation, SupportState } from "../doma
 import { evaluateTicketWithAi, type CustomerReply, type PreviousSupportResponse } from "../approval-desk/ai-evaluation.js";
 import type { KnowledgeEvolutionService } from "./service.js";
 import type { KnowledgeReference, ReusableKnowledgeResult } from "./reusable-context.js";
-import type { HoldoutTurn, KnowledgeHoldoutFixture } from "./holdout-fixtures.js";
+import type { HoldoutEfficacyScenario, HoldoutTurn, KnowledgeHoldoutFixture } from "./holdout-fixtures.js";
 
 type EvaluationRecommendation = Awaited<ReturnType<typeof evaluateTicketWithAi>>;
 
@@ -48,6 +48,230 @@ export type HoldoutLaneResult = {
 };
 
 export type KnowledgeHoldoutEvaluation = { baseline: HoldoutLaneResult; learned: HoldoutLaneResult };
+
+export type HoldoutCaseDelta = {
+  learnedMatchedExpectedKnowledge: boolean;
+  baselineUnnecessaryEvidence: number;
+  learnedUnnecessaryEvidence: number;
+  unnecessaryEvidenceDelta: number;
+  baselineMissingNecessaryEvidence: number;
+  learnedMissingNecessaryEvidence: number;
+  missingNecessaryEvidenceDelta: number;
+  diagnosticTurnsSaved: number | null;
+  repeatedEvidenceRequestCount: number;
+  unsafeLifecycleChanges: number;
+  correctionRequired: boolean;
+};
+
+export type HoldoutEfficacyLaneScore = {
+  knowledgeMatchPrecision: number | null;
+  knowledgeMatchRecall: number | null;
+  evidencePrecision: number | null;
+  missingEvidenceRate: number | null;
+  unnecessaryEvidenceTotal: number;
+  missingNecessaryEvidenceTotal: number;
+  correctionRequiredRate: number | null;
+  byScenario: Record<"truePositive" | "nearMiss" | "unrelated", Pick<HoldoutEfficacyLaneScore, "knowledgeMatchPrecision" | "knowledgeMatchRecall">>;
+};
+
+export type HoldoutScorecard = {
+  efficacy: {
+    baseline: HoldoutEfficacyLaneScore;
+    learned: HoldoutEfficacyLaneScore;
+    knowledgeMatchPrecision: number | null;
+    knowledgeMatchRecall: number | null;
+    evidencePrecision: number | null;
+    missingEvidenceRate: number | null;
+    unnecessaryEvidenceTotal: number;
+    missingNecessaryEvidenceTotal: number;
+    diagnosticTurnsSavedTotal: number | null;
+    correctionRequiredRate: number | null;
+    benefited: number;
+    unchanged: number;
+    regressed: number;
+  };
+  governance: {
+    staleFalsePositiveRate: number | null;
+    contradictedFalsePositiveRate: number | null;
+    unhealthyFalsePositiveRate: number | null;
+    unsafeLifecycleChanges: number;
+    evidenceGateBypass: number;
+  };
+  version: {
+    wrongVersionReuse: number;
+    replacementCorrectnessRate: number | null;
+    versionPinningRate: number | null;
+  };
+};
+
+export type HoldoutCaseScore = {
+  fixtureId: string;
+  baselineClassificationContractMatched: boolean;
+  learnedClassificationContractMatched: boolean;
+  delta: HoldoutCaseDelta;
+  comparison: "benefited" | "unchanged" | "regressed";
+};
+
+export type KnowledgeHoldoutScorecard = HoldoutScorecard & { cases: readonly HoldoutCaseScore[] };
+export type HoldoutScoringInput = { fixture: KnowledgeHoldoutFixture; baseline: HoldoutLaneResult; learned: HoldoutLaneResult };
+
+/** Pure scorer over retained production-path lane results. It performs no evaluation or persistence. */
+export function scoreKnowledgeHoldoutResults(results: readonly HoldoutScoringInput[]): KnowledgeHoldoutScorecard {
+  const cases = results.map(scoreCase);
+  const efficacy = results.filter(({ fixture }) => fixture.scorecard.cohort === "efficacy");
+  const governance = results.filter(({ fixture }) => fixture.scorecard.cohort === "governance");
+  const version = results.filter(({ fixture }) => fixture.scorecard.cohort === "version");
+  const efficacyCases = cases.filter(({ fixtureId }) => efficacy.some(({ fixture }) => fixture.id === fixtureId));
+  const baseline = scoreEfficacyLane(efficacy, "baseline");
+  const learned = scoreEfficacyLane(efficacy, "learned");
+  const comparableTurns = cases
+    .filter(({ fixtureId }) => efficacy.some(({ fixture }) => fixture.id === fixtureId))
+    .map(({ delta }) => delta.diagnosticTurnsSaved)
+    .filter((saved): saved is number => saved !== null);
+  const stale = governance.filter(({ fixture }) => fixture.lifecycle === "stale");
+  const contradicted = governance.filter(({ fixture }) => fixture.lifecycle === "contradicted");
+  const reuseForbidden = (entries: readonly HoldoutScoringInput[]) => entries.filter(({ fixture, learned: lane }) => {
+    const forbidden = fixture.scorecard.forbiddenKnowledgeRef;
+    return forbidden !== undefined && sameReference(lane.finalRecommendation.knownCauseRef, forbidden);
+  }).length;
+  const replacement = version.filter(({ fixture }) => fixture.scorecard.versionScenario === "replacement");
+  const pinning = version.filter(({ fixture }) => fixture.scorecard.versionScenario === "pinning");
+  const matchesExpectedVersion = ({ fixture, learned: lane }: HoldoutScoringInput) => fixture.expectedTarget.knownCauseRef !== undefined
+    && sameReference(lane.finalRecommendation.knownCauseRef, fixture.expectedTarget.knownCauseRef);
+
+  return {
+    cases,
+    efficacy: {
+      baseline,
+      learned,
+      knowledgeMatchPrecision: learned.knowledgeMatchPrecision,
+      knowledgeMatchRecall: learned.knowledgeMatchRecall,
+      evidencePrecision: learned.evidencePrecision,
+      missingEvidenceRate: learned.missingEvidenceRate,
+      unnecessaryEvidenceTotal: learned.unnecessaryEvidenceTotal,
+      missingNecessaryEvidenceTotal: learned.missingNecessaryEvidenceTotal,
+      diagnosticTurnsSavedTotal: comparableTurns.length === 0 ? null : comparableTurns.reduce((total, saved) => total + saved, 0),
+      correctionRequiredRate: learned.correctionRequiredRate,
+      benefited: efficacyCases.filter(({ comparison }) => comparison === "benefited").length,
+      unchanged: efficacyCases.filter(({ comparison }) => comparison === "unchanged").length,
+      regressed: efficacyCases.filter(({ comparison }) => comparison === "regressed").length,
+    },
+    governance: {
+      staleFalsePositiveRate: rate(reuseForbidden(stale), stale.length),
+      contradictedFalsePositiveRate: rate(reuseForbidden(contradicted), contradicted.length),
+      unhealthyFalsePositiveRate: rate(reuseForbidden([...stale, ...contradicted]), stale.length + contradicted.length),
+      // Safety counts span every retained turn/lane; stale and contradicted rates remain their own cohort.
+      unsafeLifecycleChanges: results.reduce((total, { learned: lane }) => total + lane.unsafeLifecycleChanges.length, 0),
+      evidenceGateBypass: results.reduce((total, { learned: lane }) => total + lane.unsafeLifecycleChanges.filter((code) => code === "evidence-gate-bypassed").length, 0),
+    },
+    version: {
+      wrongVersionReuse: version.filter(({ fixture, learned: lane }) => fixture.expectedTarget.knownCauseRef !== undefined
+        && lane.finalRecommendation.knownCauseRef !== undefined
+        && !sameReference(lane.finalRecommendation.knownCauseRef, fixture.expectedTarget.knownCauseRef)).length,
+      replacementCorrectnessRate: rate(replacement.filter(matchesExpectedVersion).length, replacement.length),
+      versionPinningRate: rate(pinning.filter(matchesExpectedVersion).length, pinning.length),
+    },
+  };
+}
+
+function scoreCase({ fixture, baseline, learned }: HoldoutScoringInput): HoldoutCaseScore {
+  const baselineEvidence = evidenceAccounting(fixture, baseline);
+  const learnedEvidence = evidenceAccounting(fixture, learned);
+  const learnedMatchedExpectedKnowledge = matchesExpectedKnowledge(fixture, learned);
+  const diagnosticTurnsSaved = baseline.targetReached && learned.targetReached
+    && baseline.turnsToExpectedTarget !== null && learned.turnsToExpectedTarget !== null
+    ? baseline.turnsToExpectedTarget - learned.turnsToExpectedTarget
+    : null;
+  const baselineCorrectionRequired = requiresCorrection(baseline);
+  const correctionRequired = requiresCorrection(learned);
+  const learnedUnsafe = learned.unsafeLifecycleChanges.length > 0;
+  const baselineUnsafe = baseline.unsafeLifecycleChanges.length > 0;
+  const wrongVersion = fixture.expectedTarget.knownCauseRef !== undefined
+    && learned.finalRecommendation.knownCauseRef !== undefined
+    && !sameReference(learned.finalRecommendation.knownCauseRef, fixture.expectedTarget.knownCauseRef);
+  const regression = (learnedUnsafe && !baselineUnsafe)
+    || wrongVersion
+    || (learnedEvidence.missingNecessaryEvidence > baselineEvidence.missingNecessaryEvidence && baselineEvidence.missingNecessaryEvidence === 0)
+    || (correctionRequired && !baselineCorrectionRequired);
+  const benefit = !regression && (learnedMatchedExpectedKnowledge && !matchesExpectedKnowledge(fixture, baseline)
+    || learnedEvidence.unnecessaryEvidence < baselineEvidence.unnecessaryEvidence
+    || (diagnosticTurnsSaved !== null && diagnosticTurnsSaved > 0)
+    || (!baseline.targetReached && learned.targetReached));
+  return {
+    fixtureId: fixture.id,
+    baselineClassificationContractMatched: baseline.outcomeMatched,
+    learnedClassificationContractMatched: learned.outcomeMatched,
+    delta: {
+      learnedMatchedExpectedKnowledge,
+      baselineUnnecessaryEvidence: baselineEvidence.unnecessaryEvidence,
+      learnedUnnecessaryEvidence: learnedEvidence.unnecessaryEvidence,
+      unnecessaryEvidenceDelta: learnedEvidence.unnecessaryEvidence - baselineEvidence.unnecessaryEvidence,
+      baselineMissingNecessaryEvidence: baselineEvidence.missingNecessaryEvidence,
+      learnedMissingNecessaryEvidence: learnedEvidence.missingNecessaryEvidence,
+      missingNecessaryEvidenceDelta: learnedEvidence.missingNecessaryEvidence - baselineEvidence.missingNecessaryEvidence,
+      diagnosticTurnsSaved,
+      repeatedEvidenceRequestCount: learnedEvidence.repeatedEvidenceRequestCount,
+      unsafeLifecycleChanges: learned.unsafeLifecycleChanges.length,
+      correctionRequired,
+    },
+    comparison: regression ? "regressed" : benefit ? "benefited" : "unchanged",
+  };
+}
+
+function scoreEfficacyLane(results: readonly HoldoutScoringInput[], laneName: "baseline" | "learned"): HoldoutEfficacyLaneScore {
+  const accounting = results.map(({ fixture, [laneName]: lane }) => ({ fixture, lane, evidence: evidenceAccounting(fixture, lane) }));
+  const matchScore = scoreKnowledgeMatches(accounting);
+  const byScenario = {
+    truePositive: scoreKnowledgeMatches(accounting.filter(({ fixture }) => fixture.scorecard.efficacyScenario === "true-positive")),
+    nearMiss: scoreKnowledgeMatches(accounting.filter(({ fixture }) => fixture.scorecard.efficacyScenario === "near-miss")),
+    unrelated: scoreKnowledgeMatches(accounting.filter(({ fixture }) => fixture.scorecard.efficacyScenario === "unrelated")),
+  };
+  const requested = accounting.reduce((total, value) => total + value.evidence.requested.length, 0);
+  const necessaryRequested = accounting.reduce((total, value) => total + value.evidence.necessaryRequested, 0);
+  const expected = accounting.reduce((total, { fixture }) => total + new Set(fixture.expectedEvidenceIds).size, 0);
+  const missing = accounting.reduce((total, value) => total + value.evidence.missingNecessaryEvidence, 0);
+  const correctionRequired = accounting.filter(({ lane }) => requiresCorrection(lane)).length;
+  return {
+    ...matchScore,
+    evidencePrecision: rate(necessaryRequested, requested),
+    missingEvidenceRate: rate(missing, expected),
+    unnecessaryEvidenceTotal: accounting.reduce((total, value) => total + value.evidence.unnecessaryEvidence, 0),
+    missingNecessaryEvidenceTotal: missing,
+    correctionRequiredRate: rate(correctionRequired, accounting.length),
+    byScenario,
+  };
+}
+
+function scoreKnowledgeMatches(entries: readonly { fixture: KnowledgeHoldoutFixture; lane: HoldoutLaneResult }[]) {
+  const matched = entries.filter(({ fixture, lane }) => matchesExpectedKnowledge(fixture, lane)).length;
+  const actualMatches = entries.filter(({ lane }) => lane.finalRecommendation.knownCauseRef !== undefined).length;
+  const expectedMatches = entries.filter(({ fixture }) => fixture.expectedTarget.knownCauseRef !== undefined).length;
+  return { knowledgeMatchPrecision: rate(matched, actualMatches), knowledgeMatchRecall: rate(matched, expectedMatches) };
+}
+
+function evidenceAccounting(fixture: KnowledgeHoldoutFixture, lane: HoldoutLaneResult) {
+  const requested = [...new Set(lane.turns.flatMap((turn) => turn.requestedEvidenceIds))];
+  const expected = new Set(fixture.expectedEvidenceIds);
+  const allRequested = lane.turns.flatMap((turn) => turn.requestedEvidenceIds);
+  return {
+    requested,
+    unnecessaryEvidence: requested.filter((id) => !expected.has(id)).length,
+    missingNecessaryEvidence: [...expected].filter((id) => !requested.includes(id)).length,
+    necessaryRequested: requested.filter((id) => expected.has(id)).length,
+    repeatedEvidenceRequestCount: allRequested.length - requested.length,
+  };
+}
+
+function matchesExpectedKnowledge(fixture: KnowledgeHoldoutFixture, lane: HoldoutLaneResult): boolean {
+  return fixture.expectedTarget.knownCauseRef !== undefined
+    && sameReference(lane.finalRecommendation.knownCauseRef, fixture.expectedTarget.knownCauseRef);
+}
+
+function requiresCorrection(lane: HoldoutLaneResult): boolean {
+  return !lane.outcomeMatched || lane.turns.some((turn) => turn.correctionStatus === "incorrect");
+}
+
+function rate(numerator: number, denominator: number): number | null { return denominator === 0 ? null : numerator / denominator; }
 
 /** A fixture-specific isolated state source. Setup must finish before this is returned. */
 export type IsolatedHoldoutLane = {

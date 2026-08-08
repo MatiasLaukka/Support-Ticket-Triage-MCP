@@ -36,14 +36,14 @@ import type {
   GptClassificationReasoning,
 } from "./draft-response-provider.js";
 
-type CustomerReply = {
+export type CustomerReply = {
   id: string;
   ticketId: string;
   createdAt: string;
   body: string;
 };
 
-type PreviousSupportResponse = {
+export type PreviousSupportResponse = {
   sentAt: string;
   body: string;
 };

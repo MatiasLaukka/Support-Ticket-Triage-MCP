@@ -184,14 +184,14 @@ function scoreCase({ fixture, baseline, learned }: HoldoutScoringInput): Holdout
     : null;
   const baselineCorrectionRequired = requiresCorrection(baseline);
   const correctionRequired = requiresCorrection(learned);
-  const learnedUnsafe = learned.unsafeLifecycleChanges.length > 0;
-  const baselineUnsafe = baseline.unsafeLifecycleChanges.length > 0;
+  const baselineUnsafeCodes = new Set(baseline.unsafeLifecycleChanges);
+  const learnedIntroducesUnsafeCode = learned.unsafeLifecycleChanges.some((code) => !baselineUnsafeCodes.has(code));
   const wrongVersion = fixture.expectedTarget.knownCauseRef !== undefined
     && learned.finalRecommendation.knownCauseRef !== undefined
     && !sameReference(learned.finalRecommendation.knownCauseRef, fixture.expectedTarget.knownCauseRef);
-  const regression = (learnedUnsafe && !baselineUnsafe)
+  const regression = learnedIntroducesUnsafeCode
     || wrongVersion
-    || (learnedEvidence.missingNecessaryEvidence > baselineEvidence.missingNecessaryEvidence && baselineEvidence.missingNecessaryEvidence === 0)
+    || baselineEvidence.necessaryRequestedIds.some((id) => !learnedEvidence.necessaryRequestedIds.includes(id))
     || (correctionRequired && !baselineCorrectionRequired);
   const benefit = !regression && (learnedMatchedExpectedKnowledge && !matchesExpectedKnowledge(fixture, baseline)
     || learnedEvidence.unnecessaryEvidence < baselineEvidence.unnecessaryEvidence
@@ -258,6 +258,7 @@ function evidenceAccounting(fixture: KnowledgeHoldoutFixture, lane: HoldoutLaneR
     unnecessaryEvidence: requested.filter((id) => !expected.has(id)).length,
     missingNecessaryEvidence: [...expected].filter((id) => !requested.includes(id)).length,
     necessaryRequested: requested.filter((id) => expected.has(id)).length,
+    necessaryRequestedIds: requested.filter((id) => expected.has(id)),
     repeatedEvidenceRequestCount: allRequested.length - requested.length,
   };
 }

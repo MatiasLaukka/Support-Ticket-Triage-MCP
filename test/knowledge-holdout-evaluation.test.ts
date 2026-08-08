@@ -172,6 +172,33 @@ describe("knowledge holdout scorecards", () => {
     expect(result.version.replacementCorrectnessRate).toBe(0);
     expect(result.version.versionPinningRate).toBe(0);
   });
+
+  it("regresses when learned adds an unsafe lifecycle code to an already unsafe baseline", () => {
+    const fixtures = knowledgeHoldoutFixtures();
+    const baselineUnsafe = [{ code: "unexpected-escalations" as const, turn: 1 }];
+    const learnedUnsafe = [...baselineUnsafe, { code: "evidence-gate-bypassed" as const, turn: 1 }];
+    const result = scoreKnowledgeHoldoutResults([
+      scored(fixtures, "sufficient-evidence-true-positive", lane({ target: true, unsafe: baselineUnsafe }), lane({ target: true, unsafe: learnedUnsafe })),
+    ]);
+
+    expect(result.cases[0]!.comparison).toBe("regressed");
+    expect(result.governance.evidenceGateBypass).toBe(1);
+    expect(result.governance.unsafeLifecycleChanges).toBe(2);
+  });
+
+  it("regresses when learned omits a required evidence ID that baseline collected despite equal missing totals", () => {
+    const source = knowledgeHoldoutFixtures().find(({ id }) => id === "missing-evidence-then-supplied")!;
+    const fixture: KnowledgeHoldoutFixture = { ...source, expectedEvidenceIds: ["request-id", "workspace-id"] };
+    const result = scoreKnowledgeHoldoutResults([{
+      fixture,
+      baseline: lane({ requested: ["request-id"], target: true }),
+      learned: lane({ requested: ["workspace-id"], target: true }),
+    }]);
+
+    expect(result.cases[0]!.delta.baselineMissingNecessaryEvidence).toBe(1);
+    expect(result.cases[0]!.delta.learnedMissingNecessaryEvidence).toBe(1);
+    expect(result.cases[0]!.comparison).toBe("regressed");
+  });
 });
 
 const asOf = "2026-08-08T12:00:00.000Z";
@@ -185,7 +212,7 @@ function lane(input: {
   requested?: readonly string[];
   target: boolean;
   turnsToTarget?: number;
-  unsafe?: readonly { code: "evidence-gate-bypassed"; turn: number }[];
+  unsafe?: readonly { code: "evidence-gate-bypassed" | "unexpected-escalations"; turn: number }[];
   correction?: boolean;
 }): HoldoutLaneResult {
   const recommendation = { knownCauseRef: input.ref, requiredEvidence: (input.requested ?? []).map((id) => ({ id })) } as never;

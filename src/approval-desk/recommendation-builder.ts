@@ -18,6 +18,10 @@ import {
   type Ticket,
 } from "../domain.js";
 import type { KnowledgeObject } from "../knowledge-evolution/domain.js";
+import {
+  validateKnownCauseReference,
+  type ProductionKnowledgeInput,
+} from "../knowledge-evolution/reusable-context.js";
 import type {
   SubmitEvaluationInput,
 } from "../triage-service.js";
@@ -109,6 +113,7 @@ export function buildApprovalDeskRecommendationInput(input: {
   rejectedDiagnosis?: DiagnosisContext;
   fixContext?: FixContext;
   approvedObjects?: readonly KnowledgeObject[];
+  reusableKnowledge?: ProductionKnowledgeInput["reusableKnowledge"];
 }): Omit<SubmitEvaluationInput, "submittedAt" | "evaluatedCustomerReplyWatermark"> {
   const { ticket, outcome, actor } = input;
   const conversationContextForClassification = buildConversationContextForTicket({
@@ -150,8 +155,12 @@ export function buildApprovalDeskRecommendationInput(input: {
     customerReplies: input.customerReplies ?? [],
     previousSupportResponse: input.previousSupportResponse,
     approvedObjects: input.approvedObjects,
+    reusableKnowledge: input.reusableKnowledge,
   });
   const evidenceReadiness = lifecycle.evidenceReadiness;
+  const knownCauseReferenceValidation = evidenceReadiness.knownCauseRef === undefined || input.reusableKnowledge === undefined
+    ? undefined
+    : validateKnownCauseReference(input.reusableKnowledge, evidenceReadiness.knownCauseRef);
   const conversationContext = buildConversationContext({
     customerReplies: input.customerReplies ?? [],
     ticketId: ticket.id,
@@ -226,6 +235,20 @@ export function buildApprovalDeskRecommendationInput(input: {
     ),
     supportState: diagnosticEscalation?.supportState ?? evidenceReadiness.supportState,
     knownCause: evidenceReadiness.knownCause,
+    ...(evidenceReadiness.knownCauseRef === undefined
+      ? {}
+      : { knownCauseRef: evidenceReadiness.knownCauseRef }),
+    ...(knownCauseReferenceValidation === undefined
+      ? {}
+      : { knownCauseReferenceValidation }),
+    ...(input.reusableKnowledge === undefined
+      ? {}
+      : {
+          learnedContext: {
+            status: input.reusableKnowledge.status,
+            issues: input.reusableKnowledge.issues,
+          },
+        }),
     knownEventId: evidenceReadiness.knownEventId,
     knownEventMatchReasons: evidenceReadiness.knownEventMatchReasons,
     requiredEvidence: evidenceReadiness.requiredEvidence,
@@ -275,6 +298,7 @@ export async function buildApprovalDeskRecommendationInputWithDrafting(input: {
   rejectedDiagnosis?: DiagnosisContext;
   fixContext?: FixContext;
   approvedObjects?: readonly KnowledgeObject[];
+  reusableKnowledge?: ProductionKnowledgeInput["reusableKnowledge"];
   aiPreference?: AiPreference;
   classificationTrace?: AiExecutionTrace["classification"];
   safety?: PromptInjectionAssessment;
@@ -296,6 +320,7 @@ export async function buildApprovalDeskRecommendationInputWithDrafting(input: {
     customerReplies: input.customerReplies ?? [],
     previousSupportResponse: input.previousSupportResponse,
     approvedObjects: input.approvedObjects,
+    reusableKnowledge: input.reusableKnowledge,
   });
   const diagnosticEscalated =
     input.diagnosisContext?.diagnosticState?.state === "escalated";
@@ -1061,6 +1086,7 @@ function analyzeCustomerReplyLifecycle(input: {
   customerReplies: readonly CustomerReply[];
   previousSupportResponse?: PreviousSupportResponse;
   approvedObjects?: readonly KnowledgeObject[];
+  reusableKnowledge?: ProductionKnowledgeInput["reusableKnowledge"];
 }): {
   evidenceReadiness: EvidenceReadiness;
   replyStage: CustomerReplyStage;
@@ -1077,6 +1103,7 @@ function analyzeCustomerReplyLifecycle(input: {
     ticket: input.ticket,
     outcome: input.outcome,
     approvedObjects: input.approvedObjects,
+    reusableKnowledge: input.reusableKnowledge,
   });
   if (input.ticket.status === "resolved") {
     return {
@@ -1110,6 +1137,7 @@ function analyzeCustomerReplyLifecycle(input: {
     ticket: ticketWithReplies,
     outcome: input.outcome,
     approvedObjects: input.approvedObjects,
+    reusableKnowledge: input.reusableKnowledge,
   });
   const latestReply = ticketReplies[ticketReplies.length - 1]?.body ?? "";
 

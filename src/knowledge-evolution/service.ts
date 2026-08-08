@@ -6,14 +6,16 @@ import type { TicketRepository } from "../ticket-repository.js";
 import { draftKnowledgeCandidate, type CandidateDraftProvider } from "./candidate-draft-provider.js";
 import type { CandidateDraftPayload } from "./candidate-draft-contract.js";
 import { evidenceReferenceIds, type CompletedDiagnosis, type KnowledgeCandidate, type KnowledgeObject } from "./domain.js";
-import { KnowledgeCandidateSchema } from "./domain.js";
+import { KnowledgeCandidateWriteSchema } from "./domain.js";
 import { discoverCandidates, type KnowledgeDiscoveryResult } from "./discovery.js";
 import type { DiagnosisRepository } from "./diagnosis-repository.js";
 import type { KnowledgeAuditEvent, KnowledgeAuditRepository } from "./knowledge-audit-repository.js";
 import type { KnowledgeObjectRepository } from "./knowledge-object-repository.js";
 import { findEvidenceRequirement } from "../evidence-catalog.js";
 import type { LearningEvent, LearningLedger } from "./learning-ledger.js";
-import { projectKnowledgeLearning, type KnowledgeLearningSummary } from "./learning-read-model.js";
+import type { KnowledgeVersionStore, KnowledgeRevisionOperations } from "./knowledge-version-store.js";
+import { projectCandidateLearning, projectKnowledgeVersionLearning, type KnowledgeLearningSummary } from "./learning-read-model.js";
+import { listReusableApproved, type ReusableKnowledgeResult } from "./reusable-context.js";
 
 const editableFields = [
   "name", "summary", "triggerPatterns", "evidencePolicy", "timeConstraints",
@@ -30,7 +32,7 @@ export interface KnowledgeEvolutionServiceDependencies {
   diagnoses: Pick<DiagnosisRepository, "list">;
   objects: Pick<KnowledgeObjectRepository, "listCandidates" | "getCandidate" | "saveCandidate" | "removeCandidate" | "listApproved" | "promote" | "removeApproved"> & {
     promoteWithAudit?: (candidateId: string, approved: KnowledgeObject, expectedCandidateVersion: number | undefined, audit: KnowledgeAuditEvent) => Promise<KnowledgeObject>;
-  };
+  } & Partial<Pick<KnowledgeVersionStore, "listVersions" | "listHeadMappings" | "promoteReplacement" | "snapshotForReuse">>;
   audits: Pick<KnowledgeAuditRepository, "append" | "appendIfNoPriorAction" | "list">;
   draftProvider?: CandidateDraftProvider;
   promotionAuthorizer: (actorId: string) => boolean;
@@ -49,7 +51,7 @@ export interface KnowledgeDiscoveryServiceResult extends KnowledgeDiscoveryResul
   };
 }
 
-export class KnowledgeEvolutionService {
+export class KnowledgeEvolutionService implements KnowledgeRevisionOperations {
   private readonly now: () => Date;
   private readonly nextAuditId: () => string;
 
@@ -187,17 +189,29 @@ export class KnowledgeEvolutionService {
     return this.dependencies.objects.listApproved();
   }
 
-  async learningSummary(input: { candidateId: string; objectId?: string; asOf?: string }): Promise<KnowledgeLearningSummary> {
+  async listReusableApproved(input: { asOf: string }): Promise<ReusableKnowledgeResult> {
+    const snapshotForReuse = this.dependencies.objects.snapshotForReuse;
+    if (snapshotForReuse === undefined) {
+      return { status: "ledger-unavailable", contexts: [], issues: [{ scope: "snapshot", code: "ledger-read-failed" }] };
+    }
+    return listReusableApproved({ snapshotReader: { snapshotForReuse: snapshotForReuse.bind(this.dependencies.objects) }, asOf: input.asOf });
+  }
+
+  async learningSummary(input: { candidateId: string; asOf?: string }): Promise<KnowledgeLearningSummary> {
     const events = this.dependencies.ledger === undefined
       ? []
-      : await Promise.all([
-          this.dependencies.ledger.list({ candidateId: input.candidateId }),
-          this.dependencies.ledger.list({ objectId: input.objectId ?? input.candidateId }),
-        ]).then(([candidateEvents, objectEvents]) => {
-          const byId = new Map([...candidateEvents, ...objectEvents].map((event) => [event.id, event]));
-          return [...byId.values()];
-        });
-    return projectKnowledgeLearning(events, input);
+      : await this.dependencies.ledger.list({ candidateId: input.candidateId });
+    return projectCandidateLearning(events, input);
+  }
+
+  async learningVersionSummary(input: { candidateId: string; objectId: string; sourceVersion: number; asOf: string }): Promise<KnowledgeLearningSummary> {
+    const events = this.dependencies.ledger === undefined
+      ? []
+      : await this.dependencies.ledger.list({ objectId: input.objectId });
+    return {
+      candidateId: input.candidateId,
+      ...projectKnowledgeVersionLearning(events, input),
+    };
   }
 
   async approve(input: { candidateId: string; actorId: string; edits?: CandidateEdits; expectedVersion: number }): Promise<KnowledgeObject> {
@@ -233,6 +247,8 @@ export class KnowledgeEvolutionService {
         discovery: _discovery,
         evidencePolicyMetadata: _evidencePolicyMetadata,
         evidencePolicy: _evidencePolicy,
+        objectId: _objectId,
+        sourceVersion: _sourceVersion,
         ...approvedFields
       } = reviewed;
       const object: KnowledgeObject = {
@@ -240,6 +256,7 @@ export class KnowledgeEvolutionService {
         evidencePolicy: reviewedPolicy,
         status: "approved",
         version: 1,
+        learningGovernance: "ledger",
         approval: { approvedBy: input.actorId.trim(), approvedAt: this.now().toISOString() },
       };
       let promoted: KnowledgeObject | undefined;
@@ -288,6 +305,110 @@ export class KnowledgeEvolutionService {
         }
         throw error;
       }
+    });
+  }
+
+  async proposeRevision(input: { objectId: string; sourceVersion: number; actorId: string; edits?: CandidateEdits }): Promise<KnowledgeCandidate> {
+    assertActor(input.actorId);
+    if (!this.dependencies.promotionAuthorizer(input.actorId.trim())) {
+      throw new DomainError("Actor is not authorized to propose knowledge revisions.", "INVALID_APPROVAL_FIELDS");
+    }
+    const { listVersions, listHeadMappings } = this.dependencies.objects;
+    if (listVersions === undefined || listHeadMappings === undefined) {
+      throw new DomainError("The configured knowledge store does not support version revisions.", "UNSUPPORTED_VERSION_TRANSITION");
+    }
+    const [heads, versions] = await Promise.all([listHeadMappings(), listVersions(input.objectId)]);
+    if (heads.get(input.objectId) !== input.sourceVersion) {
+      throw new DomainError("Knowledge source version is not the active head.", "STALE_APPROVAL");
+    }
+    const source = versions.find((version) => version.version === input.sourceVersion);
+    if (source === undefined) throw new DomainError("Knowledge source version was not found.", "REPOSITORY_ERROR");
+    const { status: _status, approval: _approval, learningGovernance: _governance, ...sourceFields } = source;
+    const candidate: KnowledgeCandidate = applyEdits({
+      ...sourceFields,
+      id: `revision-${randomUUID()}`,
+      objectId: source.id,
+      sourceVersion: source.version,
+      version: 1,
+      status: "candidate",
+      provenance: { source: "knowledge-version-revision", recordedAt: this.now().toISOString() },
+      deterministicScores: { confidence: 0.9, support: Math.max(1, source.supportingDiagnosisIds.length) },
+      deterministicReasons: ["An authorized operator proposed a revision from the active knowledge version."],
+      contradictions: [],
+      validationStatus: "valid",
+      evidencePolicyMetadata: {
+        derivedEvidenceIds: source.evidencePolicy.mode === "required" ? [...source.evidencePolicy.evidenceIds] : [],
+        operatorAddedEvidenceIds: [],
+      },
+    }, input.edits);
+    await this.dependencies.objects.saveCandidate(candidate);
+    return candidate;
+  }
+
+  async approveRevision(input: { candidateId: string; actorId: string }): Promise<KnowledgeObject> {
+    assertActor(input.actorId);
+    if (!this.dependencies.promotionAuthorizer(input.actorId.trim())) {
+      throw new DomainError("Actor is not authorized to approve knowledge revisions.", "INVALID_APPROVAL_FIELDS");
+    }
+    const { promoteReplacement, listHeadMappings } = this.dependencies.objects;
+    if (promoteReplacement === undefined || listHeadMappings === undefined) {
+      throw new DomainError("The configured knowledge store does not support version revisions.", "UNSUPPORTED_VERSION_TRANSITION");
+    }
+    return serializeCandidate(input.candidateId, async () => {
+      const candidate = await this.dependencies.objects.getCandidate(input.candidateId);
+      if (candidate.objectId === undefined || candidate.sourceVersion === undefined) throw new DomainError("Knowledge revision lineage is missing.", "INVALID_APPROVAL_FIELDS");
+      const [heads, reviewEvents, diagnoses, tickets] = await Promise.all([
+        listHeadMappings(),
+        this.dependencies.audits.list({ candidateId: candidate.id }),
+        this.dependencies.diagnoses.list(),
+        this.dependencies.tickets.snapshot(),
+      ]);
+      const expectedHeadVersion = heads.get(candidate.objectId);
+      if (expectedHeadVersion !== candidate.sourceVersion) throw new DomainError("Knowledge source version is not the active head.", "STALE_APPROVAL");
+      assertPromotable(candidate, reviewEvents);
+      assertReferences(candidate, diagnoses, tickets);
+      const policy = candidate.evidencePolicy;
+      if (policy.mode === "undecided") throw new DomainError("Knowledge candidate requires an explicit evidence policy before approval.", "INVALID_APPROVAL_FIELDS");
+      const {
+        deterministicScores, deterministicReasons: _reasons, contradictions: _contradictions, validationStatus: _validation,
+        gptProvenance: _gptProvenance, discovery: _discovery, evidencePolicyMetadata: _metadata,
+        evidencePolicy: _candidatePolicy, objectId: _objectId, sourceVersion: _sourceVersion, version: _version,
+        status: _status, ...objectFields
+      } = candidate;
+      const occurredAt = this.now().toISOString();
+      const correlationId = randomUUID();
+      const nextVersion = expectedHeadVersion + 1;
+      const approved = {
+        ...objectFields,
+        id: candidate.objectId,
+        evidencePolicy: policy,
+        status: "approved" as const,
+        learningGovernance: "ledger" as const,
+        approval: { approvedBy: input.actorId.trim(), approvedAt: occurredAt },
+      };
+      const promotionAudit: KnowledgeAuditEvent = {
+        id: this.nextAuditId(), timestamp: occurredAt, objectId: candidate.objectId, candidateId: candidate.id,
+        action: "approved", actor: input.actorId.trim(), supportIds: supportIds(candidate), scores: deterministicScores,
+        provenanceSummary: candidate.provenance.source, reviewedFields: [], result: "approved", notes: candidate.operatorRationale,
+        evidencePolicyMetadata: { approvedPolicy: policy, ...candidate.evidencePolicyMetadata },
+      };
+      return promoteReplacement({
+        candidateId: candidate.id,
+        approved,
+        expectedCandidateVersion: candidate.version,
+        expectedHeadVersion,
+        promotionAudit,
+        supersededEvent: {
+          id: randomUUID(), occurredAt, actor: input.actorId.trim(), correlationId,
+          objectId: candidate.objectId, sourceVersion: expectedHeadVersion, eventType: "knowledge-version-superseded",
+          payload: { health: "superseded", replacementVersion: nextVersion, provenance: "Operator approved a replacement knowledge-object version." },
+        },
+        promotionEvent: {
+          id: randomUUID(), occurredAt, actor: input.actorId.trim(), correlationId, candidateId: candidate.id,
+          objectId: candidate.objectId, sourceVersion: nextVersion, eventType: "candidate-promoted",
+          payload: { maturity: "promoted", health: "active", provenance: "Operator approved a replacement knowledge-object version." },
+        },
+      });
     });
   }
 
@@ -453,6 +574,8 @@ function deterministicCandidate(
     : { mode: "required" as const, evidenceIds };
   const value = {
     id: `known-cause-${sourceId}`,
+    objectId: `known-cause-${sourceId}`,
+    sourceVersion: 1,
     kind: "known-cause" as const,
     name: `Recurring ${diagnosis.ownerTeam} known cause`,
     summary: diagnosis.problem,
@@ -477,7 +600,7 @@ function deterministicCandidate(
     validationStatus: evidenceIds.length === 0 ? "invalid" as const : "valid" as const,
     evidencePolicyMetadata: { derivedEvidenceIds: evidenceIds, operatorAddedEvidenceIds: [] },
   };
-  const parsed = KnowledgeCandidateSchema.safeParse(value);
+  const parsed = KnowledgeCandidateWriteSchema.safeParse(value);
   return parsed.success ? parsed.data : undefined;
 }
 
@@ -495,6 +618,8 @@ function candidateFromDraft(
   const value = {
     ...fields,
     id: `known-cause-gpt-${sourceId}`,
+    objectId: `known-cause-gpt-${sourceId}`,
+    sourceVersion: 1,
     owner,
     version: 1,
     status: "candidate" as const,
@@ -506,7 +631,7 @@ function candidateFromDraft(
     validationStatus: draft.evidencePolicy.mode === "undecided" ? "invalid" as const : "valid" as const,
     evidencePolicyMetadata: evidencePolicyMetadataForDraft(draft, diagnoses),
   };
-  const parsed = KnowledgeCandidateSchema.safeParse(value);
+  const parsed = KnowledgeCandidateWriteSchema.safeParse(value);
   return parsed.success ? parsed.data : undefined;
 }
 
@@ -543,7 +668,7 @@ function applyEdits(candidate: KnowledgeCandidate, edits: CandidateEdits | undef
     };
     merged.validationStatus = merged.evidencePolicy.mode === "undecided" ? "invalid" : "valid";
   }
-  const parsed = KnowledgeCandidateSchema.safeParse(merged);
+  const parsed = KnowledgeCandidateWriteSchema.safeParse(merged);
   if (!parsed.success) throw new DomainError("Knowledge candidate edits are invalid.", "INVALID_APPROVAL_FIELDS");
   return parsed.data;
 }

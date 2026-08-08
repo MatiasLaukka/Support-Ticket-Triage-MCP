@@ -6,6 +6,7 @@ export type DomainErrorCode =
   | "RECOMMENDATION_NOT_FOUND"
   | "REVISION_CONFLICT"
   | "INVALID_CLASSIFICATION_PROVENANCE"
+  | "UNSUPPORTED_VERSION_TRANSITION"
   | "REPOSITORY_ERROR";
 
 export class DomainError extends Error {

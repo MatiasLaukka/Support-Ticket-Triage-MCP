@@ -155,14 +155,14 @@ export async function runKnowledgeEvolutionShowcase(
       provenance: "Controlled technical verification fixture.",
     },
   });
-  const learningBeforeStale = await deps.knowledgeEvolution.service.learningSummary({ candidateId, objectId: approved.id, asOf: "2026-08-01T12:07:00.000Z" });
+  const learningBeforeStale = await deps.knowledgeEvolution.service.learningVersionSummary({ candidateId, objectId: approved.id, sourceVersion: approved.version, asOf: "2026-08-01T12:07:00.000Z" });
   await deps.knowledgeEvolution.service.markStale({
     objectId: approved.id,
     sourceVersion: approved.version,
     actorId: "support-lead",
     reasons: ["Showcase stale-signal demonstration."],
   });
-  const learningAfterStale = await deps.knowledgeEvolution.service.learningSummary({ candidateId, objectId: approved.id, asOf: "2026-09-01T12:07:00.000Z" });
+  const learningAfterStale = await deps.knowledgeEvolution.service.learningVersionSummary({ candidateId, objectId: approved.id, sourceVersion: approved.version, asOf: "2026-09-01T12:07:00.000Z" });
   const failedReuseEvents = await deps.knowledgeEvolution.ledger.list({ eventType: "knowledge-reuse-failed" });
   const historicalAfter = stableJson(await deps.recommendations.get(historicalRecommendationId));
   const futureTicketReuse = {

@@ -182,3 +182,41 @@ The diagnostic harness evaluates lifecycle and evidence gates without mutating
 knowledge stores. Candidate discovery and promotion are tested through the
 knowledge-evolution service and its repositories, keeping evaluation snapshots
 separate from durable operator actions.
+
+## Multi-turn holdout and scorecards
+
+Run `npm run evaluate:knowledge-holdout` to exercise fixed future-ticket
+fixtures through the same reusable-context service and production evaluator
+used by MCP and Approval Desk. The baseline lane has no learned context; the
+learned lane receives the exact historical snapshot from
+`listReusableApproved({ asOf })`. Complete customer-reply snapshots are
+retained per turn, with no hidden evaluator conversation state and no expected
+outcome shortcut passed into production evaluation.
+
+The holdout covers evidence arriving over multiple turns, near misses,
+unrelated requests, stale and contradicted exact versions, an approved
+replacement, and an unapproved revision candidate. Its scorecard keeps
+efficacy, governance safety, and exact-version correctness separate. Generated
+JSON and Markdown reports are allowlisted: they contain fixture IDs, evidence
+IDs, lifecycle/version signals, and aggregate metrics, but no customer reply
+bodies, prompts, drafts, or rationales. This is controlled synthetic evidence,
+not a live-model or human-time benchmark.
+
+The scorecard formulas are explicit: exact-version precision is correct
+learned matches divided by all learned matches; recall is correct matches
+divided by expected positives; evidence precision is necessary requested
+evidence divided by all requested evidence; stale/contradicted safety rates
+are forbidden exact-version reuse divided by that health cohort; and
+replacement/pinning rates are the expected exact version divided by each
+version cohort. Missing-evidence rate is missing necessary IDs divided by all
+expected IDs; rate metrics with no denominator are `null`, while count totals
+remain zero. Learned-minus-baseline comparisons are safety-first, so a new
+unsafe lifecycle code, wrong version, or lost evidence is a regression even if
+a later turn recovers.
+
+The reusable boundary fails closed for learning: a ledger read failure returns
+`status: "ledger-unavailable"` with no learned contexts, while deterministic
+triage proceeds normally. It does not resurrect an older version implicitly.
+Deprecated exclusion is verified by the reusable-context boundary regression;
+stale and contradicted exclusion are also exercised end to end by the holdout
+lanes.

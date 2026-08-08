@@ -305,6 +305,9 @@ async function connect(
     service: fixture.service,
     now: () => now,
     env: {},
+    // This adapter is deliberately test-only: production callers receive the
+    // required service from runtime.ts and cannot omit the reusable boundary.
+    knowledgeEvolution: nonProductionReusableKnowledgeAdapter(),
     ...providers,
   });
   const client = new Client({ name: "server-actions-test", version: "1.0.0" });
@@ -314,6 +317,20 @@ async function connect(
   connections.push({ client, server });
   await client.connect(clientTransport);
   return client;
+}
+
+function nonProductionReusableKnowledgeAdapter() {
+  return {
+    service: {
+      async listReusableApproved() {
+        return {
+          status: "ledger-unavailable" as const,
+          contexts: [],
+          issues: [{ scope: "snapshot" as const, code: "ledger-read-failed" as const }],
+        };
+      },
+    } as never,
+  };
 }
 
 async function callTool(
@@ -1306,6 +1323,32 @@ describe("createTriageServer action protocol", () => {
     expect(textOf(diagnosis)).toBe(
       "INVALID_APPROVAL_FIELDS: Evaluate the latest customer reply before diagnosis.",
     );
+  });
+
+  it("rejects MCP evaluation when the required reusable-knowledge service is absent", async () => {
+    const fixture = await createFixture();
+    const server = createTriageServer({
+      tickets: fixture.tickets,
+      knowledge: fixture.knowledge,
+      recommendations: fixture.recommendations,
+      audits: fixture.audits,
+      service: fixture.service,
+      now: () => now,
+      env: {},
+    } as never);
+    const client = new Client({ name: "missing-knowledge-service", version: "1.0.0" });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    await server.connect(serverTransport);
+    connections.push({ client, server });
+    await client.connect(clientTransport);
+
+    const evaluated = await callTool(client, "evaluate_ticket", {
+      ticketId: "TKT-1001",
+      actor: "approval-desk",
+    });
+
+    expect(evaluated.isError).toBe(true);
+    expect(textOf(evaluated)).toContain("Knowledge evolution service is not configured.");
   });
 
   it("evaluates the current ticket timeline without caller-built recommendation objects", async () => {

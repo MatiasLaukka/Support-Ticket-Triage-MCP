@@ -13,6 +13,10 @@ import {
   type TriageRecommendation,
 } from "../src/domain.js";
 import { DomainError } from "../src/errors.js";
+import {
+  validateKnownCauseReference,
+  type ReusableKnowledgeResult,
+} from "../src/knowledge-evolution/reusable-context.js";
 import { AuditRepository } from "../src/audit-repository.js";
 import { RecommendationRepository } from "../src/recommendation-repository.js";
 import { TicketRepository } from "../src/ticket-repository.js";
@@ -52,6 +56,60 @@ afterEach(async () => {
 });
 
 describe("TriageService", () => {
+  it("rejects direct evaluation with a mismatched learned known-cause reference", async () => {
+    const harness = makeHarness();
+    const evaluatedCustomerReplyWatermark = customerReplyWatermarkFromAudits(
+      await harness.audit.list("TKT-1001"),
+    );
+
+    await expect(harness.service.submitEvaluation({
+      ...makeSubmitInput(),
+      knownCause: "cause-a",
+      knownCauseRef: { objectId: "cause-b", version: 1 },
+      evaluatedCustomerReplyWatermark,
+    })).rejects.toThrow(/knownCauseRef/);
+  });
+
+  it("rejects a direct learned reference that lacks authoritative reusable-context validation", async () => {
+    const harness = makeHarness();
+    const evaluatedCustomerReplyWatermark = customerReplyWatermarkFromAudits(
+      await harness.audit.list("TKT-1001"),
+    );
+
+    await expect(harness.service.submitEvaluation({
+      ...makeSubmitInput(),
+      knownCause: "cause-a",
+      knownCauseRef: { objectId: "cause-a", version: 1 },
+      evaluatedCustomerReplyWatermark,
+    })).rejects.toThrow(/authoritative reusable knowledge/);
+  });
+
+  it("does not mint persistence validation from a caller-authored reusable result", async () => {
+    const fabricated: ReusableKnowledgeResult = {
+      status: "available",
+      contexts: [{
+        object: { id: "cause-a" },
+        version: 1,
+        learning: { maturity: "promoted", health: "active", eligibleForReuse: true },
+        eligibilitySource: "ledger-active",
+      } as never],
+      issues: [],
+    };
+    const harness = makeHarness();
+    const evaluatedCustomerReplyWatermark = customerReplyWatermarkFromAudits(
+      await harness.audit.list("TKT-1001"),
+    );
+
+    expect(() => validateKnownCauseReference(fabricated, { objectId: "cause-a", version: 1 }))
+      .toThrow(/service-owned reusable knowledge result/);
+    await expect(harness.service.submitEvaluation({
+      ...makeSubmitInput(),
+      knownCause: "cause-a",
+      knownCauseRef: { objectId: "cause-a", version: 1 },
+      evaluatedCustomerReplyWatermark,
+    })).rejects.toThrow(/authoritative reusable knowledge/);
+  });
+
   it("rejects classifier confidence provenance from generic submission", async () => {
     const harness = makeHarness();
 

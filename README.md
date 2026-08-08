@@ -849,10 +849,10 @@ npm run verify:portfolio
 ```
 
 This runs the build, typecheck, full Vitest suite, diagnostic evaluation,
-stateful lifecycle replay, knowledge-evolution promotion/reuse showcase, and
-deterministic queue-metrics showcase in sequence. It stops at the first
-failure, so the command is suitable for reproducing the evidence reported in
-this README without enabling live GPT providers.
+stateful lifecycle replay, deterministic knowledge holdout, knowledge-evolution
+promotion/reuse showcase, and deterministic queue-metrics showcase in sequence.
+It stops at the first failure, so the command is suitable for reproducing the
+evidence reported in this README without enabling live GPT providers.
 
 ## Reproducible Evaluation
 
@@ -898,6 +898,51 @@ The current seed audit reports 30/30 classification contracts, 28 tickets
 correctly waiting for evidence, 30/30 lifecycle invariants, 7 known-cause
 matches, 3 known-event matches, and one already-resolved ticket with zero
 evidence requests.
+
+### Deterministic knowledge holdout
+
+The governed-learning proof is a fixed, multi-turn holdout rather than a
+single snapshot or a live-model benchmark. Run it with:
+
+```powershell
+npm run evaluate:knowledge-holdout
+```
+
+The command evaluates baseline and learned lanes through the same
+`listReusableApproved({ asOf })` and `evaluateTicketWithAi` production path,
+then writes sanitized artifacts to
+`reports/knowledge-holdout/controlled-latest.json` and
+`reports/knowledge-holdout/controlled-latest.md`. The fixtures cover complete
+evidence, evidence arriving on a later customer turn, near misses, unrelated
+questions, stale and contradicted knowledge, an approved replacement, and an
+unapproved revision draft. Every turn is retained, and scoring verifies that
+the evaluator changed no ticket, recommendation, audit, learning, candidate,
+version, or head state.
+
+The report separates efficacy, governance safety, and exact-version scorecards.
+It is controlled synthetic evidence: it demonstrates governed reuse and
+historical/version isolation, but it makes no claim about human time saved or
+live GPT performance.
+
+The scorecard uses explicit ratios rather than a single blended quality number:
+exact-version precision is correct learned matches divided by all learned
+matches, recall is correct learned matches divided by expected matches, and
+evidence precision is necessary evidence requested divided by all requested
+evidence. Governance rates count stale or contradicted versions reused when
+they should be excluded; version rates count the expected exact version or
+approved replacement selected. Missing-evidence rate is missing necessary IDs
+divided by all expected IDs; zero-denominator rate metrics are reported as
+`null`, while count totals remain zero. Baseline-to-learned deltas are
+safety-first:
+new unsafe lifecycle codes, wrong-version reuse, or lost evidence are
+regressions even when a later turn recovers.
+
+If the learning ledger cannot be read, `listReusableApproved({ asOf })`
+returns `ledger-unavailable` with no reusable contexts. Deterministic triage
+continues without learned context, and it never silently falls back to an
+older version. Deprecated versions are excluded by the reusable-context
+boundary regression; the holdout provides end-to-end stale and contradicted
+version lanes.
 
 ### Article-backed diagnosis and GPT advisory diagnosis
 

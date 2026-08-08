@@ -42,6 +42,7 @@ export const KnowledgeObjectStatusSchema = z.enum([
   "rejected",
   "superseded",
 ]);
+export const LearningGovernanceSchema = z.enum(["legacy", "ledger"]);
 
 const EvidencePolicyRationaleSchema = NonBlankStringSchema.max(500);
 
@@ -148,19 +149,37 @@ const KnowledgeObjectFieldsSchema = z.object({
   provenance: ProvenanceSchema,
 }).strict();
 
-export const KnowledgeObjectSchema = KnowledgeObjectFieldsSchema.extend({
+const KnowledgeObjectBaseSchema = KnowledgeObjectFieldsSchema.extend({
   status: KnowledgeObjectStatusSchema,
   approval: ApprovalSchema.optional(),
-}).strict().superRefine((value, context) => {
+}).strict();
+
+function validateObjectApproval(value: { status: KnowledgeObjectStatus; approval?: unknown }, context: z.RefinementCtx): void {
   if (value.status === "approved" && value.approval === undefined) {
     context.addIssue({ code: "custom", path: ["approval"], message: "Approved knowledge objects require approval metadata." });
   }
   if (value.status !== "approved" && value.approval !== undefined) {
     context.addIssue({ code: "custom", path: ["approval"], message: "Only approved knowledge objects may include approval metadata." });
   }
-});
+}
 
-export const KnowledgeCandidateSchema = KnowledgeObjectFieldsSchema.extend({
+/** Legacy-compatible schema retained for existing operational reads until stores move to the explicit read schema. */
+export const KnowledgeObjectSchema = KnowledgeObjectBaseSchema.superRefine(validateObjectApproval);
+/** Canonical new-write schema. New approved versions must carry immutable ledger provenance. */
+export const KnowledgeObjectWriteSchema = KnowledgeObjectBaseSchema.extend({
+  learningGovernance: z.literal("ledger"),
+}).strict().superRefine(validateObjectApproval);
+/** Read-only normalizer for historical persisted objects that predate ledger provenance. */
+export const KnowledgeObjectReadSchema = z.preprocess((value) => {
+  if (value && typeof value === "object" && !("learningGovernance" in value)) {
+    return { ...value, learningGovernance: "legacy" };
+  }
+  return value;
+}, KnowledgeObjectBaseSchema.extend({
+  learningGovernance: LearningGovernanceSchema,
+}).strict().superRefine(validateObjectApproval));
+
+const KnowledgeCandidateBaseSchema = KnowledgeObjectFieldsSchema.extend({
   evidencePolicy: LegacyCandidateEvidencePolicySchema,
   status: z.literal("candidate"),
   deterministicScores: z.object({
@@ -178,8 +197,29 @@ export const KnowledgeCandidateSchema = KnowledgeObjectFieldsSchema.extend({
   }).strict().default({ derivedEvidenceIds: [], operatorAddedEvidenceIds: [] }),
 }).strict();
 
+/** Legacy-compatible schema retained for existing operational reads until stores move to the explicit read schema. */
+export const KnowledgeCandidateSchema = KnowledgeCandidateBaseSchema;
+/** Canonical new-write schema. Revision candidates must name the object and version they revise. */
+export const KnowledgeCandidateWriteSchema = KnowledgeCandidateBaseSchema.extend({
+  objectId: IdentifierSchema,
+  sourceVersion: z.number().int().positive(),
+}).strict();
+/** Read-only normalizer for historical candidates created before revision lineage was stored. */
+export const KnowledgeCandidateReadSchema = z.preprocess((value) => {
+  if (value && typeof value === "object" && "id" in value) {
+    const candidate = value as { id: unknown; objectId?: unknown; sourceVersion?: unknown };
+    return {
+      ...candidate,
+      ...(candidate.objectId === undefined ? { objectId: candidate.id } : {}),
+      ...(candidate.sourceVersion === undefined ? { sourceVersion: 1 } : {}),
+    };
+  }
+  return value;
+}, KnowledgeCandidateWriteSchema);
+
 export type KnowledgeObjectKind = z.infer<typeof KnowledgeObjectKindSchema>;
 export type KnowledgeObjectStatus = z.infer<typeof KnowledgeObjectStatusSchema>;
+export type LearningGovernance = z.infer<typeof LearningGovernanceSchema>;
 export type CandidateEvidencePolicy = z.infer<typeof CandidateEvidencePolicySchema>;
 export type ApprovedEvidencePolicy = z.infer<typeof ApprovedEvidencePolicySchema>;
 /** @deprecated Use CandidateEvidencePolicy or ApprovedEvidencePolicy. */
@@ -189,5 +229,5 @@ export type CompletedDiagnosis = z.input<typeof CompletedDiagnosisSchema>;
 export function evidenceReferenceIds(diagnosis: CompletedDiagnosis): string[] {
   return [...new Set(diagnosis.evidenceReferences?.map(({ id }) => id) ?? [])];
 }
-export type KnowledgeObject = z.infer<typeof KnowledgeObjectSchema>;
-export type KnowledgeCandidate = z.infer<typeof KnowledgeCandidateSchema>;
+export type KnowledgeObject = z.infer<typeof KnowledgeObjectSchema> & { learningGovernance?: LearningGovernance };
+export type KnowledgeCandidate = z.infer<typeof KnowledgeCandidateSchema> & { objectId?: string; sourceVersion?: number };

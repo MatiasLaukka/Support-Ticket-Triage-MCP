@@ -415,7 +415,7 @@ export interface TriageServerDependencies {
   classificationReasoningProvider?: ClassificationReasoningProvider;
   draftProvider?: CustomerResponseDraftProvider;
   env?: NodeJS.ProcessEnv;
-  knowledgeEvolution?: {
+  knowledgeEvolution: {
     service: KnowledgeEvolutionService;
     objects?: Pick<KnowledgeObjectRepository, "listCandidates">;
     audits?: Pick<KnowledgeAuditRepository, "list">;
@@ -514,7 +514,6 @@ export function createTriageServer(
     async ({ candidateId, asOf }) => toolResult(async () => ({
       learning: await knowledgeService(deps).learningSummary({
         candidateId,
-        objectId: candidateId,
         ...(asOf === undefined ? {} : { asOf }),
       }),
     })),
@@ -924,13 +923,13 @@ async function evaluateTicket(
   deps: TriageServerDependencies,
   input: z.infer<typeof EvaluateTicketInputSchema>,
 ): Promise<z.infer<typeof EvaluateTicketOutputSchema>> {
-  const [ticket, audits, allKnowledgeArticles, approvedObjects] = await Promise.all([
+  const reusableKnowledge = await knowledgeService(deps).listReusableApproved({
+    asOf: deps.now().toISOString(),
+  });
+  const [ticket, audits, allKnowledgeArticles] = await Promise.all([
     deps.tickets.get(input.ticketId),
     deps.audits.list(input.ticketId),
     deps.knowledge.list(),
-    deps.knowledgeEvolution === undefined
-      ? Promise.resolve([])
-      : deps.knowledgeEvolution.service.listApproved(),
   ]);
   const customerReplies = customerRepliesFromAudits(ticket.id, audits);
   const previousSupportResponse = latestSupportResponseFromAudits(
@@ -944,7 +943,7 @@ async function evaluateTicket(
     ticket,
     actor: input.actor,
     allKnowledgeArticles,
-    approvedObjects,
+    reusableKnowledge,
     customerReplies,
     previousSupportResponse,
     diagnosisContext: persistedDiagnosticContext.diagnosis?.context,

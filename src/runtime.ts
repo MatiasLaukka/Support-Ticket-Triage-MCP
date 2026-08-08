@@ -160,7 +160,9 @@ export async function createRuntimeDependencies(
   const diagnoses = new DiagnosisRepository(knowledgeEvolutionPaths.diagnosesRoot);
   const ledger = new SqliteLearningLedger(knowledgeEvolutionPaths.learningLedgerFile);
   await ledger.initialize();
-  const store = new SqliteKnowledgeEvolutionStore(ledger.getDatabase());
+  const store = new SqliteKnowledgeEvolutionStore(ledger.getDatabase(), {
+    reactivationAuthorizer: (actorId) => approvers.has(actorId),
+  });
   await store.initialize();
   const learningCapture = new LearningCaptureService(ledger);
   const knowledgeEvolution = {

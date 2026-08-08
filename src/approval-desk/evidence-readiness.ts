@@ -5,6 +5,7 @@ import type {
   Ticket,
 } from "../domain.js";
 import type { KnowledgeObject } from "../knowledge-evolution/domain.js";
+import type { KnowledgeReference, ReusableKnowledgeResult } from "../knowledge-evolution/reusable-context.js";
 import { requireEvidenceRequirement } from "../evidence-catalog.js";
 import { extractAccountFacts, type AccountFacts } from "./account-facts.js";
 import { detectKnownCause, getKnownCause } from "./known-cause-catalog.js";
@@ -18,6 +19,7 @@ type EvidenceSource = EvidenceRequirement["source"];
 export interface EvidenceReadiness {
   supportState: SupportState;
   knownCause?: string | null;
+  knownCauseRef?: KnowledgeReference;
   approvedKnownCause?: ApprovedKnownCause;
   knownEventId?: string | null;
   knownEventMatchReasons?: string[];
@@ -29,7 +31,9 @@ export interface EvidenceReadiness {
 
 export interface ApprovedKnownCause {
   id: string;
+  reference?: KnowledgeReference;
   evidencePolicy: "none-required" | "required";
+  evidenceIds: readonly string[];
   customerSafeExplanation: string;
 }
 
@@ -151,6 +155,8 @@ const KNOWLEDGE_EVIDENCE: Readonly<Record<string, readonly string[]>> = {
 export function analyzeEvidenceReadiness(input: {
   ticket: Ticket;
   outcome: ExpectedOutcome;
+  /** Production learned input. Broad approvedObjects are a legacy-test seam only. */
+  reusableKnowledge?: ReusableKnowledgeResult;
   approvedObjects?: readonly KnowledgeObject[];
   candidate?: {
     status: "candidate";
@@ -163,7 +169,9 @@ export function analyzeEvidenceReadiness(input: {
     ticket: input.ticket,
     knownCause: legacyKnownCause,
   });
-  const approvedKnownCause = findApprovedKnownCause(input.ticket, input.approvedObjects);
+  const approvedKnownCause = input.reusableKnowledge === undefined
+    ? findApprovedKnownCause(input.ticket, input.approvedObjects)
+    : findReusableKnownCause(input.ticket, input.reusableKnowledge);
   const approvedCauseCanApply = approvedKnownCause !== undefined &&
     knownEvent?.status !== "active" &&
     !input.outcome.requiredEscalations.includes("outage");
@@ -173,7 +181,7 @@ export function analyzeEvidenceReadiness(input: {
   const accountFacts = extractAccountFacts(input.ticket);
   const requiredEvidence =
     approvedCauseCanApply
-      ? evidenceForApprovedKnownCause(input.approvedObjects!, approvedKnownCause.id)
+      ? evidenceForApprovedKnownCause(approvedKnownCause)
       : legacyKnownCauseDefinition !== undefined
       ? evidenceForKnownCause(legacyKnownCauseDefinition.requiredEvidenceIds)
       : evidenceForIssuePattern(input) ??
@@ -202,6 +210,9 @@ export function analyzeEvidenceReadiness(input: {
       outcome: input.outcome,
     }),
     knownCause,
+    ...(approvedCauseCanApply && approvedKnownCause.reference !== undefined
+      ? { knownCauseRef: approvedKnownCause.reference }
+      : {}),
     ...(approvedCauseCanApply ? { approvedKnownCause } : {}),
     knownEventId: knownEvent?.eventId ?? null,
     knownEventMatchReasons: knownEvent?.matchReasons ?? [],
@@ -230,6 +241,21 @@ function findApprovedKnownCause(
     .sort((left, right) => approvedMatchSpecificity(right) - approvedMatchSpecificity(left) ||
       left.id.localeCompare(right.id))[0];
   return matched === undefined ? undefined : approvedKnownCauseFromObject(matched);
+}
+
+function findReusableKnownCause(
+  ticket: Ticket,
+  reusableKnowledge: ReusableKnowledgeResult,
+): ApprovedKnownCause | undefined {
+  const text = normalizedTicketText(ticket);
+  const matched = reusableKnowledge.contexts
+    .filter(({ object }) => object.status === "approved" && object.kind === "known-cause")
+    .filter(({ object }) => matchesApprovedKnownCause(object, ticket, text))
+    .sort((left, right) => approvedMatchSpecificity(right.object) - approvedMatchSpecificity(left.object) ||
+      left.object.id.localeCompare(right.object.id))[0];
+  return matched === undefined
+    ? undefined
+    : approvedKnownCauseFromObject(matched.object, { objectId: matched.object.id, version: matched.version });
 }
 
 function matchesApprovedKnownCause(
@@ -266,21 +292,21 @@ function timeConstraintsMatch(constraints: readonly string[], createdAt: string)
   });
 }
 
-function approvedKnownCauseFromObject(object: KnowledgeObject): ApprovedKnownCause {
+function approvedKnownCauseFromObject(object: KnowledgeObject, reference?: KnowledgeReference): ApprovedKnownCause {
   return {
     id: object.id,
+    ...(reference === undefined ? {} : { reference }),
     evidencePolicy: object.evidencePolicy.mode,
+    evidenceIds: object.evidencePolicy.mode === "required" ? object.evidencePolicy.evidenceIds : [],
     customerSafeExplanation: object.customerSafeExplanation,
   };
 }
 
 function evidenceForApprovedKnownCause(
-  approvedObjects: readonly KnowledgeObject[],
-  id: string,
+  knownCause: ApprovedKnownCause,
 ): EvidenceRequirement[] {
-  const object = approvedObjects.find((candidate) => candidate.id === id);
-  if (object?.evidencePolicy.mode !== "required") return [];
-  return evidenceForIds(object.evidencePolicy.evidenceIds, "known-cause");
+  if (knownCause.evidencePolicy !== "required") return [];
+  return evidenceForIds(knownCause.evidenceIds, "known-cause");
 }
 
 function normalizedTicketText(ticket: Ticket): string {

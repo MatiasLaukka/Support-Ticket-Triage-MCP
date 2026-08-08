@@ -1,0 +1,850 @@
+{
+  "reportVersion": 1,
+  "run": {
+    "mode": "controlled-synthetic",
+    "asOf": "2026-08-08T12:00:00.000Z",
+    "clock": "2026-08-08T12:00:00.000Z",
+    "provider": "not-constructed"
+  },
+  "cases": [
+    {
+      "fixtureId": "sufficient-evidence-true-positive",
+      "reusableKnowledge": {
+        "status": "available",
+        "issues": []
+      },
+      "baseline": {
+        "lane": "baseline",
+        "classificationContractPassed": true,
+        "turns": [
+          {
+            "turnIndex": 1,
+            "category": "api",
+            "priority": "P2",
+            "team": "api-platform",
+            "supportState": "needs-information",
+            "knownEventId": null,
+            "requestedEvidenceIds": [
+              "api-response-status",
+              "endpoint-url",
+              "failure-timestamp",
+              "request-id",
+              "sample-payload"
+            ],
+            "providedEvidenceIds": [
+              "request-id"
+            ],
+            "missingEvidenceIds": [
+              "api-response-status",
+              "endpoint-url",
+              "failure-timestamp",
+              "sample-payload"
+            ],
+            "unsafeLifecycleViolations": [
+              "unexpected-support-state",
+              "wrong-known-cause-version",
+              "target-not-reached"
+            ],
+            "correctionRequired": true
+          }
+        ],
+        "targetReached": false,
+        "turnsToExpectedTarget": null
+      },
+      "learned": {
+        "lane": "learned",
+        "classificationContractPassed": true,
+        "turns": [
+          {
+            "turnIndex": 1,
+            "category": "api",
+            "priority": "P2",
+            "team": "api-platform",
+            "supportState": "known-cause",
+            "knownCauseRef": {
+              "objectId": "credential-rotation",
+              "version": 1
+            },
+            "knownEventId": null,
+            "requestedEvidenceIds": [
+              "request-id"
+            ],
+            "providedEvidenceIds": [
+              "request-id"
+            ],
+            "missingEvidenceIds": [],
+            "unsafeLifecycleViolations": [],
+            "correctionRequired": false
+          }
+        ],
+        "targetReached": true,
+        "turnsToExpectedTarget": 1
+      },
+      "delta": {
+        "learnedMatchedExpectedKnowledge": true,
+        "baselineUnnecessaryEvidence": 4,
+        "learnedUnnecessaryEvidence": 0,
+        "unnecessaryEvidenceDelta": -4,
+        "baselineMissingNecessaryEvidence": 0,
+        "learnedMissingNecessaryEvidence": 0,
+        "missingNecessaryEvidenceDelta": 0,
+        "diagnosticTurnsSaved": null,
+        "repeatedEvidenceRequestCount": 0,
+        "unsafeLifecycleChanges": 0,
+        "correctionRequired": false
+      },
+      "comparison": "benefited",
+      "readOnly": {
+        "baseline": true,
+        "learned": true
+      }
+    },
+    {
+      "fixtureId": "missing-evidence-then-supplied",
+      "reusableKnowledge": {
+        "status": "available",
+        "issues": []
+      },
+      "baseline": {
+        "lane": "baseline",
+        "classificationContractPassed": true,
+        "turns": [
+          {
+            "turnIndex": 1,
+            "category": "api",
+            "priority": "P2",
+            "team": "api-platform",
+            "supportState": "diagnosing",
+            "knownEventId": null,
+            "requestedEvidenceIds": [],
+            "providedEvidenceIds": [],
+            "missingEvidenceIds": [],
+            "unsafeLifecycleViolations": [
+              "unexpected-support-state",
+              "wrong-known-cause-version"
+            ],
+            "correctionRequired": true
+          },
+          {
+            "turnIndex": 2,
+            "category": "api",
+            "priority": "P2",
+            "team": "api-platform",
+            "supportState": "information-received",
+            "knownEventId": null,
+            "requestedEvidenceIds": [
+              "api-response-status",
+              "endpoint-url",
+              "failure-timestamp",
+              "request-id",
+              "sample-payload"
+            ],
+            "providedEvidenceIds": [
+              "request-id"
+            ],
+            "missingEvidenceIds": [
+              "api-response-status",
+              "endpoint-url",
+              "failure-timestamp",
+              "sample-payload"
+            ],
+            "unsafeLifecycleViolations": [
+              "unexpected-support-state",
+              "wrong-known-cause-version",
+              "target-not-reached"
+            ],
+            "correctionRequired": true
+          }
+        ],
+        "targetReached": false,
+        "turnsToExpectedTarget": null
+      },
+      "learned": {
+        "lane": "learned",
+        "classificationContractPassed": true,
+        "turns": [
+          {
+            "turnIndex": 1,
+            "category": "api",
+            "priority": "P2",
+            "team": "api-platform",
+            "supportState": "needs-information",
+            "knownCauseRef": {
+              "objectId": "credential-rotation",
+              "version": 1
+            },
+            "knownEventId": null,
+            "requestedEvidenceIds": [
+              "request-id"
+            ],
+            "providedEvidenceIds": [],
+            "missingEvidenceIds": [
+              "request-id"
+            ],
+            "unsafeLifecycleViolations": [],
+            "correctionRequired": false
+          },
+          {
+            "turnIndex": 2,
+            "category": "api",
+            "priority": "P2",
+            "team": "api-platform",
+            "supportState": "known-cause",
+            "knownCauseRef": {
+              "objectId": "credential-rotation",
+              "version": 1
+            },
+            "knownEventId": null,
+            "requestedEvidenceIds": [
+              "request-id"
+            ],
+            "providedEvidenceIds": [
+              "request-id"
+            ],
+            "missingEvidenceIds": [],
+            "unsafeLifecycleViolations": [],
+            "correctionRequired": false
+          }
+        ],
+        "targetReached": true,
+        "turnsToExpectedTarget": 2
+      },
+      "delta": {
+        "learnedMatchedExpectedKnowledge": true,
+        "baselineUnnecessaryEvidence": 4,
+        "learnedUnnecessaryEvidence": 0,
+        "unnecessaryEvidenceDelta": -4,
+        "baselineMissingNecessaryEvidence": 0,
+        "learnedMissingNecessaryEvidence": 0,
+        "missingNecessaryEvidenceDelta": 0,
+        "diagnosticTurnsSaved": null,
+        "repeatedEvidenceRequestCount": 1,
+        "unsafeLifecycleChanges": 0,
+        "correctionRequired": false
+      },
+      "comparison": "benefited",
+      "readOnly": {
+        "baseline": true,
+        "learned": true
+      }
+    },
+    {
+      "fixtureId": "near-miss",
+      "reusableKnowledge": {
+        "status": "available",
+        "issues": []
+      },
+      "baseline": {
+        "lane": "baseline",
+        "classificationContractPassed": true,
+        "turns": [
+          {
+            "turnIndex": 1,
+            "category": "api",
+            "priority": "P2",
+            "team": "api-platform",
+            "supportState": "diagnosing",
+            "knownEventId": null,
+            "requestedEvidenceIds": [],
+            "providedEvidenceIds": [],
+            "missingEvidenceIds": [],
+            "unsafeLifecycleViolations": [],
+            "correctionRequired": false
+          }
+        ],
+        "targetReached": true,
+        "turnsToExpectedTarget": 1
+      },
+      "learned": {
+        "lane": "learned",
+        "classificationContractPassed": true,
+        "turns": [
+          {
+            "turnIndex": 1,
+            "category": "api",
+            "priority": "P2",
+            "team": "api-platform",
+            "supportState": "diagnosing",
+            "knownEventId": null,
+            "requestedEvidenceIds": [],
+            "providedEvidenceIds": [],
+            "missingEvidenceIds": [],
+            "unsafeLifecycleViolations": [],
+            "correctionRequired": false
+          }
+        ],
+        "targetReached": true,
+        "turnsToExpectedTarget": 1
+      },
+      "delta": {
+        "learnedMatchedExpectedKnowledge": false,
+        "baselineUnnecessaryEvidence": 0,
+        "learnedUnnecessaryEvidence": 0,
+        "unnecessaryEvidenceDelta": 0,
+        "baselineMissingNecessaryEvidence": 1,
+        "learnedMissingNecessaryEvidence": 1,
+        "missingNecessaryEvidenceDelta": 0,
+        "diagnosticTurnsSaved": 0,
+        "repeatedEvidenceRequestCount": 0,
+        "unsafeLifecycleChanges": 0,
+        "correctionRequired": false
+      },
+      "comparison": "unchanged",
+      "readOnly": {
+        "baseline": true,
+        "learned": true
+      }
+    },
+    {
+      "fixtureId": "unrelated",
+      "reusableKnowledge": {
+        "status": "available",
+        "issues": []
+      },
+      "baseline": {
+        "lane": "baseline",
+        "classificationContractPassed": true,
+        "turns": [
+          {
+            "turnIndex": 1,
+            "category": "billing",
+            "priority": "P2",
+            "team": "billing",
+            "supportState": "needs-information",
+            "knownEventId": null,
+            "requestedEvidenceIds": [
+              "billing-account",
+              "error-banner",
+              "failure-timestamp",
+              "invoice-number",
+              "plan-or-promotion"
+            ],
+            "providedEvidenceIds": [
+              "invoice-number"
+            ],
+            "missingEvidenceIds": [
+              "billing-account",
+              "error-banner",
+              "failure-timestamp",
+              "plan-or-promotion"
+            ],
+            "unsafeLifecycleViolations": [],
+            "correctionRequired": false
+          }
+        ],
+        "targetReached": true,
+        "turnsToExpectedTarget": 1
+      },
+      "learned": {
+        "lane": "learned",
+        "classificationContractPassed": true,
+        "turns": [
+          {
+            "turnIndex": 1,
+            "category": "billing",
+            "priority": "P2",
+            "team": "billing",
+            "supportState": "needs-information",
+            "knownEventId": null,
+            "requestedEvidenceIds": [
+              "billing-account",
+              "error-banner",
+              "failure-timestamp",
+              "invoice-number",
+              "plan-or-promotion"
+            ],
+            "providedEvidenceIds": [
+              "invoice-number"
+            ],
+            "missingEvidenceIds": [
+              "billing-account",
+              "error-banner",
+              "failure-timestamp",
+              "plan-or-promotion"
+            ],
+            "unsafeLifecycleViolations": [],
+            "correctionRequired": false
+          }
+        ],
+        "targetReached": true,
+        "turnsToExpectedTarget": 1
+      },
+      "delta": {
+        "learnedMatchedExpectedKnowledge": false,
+        "baselineUnnecessaryEvidence": 5,
+        "learnedUnnecessaryEvidence": 5,
+        "unnecessaryEvidenceDelta": 0,
+        "baselineMissingNecessaryEvidence": 0,
+        "learnedMissingNecessaryEvidence": 0,
+        "missingNecessaryEvidenceDelta": 0,
+        "diagnosticTurnsSaved": 0,
+        "repeatedEvidenceRequestCount": 0,
+        "unsafeLifecycleChanges": 0,
+        "correctionRequired": false
+      },
+      "comparison": "unchanged",
+      "readOnly": {
+        "baseline": true,
+        "learned": true
+      }
+    },
+    {
+      "fixtureId": "stale-version",
+      "reusableKnowledge": {
+        "status": "available",
+        "issues": [
+          {
+            "scope": "version",
+            "objectId": "credential-rotation",
+            "version": 1,
+            "code": "unhealthy-version"
+          }
+        ]
+      },
+      "baseline": {
+        "lane": "baseline",
+        "classificationContractPassed": true,
+        "turns": [
+          {
+            "turnIndex": 1,
+            "category": "api",
+            "priority": "P2",
+            "team": "api-platform",
+            "supportState": "information-received",
+            "knownEventId": null,
+            "requestedEvidenceIds": [
+              "api-response-status",
+              "endpoint-url",
+              "failure-timestamp",
+              "request-id",
+              "sample-payload"
+            ],
+            "providedEvidenceIds": [
+              "request-id"
+            ],
+            "missingEvidenceIds": [
+              "api-response-status",
+              "endpoint-url",
+              "failure-timestamp",
+              "sample-payload"
+            ],
+            "unsafeLifecycleViolations": [],
+            "correctionRequired": false
+          }
+        ],
+        "targetReached": true,
+        "turnsToExpectedTarget": 1
+      },
+      "learned": {
+        "lane": "learned",
+        "classificationContractPassed": true,
+        "turns": [
+          {
+            "turnIndex": 1,
+            "category": "api",
+            "priority": "P2",
+            "team": "api-platform",
+            "supportState": "information-received",
+            "knownEventId": null,
+            "requestedEvidenceIds": [
+              "api-response-status",
+              "endpoint-url",
+              "failure-timestamp",
+              "request-id",
+              "sample-payload"
+            ],
+            "providedEvidenceIds": [
+              "request-id"
+            ],
+            "missingEvidenceIds": [
+              "api-response-status",
+              "endpoint-url",
+              "failure-timestamp",
+              "sample-payload"
+            ],
+            "unsafeLifecycleViolations": [],
+            "correctionRequired": false
+          }
+        ],
+        "targetReached": true,
+        "turnsToExpectedTarget": 1
+      },
+      "delta": {
+        "learnedMatchedExpectedKnowledge": false,
+        "baselineUnnecessaryEvidence": 4,
+        "learnedUnnecessaryEvidence": 4,
+        "unnecessaryEvidenceDelta": 0,
+        "baselineMissingNecessaryEvidence": 0,
+        "learnedMissingNecessaryEvidence": 0,
+        "missingNecessaryEvidenceDelta": 0,
+        "diagnosticTurnsSaved": 0,
+        "repeatedEvidenceRequestCount": 0,
+        "unsafeLifecycleChanges": 0,
+        "correctionRequired": false
+      },
+      "comparison": "unchanged",
+      "readOnly": {
+        "baseline": true,
+        "learned": true
+      }
+    },
+    {
+      "fixtureId": "contradicted-version",
+      "reusableKnowledge": {
+        "status": "available",
+        "issues": [
+          {
+            "scope": "version",
+            "objectId": "credential-rotation",
+            "version": 1,
+            "code": "unhealthy-version"
+          }
+        ]
+      },
+      "baseline": {
+        "lane": "baseline",
+        "classificationContractPassed": true,
+        "turns": [
+          {
+            "turnIndex": 1,
+            "category": "api",
+            "priority": "P2",
+            "team": "api-platform",
+            "supportState": "information-received",
+            "knownEventId": null,
+            "requestedEvidenceIds": [
+              "api-response-status",
+              "endpoint-url",
+              "failure-timestamp",
+              "request-id",
+              "sample-payload"
+            ],
+            "providedEvidenceIds": [
+              "request-id"
+            ],
+            "missingEvidenceIds": [
+              "api-response-status",
+              "endpoint-url",
+              "failure-timestamp",
+              "sample-payload"
+            ],
+            "unsafeLifecycleViolations": [],
+            "correctionRequired": false
+          }
+        ],
+        "targetReached": true,
+        "turnsToExpectedTarget": 1
+      },
+      "learned": {
+        "lane": "learned",
+        "classificationContractPassed": true,
+        "turns": [
+          {
+            "turnIndex": 1,
+            "category": "api",
+            "priority": "P2",
+            "team": "api-platform",
+            "supportState": "information-received",
+            "knownEventId": null,
+            "requestedEvidenceIds": [
+              "api-response-status",
+              "endpoint-url",
+              "failure-timestamp",
+              "request-id",
+              "sample-payload"
+            ],
+            "providedEvidenceIds": [
+              "request-id"
+            ],
+            "missingEvidenceIds": [
+              "api-response-status",
+              "endpoint-url",
+              "failure-timestamp",
+              "sample-payload"
+            ],
+            "unsafeLifecycleViolations": [],
+            "correctionRequired": false
+          }
+        ],
+        "targetReached": true,
+        "turnsToExpectedTarget": 1
+      },
+      "delta": {
+        "learnedMatchedExpectedKnowledge": false,
+        "baselineUnnecessaryEvidence": 4,
+        "learnedUnnecessaryEvidence": 4,
+        "unnecessaryEvidenceDelta": 0,
+        "baselineMissingNecessaryEvidence": 0,
+        "learnedMissingNecessaryEvidence": 0,
+        "missingNecessaryEvidenceDelta": 0,
+        "diagnosticTurnsSaved": 0,
+        "repeatedEvidenceRequestCount": 0,
+        "unsafeLifecycleChanges": 0,
+        "correctionRequired": false
+      },
+      "comparison": "unchanged",
+      "readOnly": {
+        "baseline": true,
+        "learned": true
+      }
+    },
+    {
+      "fixtureId": "draft-version-isolation",
+      "reusableKnowledge": {
+        "status": "available",
+        "issues": []
+      },
+      "baseline": {
+        "lane": "baseline",
+        "classificationContractPassed": true,
+        "turns": [
+          {
+            "turnIndex": 1,
+            "category": "api",
+            "priority": "P2",
+            "team": "api-platform",
+            "supportState": "information-received",
+            "knownEventId": null,
+            "requestedEvidenceIds": [
+              "api-response-status",
+              "endpoint-url",
+              "failure-timestamp",
+              "request-id",
+              "sample-payload"
+            ],
+            "providedEvidenceIds": [
+              "request-id"
+            ],
+            "missingEvidenceIds": [
+              "api-response-status",
+              "endpoint-url",
+              "failure-timestamp",
+              "sample-payload"
+            ],
+            "unsafeLifecycleViolations": [
+              "unexpected-support-state",
+              "wrong-known-cause-version",
+              "target-not-reached"
+            ],
+            "correctionRequired": true
+          }
+        ],
+        "targetReached": false,
+        "turnsToExpectedTarget": null
+      },
+      "learned": {
+        "lane": "learned",
+        "classificationContractPassed": true,
+        "turns": [
+          {
+            "turnIndex": 1,
+            "category": "api",
+            "priority": "P2",
+            "team": "api-platform",
+            "supportState": "known-cause",
+            "knownCauseRef": {
+              "objectId": "credential-rotation",
+              "version": 1
+            },
+            "knownEventId": null,
+            "requestedEvidenceIds": [
+              "request-id"
+            ],
+            "providedEvidenceIds": [
+              "request-id"
+            ],
+            "missingEvidenceIds": [],
+            "unsafeLifecycleViolations": [],
+            "correctionRequired": false
+          }
+        ],
+        "targetReached": true,
+        "turnsToExpectedTarget": 1
+      },
+      "delta": {
+        "learnedMatchedExpectedKnowledge": true,
+        "baselineUnnecessaryEvidence": 4,
+        "learnedUnnecessaryEvidence": 0,
+        "unnecessaryEvidenceDelta": -4,
+        "baselineMissingNecessaryEvidence": 0,
+        "learnedMissingNecessaryEvidence": 0,
+        "missingNecessaryEvidenceDelta": 0,
+        "diagnosticTurnsSaved": null,
+        "repeatedEvidenceRequestCount": 0,
+        "unsafeLifecycleChanges": 0,
+        "correctionRequired": false
+      },
+      "comparison": "benefited",
+      "readOnly": {
+        "baseline": true,
+        "learned": true
+      }
+    },
+    {
+      "fixtureId": "replacement-and-draft-isolation",
+      "reusableKnowledge": {
+        "status": "available",
+        "issues": []
+      },
+      "baseline": {
+        "lane": "baseline",
+        "classificationContractPassed": true,
+        "turns": [
+          {
+            "turnIndex": 1,
+            "category": "api",
+            "priority": "P2",
+            "team": "api-platform",
+            "supportState": "information-received",
+            "knownEventId": null,
+            "requestedEvidenceIds": [
+              "api-response-status",
+              "endpoint-url",
+              "failure-timestamp",
+              "request-id",
+              "sample-payload"
+            ],
+            "providedEvidenceIds": [
+              "request-id"
+            ],
+            "missingEvidenceIds": [
+              "api-response-status",
+              "endpoint-url",
+              "failure-timestamp",
+              "sample-payload"
+            ],
+            "unsafeLifecycleViolations": [
+              "unexpected-support-state",
+              "wrong-known-cause-version",
+              "target-not-reached"
+            ],
+            "correctionRequired": true
+          }
+        ],
+        "targetReached": false,
+        "turnsToExpectedTarget": null
+      },
+      "learned": {
+        "lane": "learned",
+        "classificationContractPassed": true,
+        "turns": [
+          {
+            "turnIndex": 1,
+            "category": "api",
+            "priority": "P2",
+            "team": "api-platform",
+            "supportState": "known-cause",
+            "knownCauseRef": {
+              "objectId": "credential-rotation",
+              "version": 2
+            },
+            "knownEventId": null,
+            "requestedEvidenceIds": [
+              "request-id"
+            ],
+            "providedEvidenceIds": [
+              "request-id"
+            ],
+            "missingEvidenceIds": [],
+            "unsafeLifecycleViolations": [],
+            "correctionRequired": false
+          }
+        ],
+        "targetReached": true,
+        "turnsToExpectedTarget": 1
+      },
+      "delta": {
+        "learnedMatchedExpectedKnowledge": true,
+        "baselineUnnecessaryEvidence": 4,
+        "learnedUnnecessaryEvidence": 0,
+        "unnecessaryEvidenceDelta": -4,
+        "baselineMissingNecessaryEvidence": 0,
+        "learnedMissingNecessaryEvidence": 0,
+        "missingNecessaryEvidenceDelta": 0,
+        "diagnosticTurnsSaved": null,
+        "repeatedEvidenceRequestCount": 0,
+        "unsafeLifecycleChanges": 0,
+        "correctionRequired": false
+      },
+      "comparison": "benefited",
+      "readOnly": {
+        "baseline": true,
+        "learned": true
+      }
+    }
+  ],
+  "scorecard": {
+    "efficacy": {
+      "baseline": {
+        "knowledgeMatchPrecision": null,
+        "knowledgeMatchRecall": 0,
+        "evidencePrecision": 0.13333333333333333,
+        "missingEvidenceRate": 0.3333333333333333,
+        "unnecessaryEvidenceTotal": 13,
+        "missingNecessaryEvidenceTotal": 1,
+        "correctionRequiredRate": 0.5,
+        "byScenario": {
+          "truePositive": {
+            "knowledgeMatchPrecision": null,
+            "knowledgeMatchRecall": 0
+          },
+          "nearMiss": {
+            "knowledgeMatchPrecision": null,
+            "knowledgeMatchRecall": null
+          },
+          "unrelated": {
+            "knowledgeMatchPrecision": null,
+            "knowledgeMatchRecall": null
+          }
+        }
+      },
+      "learned": {
+        "knowledgeMatchPrecision": 1,
+        "knowledgeMatchRecall": 1,
+        "evidencePrecision": 0.2857142857142857,
+        "missingEvidenceRate": 0.3333333333333333,
+        "unnecessaryEvidenceTotal": 5,
+        "missingNecessaryEvidenceTotal": 1,
+        "correctionRequiredRate": 0,
+        "byScenario": {
+          "truePositive": {
+            "knowledgeMatchPrecision": 1,
+            "knowledgeMatchRecall": 1
+          },
+          "nearMiss": {
+            "knowledgeMatchPrecision": null,
+            "knowledgeMatchRecall": null
+          },
+          "unrelated": {
+            "knowledgeMatchPrecision": null,
+            "knowledgeMatchRecall": null
+          }
+        }
+      },
+      "knowledgeMatchPrecision": 1,
+      "knowledgeMatchRecall": 1,
+      "evidencePrecision": 0.2857142857142857,
+      "missingEvidenceRate": 0.3333333333333333,
+      "unnecessaryEvidenceTotal": 5,
+      "missingNecessaryEvidenceTotal": 1,
+      "diagnosticTurnsSavedTotal": 0,
+      "correctionRequiredRate": 0,
+      "benefited": 2,
+      "unchanged": 2,
+      "regressed": 0
+    },
+    "governance": {
+      "staleFalsePositiveRate": 0,
+      "contradictedFalsePositiveRate": 0,
+      "unhealthyFalsePositiveRate": 0,
+      "unsafeLifecycleChanges": 0,
+      "evidenceGateBypass": 0
+    },
+    "version": {
+      "wrongVersionReuse": 0,
+      "replacementCorrectnessRate": 1,
+      "versionPinningRate": 1
+    }
+  },
+  "limitation": "Synthetic/controlled fixed fixtures demonstrate governed knowledge reuse only; no human-time claim or live-model performance claim is made."
+}

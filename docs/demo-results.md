@@ -174,6 +174,38 @@ The printed future-ticket sequence is:
 This makes the human approval boundary and historical immutability visible,
 not just implied by unit tests.
 
+## Controlled multi-turn knowledge holdout
+
+The broader regression artifact is available with:
+
+```powershell
+npm run evaluate:knowledge-holdout
+```
+
+It runs baseline and learned lanes for fixed complete conversation snapshots,
+including later evidence replies, near misses, unrelated questions, stale and
+contradicted versions, an approved replacement, and an unapproved revision
+candidate. The evaluator uses the shared `listReusableApproved({ asOf })`
+boundary and `evaluateTicketWithAi` path, retains every turn, and verifies the
+same isolated state before and after scoring.
+
+The generated report separates efficacy, governance safety, and exact-version
+scorecards. It is deliberately sanitized and controlled: no customer reply
+bodies, prompts, drafts, or rationales are emitted, and the results are not a
+claim about live GPT quality or human time saved. Artifacts are written to
+`reports/knowledge-holdout/controlled-latest.json` and
+`reports/knowledge-holdout/controlled-latest.md`.
+
+The ratios are intentionally visible: precision and recall use correct
+exact-version matches; evidence precision uses necessary versus all requested
+evidence, missing-evidence rate uses missing necessary IDs versus all expected
+IDs, and zero-denominator rate metrics are `null`; count totals stay zero.
+Governance rates count stale/contradicted reuse, and version rates count exact
+replacement or pinning decisions. A failed learning-ledger read
+returns no learned contexts (`ledger-unavailable`) and deterministic triage
+continues. Deprecated exclusion is covered by the reusable-context regression,
+while stale and contradicted versions have end-to-end holdout cases.
+
 ## Primary Scenario
 
 Ticket: `TKT-1010`

@@ -924,6 +924,26 @@ It is controlled synthetic evidence: it demonstrates governed reuse and
 historical/version isolation, but it makes no claim about human time saved or
 live GPT performance.
 
+The scorecard uses explicit ratios rather than a single blended quality number:
+exact-version precision is correct learned matches divided by all learned
+matches, recall is correct learned matches divided by expected matches, and
+evidence precision is necessary evidence requested divided by all requested
+evidence. Governance rates count stale or contradicted versions reused when
+they should be excluded; version rates count the expected exact version or
+approved replacement selected. Missing-evidence rate is missing necessary IDs
+divided by all expected IDs; zero-denominator rate metrics are reported as
+`null`, while count totals remain zero. Baseline-to-learned deltas are
+safety-first:
+new unsafe lifecycle codes, wrong-version reuse, or lost evidence are
+regressions even when a later turn recovers.
+
+If the learning ledger cannot be read, `listReusableApproved({ asOf })`
+returns `ledger-unavailable` with no reusable contexts. Deterministic triage
+continues without learned context, and it never silently falls back to an
+older version. Deprecated versions are excluded by the reusable-context
+boundary regression; the holdout provides end-to-end stale and contradicted
+version lanes.
+
 ### Article-backed diagnosis and GPT advisory diagnosis
 
 The deterministic diagnostic workflow now has specific playbooks for the

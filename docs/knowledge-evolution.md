@@ -201,3 +201,22 @@ JSON and Markdown reports are allowlisted: they contain fixture IDs, evidence
 IDs, lifecycle/version signals, and aggregate metrics, but no customer reply
 bodies, prompts, drafts, or rationales. This is controlled synthetic evidence,
 not a live-model or human-time benchmark.
+
+The scorecard formulas are explicit: exact-version precision is correct
+learned matches divided by all learned matches; recall is correct matches
+divided by expected positives; evidence precision is necessary requested
+evidence divided by all requested evidence; stale/contradicted safety rates
+are forbidden exact-version reuse divided by that health cohort; and
+replacement/pinning rates are the expected exact version divided by each
+version cohort. Missing-evidence rate is missing necessary IDs divided by all
+expected IDs; rate metrics with no denominator are `null`, while count totals
+remain zero. Learned-minus-baseline comparisons are safety-first, so a new
+unsafe lifecycle code, wrong version, or lost evidence is a regression even if
+a later turn recovers.
+
+The reusable boundary fails closed for learning: a ledger read failure returns
+`status: "ledger-unavailable"` with no learned contexts, while deterministic
+triage proceeds normally. It does not resurrect an older version implicitly.
+Deprecated exclusion is verified by the reusable-context boundary regression;
+stale and contradicted exclusion are also exercised end to end by the holdout
+lanes.

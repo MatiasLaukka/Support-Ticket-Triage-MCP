@@ -196,6 +196,16 @@ claim about live GPT quality or human time saved. Artifacts are written to
 `reports/knowledge-holdout/controlled-latest.json` and
 `reports/knowledge-holdout/controlled-latest.md`.
 
+The ratios are intentionally visible: precision and recall use correct
+exact-version matches; evidence precision uses necessary versus all requested
+evidence, missing-evidence rate uses missing necessary IDs versus all expected
+IDs, and zero-denominator rate metrics are `null`; count totals stay zero.
+Governance rates count stale/contradicted reuse, and version rates count exact
+replacement or pinning decisions. A failed learning-ledger read
+returns no learned contexts (`ledger-unavailable`) and deterministic triage
+continues. Deprecated exclusion is covered by the reusable-context regression,
+while stale and contradicted versions have end-to-end holdout cases.
+
 ## Primary Scenario
 
 Ticket: `TKT-1010`

@@ -20,6 +20,6 @@
 
 ## Aggregate scorecards
 
-- Efficacy: learned exact-version precision=1.000, recall=1.000, evidence precision=0.286, missing-evidence rate=0.333.
+- Efficacy: learned exact-version precision=1.000, recall=1.000, evidence precision=1.000, missing-evidence rate=0.000.
 - Governance: stale false-positive rate=0.000, contradicted false-positive rate=0.000, unsafe lifecycle changes=0.
 - Version: wrong-version reuse=0, replacement correctness=1.000, version pinning=1.000.

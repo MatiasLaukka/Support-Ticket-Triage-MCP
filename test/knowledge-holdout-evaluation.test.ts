@@ -76,6 +76,21 @@ describe("production-path knowledge holdout fixtures", () => {
     }
   });
 
+  it.each(["stale-version", "contradicted-version"] as const)("keeps %s evidence-gated when ordinary API fallback has only a request ID", async (id) => {
+    const fixture = knowledgeHoldoutFixtures().find((candidate) => candidate.id === id)!;
+    const lane = createLane(fixture);
+    const result = await evaluateKnowledgeHoldoutFixture({
+      fixture, knowledgeEvolution: lane.service, allKnowledgeArticles: [], asOf, actor: "holdout-evaluator", snapshot: lane.snapshot,
+    });
+
+    expect(fixture.expectedTarget.requiredEvidenceSatisfied).toBe(false);
+    expect(fixture.turns.at(-1)?.expected?.requiredEvidenceSatisfied).toBe(false);
+    expect(result.learned.turns.at(-1)?.targetMatched).toBe(true);
+    expect(result.learned.unsafeLifecycleViolations).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: "target-not-reached" }),
+    ]));
+  });
+
   it.each([
     "ticket", "recommendation", "audit", "learning", "candidate", "version", "head",
   ] as const)("rejects a %s state mutation after setup", async (mutation) => {

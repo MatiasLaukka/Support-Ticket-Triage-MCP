@@ -43,7 +43,9 @@ const eventIds = {
   wrongTicket: "e1111111-1111-4111-8111-111111111111",
 } as const;
 const messageId = "22222222-2222-4222-8222-222222222222";
+const secondMessageId = "32222222-2222-4222-8222-222222222222";
 const recommendationId = "10000000-0000-4000-8000-000000000001";
+const secondRecommendationId = "10000000-0000-4000-8000-000000000002";
 const temporaryRoots: string[] = [];
 
 afterEach(() => {
@@ -106,6 +108,27 @@ describe("canonicalRequestHash", () => {
     })()],
   ])("rejects non-canonical %s request values instead of hashing them as plain objects", (_label, value) => {
     expect(() => canonicalRequestHash("ticket-update", { value })).toThrow(/plain|canonical|json/i);
+  });
+
+  it("keeps a parsed __proto__ semantic key distinct from an empty request", () => {
+    const request = JSON.parse('{"__proto__":{"ticketId":"TKT-0001"}}') as unknown;
+    expect(canonicalRequestHash("ticket-update", request)).not.toBe(
+      canonicalRequestHash("ticket-update", {}),
+    );
+  });
+
+  it.each([
+    ["string expando", (value: unknown[]) => { Object.defineProperty(value, "semantic", { value: 2, enumerable: true }); }],
+    ["symbol expando", (value: unknown[]) => { Object.defineProperty(value, Symbol("semantic"), { value: 2, enumerable: true }); }],
+    ["accessor index", (value: unknown[]) => { Object.defineProperty(value, "0", { get: () => 1, enumerable: true }); }],
+    ["non-enumerable index", (value: unknown[]) => { Object.defineProperty(value, "0", { value: 1, enumerable: false }); }],
+    ["non-writable index", (value: unknown[]) => { Object.defineProperty(value, "0", { writable: false }); }],
+    ["non-writable length", (value: unknown[]) => { Object.defineProperty(value, "length", { writable: false }); }],
+    ["non-enumerable expando", (value: unknown[]) => { Object.defineProperty(value, "semantic", { value: 2, enumerable: false }); }],
+  ])("rejects an array with a %s instead of hashing it like the dense array", (_label, mutate) => {
+    const request: unknown[] = [1];
+    mutate(request);
+    expect(() => canonicalRequestHash("ticket-update", { request })).toThrow(/array|canonical|data|propert/i);
   });
 });
 
@@ -530,6 +553,7 @@ describe("persistent operational command idempotency", () => {
           diagnosis: diagnosisFor(updated.id, "diagnosis-semantic"),
           operationalEventId: eventIds.semanticDiagnosis,
         });
+        unit.appendTrace(decisionTrace(updated.id, eventIds.semanticDiagnosis));
         unit.persistCommandResult(commandIds.semantic, hash, result);
       });
 
@@ -604,6 +628,38 @@ describe("persistent operational command idempotency", () => {
     },
   );
 
+  it("rejects a transaction-local decision trace linked to an event not written by the claimed command", () => {
+    const store = openedStore();
+    try {
+      store.transaction((unit) => {
+        unit.insertTicket(ticket("TKT-0001"));
+        const [sequence] = unit.allocateEventSequences("TKT-0001", 1);
+        unit.appendEvent(event("TKT-0001", sequence!, eventIds.seed, commandIds.compound));
+      });
+      const request = { ticketId: "TKT-0001" };
+      const hash = canonicalRequestHash("ticket-update", request);
+      expect(() => store.transaction((unit) => {
+        expect(unit.beginCommand(commandIds.single, "ticket-update", request)).toBe("new");
+        const [sequence] = unit.allocateEventSequences("TKT-0001", 1);
+        unit.appendEvent(event("TKT-0001", sequence!, eventIds.single, commandIds.single));
+        unit.appendTrace(decisionTrace("TKT-0001", eventIds.seed));
+        unit.persistCommandResult(commandIds.single, hash, {
+          operation: "ticket-update",
+          tickets: [{
+            ticketId: "TKT-0001",
+            operationalEventIds: [eventIds.single],
+            resultingRevision: null,
+          }],
+        });
+      })).toThrowError(expect.objectContaining({ code: "IDEMPOTENCY_CONFLICT" }));
+      const snapshot = store.readWorkflowSnapshot("TKT-0001");
+      expect(snapshot.events.map(({ id }) => id)).toEqual([eventIds.seed]);
+      expect(snapshot.traces).toEqual([]);
+    } finally {
+      store.close();
+    }
+  });
+
   it.each(["message", "recommendation", "diagnosis"] as const)(
     "rejects an omitted %s result reference when the command wrote that record",
     (kind) => {
@@ -655,6 +711,86 @@ describe("persistent operational command idempotency", () => {
             hash,
             resultWithReference(kind, "TKT-0001", eventIds.single),
           );
+        })).toThrowError(expect.objectContaining({ code: "IDEMPOTENCY_CONFLICT" }));
+        expect(store.readWorkflowSnapshot("TKT-0001").events).toEqual([]);
+      } finally {
+        store.close();
+      }
+    },
+  );
+
+  it.each(["message", "recommendation", "diagnosis"] as const)(
+    "rejects restart-time adoption of a pre-existing unbound %s write set",
+    (kind) => {
+      const path = temporaryDatabasePath();
+      const store = OperationalSqliteStore.open(path);
+      store.initialize();
+      store.transaction((unit) => {
+        unit.insertTicket(ticket("TKT-0001"));
+        const [sequence] = unit.allocateEventSequences("TKT-0001", 1);
+        unit.appendEvent(event("TKT-0001", sequence!, eventIds.single, commandIds.single));
+        writeSemanticReference(unit, kind, "TKT-0001", eventIds.single);
+      });
+      store.close();
+
+      const reopened = OperationalSqliteStore.open(path);
+      try {
+        reopened.initialize();
+        const request = { ticketId: "TKT-0001" };
+        const hash = canonicalRequestHash("ticket-update", request);
+        expect(() => reopened.transaction((unit) => {
+          expect(unit.beginCommand(commandIds.single, "ticket-update", request)).toBe("new");
+          unit.persistCommandResult(
+            commandIds.single,
+            hash,
+            resultWithReference(kind, "TKT-0001", eventIds.single),
+          );
+        })).toThrowError(expect.objectContaining({ code: "IDEMPOTENCY_CONFLICT" }));
+        expect(reopened.readWorkflowSnapshot("TKT-0001").events.map(({ id }) => id))
+          .toEqual([eventIds.single]);
+        expect(() => reopened.transaction((unit) => {
+          expect(unit.beginCommand(commandIds.single, "ticket-update", request)).toBe("new");
+          throw new Error("rollback claim probe");
+        })).toThrow("rollback claim probe");
+      } finally {
+        reopened.close();
+      }
+    },
+  );
+
+  it.each(["message", "recommendation", "diagnosis"] as const)(
+    "rejects two same-command %s writes because one result reference cannot represent both",
+    (kind) => {
+      const store = openedStore();
+      try {
+        store.transaction((unit) => unit.insertTicket(ticket("TKT-0001")));
+        const request = { ticketId: "TKT-0001" };
+        const hash = canonicalRequestHash("ticket-update", request);
+        expect(() => store.transaction((unit) => {
+          expect(unit.beginCommand(commandIds.single, "ticket-update", request)).toBe("new");
+          const sequences = unit.allocateEventSequences("TKT-0001", 2);
+          unit.appendEvent(event(
+            "TKT-0001",
+            sequences[0]!,
+            eventIds.semanticMessage,
+            commandIds.single,
+          ));
+          unit.appendEvent(event(
+            "TKT-0001",
+            sequences[1]!,
+            eventIds.semanticRecommendation,
+            commandIds.single,
+          ));
+          writeSemanticReference(unit, kind, "TKT-0001", eventIds.semanticMessage, "first");
+          writeSemanticReference(unit, kind, "TKT-0001", eventIds.semanticRecommendation, "second");
+          unit.persistCommandResult(commandIds.single, hash, {
+            ...resultWithReference(kind, "TKT-0001", eventIds.semanticMessage),
+            tickets: [{
+              ticketId: "TKT-0001",
+              operationalEventIds: [eventIds.semanticMessage, eventIds.semanticRecommendation],
+              resultingRevision: null,
+            }],
+          });
         })).toThrowError(expect.objectContaining({ code: "IDEMPOTENCY_CONFLICT" }));
         expect(store.readWorkflowSnapshot("TKT-0001").events).toEqual([]);
       } finally {
@@ -903,10 +1039,11 @@ function writeSemanticReference(
   kind: "message" | "recommendation" | "diagnosis",
   ticketId: "TKT-0001" | "TKT-0002",
   operationalEventId: string,
+  ordinal: "first" | "second" = "first",
 ): void {
   if (kind === "message") {
     unit.insertMessage({
-      id: messageId,
+      id: ordinal === "first" ? messageId : secondMessageId,
       ticketId,
       operationalEventId,
       kind: "customer",
@@ -916,7 +1053,10 @@ function writeSemanticReference(
     return;
   }
   if (kind === "recommendation") {
-    const recommendation = recommendationFor(unit.readTicket(ticketId), recommendationId);
+    const recommendation = recommendationFor(
+      unit.readTicket(ticketId),
+      ordinal === "first" ? recommendationId : secondRecommendationId,
+    );
     unit.insertRecommendation(recommendation);
     unit.appendRecommendationRevision({
       recommendation,
@@ -926,7 +1066,26 @@ function writeSemanticReference(
     return;
   }
   unit.insertDiagnosis({
-    diagnosis: diagnosisFor(ticketId, "diagnosis-semantic"),
+    diagnosis: diagnosisFor(
+      ticketId,
+      ordinal === "first" ? "diagnosis-semantic" : "diagnosis-semantic-second",
+    ),
     operationalEventId,
   });
+}
+
+function decisionTrace(ticketId: string, operationalEventId: string) {
+  return {
+    id: "66666666-6666-4666-8666-666666666666",
+    operationalEventId,
+    ticketId,
+    occurredAt: "2026-08-10T10:00:00.000Z",
+    actor: "support-lead" as const,
+    traceType: "classification" as const,
+    category: "api" as const,
+    priority: "P2" as const,
+    team: "api-platform" as const,
+    confidence: 0.9,
+    reasons: ["API response evidence"],
+  };
 }

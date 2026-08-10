@@ -79,6 +79,9 @@ interface CommandEventRow {
   ticket_id: string;
   sequence: number;
 }
+interface LocalCommandEventRow extends CommandEventRow {
+  command_id: string;
+}
 interface TicketRevisionReferenceRow {
   ticket_id: string;
   revision: number;
@@ -87,6 +90,14 @@ interface TicketRevisionReferenceRow {
 interface SemanticReferenceRow {
   id: string;
   ticket_id: string;
+}
+interface LocalEventChildRow extends SemanticReferenceRow {
+  operational_event_id: string;
+}
+interface LocalTicketRevisionRow {
+  ticket_id: string;
+  revision: number;
+  operational_event_id: string;
 }
 
 /** Task 1's enum-keyed Zod record infers every allowlisted key as required. */
@@ -113,6 +124,13 @@ export class OperationalUnitOfWork {
   private active = true;
   private commandClosure: "open" | "result-persisted" | "replay" = "open";
   private persistedCommandRecord: CommandIdempotencyRecord | undefined;
+  private readonly appendedEventWrites: LocalCommandEventRow[] = [];
+  private readonly ticketRevisionWrites: LocalTicketRevisionRow[] = [];
+  private readonly messageWrites: LocalEventChildRow[] = [];
+  private readonly recommendationAggregateWrites = new Set<string>();
+  private readonly recommendationRevisionWrites: LocalEventChildRow[] = [];
+  private readonly diagnosisWrites: LocalEventChildRow[] = [];
+  private readonly traceWrites: LocalEventChildRow[] = [];
   private readonly reservedSequences = new Map<string, number[]>();
   private readonly ticketProjectionUpdates = new Map<string, number>();
   private readonly pendingCommandClaims = new Map<string, {
@@ -324,6 +342,11 @@ export class OperationalUnitOfWork {
       parsed.createdAt,
       JSON.stringify(parsed),
     );
+    this.ticketRevisionWrites.push({
+      ticket_id: parsed.ticketId,
+      revision: parsed.revision,
+      operational_event_id: parsed.operationalEventId,
+    });
   }
 
   insertMessage(message: ConversationMessage): void {
@@ -347,6 +370,11 @@ export class OperationalUnitOfWork {
       parsed.recommendationId ?? null,
       JSON.stringify(parsed),
     );
+    this.messageWrites.push({
+      id: parsed.id,
+      ticket_id: parsed.ticketId,
+      operational_event_id: parsed.operationalEventId,
+    });
   }
 
   insertRecommendation(recommendation: TriageRecommendation): void {
@@ -369,6 +397,7 @@ export class OperationalUnitOfWork {
       parsed.createdAt,
       JSON.stringify(parsed),
     );
+    this.recommendationAggregateWrites.add(parsed.id);
   }
 
   appendRecommendationRevision(
@@ -392,6 +421,11 @@ export class OperationalUnitOfWork {
       parsed.createdAt,
       JSON.stringify(parsed),
     );
+    this.recommendationRevisionWrites.push({
+      id: parsed.recommendation.id,
+      ticket_id: parsed.recommendation.ticketId,
+      operational_event_id: parsed.operationalEventId,
+    });
   }
 
   insertDiagnosis(
@@ -415,6 +449,11 @@ export class OperationalUnitOfWork {
       parsed.diagnosis.completedAt,
       JSON.stringify(parsed),
     );
+    this.diagnosisWrites.push({
+      id: parsed.diagnosis.id,
+      ticket_id: parsed.diagnosis.ticketId,
+      operational_event_id: parsed.operationalEventId,
+    });
   }
 
   appendEvent(event: OperationalEventWrite): void {
@@ -447,6 +486,12 @@ export class OperationalUnitOfWork {
       JSON.stringify(parsed.facts),
       JSON.stringify(parsed),
     );
+    this.appendedEventWrites.push({
+      id: parsed.id,
+      ticket_id: parsed.ticketId,
+      sequence: parsed.sequence,
+      command_id: parsed.commandId,
+    });
     pending.shift();
     if (pending.length === 0) this.reservedSequences.delete(parsed.ticketId);
   }
@@ -471,6 +516,11 @@ export class OperationalUnitOfWork {
       parsed.traceType,
       JSON.stringify(parsed),
     );
+    this.traceWrites.push({
+      id: parsed.id,
+      ticket_id: parsed.ticketId,
+      operational_event_id: parsed.operationalEventId,
+    });
   }
 
   readTicket(ticketId: TicketId): Ticket {
@@ -704,6 +754,19 @@ export class OperationalUnitOfWork {
       WHERE command_id = ?
       ORDER BY ticket_id ASC, sequence ASC
     `).all(commandId) as CommandEventRow[];
+    const localRows = this.appendedEventWrites
+      .filter((row) => row.command_id === commandId)
+      .sort(compareCommandEventRows);
+    if (
+      localRows.length !== this.appendedEventWrites.length
+      || rows.length !== localRows.length
+      || rows.some((row, index) => !sameCommandEvent(row, localRows[index]))
+    ) {
+      throw new OperationalStoreError(
+        "Operational command events must be written by its transaction-local command claim.",
+        "IDEMPOTENCY_CONFLICT",
+      );
+    }
     const expected = [...result.tickets]
       .sort((left, right) => left.ticketId.localeCompare(right.ticketId))
       .flatMap((ticket) => ticket.operationalEventIds.map((id) => ({
@@ -740,16 +803,49 @@ export class OperationalUnitOfWork {
     result: OperationalResultReference,
   ): void {
     const ticketIds = new Set(result.tickets.map((ticket) => ticket.ticketId));
+    const commandEvents = new Map(
+      this.appendedEventWrites
+        .filter((row) => row.command_id === commandId)
+        .map((row) => [row.id, row] as const),
+    );
     const revisionRows = this.database.prepare(`
       SELECT revisions.ticket_id, revisions.revision, tickets.revision AS current_revision
       FROM ticket_revisions AS revisions
       JOIN operational_events AS events ON events.id = revisions.operational_event_id
       JOIN tickets ON tickets.id = revisions.ticket_id
       WHERE events.command_id = ?
-      ORDER BY revisions.ticket_id ASC, events.sequence ASC
+       ORDER BY revisions.ticket_id ASC, events.sequence ASC
     `).all(commandId) as TicketRevisionReferenceRow[];
+    const localRevisionRows = this.ticketRevisionWrites.map((row) => {
+      this.assertLocalChildEvent("ticket revision", row, commandEvents);
+      return {
+        ticket_id: row.ticket_id,
+        revision: row.revision,
+      };
+    }).sort((left, right) => (
+      left.ticket_id.localeCompare(right.ticket_id) || left.revision - right.revision
+    ));
+    if (
+      revisionRows.length !== localRevisionRows.length
+      || revisionRows.some((row, index) => (
+        row.ticket_id !== localRevisionRows[index]?.ticket_id
+        || row.revision !== localRevisionRows[index]?.revision
+      ))
+    ) {
+      throw this.semanticReferenceError(
+        "Operational command ticket revisions must be written by its transaction-local command claim.",
+      );
+    }
+    for (const [ticketId, updatedRevision] of this.ticketProjectionUpdates) {
+      const latestRevision = localRevisionRows.filter((row) => row.ticket_id === ticketId).at(-1);
+      if (!ticketIds.has(ticketId) || latestRevision?.revision !== updatedRevision) {
+        throw this.semanticReferenceError(
+          "Every transaction-local ticket projection update must have a matching command result and revision write.",
+        );
+      }
+    }
     for (const ticket of result.tickets) {
-      const commandRevisions = revisionRows.filter((row) => row.ticket_id === ticket.ticketId);
+      const commandRevisions = localRevisionRows.filter((row) => row.ticket_id === ticket.ticketId);
       const updatedRevision = this.ticketProjectionUpdates.get(ticket.ticketId);
       if (ticket.resultingRevision === null) {
         if (commandRevisions.length > 0 || updatedRevision !== undefined) {
@@ -758,50 +854,145 @@ export class OperationalUnitOfWork {
         continue;
       }
       const latestRevision = commandRevisions.at(-1);
+      const durableRevision = revisionRows.filter((row) => row.ticket_id === ticket.ticketId).at(-1);
       if (
         latestRevision?.revision !== ticket.resultingRevision
-        || latestRevision.current_revision !== ticket.resultingRevision
+        || durableRevision?.current_revision !== ticket.resultingRevision
         || updatedRevision !== ticket.resultingRevision
       ) {
         throw this.semanticReferenceError("Ticket result revision does not match the command's committed ticket revision.");
       }
     }
 
-    this.assertSemanticReference(
+    const localMessages = this.localSemanticRows("message", this.messageWrites, commandEvents);
+    this.assertDurableSemanticRows(
       "message",
-      result.messageId,
-      ticketIds,
+      localMessages,
       this.database.prepare(`
         SELECT messages.id, messages.ticket_id
         FROM conversation_messages AS messages
         JOIN operational_events AS events ON events.id = messages.operational_event_id
         WHERE events.command_id = ?
+        ORDER BY messages.id ASC
       `).all(commandId) as SemanticReferenceRow[],
     );
+    this.assertSemanticReference(
+      "message",
+      result.messageId,
+      ticketIds,
+      localMessages,
+    );
+
+    const localRecommendations = this.localSemanticRows(
+      "recommendation",
+      this.recommendationRevisionWrites,
+      commandEvents,
+    );
+    for (const id of this.recommendationAggregateWrites) {
+      if (!localRecommendations.some((row) => row.id === id)) {
+        throw this.semanticReferenceError(
+          "Every transaction-local recommendation write must have a revision linked to this command.",
+        );
+      }
+    }
+    const durableRecommendations = this.database.prepare(`
+      SELECT DISTINCT recommendations.id, recommendations.ticket_id
+      FROM recommendations
+      JOIN recommendation_revisions AS revisions
+        ON revisions.recommendation_id = recommendations.id
+      JOIN operational_events AS events ON events.id = revisions.operational_event_id
+      WHERE events.command_id = ?
+      ORDER BY recommendations.id ASC
+    `).all(commandId) as SemanticReferenceRow[];
+    this.assertDurableSemanticRows("recommendation", localRecommendations, durableRecommendations);
     this.assertSemanticReference(
       "recommendation",
       result.recommendationId,
       ticketIds,
+      localRecommendations,
+    );
+
+    const localDiagnoses = this.localSemanticRows("diagnosis", this.diagnosisWrites, commandEvents);
+    this.assertDurableSemanticRows(
+      "diagnosis",
+      localDiagnoses,
       this.database.prepare(`
-        SELECT DISTINCT recommendations.id, recommendations.ticket_id
-        FROM recommendations
-        JOIN recommendation_revisions AS revisions
-          ON revisions.recommendation_id = recommendations.id
-        JOIN operational_events AS events ON events.id = revisions.operational_event_id
+        SELECT diagnoses.id, diagnoses.ticket_id
+        FROM diagnoses
+        JOIN operational_events AS events ON events.id = diagnoses.operational_event_id
         WHERE events.command_id = ?
+        ORDER BY diagnoses.id ASC
       `).all(commandId) as SemanticReferenceRow[],
     );
     this.assertSemanticReference(
       "diagnosis",
       result.diagnosisId,
       ticketIds,
+      localDiagnoses,
+    );
+
+    const localTraces = this.localSemanticRows("decision trace", this.traceWrites, commandEvents);
+    this.assertDurableSemanticRows(
+      "decision trace",
+      localTraces,
       this.database.prepare(`
-        SELECT diagnoses.id, diagnoses.ticket_id
-        FROM diagnoses
-        JOIN operational_events AS events ON events.id = diagnoses.operational_event_id
+        SELECT traces.id, traces.ticket_id
+        FROM decision_trace_events AS traces
+        JOIN operational_events AS events ON events.id = traces.operational_event_id
         WHERE events.command_id = ?
+        ORDER BY traces.id ASC
       `).all(commandId) as SemanticReferenceRow[],
     );
+  }
+
+  private assertLocalChildEvent(
+    referenceType: string,
+    row: { readonly ticket_id: string; readonly operational_event_id: string },
+    commandEvents: ReadonlyMap<string, CommandEventRow>,
+  ): void {
+    const event = commandEvents.get(row.operational_event_id);
+    if (event === undefined || event.ticket_id !== row.ticket_id) {
+      throw this.semanticReferenceError(
+        `Transaction-local ${referenceType} writes must be linked to a matching event written by this command.`,
+      );
+    }
+  }
+
+  private localSemanticRows(
+    referenceType: string,
+    writes: readonly LocalEventChildRow[],
+    commandEvents: ReadonlyMap<string, CommandEventRow>,
+  ): SemanticReferenceRow[] {
+    const byId = new Map<string, SemanticReferenceRow>();
+    for (const write of writes) {
+      this.assertLocalChildEvent(referenceType, write, commandEvents);
+      const previous = byId.get(write.id);
+      if (previous !== undefined && previous.ticket_id !== write.ticket_id) {
+        throw this.semanticReferenceError(
+          `Transaction-local ${referenceType} writes disagree on their affected ticket.`,
+        );
+      }
+      byId.set(write.id, { id: write.id, ticket_id: write.ticket_id });
+    }
+    return [...byId.values()].sort(compareSemanticRows);
+  }
+
+  private assertDurableSemanticRows(
+    referenceType: string,
+    localRows: readonly SemanticReferenceRow[],
+    durableRows: readonly SemanticReferenceRow[],
+  ): void {
+    const sortedDurableRows = [...durableRows].sort(compareSemanticRows);
+    if (
+      sortedDurableRows.length !== localRows.length
+      || sortedDurableRows.some((row, index) => (
+        row.id !== localRows[index]?.id || row.ticket_id !== localRows[index]?.ticket_id
+      ))
+    ) {
+      throw this.semanticReferenceError(
+        `Operational command ${referenceType} records must exactly match its transaction-local writes.`,
+      );
+    }
   }
 
   private assertSemanticReference(
@@ -810,6 +1001,11 @@ export class OperationalUnitOfWork {
     resultTicketIds: ReadonlySet<string>,
     rows: readonly SemanticReferenceRow[],
   ): void {
+    if (rows.length > 1) {
+      throw this.semanticReferenceError(
+        `Operational command wrote multiple ${referenceType} records that its singular result reference cannot represent.`,
+      );
+    }
     if (expectedId === undefined) {
       if (rows.length > 0) {
         throw this.semanticReferenceError(
@@ -818,8 +1014,8 @@ export class OperationalUnitOfWork {
       }
       return;
     }
-    const row = rows.find((candidate) => candidate.id === expectedId);
-    if (row === undefined || !resultTicketIds.has(row.ticket_id)) {
+    const row = rows[0];
+    if (row?.id !== expectedId || !resultTicketIds.has(row.ticket_id)) {
       throw this.semanticReferenceError(
         `Operational command ${referenceType} result must reference a record written for an affected ticket by this command.`,
       );
@@ -869,4 +1065,22 @@ function parseStoredJson<T>(
     throw new OperationalStoreError(message, "PERSISTENCE_ERROR", { cause: parsed.error });
   }
   return parsed.data;
+}
+
+function compareCommandEventRows(left: CommandEventRow, right: CommandEventRow): number {
+  return left.ticket_id.localeCompare(right.ticket_id) || left.sequence - right.sequence;
+}
+
+function sameCommandEvent(
+  left: CommandEventRow,
+  right: CommandEventRow | undefined,
+): boolean {
+  return right !== undefined
+    && left.id === right.id
+    && left.ticket_id === right.ticket_id
+    && left.sequence === right.sequence;
+}
+
+function compareSemanticRows(left: SemanticReferenceRow, right: SemanticReferenceRow): number {
+  return left.id.localeCompare(right.id) || left.ticket_id.localeCompare(right.ticket_id);
 }

@@ -1,8 +1,5 @@
 import { createHash } from "node:crypto";
-import {
-  canonicalOperationalRequestJson,
-  type OperationalResultReference,
-} from "./domain.js";
+import type { OperationalResultReference } from "./domain.js";
 
 const OPERATION_NAME_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const NON_SEMANTIC_REQUEST_KEYS = new Set([
@@ -43,10 +40,7 @@ export interface CommandReplay {
 export function canonicalRequestHash(operation: string, request: unknown): string {
   const normalizedOperation = normalizeOperationName(operation);
   const semanticRequest = projectSemanticRequest(request, new Set<object>());
-  const canonical = canonicalOperationalRequestJson({
-    operation: normalizedOperation,
-    request: semanticRequest,
-  });
+  const canonical = `{"operation":${JSON.stringify(normalizedOperation)},"request":${canonicalSemanticJson(semanticRequest)}}`;
   return createHash("sha256").update(canonical, "utf8").digest("hex");
 }
 
@@ -64,12 +58,40 @@ function projectSemanticRequest(
       throw new TypeError("Canonical semantic request arrays must use the standard Array prototype.");
     }
     if (ancestors.has(value)) throw new TypeError("Canonical semantic requests cannot contain cycles.");
+    const ownKeys = Reflect.ownKeys(value);
+    if (
+      ownKeys.length !== value.length + 1
+      || ownKeys.some((key) => (
+        typeof key !== "string"
+        || (key !== "length" && !isDenseArrayIndex(key, value.length))
+      ))
+    ) {
+      throw new TypeError("Canonical semantic request arrays may contain only dense indices and length.");
+    }
+    const lengthDescriptor = Object.getOwnPropertyDescriptor(value, "length");
+    if (
+      lengthDescriptor === undefined
+      || !("value" in lengthDescriptor)
+      || lengthDescriptor.value !== value.length
+      || !lengthDescriptor.writable
+      || lengthDescriptor.enumerable
+      || lengthDescriptor.configurable
+    ) {
+      throw new TypeError("Canonical semantic request array length must be a non-enumerable data property.");
+    }
     ancestors.add(value);
-    const projected = value.map((item, index) => {
-      if (!Object.hasOwn(value, index)) {
-        throw new TypeError("Canonical semantic request arrays must not be sparse.");
+    const projected = Array.from({ length: value.length }, (_, index) => {
+      const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+      if (
+        descriptor === undefined
+        || !("value" in descriptor)
+        || !descriptor.writable
+        || !descriptor.enumerable
+        || !descriptor.configurable
+      ) {
+        throw new TypeError("Canonical semantic request array indices must be enumerable data properties.");
       }
-      return projectSemanticRequest(item, ancestors);
+      return projectSemanticRequest(descriptor.value, ancestors);
     });
     ancestors.delete(value);
     return projected;
@@ -83,7 +105,7 @@ function projectSemanticRequest(
   }
   if (ancestors.has(value)) throw new TypeError("Canonical semantic requests cannot contain cycles.");
   ancestors.add(value);
-  const projected: Record<string, unknown> = {};
+  const projected = Object.create(null) as Record<string, unknown>;
   for (const key of Reflect.ownKeys(value)) {
     if (typeof key !== "string") {
       throw new TypeError("Canonical semantic request objects must not contain symbol keys.");
@@ -93,10 +115,35 @@ function projectSemanticRequest(
       throw new TypeError("Canonical semantic request objects require enumerable data properties.");
     }
     if (NON_SEMANTIC_REQUEST_KEYS.has(key) || descriptor.value === undefined) continue;
-    projected[key] = projectSemanticRequest(descriptor.value, ancestors);
+    Object.defineProperty(projected, key, {
+      value: projectSemanticRequest(descriptor.value, ancestors),
+      enumerable: true,
+      configurable: false,
+      writable: false,
+    });
   }
   ancestors.delete(value);
   return projected;
+}
+
+function isDenseArrayIndex(key: string, length: number): boolean {
+  if (!/^(?:0|[1-9][0-9]*)$/.test(key)) return false;
+  const index = Number(key);
+  return Number.isSafeInteger(index) && index >= 0 && index < length && String(index) === key;
+}
+
+function canonicalSemanticJson(
+  value: null | boolean | number | string | readonly unknown[] | Readonly<Record<string, unknown>>,
+): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => canonicalSemanticJson(item as ReturnType<typeof projectSemanticRequest>)).join(",")}]`;
+  }
+  const record = value as Readonly<Record<string, unknown>>;
+  const entries = Object.keys(record).sort().map((key) => (
+    `${JSON.stringify(key)}:${canonicalSemanticJson(record[key] as ReturnType<typeof projectSemanticRequest>)}`
+  ));
+  return `{${entries.join(",")}}`;
 }
 
 /** @internal Shared with the transaction boundary so hash and storage agree. */

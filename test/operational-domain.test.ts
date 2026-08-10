@@ -168,6 +168,9 @@ describe("operational persistence domain", () => {
     expect(OperationalEventSchema.safeParse({ ...base, facts: { count: 2, approved: true, evidence: ["request-id"] } }).success).toBe(true);
     for (const facts of [
       { body: "Customer body must not be copied." },
+      { message: "Customer message must not be copied." },
+      { customerMessage: "Customer message must not be copied." },
+      { response: "Customer response must not be copied." },
       { customerResponse: "A customer response must not be copied." },
       { prompt: "system instructions" },
       { reasoning: "hidden reasoning" },

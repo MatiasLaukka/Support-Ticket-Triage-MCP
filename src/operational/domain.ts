@@ -39,9 +39,47 @@ const UniqueIdentifierSchema = z.array(IdentifierSchema).refine(
   (ids) => new Set(ids).size === ids.length,
   "Identifiers must be unique.",
 );
-const SafeFactKeySchema = z.string().trim().min(1).max(80).refine(
-  (key) => !/(?:body|customer.?response|prompt|reasoning|credential|secret|token|password|path)/i.test(key),
-  "Operational fact keys must not name customer content or sensitive data.",
+const SafeFactKeys = [
+  "approved",
+  "approvedFields",
+  "category",
+  "confidence",
+  "count",
+  "diagnosisOutcome",
+  "evidence",
+  "evidenceIds",
+  "expectedRevision",
+  "fallbackCategory",
+  "inputTokens",
+  "knownEventId",
+  "knowledgeArticleIds",
+  "latencyMs",
+  "missingEvidenceIds",
+  "model",
+  "outcome",
+  "outputTokens",
+  "priority",
+  "providedEvidenceIds",
+  "provider",
+  "recommendationFields",
+  "resolution",
+  "revision",
+  "reasonCode",
+  "securityRisk",
+  "slaRisk",
+  "sourceRevision",
+  "stage",
+  "status",
+  "team",
+  "verificationType",
+] as const;
+/**
+ * Facts are deliberately a small allowlist: canonical customer/support bodies
+ * belong only in ConversationMessage, never in the operational event spine.
+ */
+const SafeFactKeySchema = z.string().refine(
+  (key): key is (typeof SafeFactKeys)[number] => (SafeFactKeys as readonly string[]).includes(key),
+  "Operational fact key is not allowlisted.",
 );
 const SanitizedOperationalFactValueSchema: z.ZodType<unknown> = z.lazy(() => z.union([
   SafeFactTextSchema,

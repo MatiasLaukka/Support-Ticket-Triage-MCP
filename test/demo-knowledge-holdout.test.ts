@@ -44,6 +44,10 @@ describe("controlled knowledge holdout CLI", () => {
       expect(entry.reusableKnowledge.status).toMatch(/^(available|ledger-unavailable)$/);
       expect(entry.reusableKnowledge.issues).toEqual(expect.any(Array));
       expect(entry.readOnly).toEqual({ baseline: true, learned: true });
+      expect(entry.evidencePolicy).toEqual({
+        requiredIds: fixture!.evidencePolicy.requiredIds,
+        reasonCode: fixture!.evidencePolicy.reasonCode,
+      });
       for (const [laneName, lane] of [["baseline", entry.baseline], ["learned", entry.learned]] as const) {
         expect(lane.lane).toBe(laneName);
         expect(typeof lane.classificationContractPassed).toBe("boolean");
@@ -84,8 +88,11 @@ describe("controlled knowledge holdout CLI", () => {
     expect(report.limitation).toMatch(/synthetic\/controlled/i);
     expect(report.limitation).toMatch(/no human-time claim/i);
     expect(markdown).toContain("Controlled Knowledge Holdout Evaluation");
+    expect(markdown).toContain("Evidence policy");
+    expect(markdown).toContain("approved-known-cause-required");
+    expect(markdown).toContain("request-id");
 
-    expect(json).not.toMatch(/draftCustomerResponse|rationale|classificationSignals|conversation|customerReplies|previousSupportResponse|prompt|body|expectedOutcome/i);
+    expect(json).not.toMatch(/draftCustomerResponse|rationale|classificationSignals|conversation|customerReplies|previousSupportResponse|prompt|body|expectedOutcome|req_holdout_001/i);
     expect(markdown).not.toMatch(/draftCustomerResponse|rationale|classificationSignals|customerReplies|previousSupportResponse|prompt|Request ID:/i);
   });
 });

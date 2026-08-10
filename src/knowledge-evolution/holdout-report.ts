@@ -7,6 +7,7 @@ import type {
   KnowledgeHoldoutEvaluation,
 } from "./holdout-evaluation.js";
 import type { KnowledgeReference, ReusableKnowledgeIssue, ReusableKnowledgeResult } from "./reusable-context.js";
+import type { EvidenceRequirementId } from "../evidence-catalog.js";
 
 export type HoldoutReportTurn = {
   turnIndex: number;
@@ -33,6 +34,10 @@ export type HoldoutReportLane = {
 
 export type HoldoutReportCase = {
   fixtureId: string;
+  evidencePolicy: {
+    requiredIds: readonly EvidenceRequirementId[];
+    reasonCode: KnowledgeHoldoutFixture["evidencePolicy"]["reasonCode"];
+  };
   reusableKnowledge: {
     status: ReusableKnowledgeResult["status"];
     issues: readonly ReusableKnowledgeIssue[];
@@ -74,6 +79,10 @@ export function toControlledKnowledgeHoldoutReport(input: {
     run: { mode: "controlled-synthetic", asOf: input.asOf, clock: input.clock, provider: "not-constructed" },
     cases: input.cases.map(({ fixture, reusableKnowledge, evaluation, delta, comparison }) => ({
       fixtureId: fixture.id,
+      evidencePolicy: {
+        requiredIds: [...fixture.evidencePolicy.requiredIds],
+        reasonCode: fixture.evidencePolicy.reasonCode,
+      },
       reusableKnowledge: { status: reusableKnowledge.status, issues: reusableKnowledge.issues.map(copyIssue) },
       baseline: toLane("baseline", evaluation.baseline),
       learned: toLane("learned", evaluation.learned),
@@ -94,7 +103,7 @@ export function toControlledKnowledgeHoldoutReport(input: {
 export function renderControlledKnowledgeHoldoutMarkdown(report: ControlledKnowledgeHoldoutReport): string {
   const rows = report.cases.map((entry) => {
     const learned = entry.learned;
-    return `| ${entry.fixtureId} | ${entry.reusableKnowledge.status} | ${learned.targetReached ? "yes" : "no"} | ${entry.comparison} | ${entry.readOnly.learned ? "pass" : "FAIL"} |`;
+    return `| ${entry.fixtureId} | ${formatEvidencePolicy(entry.evidencePolicy)} | ${entry.reusableKnowledge.status} | ${learned.targetReached ? "yes" : "no"} | ${entry.comparison} | ${entry.readOnly.learned ? "pass" : "FAIL"} |`;
   });
   return [
     "# Controlled Knowledge Holdout Evaluation",
@@ -106,8 +115,8 @@ export function renderControlledKnowledgeHoldoutMarkdown(report: ControlledKnowl
     "",
     "## Case scorecard",
     "",
-    "| Fixture | Reusable-context status | Learned target | Comparison | Read-only |",
-    "| --- | --- | --- | --- | --- |",
+    "| Fixture | Evidence policy | Reusable-context status | Learned target | Comparison | Read-only |",
+    "| --- | --- | --- | --- | --- | --- |",
     ...rows,
     "",
     "## Aggregate scorecards",
@@ -162,6 +171,11 @@ function snapshotsMatch(lane: HoldoutLaneResult): boolean {
 }
 
 function formatMetric(value: number | null): string { return value === null ? "n/a" : value.toFixed(3); }
+
+function formatEvidencePolicy(policy: HoldoutReportCase["evidencePolicy"]): string {
+  const requiredIds = policy.requiredIds.length === 0 ? "none" : policy.requiredIds.join(", ");
+  return `${requiredIds}; ${policy.reasonCode}`;
+}
 
 function assertSanitizedReport(report: ControlledKnowledgeHoldoutReport): void {
   const forbidden = /draftCustomerResponse|rationale|classificationSignals|conversation|customerReplies|previousSupportResponse|prompt|body|expectedOutcome/i;

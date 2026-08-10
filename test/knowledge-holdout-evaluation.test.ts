@@ -9,7 +9,7 @@ import { KnowledgeCandidateWriteSchema, KnowledgeObjectWriteSchema, type Knowled
 import type { LearningEvent } from "../src/knowledge-evolution/learning-ledger.js";
 
 describe("production-path knowledge holdout fixtures", () => {
-  it("defines seven fixed classes with immutable complete conversation snapshots", () => {
+  it("defines eight fixed classes with immutable complete conversation snapshots", () => {
     const fixtures = knowledgeHoldoutFixtures();
 
     expect(fixtures.map(({ id }) => id)).toEqual([
@@ -26,6 +26,7 @@ describe("production-path knowledge holdout fixtures", () => {
     for (const fixture of fixtures) {
       assertFixtureIsSnapshotBased(fixture);
       expect(fixture.expectedEvidenceIds).toEqual(expect.any(Array));
+      expect(fixture.expectedEvidenceIds).toBe(fixture.evidencePolicy.requiredIds);
       expect(fixture.lifecycle).toBeDefined();
       for (const turn of fixture.turns) {
         expect(turn.expected?.requiredEscalations).toEqual(expect.any(Array));
@@ -48,6 +49,7 @@ describe("production-path knowledge holdout fixtures", () => {
       expect(result.baseline.turns).toHaveLength(fixture.turns.length);
       expect(result.learned.turns).toHaveLength(fixture.turns.length);
       expect(result.learned.before).toEqual(result.learned.after);
+      expect(JSON.stringify(result)).not.toContain(fixture.evidencePolicy.rationale);
 
       if (fixture.lifecycle === "stale" || fixture.lifecycle === "contradicted") {
         expect(reusable.contexts).toEqual([]);
@@ -72,6 +74,21 @@ describe("production-path knowledge holdout fixtures", () => {
         expect(lane.state.events.map(({ eventType }) => eventType)).toEqual(["candidate-promoted"]);
       }
     }
+  });
+
+  it.each(["stale-version", "contradicted-version"] as const)("keeps %s evidence-gated when ordinary API fallback has only a request ID", async (id) => {
+    const fixture = knowledgeHoldoutFixtures().find((candidate) => candidate.id === id)!;
+    const lane = createLane(fixture);
+    const result = await evaluateKnowledgeHoldoutFixture({
+      fixture, knowledgeEvolution: lane.service, allKnowledgeArticles: [], asOf, actor: "holdout-evaluator", snapshot: lane.snapshot,
+    });
+
+    expect(fixture.expectedTarget.requiredEvidenceSatisfied).toBe(false);
+    expect(fixture.turns.at(-1)?.expected?.requiredEvidenceSatisfied).toBe(false);
+    expect(result.learned.turns.at(-1)?.targetMatched).toBe(true);
+    expect(result.learned.unsafeLifecycleViolations).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: "target-not-reached" }),
+    ]));
   });
 
   it.each([
@@ -126,11 +143,11 @@ describe("knowledge holdout scorecards", () => {
     expect(result.efficacy.learned.byScenario.truePositive.knowledgeMatchRecall).toBe(1);
     expect(result.efficacy.learned.byScenario.nearMiss.knowledgeMatchPrecision).toBe(0);
     expect(result.efficacy.learned.byScenario.unrelated.knowledgeMatchRecall).toBeNull();
-    expect(result.efficacy.baseline.unnecessaryEvidenceTotal).toBe(1);
-    expect(result.efficacy.baseline.evidencePrecision).toBe(3 / 4);
-    expect(result.efficacy.unnecessaryEvidenceTotal).toBe(0);
-    expect(result.efficacy.evidencePrecision).toBe(1);
-    expect(result.efficacy.missingNecessaryEvidenceTotal).toBe(0);
+    expect(result.efficacy.baseline.unnecessaryEvidenceTotal).toBe(2);
+    expect(result.efficacy.baseline.evidencePrecision).toBe(2 / 4);
+    expect(result.efficacy.unnecessaryEvidenceTotal).toBe(1);
+    expect(result.efficacy.evidencePrecision).toBe(2 / 3);
+    expect(result.efficacy.missingNecessaryEvidenceTotal).toBe(5);
     expect(result.efficacy.diagnosticTurnsSavedTotal).toBe(2);
     expect(result.efficacy.benefited).toBe(2);
     expect(result.efficacy.regressed).toBe(1);
@@ -144,10 +161,10 @@ describe("knowledge holdout scorecards", () => {
     const result = scoreKnowledgeHoldoutResults([evaluation]);
 
     expect(result.efficacy.evidencePrecision).toBeNull();
-    expect(result.efficacy.missingEvidenceRate).toBeNull();
+    expect(result.efficacy.missingEvidenceRate).toBe(1);
     expect(result.efficacy.correctionRequiredRate).toBe(0);
     expect(result.efficacy.unnecessaryEvidenceTotal).toBe(0);
-    expect(result.efficacy.missingNecessaryEvidenceTotal).toBe(0);
+    expect(result.efficacy.missingNecessaryEvidenceTotal).toBe(5);
     expect(result.efficacy.diagnosticTurnsSavedTotal).toBe(0);
     expect(evaluation).toEqual(before);
   });
@@ -186,13 +203,17 @@ describe("knowledge holdout scorecards", () => {
     expect(result.governance.unsafeLifecycleChanges).toBe(2);
   });
 
-  it("regresses when learned omits a required evidence ID that baseline collected despite equal missing totals", () => {
+  it("uses policy-backed required evidence rather than the compatibility alias when scoring", () => {
     const source = knowledgeHoldoutFixtures().find(({ id }) => id === "missing-evidence-then-supplied")!;
-    const fixture: KnowledgeHoldoutFixture = { ...source, expectedEvidenceIds: ["request-id", "workspace-id"] };
+    const fixture: KnowledgeHoldoutFixture = {
+      ...source,
+      evidencePolicy: { ...source.evidencePolicy, requiredIds: ["request-id", "endpoint-url"] },
+      expectedEvidenceIds: [],
+    };
     const result = scoreKnowledgeHoldoutResults([{
       fixture,
       baseline: lane({ requested: ["request-id"], target: true }),
-      learned: lane({ requested: ["workspace-id"], target: true }),
+      learned: lane({ requested: ["endpoint-url"], target: true }),
     }]);
 
     expect(result.cases[0]!.delta.baselineMissingNecessaryEvidence).toBe(1);

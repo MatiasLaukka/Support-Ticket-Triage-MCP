@@ -16,6 +16,10 @@ import {
 } from "../src/domain.js";
 import type { ClassificationReasoningProvider } from "../src/approval-desk/classification-reasoning-provider.js";
 import type { CustomerResponseDraftProvider } from "../src/approval-desk/draft-response-provider.js";
+import {
+  listReusableApproved,
+  type ReusableKnowledgeResult,
+} from "../src/knowledge-evolution/reusable-context.js";
 import { KnowledgeRepository } from "../src/knowledge-repository.js";
 import { RecommendationRepository } from "../src/recommendation-repository.js";
 import { createTriageServer } from "../src/server.js";
@@ -28,6 +32,11 @@ import {
   type RejectRecommendationInput,
   type SubmitRecommendationInput,
 } from "../src/triage-service.js";
+import {
+  EVIDENCE_PARITY,
+  requestIdKnowledgeObject,
+  requestIdKnowledgePromotionEvent,
+} from "./evidence-parity-fixtures.js";
 
 const now = new Date("2026-06-10T10:00:00.000Z");
 const temporaryRoots: string[] = [];
@@ -295,6 +304,7 @@ async function connect(
     classificationReasoningProvider: ClassificationReasoningProvider;
     draftProvider: CustomerResponseDraftProvider;
     env: NodeJS.ProcessEnv;
+    knowledgeEvolution: ReturnType<typeof nonProductionReusableKnowledgeAdapter>;
   }> = {},
 ): Promise<Client> {
   const server = createTriageServer({
@@ -331,6 +341,33 @@ function nonProductionReusableKnowledgeAdapter() {
       },
     } as never,
   };
+}
+
+async function reusableRequestIdKnowledgeAdapter(): Promise<ReturnType<typeof nonProductionReusableKnowledgeAdapter>> {
+  const reusableKnowledge = await reusableRequestIdKnowledge();
+  return {
+    service: {
+      async listReusableApproved(): Promise<ReusableKnowledgeResult> {
+        return reusableKnowledge;
+      },
+    } as never,
+  };
+}
+
+async function reusableRequestIdKnowledge(): Promise<ReusableKnowledgeResult> {
+  const object = requestIdKnowledgeObject();
+  return listReusableApproved({
+    asOf: "2026-08-08T12:00:00.000Z",
+    snapshotReader: {
+      async snapshotForReuse() {
+        return {
+          versions: [object],
+          heads: new Map([[object.id, object.version]]),
+          events: [requestIdKnowledgePromotionEvent()],
+        };
+      },
+    },
+  });
 }
 
 async function callTool(
@@ -1404,6 +1441,172 @@ describe("createTriageServer action protocol", () => {
     expect(await fixture.recommendations.get(recommendation.id)).toEqual(
       recommendation,
     );
+  });
+
+  it("keeps an ordinary API ticket evidence-gated after MCP receives only a request ID", async () => {
+    const fixture = await createFixture(makeTicket({
+      id: EVIDENCE_PARITY.ordinaryApi.ticketId,
+      subject: EVIDENCE_PARITY.ordinaryApi.baseSubject,
+      description: EVIDENCE_PARITY.ordinaryApi.baseDescription,
+      category: "api",
+      priority: "P3",
+      team: "api-platform",
+      tags: [],
+    }));
+    const client = await connect(fixture);
+    await callTool(client, "add_customer_reply", {
+      ticketId: EVIDENCE_PARITY.ordinaryApi.ticketId,
+      actor: "Maya Chen",
+      body: EVIDENCE_PARITY.ordinaryApi.body,
+      source: "manual",
+    });
+
+    const evaluated = await callTool(client, "evaluate_ticket", {
+      ticketId: EVIDENCE_PARITY.ordinaryApi.ticketId,
+      actor: "approval-desk",
+      aiPreference: "deterministic",
+    });
+    const recommendation = TriageRecommendationSchema.parse(
+      expectStableStructured(evaluated).recommendation,
+    );
+
+    expect(recommendation.requiredEvidence?.map(({ id }) => id).sort()).toEqual([
+      "endpoint-url",
+      "request-id",
+      "api-response-status",
+      "sample-payload",
+      "failure-timestamp",
+    ].sort());
+    expect(recommendation.providedEvidence?.map(({ id }) => id).sort()).toEqual(["request-id"]);
+    expect(recommendation.missingEvidence?.map(({ id }) => id).sort()).toEqual([
+      "endpoint-url",
+      "api-response-status",
+      "sample-payload",
+      "failure-timestamp",
+    ].sort());
+    // The action surface deliberately records recognized partial progress as
+    // information-received, while the authoritative readiness result remains
+    // evidence-gated until every required API detail is present.
+    expect(recommendation.supportState).toBe("information-received");
+
+    const diagnosis = await callTool(client, "record_diagnosis", {
+      ticketId: EVIDENCE_PARITY.ordinaryApi.ticketId,
+      actor: "approval-desk",
+    });
+    const fix = await callTool(client, "mark_fix_available", {
+      ticketId: EVIDENCE_PARITY.ordinaryApi.ticketId,
+      actor: "approval-desk",
+    });
+    expect(diagnosis.isError).toBe(true);
+    expect(textOf(diagnosis)).toBe(
+      "INVALID_APPROVAL_FIELDS: Diagnosis requires all required evidence to be gathered.",
+    );
+    expect(fix.isError).toBe(true);
+    expect(textOf(fix)).toBe(
+      "INVALID_APPROVAL_FIELDS: A completed diagnosis is required before marking a fix available.",
+    );
+    const auditActions = (await fixture.audits.list(EVIDENCE_PARITY.ordinaryApi.ticketId)).map(({ action }) => action);
+    expect(auditActions).not.toContain("diagnosis-completed");
+    expect(auditActions).not.toContain("fix-available");
+  });
+
+  it("recognizes the shared TKT-1004 audit evidence through MCP evaluation", async () => {
+    const fixture = await createFixture(makeTicket({
+      id: EVIDENCE_PARITY.securityAudit.ticketId,
+      subject: "Private API key may be exposed in shared connector logs",
+      description: EVIDENCE_PARITY.securityAudit.baseDescription,
+      category: "security",
+      priority: "P1",
+      team: "security",
+      tags: ["security", "api-key", "credentials", "missing-information"],
+    }));
+    const client = await connect(fixture);
+    await callTool(client, "add_customer_reply", {
+      ticketId: EVIDENCE_PARITY.securityAudit.ticketId,
+      actor: "Maya Chen",
+      body: EVIDENCE_PARITY.securityAudit.body,
+      source: "manual",
+    });
+
+    const evaluated = await callTool(client, "evaluate_ticket", {
+      ticketId: EVIDENCE_PARITY.securityAudit.ticketId,
+      actor: "approval-desk",
+      aiPreference: "deterministic",
+    });
+    const recommendation = TriageRecommendationSchema.parse(
+      expectStableStructured(evaluated).recommendation,
+    );
+
+    expect(recommendation.requiredEvidence?.map(({ id }) => id).sort()).toEqual([
+      "key-identifier",
+      "exposure-location",
+      "key-usage-status",
+      "rotation-status",
+      "audit-source",
+      "affected-scope",
+    ].sort());
+    expect(recommendation.providedEvidence?.map(({ id }) => id).sort()).toEqual([
+      "exposure-location",
+      "audit-source",
+      "affected-scope",
+    ].sort());
+    expect(recommendation.missingEvidence?.map(({ id }) => id).sort()).toEqual([
+      "key-identifier",
+      "key-usage-status",
+      "rotation-status",
+    ].sort());
+    expect(recommendation.supportState).toBe("information-received");
+  });
+
+  it("activates a reusable request-ID-only cause through MCP only after the request ID arrives", async () => {
+    const fixture = await createFixture(makeTicket({
+      id: EVIDENCE_PARITY.approvedRequestIdCause.ticketId,
+      subject: EVIDENCE_PARITY.approvedRequestIdCause.baseSubject,
+      description: EVIDENCE_PARITY.approvedRequestIdCause.baseDescription,
+      category: "api",
+      priority: "P3",
+      team: "api-platform",
+      tags: [],
+    }));
+    const client = await connect(fixture, {
+      knowledgeEvolution: await reusableRequestIdKnowledgeAdapter(),
+    });
+
+    const beforeEvidence = await callTool(client, "evaluate_ticket", {
+      ticketId: EVIDENCE_PARITY.approvedRequestIdCause.ticketId,
+      actor: "approval-desk",
+      aiPreference: "deterministic",
+    });
+    const beforeRecommendation = TriageRecommendationSchema.parse(
+      expectStableStructured(beforeEvidence).recommendation,
+    );
+    expect(beforeRecommendation.requiredEvidence?.map(({ id }) => id).sort()).toEqual(["request-id"]);
+    expect(beforeRecommendation.providedEvidence).toEqual([]);
+    expect(beforeRecommendation.missingEvidence?.map(({ id }) => id).sort()).toEqual(["request-id"]);
+    expect(beforeRecommendation.supportState).toBe("needs-information");
+
+    await callTool(client, "add_customer_reply", {
+      ticketId: EVIDENCE_PARITY.approvedRequestIdCause.ticketId,
+      actor: "Maya Chen",
+      body: EVIDENCE_PARITY.approvedRequestIdCause.body,
+      source: "manual",
+    });
+    const afterEvidence = await callTool(client, "evaluate_ticket", {
+      ticketId: EVIDENCE_PARITY.approvedRequestIdCause.ticketId,
+      actor: "approval-desk",
+      aiPreference: "deterministic",
+    });
+    const afterRecommendation = TriageRecommendationSchema.parse(
+      expectStableStructured(afterEvidence).recommendation,
+    );
+
+    expect(afterRecommendation.requiredEvidence?.map(({ id }) => id).sort()).toEqual(["request-id"]);
+    expect(afterRecommendation.providedEvidence?.map(({ id }) => id).sort()).toEqual(["request-id"]);
+    expect(afterRecommendation.supportState).toBe("known-cause");
+    expect(afterRecommendation.knownCauseRef).toEqual({
+      objectId: EVIDENCE_PARITY.approvedRequestIdCause.objectId,
+      version: 1,
+    });
   });
 
   it("supersedes an older pending recommendation after a newer reply during evaluate_ticket", async () => {

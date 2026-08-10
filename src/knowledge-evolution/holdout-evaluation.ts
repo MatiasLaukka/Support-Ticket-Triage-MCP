@@ -228,7 +228,7 @@ function scoreEfficacyLane(results: readonly HoldoutScoringInput[], laneName: "b
   };
   const requested = accounting.reduce((total, value) => total + value.evidence.requested.length, 0);
   const necessaryRequested = accounting.reduce((total, value) => total + value.evidence.necessaryRequested, 0);
-  const expected = accounting.reduce((total, { fixture }) => total + new Set(fixture.expectedEvidenceIds).size, 0);
+  const expected = accounting.reduce((total, { fixture }) => total + new Set(fixture.evidencePolicy.requiredIds).size, 0);
   const missing = accounting.reduce((total, value) => total + value.evidence.missingNecessaryEvidence, 0);
   const correctionRequired = accounting.filter(({ lane }) => requiresCorrection(lane)).length;
   return {
@@ -251,7 +251,7 @@ function scoreKnowledgeMatches(entries: readonly { fixture: KnowledgeHoldoutFixt
 
 function evidenceAccounting(fixture: KnowledgeHoldoutFixture, lane: HoldoutLaneResult) {
   const requested = [...new Set(lane.turns.flatMap((turn) => turn.requestedEvidenceIds))];
-  const expected = new Set(fixture.expectedEvidenceIds);
+  const expected = new Set<string>(fixture.evidencePolicy.requiredIds);
   const allRequested = lane.turns.flatMap((turn) => turn.requestedEvidenceIds);
   return {
     requested,
@@ -349,7 +349,7 @@ function scoreTurn(fixture: KnowledgeHoldoutFixture, expectedTurn: HoldoutTurn, 
   const providedEvidenceIds = (recommendation.providedEvidence ?? []).map(({ id }) => id).sort();
   const missingEvidenceIds = (recommendation.missingEvidence ?? []).map(({ id }) => id).sort();
   const requiredEscalations = [...(recommendation.escalationReasons ?? [])].sort();
-  const evidenceSatisfied = fixture.expectedEvidenceIds.every((id) => !missingEvidenceIds.includes(id));
+  const evidenceSatisfied = fixture.evidencePolicy.requiredIds.every((id) => !missingEvidenceIds.includes(id));
   const contract = expectedTurn.expected;
   const violations: UnsafeLifecycleViolation[] = [];
   if (contract?.requiredEvidenceSatisfied === false && recommendation.supportState === "known-cause") {

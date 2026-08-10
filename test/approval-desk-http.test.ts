@@ -19,7 +19,10 @@ import { evaluateTicketWithAi } from "../src/approval-desk/ai-evaluation.js";
 import type { ClassificationReasoningProvider } from "../src/approval-desk/classification-reasoning-provider.js";
 import type { CustomerResponseDraftProvider } from "../src/approval-desk/draft-response-provider.js";
 import type { CandidateDraftProvider } from "../src/knowledge-evolution/candidate-draft-provider.js";
-import { KnowledgeCandidateWriteSchema, type KnowledgeObject } from "../src/knowledge-evolution/domain.js";
+import {
+  KnowledgeCandidateWriteSchema,
+  type KnowledgeObject,
+} from "../src/knowledge-evolution/domain.js";
 import { KnowledgeEvolutionService } from "../src/knowledge-evolution/service.js";
 import { createRuntimeDependencies } from "../src/runtime.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -29,6 +32,11 @@ import {
   listReusableApproved,
   type ReusableKnowledgeResult,
 } from "../src/knowledge-evolution/reusable-context.js";
+import {
+  EVIDENCE_PARITY,
+  requestIdKnowledgeObject,
+  requestIdKnowledgePromotionEvent,
+} from "./evidence-parity-fixtures.js";
 
 const now = new Date("2026-06-10T09:00:00.000Z");
 const temporaryRoots: string[] = [];
@@ -3728,6 +3736,121 @@ describe("createApprovalDeskHttpServer", () => {
     });
     expect((await deps.tickets.get("TKT-1005")).revision).toBe(0);
   });
+  it("recognizes the shared ordinary partial-API evidence through the Approval Desk evaluation route", async () => {
+    const { json } = await startFixture();
+    const evaluated = await json(`/api/tickets/${EVIDENCE_PARITY.ordinaryApi.ticketId}/recommendations`, {
+      method: "POST",
+      body: JSON.stringify({
+        actor: "approval-desk",
+        aiPreference: "deterministic",
+        customerReplies: [{
+          id: EVIDENCE_PARITY.ordinaryApi.replyId,
+          createdAt: EVIDENCE_PARITY.ordinaryApi.createdAt,
+          body: EVIDENCE_PARITY.ordinaryApi.body,
+        }],
+      }),
+    });
+    const recommendation = TriageRecommendationSchema.parse(evaluated.body.recommendation);
+
+    expect(evaluated.status, JSON.stringify(evaluated.body)).toBe(201);
+    expect(recommendation.requiredEvidence?.map(({ id }) => id).sort()).toEqual([
+      "endpoint-url",
+      "request-id",
+      "api-response-status",
+      "sample-payload",
+      "failure-timestamp",
+    ].sort());
+    expect(recommendation.providedEvidence?.map(({ id }) => id).sort()).toEqual(["request-id"]);
+    expect(recommendation.missingEvidence?.map(({ id }) => id).sort()).toEqual([
+      "endpoint-url",
+      "api-response-status",
+      "sample-payload",
+      "failure-timestamp",
+    ].sort());
+    expect(recommendation.supportState).toBe("information-received");
+  });
+
+  it("recognizes exact security audit evidence through the Approval Desk evaluation route", async () => {
+    const { json } = await startFixture();
+
+    const evaluated = await json("/api/tickets/TKT-1004/recommendations", {
+      method: "POST",
+      body: JSON.stringify({
+        actor: "approval-desk",
+        aiPreference: "deterministic",
+        customerReplies: [{
+          id: EVIDENCE_PARITY.securityAudit.replyId,
+          createdAt: EVIDENCE_PARITY.securityAudit.createdAt,
+          body: EVIDENCE_PARITY.securityAudit.body,
+        }],
+      }),
+    });
+    const recommendation = TriageRecommendationSchema.parse(
+      evaluated.body.recommendation,
+    );
+
+    expect(evaluated.status, JSON.stringify(evaluated.body)).toBe(201);
+    expect(recommendation.requiredEvidence?.map(({ id }) => id).sort()).toEqual([
+      "key-identifier",
+      "exposure-location",
+      "key-usage-status",
+      "rotation-status",
+      "audit-source",
+      "affected-scope",
+    ].sort());
+    expect(recommendation.providedEvidence?.map(({ id }) => id).sort()).toEqual([
+      "exposure-location",
+      "audit-source",
+      "affected-scope",
+    ].sort());
+    expect(recommendation.missingEvidence?.map(({ id }) => id).sort()).toEqual([
+      "key-identifier",
+      "key-usage-status",
+      "rotation-status",
+    ].sort());
+    expect(recommendation.supportState).toBe("information-received");
+  });
+
+  it("keeps the Approval Desk evidence-gated until an approved request-ID-only cause receives its ID", async () => {
+    const { deps, json } = await startFixture();
+    const reusableKnowledge = await reusableRequestIdKnowledge();
+    deps.knowledgeEvolution.service.listReusableApproved = async () => reusableKnowledge;
+
+    const withoutRequestId = await json("/api/tickets/TKT-1010/recommendations", {
+      method: "POST",
+      body: JSON.stringify({ actor: "approval-desk", aiPreference: "deterministic" }),
+    });
+    const before = TriageRecommendationSchema.parse(withoutRequestId.body.recommendation);
+    expect(withoutRequestId.status, JSON.stringify(withoutRequestId.body)).toBe(201);
+    expect(before.requiredEvidence?.map(({ id }) => id).sort()).toEqual(["request-id"]);
+    expect(before.providedEvidence).toEqual([]);
+    expect(before.missingEvidence?.map(({ id }) => id).sort()).toEqual(["request-id"]);
+    expect(before.supportState).toBe("needs-information");
+
+    const withRequestId = await json("/api/tickets/TKT-1010/recommendations", {
+      method: "POST",
+      body: JSON.stringify({
+        actor: "approval-desk",
+        aiPreference: "deterministic",
+        customerReplies: [{
+          id: EVIDENCE_PARITY.approvedRequestIdCause.replyId,
+          createdAt: EVIDENCE_PARITY.approvedRequestIdCause.createdAt,
+          body: EVIDENCE_PARITY.approvedRequestIdCause.body,
+        }],
+      }),
+    });
+    const after = TriageRecommendationSchema.parse(withRequestId.body.recommendation);
+    expect(withRequestId.status, JSON.stringify(withRequestId.body)).toBe(201);
+    expect(after.requiredEvidence?.map(({ id }) => id).sort()).toEqual(["request-id"]);
+    expect(after.providedEvidence?.map(({ id }) => id).sort()).toEqual(["request-id"]);
+    expect(after.missingEvidence).toEqual([]);
+    expect(after.supportState).toBe("known-cause");
+    expect(after.knownCauseRef).toEqual({
+      objectId: EVIDENCE_PARITY.approvedRequestIdCause.objectId,
+      version: EVIDENCE_PARITY.approvedRequestIdCause.version,
+    });
+  });
+
   it("routes the same unavailable reusable-knowledge snapshot through HTTP and MCP evaluation", async () => {
     const { deps, json } = await startFixture();
     const calls: string[] = [];
@@ -3828,6 +3951,22 @@ describe("createApprovalDeskHttpServer", () => {
     });
   });
 });
+
+async function reusableRequestIdKnowledge(): Promise<ReusableKnowledgeResult> {
+  const object = requestIdKnowledgeObject();
+  return listReusableApproved({
+    asOf: "2026-08-08T12:00:00.000Z",
+    snapshotReader: {
+      async snapshotForReuse() {
+        return {
+          versions: [object],
+          heads: new Map([[object.id, object.version]]),
+          events: [requestIdKnowledgePromotionEvent()],
+        };
+      },
+    },
+  });
+}
 
 async function reusableCampaignEditorKnowledge(version: number): Promise<ReusableKnowledgeResult> {
   const object: KnowledgeObject = {

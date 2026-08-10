@@ -206,6 +206,25 @@ returns no learned contexts (`ledger-unavailable`) and deterministic triage
 continues. Deprecated exclusion is covered by the reusable-context regression,
 while stale and contradicted versions have end-to-end holdout cases.
 
+### Evidence-policy interpretation
+
+Each report case publishes only its policy-required catalog IDs and a stable
+reason code. It deliberately excludes the free-form policy rationale, customer
+reply bodies, prompts, drafts, and internal traces. Treat a requested item as
+unnecessary only when it is outside that documented policy; a catalogued
+requirement remains legitimate even before the customer provides it.
+
+Known-cause reuse does not bypass evidence by confidence alone. A known cause
+can change the requirement set only through its explicitly approved policy;
+when that policy requires evidence, the ticket stays gated until the listed
+IDs are present.
+
+For metric interpretation, preserve three checkpoints: the original report
+had learned evidence precision `0.286` and missing-evidence rate `0.333`; the
+post-policy/oracle-correction report has `1.000` and `0.000`; there is no later
+matcher behavior delta in this slice. The change corrects evaluation ground
+truth and is not presented as a production improvement.
+
 ## Primary Scenario
 
 Ticket: `TKT-1010`

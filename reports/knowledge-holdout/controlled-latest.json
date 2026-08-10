@@ -9,6 +9,12 @@
   "cases": [
     {
       "fixtureId": "sufficient-evidence-true-positive",
+      "evidencePolicy": {
+        "requiredIds": [
+          "request-id"
+        ],
+        "reasonCode": "approved-known-cause-required"
+      },
       "reusableKnowledge": {
         "status": "available",
         "issues": []
@@ -101,6 +107,12 @@
     },
     {
       "fixtureId": "missing-evidence-then-supplied",
+      "evidencePolicy": {
+        "requiredIds": [
+          "request-id"
+        ],
+        "reasonCode": "approved-known-cause-required"
+      },
       "reusableKnowledge": {
         "status": "available",
         "issues": []
@@ -230,6 +242,10 @@
     },
     {
       "fixtureId": "near-miss",
+      "evidencePolicy": {
+        "requiredIds": [],
+        "reasonCode": "successful-near-miss-no-failure"
+      },
       "reusableKnowledge": {
         "status": "available",
         "issues": []
@@ -281,8 +297,8 @@
         "baselineUnnecessaryEvidence": 0,
         "learnedUnnecessaryEvidence": 0,
         "unnecessaryEvidenceDelta": 0,
-        "baselineMissingNecessaryEvidence": 1,
-        "learnedMissingNecessaryEvidence": 1,
+        "baselineMissingNecessaryEvidence": 0,
+        "learnedMissingNecessaryEvidence": 0,
         "missingNecessaryEvidenceDelta": 0,
         "diagnosticTurnsSaved": 0,
         "repeatedEvidenceRequestCount": 0,
@@ -297,6 +313,16 @@
     },
     {
       "fixtureId": "unrelated",
+      "evidencePolicy": {
+        "requiredIds": [
+          "invoice-number",
+          "billing-account",
+          "plan-or-promotion",
+          "failure-timestamp",
+          "error-banner"
+        ],
+        "reasonCode": "billing-knowledge-article"
+      },
       "reusableKnowledge": {
         "status": "available",
         "issues": []
@@ -371,8 +397,8 @@
       },
       "delta": {
         "learnedMatchedExpectedKnowledge": false,
-        "baselineUnnecessaryEvidence": 5,
-        "learnedUnnecessaryEvidence": 5,
+        "baselineUnnecessaryEvidence": 0,
+        "learnedUnnecessaryEvidence": 0,
         "unnecessaryEvidenceDelta": 0,
         "baselineMissingNecessaryEvidence": 0,
         "learnedMissingNecessaryEvidence": 0,
@@ -390,6 +416,16 @@
     },
     {
       "fixtureId": "stale-version",
+      "evidencePolicy": {
+        "requiredIds": [
+          "endpoint-url",
+          "request-id",
+          "api-response-status",
+          "sample-payload",
+          "failure-timestamp"
+        ],
+        "reasonCode": "ordinary-knowledge-article"
+      },
       "reusableKnowledge": {
         "status": "available",
         "issues": [
@@ -471,8 +507,8 @@
       },
       "delta": {
         "learnedMatchedExpectedKnowledge": false,
-        "baselineUnnecessaryEvidence": 4,
-        "learnedUnnecessaryEvidence": 4,
+        "baselineUnnecessaryEvidence": 0,
+        "learnedUnnecessaryEvidence": 0,
         "unnecessaryEvidenceDelta": 0,
         "baselineMissingNecessaryEvidence": 0,
         "learnedMissingNecessaryEvidence": 0,
@@ -490,6 +526,16 @@
     },
     {
       "fixtureId": "contradicted-version",
+      "evidencePolicy": {
+        "requiredIds": [
+          "endpoint-url",
+          "request-id",
+          "api-response-status",
+          "sample-payload",
+          "failure-timestamp"
+        ],
+        "reasonCode": "ordinary-knowledge-article"
+      },
       "reusableKnowledge": {
         "status": "available",
         "issues": [
@@ -571,8 +617,8 @@
       },
       "delta": {
         "learnedMatchedExpectedKnowledge": false,
-        "baselineUnnecessaryEvidence": 4,
-        "learnedUnnecessaryEvidence": 4,
+        "baselineUnnecessaryEvidence": 0,
+        "learnedUnnecessaryEvidence": 0,
         "unnecessaryEvidenceDelta": 0,
         "baselineMissingNecessaryEvidence": 0,
         "learnedMissingNecessaryEvidence": 0,
@@ -590,6 +636,12 @@
     },
     {
       "fixtureId": "draft-version-isolation",
+      "evidencePolicy": {
+        "requiredIds": [
+          "request-id"
+        ],
+        "reasonCode": "approved-known-cause-required"
+      },
       "reusableKnowledge": {
         "status": "available",
         "issues": []
@@ -682,6 +734,12 @@
     },
     {
       "fixtureId": "replacement-and-draft-isolation",
+      "evidencePolicy": {
+        "requiredIds": [
+          "request-id"
+        ],
+        "reasonCode": "approved-known-cause-required"
+      },
       "reusableKnowledge": {
         "status": "available",
         "issues": []
@@ -778,10 +836,10 @@
       "baseline": {
         "knowledgeMatchPrecision": null,
         "knowledgeMatchRecall": 0,
-        "evidencePrecision": 0.13333333333333333,
-        "missingEvidenceRate": 0.3333333333333333,
-        "unnecessaryEvidenceTotal": 13,
-        "missingNecessaryEvidenceTotal": 1,
+        "evidencePrecision": 0.4666666666666667,
+        "missingEvidenceRate": 0,
+        "unnecessaryEvidenceTotal": 8,
+        "missingNecessaryEvidenceTotal": 0,
         "correctionRequiredRate": 0.5,
         "byScenario": {
           "truePositive": {
@@ -801,10 +859,10 @@
       "learned": {
         "knowledgeMatchPrecision": 1,
         "knowledgeMatchRecall": 1,
-        "evidencePrecision": 0.2857142857142857,
-        "missingEvidenceRate": 0.3333333333333333,
-        "unnecessaryEvidenceTotal": 5,
-        "missingNecessaryEvidenceTotal": 1,
+        "evidencePrecision": 1,
+        "missingEvidenceRate": 0,
+        "unnecessaryEvidenceTotal": 0,
+        "missingNecessaryEvidenceTotal": 0,
         "correctionRequiredRate": 0,
         "byScenario": {
           "truePositive": {
@@ -823,10 +881,10 @@
       },
       "knowledgeMatchPrecision": 1,
       "knowledgeMatchRecall": 1,
-      "evidencePrecision": 0.2857142857142857,
-      "missingEvidenceRate": 0.3333333333333333,
-      "unnecessaryEvidenceTotal": 5,
-      "missingNecessaryEvidenceTotal": 1,
+      "evidencePrecision": 1,
+      "missingEvidenceRate": 0,
+      "unnecessaryEvidenceTotal": 0,
+      "missingNecessaryEvidenceTotal": 0,
       "diagnosticTurnsSavedTotal": 0,
       "correctionRequiredRate": 0,
       "benefited": 2,

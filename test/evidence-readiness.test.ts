@@ -8,6 +8,12 @@ import {
 } from "../src/domain.js";
 import { analyzeEvidenceReadiness } from "../src/approval-desk/evidence-readiness.js";
 import { getKnownCause } from "../src/approval-desk/known-cause-catalog.js";
+import { listReusableApproved } from "../src/knowledge-evolution/reusable-context.js";
+import {
+  EVIDENCE_PARITY,
+  requestIdKnowledgeObject,
+  requestIdKnowledgePromotionEvent,
+} from "./evidence-parity-fixtures.js";
 
 describe("analyzeEvidenceReadiness", () => {
   it("returns evidence requirements accepted by the strict recommendation schema", async () => {
@@ -542,7 +548,7 @@ describe("analyzeEvidenceReadiness", () => {
   it("recognizes the natural audit-source and affected-scope wording used in testing mode", async () => {
     const ticket = TicketSchema.parse({
       ...(await loadSeedTicket("TKT-1004")),
-      description: `${(await loadSeedTicket("TKT-1004")).description}\n\nCustomer reply: The audit source shown is IP 198.51.100.24. The affected scope appears to be 12 profiles in the latest export.`,
+      description: `${(await loadSeedTicket("TKT-1004")).description}\n\nCustomer reply: ${EVIDENCE_PARITY.securityAudit.body}`,
     });
     const readiness = analyzeEvidenceReadiness({
       ticket,
@@ -556,12 +562,104 @@ describe("analyzeEvidenceReadiness", () => {
       },
     });
 
-    expect(readiness.providedEvidence.map((requirement) => requirement.id)).toEqual(
-      expect.arrayContaining(["audit-source", "affected-scope"]),
-    );
-    expect(readiness.missingEvidence.map((requirement) => requirement.id)).not.toEqual(
-      expect.arrayContaining(["audit-source", "affected-scope"]),
-    );
+    expect(readiness.providedEvidence.map(({ id }) => id).sort()).toEqual([
+      "exposure-location",
+      "audit-source",
+      "affected-scope",
+    ].sort());
+    expect(readiness.missingEvidence.map(({ id }) => id).sort()).toEqual([
+      "key-identifier",
+      "key-usage-status",
+      "rotation-status",
+    ].sort());
+    expect(readiness.supportState).toBe("needs-information");
+  });
+
+  it("keeps an ordinary API ticket evidence-gated when only its request ID is provided", async () => {
+    const apiTicket = TicketSchema.parse({
+      ...(await loadSeedTicket(EVIDENCE_PARITY.ordinaryApi.ticketId)),
+      subject: EVIDENCE_PARITY.ordinaryApi.baseSubject,
+      description: `${EVIDENCE_PARITY.ordinaryApi.baseDescription}\n\nCustomer reply: ${EVIDENCE_PARITY.ordinaryApi.body}`,
+      category: "api",
+      priority: "P3",
+      team: "api-platform",
+      tags: [],
+    });
+    const apiReadiness = analyzeEvidenceReadiness({
+      ticket: apiTicket,
+      outcome: {
+        ticketId: apiTicket.id,
+        category: "api",
+        acceptablePriorities: ["P3"],
+        team: "api-platform",
+        requiredEscalations: [],
+        knowledgeArticleIds: ["api-reference"],
+      },
+    });
+
+    expect(apiReadiness.requiredEvidence.map(({ id }) => id).sort()).toEqual([
+      "endpoint-url",
+      "request-id",
+      "api-response-status",
+      "sample-payload",
+      "failure-timestamp",
+    ].sort());
+    expect(apiReadiness.providedEvidence.map(({ id }) => id).sort()).toEqual(["request-id"]);
+    expect(apiReadiness.missingEvidence.map(({ id }) => id).sort()).toEqual([
+      "endpoint-url",
+      "api-response-status",
+      "sample-payload",
+      "failure-timestamp",
+    ].sort());
+    expect(apiReadiness.supportState).toBe("needs-information");
+  });
+
+  it("requires an approved request-ID-only cause to receive its required evidence before activation", async () => {
+    const reusableKnowledge = await reusableRequestIdKnowledge();
+    const matchedTicket = TicketSchema.parse({
+      ...(await loadSeedTicket(EVIDENCE_PARITY.approvedRequestIdCause.ticketId)),
+      subject: EVIDENCE_PARITY.approvedRequestIdCause.baseSubject,
+      description: `${EVIDENCE_PARITY.approvedRequestIdCause.baseDescription}\n\nCustomer reply: ${EVIDENCE_PARITY.approvedRequestIdCause.body}`,
+      category: "api",
+      priority: "P3",
+      team: "api-platform",
+      tags: [],
+    });
+    const matchedReadiness = analyzeEvidenceReadiness({
+      ticket: matchedTicket,
+      outcome: {
+        ticketId: matchedTicket.id,
+        category: "api",
+        acceptablePriorities: ["P3"],
+        team: "api-platform",
+        requiredEscalations: [],
+        knowledgeArticleIds: ["api-reference"],
+      },
+      reusableKnowledge,
+    });
+    const missingReadiness = analyzeEvidenceReadiness({
+      ticket: TicketSchema.parse({
+        ...matchedTicket,
+        description: EVIDENCE_PARITY.approvedRequestIdCause.baseDescription,
+      }),
+      outcome: {
+        ticketId: matchedTicket.id,
+        category: "api",
+        acceptablePriorities: ["P3"],
+        team: "api-platform",
+        requiredEscalations: [],
+        knowledgeArticleIds: ["api-reference"],
+      },
+      reusableKnowledge,
+    });
+
+    expect(matchedReadiness.requiredEvidence.map(({ id }) => id).sort()).toEqual(["request-id"]);
+    expect(matchedReadiness.providedEvidence.map(({ id }) => id).sort()).toEqual(["request-id"]);
+    expect(matchedReadiness.supportState).toBe("known-cause");
+    expect(missingReadiness.requiredEvidence.map(({ id }) => id).sort()).toEqual(["request-id"]);
+    expect(missingReadiness.providedEvidence).toEqual([]);
+    expect(missingReadiness.missingEvidence.map(({ id }) => id).sort()).toEqual(["request-id"]);
+    expect(missingReadiness.supportState).toBe("needs-information");
   });
 
   it("keeps unknown private-key facts missing for TKT-1019", async () => {
@@ -858,4 +956,20 @@ async function loadSeedTicket(ticketId: string): Promise<Ticket> {
     throw new Error(`Seed ticket ${ticketId} was not found.`);
   }
   return ticket;
+}
+
+async function reusableRequestIdKnowledge() {
+  const object = requestIdKnowledgeObject();
+  return listReusableApproved({
+    asOf: "2026-08-08T12:00:00.000Z",
+    snapshotReader: {
+      async snapshotForReuse() {
+        return {
+          versions: [object],
+          heads: new Map([[object.id, object.version]]),
+          events: [requestIdKnowledgePromotionEvent()],
+        };
+      },
+    },
+  });
 }

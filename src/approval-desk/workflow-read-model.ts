@@ -2,15 +2,23 @@ import type { AuditEvent, Ticket, TriageRecommendation } from "../domain.js";
 import type { KnowledgeCandidate } from "../knowledge-evolution/domain.js";
 import type { KnowledgeAuditEvent } from "../knowledge-evolution/knowledge-audit-repository.js";
 import { compareIsoInstants } from "../iso-instant.js";
+import type { OperationalWorkflowSnapshot } from "../operational/domain.js";
 import {
   buildConversationHistory,
+  buildConversationHistoryFromSnapshot,
   buildConversationTimeline,
+  buildConversationTimelineFromSnapshot,
 } from "./conversation-history.js";
 import {
   auditCausalPositions,
   compareAuditCausalOrder,
+  compareOperationalCausalOrder,
   latestAuditPosition,
+  operationalMessageCausalPositions,
+  operationalPositionForEventId,
   type AuditCausalPosition,
+  type OperationalCausalPosition,
+  type OperationalMessageCausalPosition,
 } from "./workflow-causal-context.js";
 import { buildOperatorGuidance } from "./workflow-guidance.js";
 
@@ -33,6 +41,7 @@ export interface PreviousSupportResponseContext {
   body: string;
 }
 
+/** @deprecated File-backed audit adapter only until operational cutover. */
 export function buildTicketWorkflowReadModel(input: {
   ticket: Ticket;
   recommendations: readonly TriageRecommendation[];
@@ -62,6 +71,25 @@ export function buildTicketWorkflowReadModel(input: {
   };
 }
 
+/**
+ * Canonical operational read projection. The legacy audit projection above is
+ * retained only for file-backed fixture/runtime compatibility until cutover.
+ */
+export function buildTicketWorkflowReadModelFromSnapshot(
+  snapshot: OperationalWorkflowSnapshot,
+) {
+  const recommendation = summarizeRecommendationsForSnapshot(snapshot);
+  return {
+    ticket: snapshot.ticket,
+    conversationHistory: buildConversationHistoryFromSnapshot(snapshot),
+    conversationTimeline: buildConversationTimelineFromSnapshot(snapshot),
+    recommendationHistory: recommendation.history,
+    recommendationSummary: recommendation.summary,
+    latestRecommendation: recommendation.latest,
+  };
+}
+
+/** @deprecated File-backed audit adapter only until operational cutover. */
 export function summarizeRecommendationsForTicket(
   ticket: Ticket,
   recommendations: readonly TriageRecommendation[],
@@ -138,6 +166,58 @@ export function summarizeRecommendationsForTicket(
   };
 }
 
+export function summarizeRecommendationsForSnapshot(
+  snapshot: OperationalWorkflowSnapshot,
+): ReturnType<typeof summarizeRecommendationsForTicket> {
+  const submissionPositions = operationalSubmissionPositionsByRecommendation(snapshot);
+  const related = snapshot.recommendations
+    .filter((recommendation) => recommendation.ticketId === snapshot.ticket.id)
+    .sort((left, right) => {
+      const leftPosition = submissionPositions.get(left.id);
+      const rightPosition = submissionPositions.get(right.id);
+      if (leftPosition !== undefined && rightPosition !== undefined) {
+        const causalOrder = compareOperationalCausalOrder(rightPosition, leftPosition);
+        if (causalOrder !== 0) return causalOrder;
+      }
+      return compareIsoInstants(right.createdAt, left.createdAt)
+        || right.id.localeCompare(left.id);
+    });
+  const currentRelated = related.filter(({ resolution }) =>
+    resolution === "pending" || resolution === "approved");
+  const latest = currentRelated[0];
+  const latestSent = operationalMessageCausalPositions(snapshot, "support").at(-1);
+  const latestCustomerReply = operationalMessageCausalPositions(snapshot, "customer").at(-1);
+
+  return {
+    summary: {
+      latestRecommendationId: latest?.id,
+      latestResolution: latest?.resolution,
+      hasPendingRecommendation: currentRelated.some(({ resolution }) => resolution === "pending"),
+      hasApprovedRecommendation: currentRelated.some(({ resolution }) => resolution === "approved"),
+      workflowState: operationalConversationWorkflowState({
+        ticket: snapshot.ticket,
+        latest,
+        latestSent,
+        latestCustomerReply,
+        latestRecommendationSubmission: latest === undefined
+          ? undefined
+          : submissionPositions.get(latest.id),
+      }),
+      outageRisk: latest?.outageRisk,
+      securityRisk: latest?.securityRisk,
+      slaRisk: latest?.slaRisk,
+      priority: latest?.priority,
+      hasSentResponse: latestSent !== undefined,
+      hasCustomerReply: latestCustomerReply !== undefined,
+      latestSentAt: latestSent?.message.createdAt,
+      latestCustomerReplyAt: latestCustomerReply?.message.createdAt,
+    },
+    latest,
+    history: related,
+  };
+}
+
+/** @deprecated File-backed fixture adapter only until operational cutover. */
 export function customerRepliesFromAudits(
   ticketId: string,
   audits: readonly AuditEvent[],
@@ -159,6 +239,18 @@ export function customerRepliesFromAudits(
     }));
 }
 
+export function customerRepliesFromSnapshot(
+  snapshot: OperationalWorkflowSnapshot,
+): CustomerReplyContext[] {
+  return operationalMessageCausalPositions(snapshot, "customer").map(({ message }) => ({
+    id: message.id,
+    ticketId: message.ticketId,
+    createdAt: message.createdAt,
+    body: message.body,
+  }));
+}
+
+/** @deprecated File-backed fixture adapter only until operational cutover. */
 export function latestSupportResponseFromAudits(
   ticketId: string,
   audits: readonly AuditEvent[],
@@ -177,6 +269,15 @@ export function latestSupportResponseFromAudits(
   };
 }
 
+export function latestSupportResponseFromSnapshot(
+  snapshot: OperationalWorkflowSnapshot,
+): PreviousSupportResponseContext | undefined {
+  const latest = operationalMessageCausalPositions(snapshot, "support").at(-1);
+  return latest === undefined
+    ? undefined
+    : { sentAt: latest.message.createdAt, body: latest.message.body };
+}
+
 export function latestSentAtForRecommendation(
   audits: readonly AuditEvent[],
   recommendationId: string,
@@ -187,6 +288,15 @@ export function latestSentAtForRecommendation(
       event.action === "customer-response-sent" &&
       event.recommendationId === recommendationId,
   ));
+}
+
+export function latestSentAtForRecommendationFromSnapshot(
+  snapshot: OperationalWorkflowSnapshot,
+  recommendationId: string,
+): string | undefined {
+  return operationalMessageCausalPositions(snapshot, "support")
+    .filter(({ message }) => message.recommendationId === recommendationId)
+    .at(-1)?.message.createdAt;
 }
 
 /** Select the latest persisted approval for a recommendation by causal audit order. */
@@ -240,6 +350,24 @@ function submittedAuditPositionsByRecommendation(
   return positions;
 }
 
+function operationalSubmissionPositionsByRecommendation(
+  snapshot: OperationalWorkflowSnapshot,
+): Map<string, OperationalCausalPosition> {
+  const positions = new Map<string, OperationalCausalPosition>();
+  for (const revision of snapshot.recommendationRevisions) {
+    const candidate = operationalPositionForEventId(snapshot, revision.operationalEventId);
+    if (candidate === undefined || candidate.event.action !== "recommendation-submitted") continue;
+    const current = positions.get(revision.recommendation.id);
+    if (
+      current === undefined
+      || compareOperationalCausalOrder(candidate, current) > 0
+    ) {
+      positions.set(revision.recommendation.id, candidate);
+    }
+  }
+  return positions;
+}
+
 function conversationWorkflowState(input: {
   ticket: Ticket;
   latest?: TriageRecommendation;
@@ -286,6 +414,68 @@ function conversationWorkflowState(input: {
   }
 
   return input.latestSent === undefined ? "active" : "waiting";
+}
+
+function operationalConversationWorkflowState(input: {
+  ticket: Ticket;
+  latest?: TriageRecommendation;
+  latestSent?: OperationalMessageCausalPosition;
+  latestCustomerReply?: OperationalMessageCausalPosition;
+  latestRecommendationSubmission?: OperationalCausalPosition;
+}): RecommendationWorkflowState {
+  if (input.ticket.status === "resolved") return "resolved";
+  if (
+    input.latest?.resolution === "approved"
+    && input.latestSent !== undefined
+    && operationalMessageAtOrAfterRecommendation(
+      input.latestSent,
+      input.latest,
+      input.latestRecommendationSubmission,
+    )
+  ) {
+    return input.latestCustomerReply !== undefined
+      && compareOperationalCausalOrder(input.latestCustomerReply, input.latestSent) > 0
+      ? "customer-replied"
+      : "waiting";
+  }
+  if (input.latest !== undefined) {
+    return input.latestCustomerReply !== undefined
+      && operationalMessageAfterRecommendation(
+        input.latestCustomerReply,
+        input.latest,
+        input.latestRecommendationSubmission,
+      )
+      ? "customer-replied"
+      : "draft-ready";
+  }
+  if (
+    input.latestCustomerReply !== undefined
+    && (
+      input.latestSent === undefined
+      || compareOperationalCausalOrder(input.latestCustomerReply, input.latestSent) > 0
+    )
+  ) return "customer-replied";
+  return input.latestSent === undefined ? "active" : "waiting";
+}
+
+function operationalMessageAtOrAfterRecommendation(
+  message: OperationalMessageCausalPosition,
+  recommendation: TriageRecommendation,
+  submission: OperationalCausalPosition | undefined,
+): boolean {
+  return submission === undefined
+    ? compareIsoInstants(message.message.createdAt, recommendation.createdAt) >= 0
+    : compareOperationalCausalOrder(message, submission) >= 0;
+}
+
+function operationalMessageAfterRecommendation(
+  message: OperationalMessageCausalPosition,
+  recommendation: TriageRecommendation,
+  submission: OperationalCausalPosition | undefined,
+): boolean {
+  return submission === undefined
+    ? compareIsoInstants(message.message.createdAt, recommendation.createdAt) > 0
+    : compareOperationalCausalOrder(message, submission) > 0;
 }
 
 function auditOccurredAt(position: AuditCausalPosition | undefined): string | undefined {

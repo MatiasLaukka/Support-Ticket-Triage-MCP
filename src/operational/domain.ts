@@ -54,6 +54,7 @@ const SafeFactKeys = [
   "knownEventId",
   "knowledgeArticleIds",
   "latencyMs",
+  "messageId",
   "missingEvidenceIds",
   "model",
   "outcome",
@@ -86,18 +87,38 @@ const SanitizedOperationalFactValueSchema: z.ZodType<unknown> = z.lazy(() => z.u
   z.number().finite(),
   z.boolean(),
   z.array(SanitizedOperationalFactValueSchema).max(32),
-  z.record(SafeFactKeySchema, SanitizedOperationalFactValueSchema).refine(
-    (record) => Object.keys(record).length <= 32,
-    "Operational fact records may contain at most 32 values.",
-  ),
+  z.record(SafeFactKeySchema, SanitizedOperationalFactValueSchema)
+    .refine(
+      (record) => Object.keys(record).length <= 32,
+      "Operational fact records may contain at most 32 values.",
+    )
+    .superRefine(validateTypedOperationalFacts),
 ]));
 const SanitizedOperationalFactsSchema = z.record(
   SafeFactKeySchema,
   SanitizedOperationalFactValueSchema,
-).refine(
-  (record) => Object.keys(record).length <= 32,
-  "Operational facts may contain at most 32 values.",
-);
+)
+  .refine(
+    (record) => Object.keys(record).length <= 32,
+    "Operational facts may contain at most 32 values.",
+  )
+  .superRefine(validateTypedOperationalFacts);
+
+function validateTypedOperationalFacts(
+  facts: Record<string, unknown>,
+  context: z.RefinementCtx,
+): void {
+  if (
+    Object.prototype.hasOwnProperty.call(facts, "messageId")
+    && !MessageIdSchema.safeParse(facts.messageId).success
+  ) {
+    context.addIssue({
+      code: "custom",
+      path: ["messageId"],
+      message: "Operational message references require a canonical message ID.",
+    });
+  }
+}
 
 /**
  * The append-only causal spine. Child aggregates reference this event; the
@@ -406,11 +427,32 @@ export const OperationalWorkflowSnapshotSchema = z.object({
     }
   });
   const customerReplyWatermark = snapshot.customerReplyWatermark;
-  if (customerReplyWatermark.state === "reply") {
-    const message = snapshot.messages.find((candidate) => candidate.id === customerReplyWatermark.id);
-    if (message?.kind !== "customer" || message.createdAt !== customerReplyWatermark.timestamp) {
-      context.addIssue({ code: "custom", path: ["customerReplyWatermark"], message: "Customer reply watermark must reference its canonical customer message." });
-    }
+  const sequenceByEventId = new Map(
+    snapshot.events.map((event) => [event.id, event.sequence] as const),
+  );
+  const latestCustomerMessage = snapshot.messages
+    .filter((message) => message.kind === "customer")
+    .map((message) => ({
+      message,
+      sequence: sequenceByEventId.get(message.operationalEventId),
+    }))
+    .filter((entry): entry is { message: ConversationMessage; sequence: number } =>
+      entry.sequence !== undefined)
+    .sort((left, right) => left.sequence - right.sequence)
+    .at(-1)?.message;
+  if (
+    (latestCustomerMessage === undefined && customerReplyWatermark.state !== "none")
+    || (latestCustomerMessage !== undefined && (
+      customerReplyWatermark.state !== "reply"
+      || customerReplyWatermark.id !== latestCustomerMessage.id
+      || customerReplyWatermark.timestamp !== latestCustomerMessage.createdAt
+    ))
+  ) {
+    context.addIssue({
+      code: "custom",
+      path: ["customerReplyWatermark"],
+      message: "Customer reply watermark must reference the latest canonical customer message by causal event sequence.",
+    });
   }
 }).readonly();
 

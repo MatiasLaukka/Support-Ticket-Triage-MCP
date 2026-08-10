@@ -4,6 +4,11 @@ import type {
   TriageRecommendation,
 } from "../domain.js";
 import { compareIsoInstants } from "../iso-instant.js";
+import type {
+  OperationalEvent,
+  OperationalWorkflowSnapshot,
+} from "../operational/domain.js";
+import { operationalCausalPositions } from "./workflow-causal-context.js";
 
 export interface ConversationHistoryItem {
   timestamp: string;
@@ -58,6 +63,7 @@ export type ConversationTimelineItem =
       recommendationId?: string;
     };
 
+/** @deprecated File-backed audit adapter only until operational cutover. */
 export function buildConversationHistory(
   audits: readonly AuditEvent[],
 ): ConversationHistoryItem[] {
@@ -73,6 +79,26 @@ export function buildConversationHistory(
     }));
 }
 
+/**
+ * Canonical operational conversation history. Bodies are deliberately absent
+ * from the event spine and are joined only by timeline message rendering.
+ */
+export function buildConversationHistoryFromSnapshot(
+  snapshot: OperationalWorkflowSnapshot,
+): ConversationHistoryItem[] {
+  return operationalCausalPositions(snapshot).map(({ event }) => {
+    const recommendationId = recommendationIdForOperationalEvent(snapshot, event.id);
+    return {
+      timestamp: event.occurredAt,
+      actor: event.actor,
+      action: event.action,
+      summary: summarizeOperationalEvent(event),
+      ...(recommendationId === undefined ? {} : { recommendationId }),
+    };
+  });
+}
+
+/** @deprecated File-backed audit adapter only until operational cutover. */
 export function buildConversationTimeline(input: {
   ticket: Ticket;
   audits: readonly AuditEvent[];
@@ -116,6 +142,131 @@ export function buildConversationTimeline(input: {
     );
   }
   return persistedItems;
+}
+
+/** Canonical operational timeline ordered strictly by ticket event sequence. */
+export function buildConversationTimelineFromSnapshot(
+  snapshot: OperationalWorkflowSnapshot,
+): ConversationTimelineItem[] {
+  const persistedItems: ConversationTimelineItem[] = [
+    originalTicketTimelineItem(snapshot.ticket),
+    ...operationalCausalPositions(snapshot).map(({ event }) =>
+      buildTimelineOperationalItem(snapshot, event)),
+  ];
+  const revisionRecommendationIds = new Set(
+    snapshot.recommendationRevisions.map(({ recommendation }) => recommendation.id),
+  );
+  const importedWithoutRevision = snapshot.recommendations
+    .filter(({ id }) => !revisionRecommendationIds.has(id))
+    .sort((left, right) => compareIsoInstants(left.createdAt, right.createdAt))
+    .map(buildRecommendationTimelineItem);
+  for (const legacy of importedWithoutRevision) {
+    const insertionIndex = persistedItems.findIndex(
+      (item, index) =>
+        index > 0 && compareIsoInstants(legacy.timestamp, item.timestamp) < 0,
+    );
+    persistedItems.splice(
+      insertionIndex < 0 ? persistedItems.length : insertionIndex,
+      0,
+      legacy,
+    );
+  }
+  return persistedItems;
+}
+
+function originalTicketTimelineItem(ticket: Ticket): ConversationTimelineItem {
+  return {
+    kind: "original-ticket",
+    timestamp: ticket.createdAt,
+    actor: ticket.requester?.name ?? ticket.customer.name,
+    title: ticket.subject,
+    body: ticket.description,
+  };
+}
+
+function buildTimelineOperationalItem(
+  snapshot: OperationalWorkflowSnapshot,
+  event: OperationalEvent,
+): ConversationTimelineItem {
+  const message = snapshot.messages.find(
+    ({ operationalEventId }) => operationalEventId === event.id,
+  );
+  if (
+    event.action === "customer-response-sent"
+    && message?.kind === "support"
+    && message.recommendationId !== undefined
+  ) {
+    return {
+      kind: "support-response-sent",
+      timestamp: message.createdAt,
+      actor: event.actor,
+      recommendationId: message.recommendationId,
+      body: message.body,
+    };
+  }
+  if (event.action === "customer-reply-received" && message?.kind === "customer") {
+    return {
+      kind: "customer-reply",
+      timestamp: message.createdAt,
+      actor: event.actor,
+      body: message.body,
+    };
+  }
+  const diagnosis = snapshot.diagnoses.find(
+    ({ operationalEventId }) => operationalEventId === event.id,
+  )?.diagnosis;
+  if (event.action === "diagnosis-completed" && diagnosis !== undefined) {
+    return {
+      kind: "diagnosis",
+      timestamp: event.occurredAt,
+      actor: event.actor,
+      summary: diagnosis.problem,
+      owner: diagnosis.ownerTeam,
+    };
+  }
+  const recommendationId = recommendationIdForOperationalEvent(snapshot, event.id);
+  return {
+    kind: "recommendation-event",
+    timestamp: event.occurredAt,
+    actor: event.actor,
+    action: event.action,
+    summary: summarizeOperationalEvent(event),
+    ...(recommendationId === undefined ? {} : { recommendationId }),
+  };
+}
+
+function recommendationIdForOperationalEvent(
+  snapshot: OperationalWorkflowSnapshot,
+  operationalEventId: string,
+): string | undefined {
+  return snapshot.recommendationRevisions.find(
+    (revision) => revision.operationalEventId === operationalEventId,
+  )?.recommendation.id ?? snapshot.messages.find(
+    (message) => message.operationalEventId === operationalEventId,
+  )?.recommendationId;
+}
+
+function summarizeOperationalEvent(event: OperationalEvent): string {
+  return summarizeAuditEvent({
+    id: event.id,
+    timestamp: event.occurredAt,
+    actor: event.actor,
+    action: event.action,
+    ticketId: event.ticketId,
+    before: {},
+    after: {},
+    rationale: operationalEventRationale(event.action),
+    knowledgeArticleIds: [],
+    result: "success",
+  });
+}
+
+function operationalEventRationale(action: AuditEvent["action"]): string {
+  if (action === "recommendation-rejected") return "the recorded decision";
+  if (action === "recommendation-canceled") return "the recorded decision";
+  if (action === "recommendation-superseded") return "a newer causal event";
+  if (action === "approval-rejected") return "the recorded gate";
+  return "Operational event persisted.";
 }
 
 function buildRecommendationTimelineItem(

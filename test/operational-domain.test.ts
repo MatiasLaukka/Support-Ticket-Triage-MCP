@@ -166,8 +166,11 @@ describe("operational persistence domain", () => {
   it("accepts only closed sanitized operational facts", () => {
     const base = { id: eventId, ticketId: "TKT-0001", sequence: 1, occurredAt: "2026-08-10T10:00:00.000Z", actor: "support-lead", action: "ticket-updated", commandId };
     expect(OperationalEventSchema.safeParse({ ...base, facts: { count: 2, approved: true, evidence: ["request-id"] } }).success).toBe(true);
+    expect(OperationalEventSchema.safeParse({ ...base, facts: { messageId } }).success).toBe(true);
+    expect(OperationalEventSchema.safeParse({ ...base, facts: { messageId: "message-1" } }).success).toBe(false);
     for (const facts of [
       { body: "Customer body must not be copied." },
+      { content: "Customer content must not be copied." },
       { message: "Customer message must not be copied." },
       { customerMessage: "Customer message must not be copied." },
       { response: "Customer response must not be copied." },
@@ -177,6 +180,7 @@ describe("operational persistence domain", () => {
       { credential: "secret" },
       { path: "C:\\sensitive" },
       { nested: { unsafe: Infinity } },
+      { unexpected: "Unknown fact keys are rejected." },
     ]) expect(OperationalEventSchema.safeParse({ ...base, facts }).success).toBe(false);
   });
 
@@ -208,5 +212,35 @@ describe("operational persistence domain", () => {
     expect(OperationalWorkflowSnapshotSchema.safeParse(snapshot).success).toBe(true);
     expect(OperationalWorkflowSnapshotSchema.safeParse({ ...snapshot, messages: [{ id: messageId, ticketId: "TKT-0002", operationalEventId: eventId, kind: "customer", createdAt: "2026-08-10T10:00:00.000Z", body: "Reply" }] }).success).toBe(false);
     expect(OperationalWorkflowSnapshotSchema.safeParse({ ...snapshot, events: [event, { ...event, sequence: 1 }] }).success).toBe(false);
+  });
+
+  it("requires the workflow watermark to name the latest customer message by event sequence", () => {
+    const latestMessageId = "23222222-2222-4222-8222-222222222222";
+    const events = [
+      { id: eventId, ticketId: "TKT-0001", sequence: 1, occurredAt: "2026-08-10T11:00:00.000Z", actor: "customer", action: "customer-reply-received", commandId, facts: { messageId } },
+      { id: secondEventId, ticketId: "TKT-0001", sequence: 2, occurredAt: "2026-08-10T09:00:00.000Z", actor: "customer", action: "customer-reply-received", commandId, facts: { messageId: latestMessageId } },
+    ];
+    const messages = [
+      { id: messageId, ticketId: "TKT-0001", operationalEventId: eventId, kind: "customer", createdAt: "2026-08-10T11:00:00.000Z", body: "Earlier by sequence." },
+      { id: latestMessageId, ticketId: "TKT-0001", operationalEventId: secondEventId, kind: "customer", createdAt: "2026-08-10T09:00:00.000Z", body: "Latest by sequence." },
+    ];
+    const snapshot = {
+      ticket,
+      ticketRevisions: [],
+      recommendations: [],
+      recommendationRevisions: [],
+      messages,
+      diagnoses: [],
+      events,
+      traces: [],
+    };
+    expect(OperationalWorkflowSnapshotSchema.safeParse({
+      ...snapshot,
+      customerReplyWatermark: { state: "reply", timestamp: messages[1]!.createdAt, id: latestMessageId },
+    }).success).toBe(true);
+    expect(OperationalWorkflowSnapshotSchema.safeParse({
+      ...snapshot,
+      customerReplyWatermark: { state: "reply", timestamp: messages[0]!.createdAt, id: messageId },
+    }).success).toBe(false);
   });
 });

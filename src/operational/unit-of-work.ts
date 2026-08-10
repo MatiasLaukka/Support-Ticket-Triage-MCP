@@ -652,7 +652,7 @@ export class OperationalUnitOfWork {
       DecisionTraceEventSchema,
       "Operational decision trace data is corrupt.",
     ));
-    const latestCustomerReply = [...messages].reverse().find((message) => message.kind === "customer");
+    const latestCustomerReply = latestMessageByEventSequence(messages, events, "customer");
     return parseWith(
       OperationalWorkflowSnapshotSchema,
       {
@@ -1217,4 +1217,22 @@ function compareSemanticRows(left: SemanticReferenceRow, right: SemanticReferenc
 
 function compareRecommendationRevisionRows(left: LocalEventChildRow, right: LocalEventChildRow): number {
   return compareSemanticRows(left, right) || left.operational_event_id.localeCompare(right.operational_event_id);
+}
+
+function latestMessageByEventSequence(
+  messages: readonly ConversationMessage[],
+  events: readonly OperationalEvent[],
+  kind: ConversationMessage["kind"],
+): ConversationMessage | undefined {
+  const sequenceByEventId = new Map(events.map((event) => [event.id, event.sequence] as const));
+  return messages
+    .filter((message) => message.kind === kind)
+    .map((message) => ({
+      message,
+      sequence: sequenceByEventId.get(message.operationalEventId),
+    }))
+    .filter((entry): entry is { message: ConversationMessage; sequence: number } =>
+      entry.sequence !== undefined)
+    .sort((left, right) => left.sequence - right.sequence)
+    .at(-1)?.message;
 }

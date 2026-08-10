@@ -63,7 +63,10 @@ import {
 import type { CompletedDiagnosis } from "./knowledge-evolution/domain.js";
 import type { LearningCaptureContext, LearningCaptureService } from "./knowledge-evolution/learning-capture.js";
 import type { DiagnosisReviewInput } from "./approval-desk/diagnosis-review.js";
-import { hasCustomerReplyAfterRecommendation } from "./approval-desk/workflow-causal-context.js";
+import {
+  hasCustomerReplyAfterRecommendation,
+  hasCustomerReplyAfterRecommendationFromSnapshot,
+} from "./approval-desk/workflow-causal-context.js";
 import { getKnownEvent } from "./approval-desk/known-event-catalog.js";
 import {
   isValidatedKnownCauseReference,
@@ -75,6 +78,7 @@ import {
   type OperationalCommandContext,
 } from "./operational/idempotency.js";
 import type {
+  ConversationMessage,
   OperationalResultReference,
   OperationalWorkflowSnapshot,
 } from "./operational/domain.js";
@@ -530,6 +534,7 @@ export interface OperationalCommandStore {
   readWorkflowSnapshot(ticketId: TicketId): OperationalWorkflowSnapshot;
 }
 
+/** @deprecated File-backed fixture adapter only until operational cutover. */
 export function customerReplyWatermarkFromAudits(
   audits: readonly AuditEvent[],
 ): CustomerReplyWatermark {
@@ -543,6 +548,13 @@ export function customerReplyWatermarkFromAudits(
         timestamp: latestReply.timestamp,
         id: latestReply.id,
       };
+}
+
+/** Canonical operational watermark; its ID is always the message-row ID. */
+export function customerReplyWatermarkFromSnapshot(
+  snapshot: OperationalWorkflowSnapshot,
+): CustomerReplyWatermark {
+  return CustomerReplyWatermarkSchema.parse(snapshot.customerReplyWatermark);
 }
 
 function assertTrustedKnownCauseReference(
@@ -886,7 +898,6 @@ export class TriageService {
       }
       if (!operationalCustomerReplyWatermarksMatch(
         evaluatedCustomerReplyWatermark,
-        snapshot.customerReplyWatermark,
         snapshot,
       )) {
         throw stale("Evaluation customer reply snapshot is stale.");
@@ -1126,21 +1137,7 @@ export class TriageService {
     snapshot: OperationalWorkflowSnapshot,
     recommendation: TriageRecommendation,
   ): boolean {
-    const latestReply = snapshot.messages
-      .filter((message) => message.kind === "customer")
-      .map((message) => ({ message, event: snapshot.events.find(({ id }) => id === message.operationalEventId) }))
-      .filter((entry): entry is { message: typeof entry.message; event: NonNullable<typeof entry.event> } => entry.event !== undefined)
-      .at(-1);
-    if (latestReply === undefined) return false;
-    const revision = snapshot.recommendationRevisions
-      .filter(({ recommendation: candidate }) => candidate.id === recommendation.id)
-      .at(-1);
-    const recommendationEvent = revision === undefined
-      ? undefined
-      : snapshot.events.find(({ id }) => id === revision.operationalEventId);
-    return recommendationEvent === undefined
-      ? compareIsoInstants(latestReply.message.createdAt, recommendation.createdAt) > 0
-      : latestReply.event.sequence > recommendationEvent.sequence;
+    return hasCustomerReplyAfterRecommendationFromSnapshot(snapshot, recommendation);
   }
 
   async submitEvaluation(
@@ -1298,8 +1295,20 @@ export class TriageService {
     });
   }
 
-  async addCustomerReply(input: AddCustomerReplyInput): Promise<AuditEvent> {
+  async addCustomerReply(
+    input: AddCustomerReplyInput,
+    commandContext?: OperationalCommandContext,
+  ): Promise<AuditEvent> {
     const reply = AddCustomerReplyInputSchema.parse(input);
+    if (this.dependencies.operationalStore !== undefined) {
+      if (commandContext === undefined) {
+        throw new DomainError(
+          "Operational customer replies require an explicit command context.",
+          "REPOSITORY_ERROR",
+        );
+      }
+      return this.addOperationalCustomerReply(reply, commandContext);
+    }
     return serializeTicket(reply.ticketId, async () => {
       await this.dependencies.tickets.get(reply.ticketId);
 
@@ -1321,6 +1330,89 @@ export class TriageService {
       await this.dependencies.audit.append(auditEvent);
       return auditEvent;
     });
+  }
+
+  private async addOperationalCustomerReply(
+    reply: z.infer<typeof AddCustomerReplyInputSchema>,
+    commandContext: OperationalCommandContext,
+  ): Promise<AuditEvent> {
+    const store = this.dependencies.operationalStore;
+    if (store === undefined) throw new Error("Operational store is not configured.");
+    const requestHash = canonicalRequestHash("add-customer-reply", reply);
+    return store.transaction((unit) => {
+      const replay = unit.beginCommand(
+        commandContext.commandId,
+        "add-customer-reply",
+        reply,
+      );
+      if (replay !== "new") return this.replayCustomerReply(unit, replay);
+      const snapshot = unit.readWorkflowSnapshot(reply.ticketId);
+      const messageId = this.uuid();
+      const operationalEventId = this.uuid();
+      const [sequence] = unit.allocateEventSequences(reply.ticketId, 1);
+      unit.appendEvent({
+        id: operationalEventId,
+        ticketId: reply.ticketId,
+        sequence: sequence!,
+        occurredAt: reply.receivedAt,
+        actor: reply.actor,
+        action: "customer-reply-received",
+        commandId: commandContext.commandId,
+        facts: { messageId },
+      });
+      const message: ConversationMessage = {
+        id: messageId,
+        ticketId: reply.ticketId,
+        operationalEventId,
+        kind: "customer",
+        createdAt: reply.receivedAt,
+        body: reply.body,
+      };
+      unit.insertMessage(message);
+      unit.appendTrace({
+        id: this.uuid(),
+        operationalEventId,
+        ticketId: reply.ticketId,
+        occurredAt: reply.receivedAt,
+        actor: reply.actor,
+        traceType: "lifecycle",
+        stage: "customer-reply-received",
+        outcome: "success",
+      });
+      unit.persistCommandResult(commandContext.commandId, requestHash, {
+        operation: "add-customer-reply",
+        tickets: [{
+          ticketId: reply.ticketId,
+          operationalEventIds: [operationalEventId],
+          resultingRevision: null,
+        }],
+        messageId,
+      });
+      return operationalCustomerReplyAudit(message, snapshot.ticket, reply.actor);
+    });
+  }
+
+  private replayCustomerReply(
+    unit: OperationalUnitOfWork,
+    replay: CommandReplay,
+  ): AuditEvent {
+    const ticketResult = replay.result.tickets[0];
+    if (ticketResult === undefined || replay.result.messageId === undefined) {
+      throw stale("Operational customer-reply replay is missing its message reference.");
+    }
+    const snapshot = unit.readWorkflowSnapshot(ticketResult.ticketId);
+    const message = snapshot.messages.find(({ id }) => id === replay.result.messageId);
+    const event = message === undefined
+      ? undefined
+      : snapshot.events.find(({ id }) => id === message.operationalEventId);
+    if (
+      message?.kind !== "customer"
+      || event?.action !== "customer-reply-received"
+      || !ticketResult.operationalEventIds.includes(event.id)
+    ) {
+      throw stale("Operational customer-reply replay is missing its persisted message.");
+    }
+    return operationalCustomerReplyAudit(message, snapshot.ticket, event.actor);
   }
 
   async recordDiagnosis(input: RecordDiagnosisInput): Promise<AuditEvent> {
@@ -2310,24 +2402,37 @@ function completedDiagnosisOwner(owner: DiagnosisContext["owner"]): Team {
   return "support";
 }
 
+/** Explicit compatibility result for adapters that still expose AuditEvent. */
+function operationalCustomerReplyAudit(
+  message: ConversationMessage,
+  ticket: Ticket,
+  actor: string,
+): AuditEvent {
+  return AuditEventSchema.parse({
+    // Canonical message IDs are the reply watermark. Imported legacy messages
+    // retain their source audit ID here by using that ID as the message ID.
+    id: message.id,
+    timestamp: message.createdAt,
+    actor,
+    action: "customer-reply-received",
+    ticketId: ticket.id,
+    before: {},
+    after: { body: message.body },
+    rationale: "Customer reply added to ticket conversation.",
+    knowledgeArticleIds: [],
+    result: "success",
+  });
+}
+
 function operationalCustomerReplyWatermarksMatch(
   evaluated: CustomerReplyWatermark,
-  current: CustomerReplyWatermark,
   snapshot: OperationalWorkflowSnapshot,
 ): boolean {
-  const latestCustomerMessage = snapshot.messages
-    .filter((message) => message.kind === "customer")
-    .at(-1);
-  const latestCustomerEvent = latestCustomerMessage === undefined
-    ? undefined
-    : snapshot.events.find(({ id }) => id === latestCustomerMessage.operationalEventId);
-  const currentReplyIds = latestCustomerMessage === undefined
-    ? []
-    : [latestCustomerMessage.id, ...(latestCustomerEvent === undefined ? [] : [latestCustomerEvent.id])];
+  const current = customerReplyWatermarkFromSnapshot(snapshot);
   return evaluated.state === current.state &&
     (evaluated.state === "none" ||
       (current.state === "reply" &&
-        (evaluated.id === current.id || currentReplyIds.includes(evaluated.id)) &&
+        evaluated.id === current.id &&
         compareIsoInstants(evaluated.timestamp, current.timestamp) === 0));
 }
 

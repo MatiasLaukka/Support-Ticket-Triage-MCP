@@ -107,7 +107,7 @@ describe("transactional operational evaluation", () => {
     }
   });
 
-  it("accepts an audit-event reply watermark while the operational snapshot is message-backed", async () => {
+  it("rejects an audit-event reply watermark once the operational snapshot is canonically message-backed", async () => {
     const harness = openHarness();
     try {
       const input = evaluationInput();
@@ -118,7 +118,10 @@ describe("transactional operational evaluation", () => {
           id: customerReplyEventId,
           timestamp: "2026-08-10T09:05:00.000Z",
         },
-      }, { commandId })).resolves.toMatchObject({ recommendation: { resolution: "pending" } });
+      }, { commandId })).rejects.toMatchObject({ code: "STALE_APPROVAL" });
+      expect(harness.store.readWorkflowSnapshot(ticketId).events.filter(
+        (event) => event.commandId === commandId,
+      )).toEqual([]);
     } finally {
       harness.store.close();
     }

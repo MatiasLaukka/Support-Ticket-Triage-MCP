@@ -82,6 +82,7 @@ operational.sqlite
   tickets
   ticket_revisions
   conversation_messages
+  operational_import_resolutions
   recommendations
   recommendation_revisions
   diagnoses
@@ -167,11 +168,13 @@ events and optional derived projections.
 `operational_events` is an append-only audit stream for lifecycle actions,
 approvals, rejections, diagnosis/fix actions, customer replies, and
 verification outcomes. Every event has a ticket-wide monotonic causal
-`sequence`, a globally unique event ID, and references to associated message,
-recommendation revision, or diagnosis records. Events contain no duplicated
-customer/support message bodies. Repositories expose append/read operations,
-not update/delete operations after commit. Caller retry safety is provided by
-the separate command/idempotency key described below.
+`sequence` and a globally unique event ID. Messages, recommendation revisions,
+diagnoses, and decision traces reference their associated operational event;
+the event does not store reverse foreign keys to those records. Events contain
+no duplicated customer/support message bodies. Repositories expose
+append/read operations, not update/delete operations after commit. Caller
+retry safety is provided by the separate command/idempotency key described
+below.
 
 ### Decision traces
 
@@ -260,6 +263,10 @@ delivered_at
 The capture envelope is validated, immutable, and restricted to the finalized
 diagnosis/outcome snapshot and its committed operational-event reference. A
 retry never recalculates learning content from the current mutable ticket.
+Each outbox row represents exactly one learning-ledger event in this slice.
+If a future operation must produce a batch, it must use deterministic child
+delivery identities (for example, `<delivery_key>:<index>`) and treat the
+whole immutable batch as one idempotent delivery contract.
 `delivery_key` (normally the outbox ID or a deterministic derivative of the
 operational event ID) is the learning-ledger idempotency identity:
 
@@ -352,7 +359,9 @@ evaluation
   -> recommendation revision + operational event + typed traces
 
 diagnosis completion
-  -> immutable diagnosis + ticket revision/projection
+  -> immutable diagnosis
+     + ticket revision/projection only if the domain transition changes the
+       canonical Ticket projection
      + operational event + typed traces + learning outbox intent when eligible
 
 customer reply
@@ -380,6 +389,18 @@ fixture-backed operational records. It supports:
 - idempotent reruns;
 - an import summary suitable for the audit trail.
 
+`operational_import_resolutions` is append-only metadata for explicit import
+decisions. A skipped aggregate records:
+
+```text
+source_aggregate_id
+resolution: skipped
+reason
+actor
+occurred_at
+import_command_id
+```
+
 SQLite becomes the single source of truth for new operational writes after the
 cutover. `operational_metadata` records the cutover state:
 
@@ -398,8 +419,10 @@ partial ticket history; other valid ticket aggregates may commit. Every
 successful batch preserves source IDs, revision numbers, actors, timestamps,
 and the source/import provenance. The database remains
 `import-in-progress` until all source aggregates have imported successfully or
-all conflicts have been explicitly resolved or skipped. Only then may it enter
-`imported` mode.
+all conflicts have been explicitly resolved or skipped. Every explicit skip is
+durable in `operational_import_resolutions` with the source aggregate ID, skip
+reason, actor, timestamp, and import command/correlation ID. Only then may the
+database enter `imported` mode.
 
 Legacy operational-event sequences are reconstructed from original append or
 audit order, not timestamps. This preserves existing customer-reply watermark
@@ -419,9 +442,10 @@ Every new database begins in `empty` mode. An explicit
 `initialize:operational-native` command transitions it to `native`; that
 command refuses if recognizable legacy operational files exist until the
 operator chooses import or explicitly resolves them. An imported deployment
-enters `imported` mode only after a successful import batch. The `empty` state
-and `import-in-progress` states permit inspection and import but not
-operational mutation.
+enters `imported` mode only after every discovered source aggregate has been
+imported or has a durable explicit resolution. The `empty` state and
+`import-in-progress` states permit inspection and import but not operational
+mutation.
 
 ## Decision Timeline UI
 
@@ -476,9 +500,9 @@ The implementation must prove:
 
 1. Evaluation persists its recommendation revision, operational event, and
    typed traces atomically.
-2. Diagnosis completion persists its immutable diagnosis, ticket
-   revision/projection, operational event, typed traces, and outbox intent
-   atomically.
+2. Diagnosis completion persists its immutable diagnosis, plus a ticket
+   revision/projection only when the canonical Ticket projection changes,
+   operational event, typed traces, and outbox intent atomically.
 3. Approval, fix, verification, and closure each persist their own exact
    transactional write set.
 4. Expensive evaluation occurs outside the write transaction and stale

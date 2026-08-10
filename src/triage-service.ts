@@ -1000,7 +1000,9 @@ export class TriageService {
       priority: recommendation.priority,
       team: recommendation.team,
       confidence: recommendation.confidence,
-      reasons: recommendation.classificationSignals?.map(({ reason }) => reason) ?? [recommendation.rationale],
+      reasons: stableUnique(
+        recommendation.classificationSignals?.map(({ reason }) => reason) ?? [recommendation.rationale],
+      ),
     });
     unit.appendTrace({
       id: this.uuid(),
@@ -2327,6 +2329,10 @@ function operationalCustomerReplyWatermarksMatch(
       (current.state === "reply" &&
         (evaluated.id === current.id || currentReplyIds.includes(evaluated.id)) &&
         compareIsoInstants(evaluated.timestamp, current.timestamp) === 0));
+}
+
+function stableUnique<T>(values: readonly T[]): T[] {
+  return [...new Set(values)];
 }
 
 async function serializeRecommendation<T>(

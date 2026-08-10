@@ -71,6 +71,28 @@ describe("transactional operational evaluation", () => {
     }
   });
 
+  it("deduplicates repeated classifier trace reasons in stable first-seen order", async () => {
+    const harness = openHarness();
+    try {
+      const result = await harness.service.submitEvaluation({
+        ...evaluationInput(),
+        classificationSignals: [
+          { ruleId: "signal-a", target: "classifier", weight: 1, reason: "same reason" },
+          { ruleId: "signal-b", target: "classifier", weight: 0.5, reason: "first unique reason" },
+          { ruleId: "signal-c", target: "classifier", weight: 0.25, reason: "same reason" },
+        ],
+      }, { commandId });
+      const snapshot = harness.store.readWorkflowSnapshot(ticketId);
+      const classification = snapshot.traces.find(({ traceType }) => traceType === "classification");
+      expect(classification).toMatchObject({
+        reasons: ["same reason", "first unique reason"],
+      });
+      expect(result.recommendation.classificationSignals).toHaveLength(3);
+    } finally {
+      harness.store.close();
+    }
+  });
+
   it("accepts an explicit command context on direct submit and persists the same atomic write set", async () => {
     const harness = openHarness();
     try {

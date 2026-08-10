@@ -21,7 +21,6 @@ import type { CustomerResponseDraftProvider } from "../src/approval-desk/draft-r
 import type { CandidateDraftProvider } from "../src/knowledge-evolution/candidate-draft-provider.js";
 import {
   KnowledgeCandidateWriteSchema,
-  KnowledgeObjectWriteSchema,
   type KnowledgeObject,
 } from "../src/knowledge-evolution/domain.js";
 import { KnowledgeEvolutionService } from "../src/knowledge-evolution/service.js";
@@ -33,6 +32,11 @@ import {
   listReusableApproved,
   type ReusableKnowledgeResult,
 } from "../src/knowledge-evolution/reusable-context.js";
+import {
+  EVIDENCE_PARITY,
+  requestIdKnowledgeObject,
+  requestIdKnowledgePromotionEvent,
+} from "./evidence-parity-fixtures.js";
 
 const now = new Date("2026-06-10T09:00:00.000Z");
 const temporaryRoots: string[] = [];
@@ -3732,6 +3736,40 @@ describe("createApprovalDeskHttpServer", () => {
     });
     expect((await deps.tickets.get("TKT-1005")).revision).toBe(0);
   });
+  it("recognizes the shared ordinary partial-API evidence through the Approval Desk evaluation route", async () => {
+    const { json } = await startFixture();
+    const evaluated = await json(`/api/tickets/${EVIDENCE_PARITY.ordinaryApi.ticketId}/recommendations`, {
+      method: "POST",
+      body: JSON.stringify({
+        actor: "approval-desk",
+        aiPreference: "deterministic",
+        customerReplies: [{
+          id: EVIDENCE_PARITY.ordinaryApi.replyId,
+          createdAt: EVIDENCE_PARITY.ordinaryApi.createdAt,
+          body: EVIDENCE_PARITY.ordinaryApi.body,
+        }],
+      }),
+    });
+    const recommendation = TriageRecommendationSchema.parse(evaluated.body.recommendation);
+
+    expect(evaluated.status, JSON.stringify(evaluated.body)).toBe(201);
+    expect(recommendation.requiredEvidence?.map(({ id }) => id).sort()).toEqual([
+      "endpoint-url",
+      "request-id",
+      "api-response-status",
+      "sample-payload",
+      "failure-timestamp",
+    ].sort());
+    expect(recommendation.providedEvidence?.map(({ id }) => id).sort()).toEqual(["request-id"]);
+    expect(recommendation.missingEvidence?.map(({ id }) => id).sort()).toEqual([
+      "endpoint-url",
+      "api-response-status",
+      "sample-payload",
+      "failure-timestamp",
+    ].sort());
+    expect(recommendation.supportState).toBe("information-received");
+  });
+
   it("recognizes exact security audit evidence through the Approval Desk evaluation route", async () => {
     const { json } = await startFixture();
 
@@ -3741,9 +3779,9 @@ describe("createApprovalDeskHttpServer", () => {
         actor: "approval-desk",
         aiPreference: "deterministic",
         customerReplies: [{
-          id: "reply-security-holdout-001",
-          createdAt: "2026-06-10T09:00:00.000Z",
-          body: "The audit source shown is IP 198.51.100.24. The affected scope appears to be 12 profiles in the latest export.",
+          id: EVIDENCE_PARITY.securityAudit.replyId,
+          createdAt: EVIDENCE_PARITY.securityAudit.createdAt,
+          body: EVIDENCE_PARITY.securityAudit.body,
         }],
       }),
     });
@@ -3795,9 +3833,9 @@ describe("createApprovalDeskHttpServer", () => {
         actor: "approval-desk",
         aiPreference: "deterministic",
         customerReplies: [{
-          id: "reply-request-id-holdout-001",
-          createdAt: "2026-06-10T09:00:00.000Z",
-          body: "Request ID: req_holdout_001.",
+          id: EVIDENCE_PARITY.approvedRequestIdCause.replyId,
+          createdAt: EVIDENCE_PARITY.approvedRequestIdCause.createdAt,
+          body: EVIDENCE_PARITY.approvedRequestIdCause.body,
         }],
       }),
     });
@@ -3808,8 +3846,8 @@ describe("createApprovalDeskHttpServer", () => {
     expect(after.missingEvidence).toEqual([]);
     expect(after.supportState).toBe("known-cause");
     expect(after.knownCauseRef).toEqual({
-      objectId: "request-id-holdout",
-      version: 1,
+      objectId: EVIDENCE_PARITY.approvedRequestIdCause.objectId,
+      version: EVIDENCE_PARITY.approvedRequestIdCause.version,
     });
   });
 
@@ -3915,28 +3953,7 @@ describe("createApprovalDeskHttpServer", () => {
 });
 
 async function reusableRequestIdKnowledge(): Promise<ReusableKnowledgeResult> {
-  const object = KnowledgeObjectWriteSchema.parse({
-    id: "request-id-holdout",
-    version: 1,
-    learningGovernance: "ledger",
-    kind: "known-cause",
-    name: "Request ID confirmation path",
-    summary: "An approved support path requiring only a request identifier.",
-    triggerPatterns: ["problem"],
-    evidencePolicy: { mode: "required", evidenceIds: ["request-id"] },
-    timeConstraints: ["Apply when the documented problem pattern is present."],
-    diagnosticSteps: ["Review the request identifier."],
-    fixSteps: ["Apply the documented correction."],
-    verificationSteps: ["Verify the next request."],
-    customerSafeExplanation: "We will review the documented support path.",
-    operatorRationale: "This controlled path requires a request identifier.",
-    owner: "api-platform",
-    supportingDiagnosisIds: ["diagnosis-request-id-holdout"],
-    supportingTicketIds: ["TKT-1010"],
-    provenance: { source: "test", recordedAt: "2026-08-08T08:00:00.000Z" },
-    status: "approved",
-    approval: { approvedBy: "support-lead", approvedAt: "2026-08-08T08:00:00.000Z" },
-  });
+  const object = requestIdKnowledgeObject();
   return listReusableApproved({
     asOf: "2026-08-08T12:00:00.000Z",
     snapshotReader: {
@@ -3944,17 +3961,7 @@ async function reusableRequestIdKnowledge(): Promise<ReusableKnowledgeResult> {
         return {
           versions: [object],
           heads: new Map([[object.id, object.version]]),
-          events: [{
-            id: "00000000-0000-4000-8000-000000000102",
-            occurredAt: "2026-08-08T08:00:00.000Z",
-            actor: "support-lead",
-            correlationId: "10000000-0000-4000-8000-000000000102",
-            candidateId: "candidate-request-id-holdout",
-            objectId: object.id,
-            sourceVersion: object.version,
-            eventType: "candidate-promoted",
-            payload: { maturity: "promoted", health: "active", provenance: "test promotion" },
-          }],
+          events: [requestIdKnowledgePromotionEvent()],
         };
       },
     },

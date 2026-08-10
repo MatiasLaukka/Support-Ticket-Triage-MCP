@@ -7,6 +7,7 @@ import type {
   KnowledgeHoldoutEvaluation,
 } from "./holdout-evaluation.js";
 import type { KnowledgeReference, ReusableKnowledgeIssue, ReusableKnowledgeResult } from "./reusable-context.js";
+import type { EvidenceRequirementId } from "../evidence-catalog.js";
 
 export type HoldoutReportTurn = {
   turnIndex: number;
@@ -34,7 +35,7 @@ export type HoldoutReportLane = {
 export type HoldoutReportCase = {
   fixtureId: string;
   evidencePolicy: {
-    requiredIds: readonly string[];
+    requiredIds: readonly EvidenceRequirementId[];
     reasonCode: KnowledgeHoldoutFixture["evidencePolicy"]["reasonCode"];
   };
   reusableKnowledge: {

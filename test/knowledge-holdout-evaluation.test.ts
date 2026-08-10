@@ -9,7 +9,7 @@ import { KnowledgeCandidateWriteSchema, KnowledgeObjectWriteSchema, type Knowled
 import type { LearningEvent } from "../src/knowledge-evolution/learning-ledger.js";
 
 describe("production-path knowledge holdout fixtures", () => {
-  it("defines seven fixed classes with immutable complete conversation snapshots", () => {
+  it("defines eight fixed classes with immutable complete conversation snapshots", () => {
     const fixtures = knowledgeHoldoutFixtures();
 
     expect(fixtures.map(({ id }) => id)).toEqual([

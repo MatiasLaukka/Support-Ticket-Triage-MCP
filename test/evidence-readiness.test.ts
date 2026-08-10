@@ -8,8 +8,12 @@ import {
 } from "../src/domain.js";
 import { analyzeEvidenceReadiness } from "../src/approval-desk/evidence-readiness.js";
 import { getKnownCause } from "../src/approval-desk/known-cause-catalog.js";
-import { KnowledgeObjectWriteSchema } from "../src/knowledge-evolution/domain.js";
 import { listReusableApproved } from "../src/knowledge-evolution/reusable-context.js";
+import {
+  EVIDENCE_PARITY,
+  requestIdKnowledgeObject,
+  requestIdKnowledgePromotionEvent,
+} from "./evidence-parity-fixtures.js";
 
 describe("analyzeEvidenceReadiness", () => {
   it("returns evidence requirements accepted by the strict recommendation schema", async () => {
@@ -544,7 +548,7 @@ describe("analyzeEvidenceReadiness", () => {
   it("recognizes the natural audit-source and affected-scope wording used in testing mode", async () => {
     const ticket = TicketSchema.parse({
       ...(await loadSeedTicket("TKT-1004")),
-      description: `${(await loadSeedTicket("TKT-1004")).description}\n\nCustomer reply: The audit source shown is IP 198.51.100.24. The affected scope appears to be 12 profiles in the latest export.`,
+      description: `${(await loadSeedTicket("TKT-1004")).description}\n\nCustomer reply: ${EVIDENCE_PARITY.securityAudit.body}`,
     });
     const readiness = analyzeEvidenceReadiness({
       ticket,
@@ -573,9 +577,9 @@ describe("analyzeEvidenceReadiness", () => {
 
   it("keeps an ordinary API ticket evidence-gated when only its request ID is provided", async () => {
     const apiTicket = TicketSchema.parse({
-      ...(await loadSeedTicket("TKT-1005")),
-      subject: "API request needs review",
-      description: "Customer reply: Request ID: req_holdout_001.",
+      ...(await loadSeedTicket(EVIDENCE_PARITY.ordinaryApi.ticketId)),
+      subject: EVIDENCE_PARITY.ordinaryApi.baseSubject,
+      description: `${EVIDENCE_PARITY.ordinaryApi.baseDescription}\n\nCustomer reply: ${EVIDENCE_PARITY.ordinaryApi.body}`,
       category: "api",
       priority: "P3",
       team: "api-platform",
@@ -611,11 +615,11 @@ describe("analyzeEvidenceReadiness", () => {
   });
 
   it("requires an approved request-ID-only cause to receive its required evidence before activation", async () => {
-    const reusableKnowledge = await reusableCredentialRotationKnowledge();
+    const reusableKnowledge = await reusableRequestIdKnowledge();
     const matchedTicket = TicketSchema.parse({
-      ...(await loadSeedTicket("TKT-1005")),
-      subject: "Credential rotation request failure",
-      description: "Credential rotation request failure. Request ID: req_holdout_001.",
+      ...(await loadSeedTicket(EVIDENCE_PARITY.approvedRequestIdCause.ticketId)),
+      subject: EVIDENCE_PARITY.approvedRequestIdCause.baseSubject,
+      description: `${EVIDENCE_PARITY.approvedRequestIdCause.baseDescription}\n\nCustomer reply: ${EVIDENCE_PARITY.approvedRequestIdCause.body}`,
       category: "api",
       priority: "P3",
       team: "api-platform",
@@ -636,7 +640,7 @@ describe("analyzeEvidenceReadiness", () => {
     const missingReadiness = analyzeEvidenceReadiness({
       ticket: TicketSchema.parse({
         ...matchedTicket,
-        description: "Credential rotation request failure.",
+        description: EVIDENCE_PARITY.approvedRequestIdCause.baseDescription,
       }),
       outcome: {
         ticketId: matchedTicket.id,
@@ -954,29 +958,8 @@ async function loadSeedTicket(ticketId: string): Promise<Ticket> {
   return ticket;
 }
 
-async function reusableCredentialRotationKnowledge() {
-  const object = KnowledgeObjectWriteSchema.parse({
-    id: "credential-rotation-holdout",
-    version: 1,
-    learningGovernance: "ledger",
-    kind: "known-cause",
-    name: "Credential rotation request failure",
-    summary: "An approved request-ID-only credential rotation support path.",
-    triggerPatterns: ["credential rotation request failure"],
-    evidencePolicy: { mode: "required", evidenceIds: ["request-id"] },
-    timeConstraints: ["Apply after the documented credential rotation condition is present."],
-    diagnosticSteps: ["Review the request identifier."],
-    fixSteps: ["Apply the documented credential correction."],
-    verificationSteps: ["Verify a new request succeeds."],
-    customerSafeExplanation: "We will review the documented credential condition.",
-    operatorRationale: "This controlled object requires a request identifier.",
-    owner: "api-platform",
-    supportingDiagnosisIds: ["diagnosis-credential-rotation"],
-    supportingTicketIds: ["TKT-1005"],
-    provenance: { source: "test", recordedAt: "2026-08-08T08:00:00.000Z" },
-    status: "approved",
-    approval: { approvedBy: "support-lead", approvedAt: "2026-08-08T08:00:00.000Z" },
-  });
+async function reusableRequestIdKnowledge() {
+  const object = requestIdKnowledgeObject();
   return listReusableApproved({
     asOf: "2026-08-08T12:00:00.000Z",
     snapshotReader: {
@@ -984,17 +967,7 @@ async function reusableCredentialRotationKnowledge() {
         return {
           versions: [object],
           heads: new Map([[object.id, object.version]]),
-          events: [{
-            id: "00000000-0000-4000-8000-000000000101",
-            occurredAt: "2026-08-08T08:00:00.000Z",
-            actor: "support-lead",
-            correlationId: "10000000-0000-4000-8000-000000000101",
-            candidateId: "candidate-credential-rotation-holdout",
-            objectId: object.id,
-            sourceVersion: object.version,
-            eventType: "candidate-promoted",
-            payload: { maturity: "promoted", health: "active", provenance: "test promotion" },
-          }],
+          events: [requestIdKnowledgePromotionEvent()],
         };
       },
     },

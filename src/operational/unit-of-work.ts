@@ -66,6 +66,7 @@ interface JsonRow { payload_json: string; }
 interface EventRow { event_json: string; }
 interface TraceRow { trace_json: string; }
 interface SequenceRow { sequence: number; }
+interface TotalChangesRow { count: number; }
 interface CommandRow {
   command_id: string;
   operation: string;
@@ -77,6 +78,15 @@ interface CommandEventRow {
   id: string;
   ticket_id: string;
   sequence: number;
+}
+interface TicketRevisionReferenceRow {
+  ticket_id: string;
+  revision: number;
+  current_revision: number;
+}
+interface SemanticReferenceRow {
+  id: string;
+  ticket_id: string;
 }
 
 /** Task 1's enum-keyed Zod record infers every allowlisted key as required. */
@@ -101,13 +111,20 @@ export interface OperationalDiagnosisWrite {
  */
 export class OperationalUnitOfWork {
   private active = true;
+  private commandClosure: "open" | "result-persisted" | "replay" = "open";
+  private persistedCommandRecord: CommandIdempotencyRecord | undefined;
   private readonly reservedSequences = new Map<string, number[]>();
+  private readonly ticketProjectionUpdates = new Map<string, number>();
   private readonly pendingCommandClaims = new Map<string, {
     readonly operation: string;
     readonly requestHash: string;
   }>();
 
-  constructor(private readonly database: Database.Database) {}
+  private readonly initialTotalChanges: number;
+
+  constructor(private readonly database: Database.Database) {
+    this.initialTotalChanges = this.totalChanges();
+  }
 
   beginCommand(
     commandId: string,
@@ -141,6 +158,13 @@ export class OperationalUnitOfWork {
           "IDEMPOTENCY_CONFLICT",
         );
       }
+      if (this.hasMutationActivity()) {
+        throw new OperationalStoreError(
+          "Operational command replay must be checked before transaction mutations.",
+          "IDEMPOTENCY_CONFLICT",
+        );
+      }
+      this.commandClosure = "replay";
       return immutableCommandReplay(stored.result);
     }
 
@@ -202,6 +226,7 @@ export class OperationalUnitOfWork {
       );
     }
     this.assertCommandEvents(parsedCommandId, parsedResult);
+    this.assertCommandResultReferences(parsedCommandId, parsedResult);
     const record = parseWith(
       CommandIdempotencyRecordSchema,
       {
@@ -225,10 +250,13 @@ export class OperationalUnitOfWork {
       record.createdAt,
     );
     this.pendingCommandClaims.delete(parsedCommandId);
+    this.persistedCommandRecord = record;
+    this.commandClosure = "result-persisted";
   }
 
   allocateEventSequences(ticketId: TicketId, count: number): number[] {
     this.assertActive();
+    this.assertMutationOpen();
     const parsedTicketId = parseWith(TicketIdSchema, ticketId, "Ticket ID is invalid.");
     if (!Number.isInteger(count) || count <= 0 || count > 10_000) {
       throw new OperationalStoreError(
@@ -250,6 +278,7 @@ export class OperationalUnitOfWork {
 
   insertTicket(ticket: Ticket): void {
     this.assertActive();
+    this.assertMutationOpen();
     const parsed = parseWith(TicketSchema, ticket, "Ticket failed operational schema validation.");
     this.database.prepare(
       "INSERT INTO tickets(id, revision, updated_at, payload_json) VALUES (?, ?, ?, ?)",
@@ -258,6 +287,7 @@ export class OperationalUnitOfWork {
 
   updateTicket(ticket: Ticket, expectedRevision: number): void {
     this.assertActive();
+    this.assertMutationOpen();
     const parsed = parseWith(TicketSchema, ticket, "Ticket failed operational schema validation.");
     if (!Number.isInteger(expectedRevision) || expectedRevision < 0 || parsed.revision !== expectedRevision + 1) {
       throw new OperationalStoreError(
@@ -272,10 +302,12 @@ export class OperationalUnitOfWork {
     if (result.changes !== 1) {
       throw new OperationalStoreError("Ticket revision is stale.", "STALE_REVISION");
     }
+    this.ticketProjectionUpdates.set(parsed.id, parsed.revision);
   }
 
   appendTicketRevision(revision: TicketRevision): void {
     this.assertActive();
+    this.assertMutationOpen();
     const parsed = parseWith(
       TicketRevisionSchema,
       revision,
@@ -296,6 +328,7 @@ export class OperationalUnitOfWork {
 
   insertMessage(message: ConversationMessage): void {
     this.assertActive();
+    this.assertMutationOpen();
     const parsed = parseWith(
       ConversationMessageSchema,
       message,
@@ -318,6 +351,7 @@ export class OperationalUnitOfWork {
 
   insertRecommendation(recommendation: TriageRecommendation): void {
     this.assertActive();
+    this.assertMutationOpen();
     const parsed = parseWith(
       TriageRecommendationSchema,
       recommendation,
@@ -341,6 +375,7 @@ export class OperationalUnitOfWork {
     revision: RecommendationRevisionWrite,
   ): void {
     this.assertActive();
+    this.assertMutationOpen();
     const parsed = parseWith(
       RecommendationRevisionSchema,
       revision,
@@ -363,6 +398,7 @@ export class OperationalUnitOfWork {
     diagnosisRecord: OperationalDiagnosisWrite,
   ): void {
     this.assertActive();
+    this.assertMutationOpen();
     const parsed = parseWith(
       OperationalDiagnosisRecordSchema,
       diagnosisRecord,
@@ -383,6 +419,7 @@ export class OperationalUnitOfWork {
 
   appendEvent(event: OperationalEventWrite): void {
     this.assertActive();
+    this.assertMutationOpen();
     const parsed = parseWith(
       OperationalEventSchema,
       event,
@@ -416,6 +453,7 @@ export class OperationalUnitOfWork {
 
   appendTrace(trace: DecisionTraceEvent): void {
     this.assertActive();
+    this.assertMutationOpen();
     const parsed = parseWith(
       DecisionTraceEventSchema,
       trace,
@@ -574,6 +612,17 @@ export class OperationalUnitOfWork {
         "IDEMPOTENCY_CONFLICT",
       );
     }
+    if (this.persistedCommandRecord !== undefined) {
+      const stored = this.readCommandRecord(this.persistedCommandRecord.commandId);
+      if (stored === undefined || JSON.stringify(stored) !== JSON.stringify(this.persistedCommandRecord)) {
+        throw new OperationalStoreError(
+          "Operational command result changed before commit.",
+          "IDEMPOTENCY_CONFLICT",
+        );
+      }
+      this.assertCommandEvents(stored.commandId, stored.result);
+      this.assertCommandResultReferences(stored.commandId, stored.result);
+    }
   }
 
   /** @internal Prevents a callback from retaining write access after commit. */
@@ -585,6 +634,25 @@ export class OperationalUnitOfWork {
     if (!this.active) {
       throw new OperationalStoreError("Operational unit of work is no longer active.", "PERSISTENCE_ERROR");
     }
+  }
+
+  private assertMutationOpen(): void {
+    if (this.commandClosure !== "open") {
+      throw new OperationalStoreError(
+        this.commandClosure === "replay"
+          ? "Replayed operational commands are read-only."
+          : "Operational command mutations are closed after its result is persisted.",
+        "IDEMPOTENCY_CONFLICT",
+      );
+    }
+  }
+
+  private hasMutationActivity(): boolean {
+    return this.reservedSequences.size > 0 || this.totalChanges() !== this.initialTotalChanges;
+  }
+
+  private totalChanges(): number {
+    return (this.database.prepare("SELECT total_changes() AS count").get() as TotalChangesRow).count;
   }
 
   private assertTicketExists(ticketId: string): void {
@@ -665,6 +733,101 @@ export class OperationalUnitOfWork {
         );
       }
     }
+  }
+
+  private assertCommandResultReferences(
+    commandId: string,
+    result: OperationalResultReference,
+  ): void {
+    const ticketIds = new Set(result.tickets.map((ticket) => ticket.ticketId));
+    const revisionRows = this.database.prepare(`
+      SELECT revisions.ticket_id, revisions.revision, tickets.revision AS current_revision
+      FROM ticket_revisions AS revisions
+      JOIN operational_events AS events ON events.id = revisions.operational_event_id
+      JOIN tickets ON tickets.id = revisions.ticket_id
+      WHERE events.command_id = ?
+      ORDER BY revisions.ticket_id ASC, events.sequence ASC
+    `).all(commandId) as TicketRevisionReferenceRow[];
+    for (const ticket of result.tickets) {
+      const commandRevisions = revisionRows.filter((row) => row.ticket_id === ticket.ticketId);
+      const updatedRevision = this.ticketProjectionUpdates.get(ticket.ticketId);
+      if (ticket.resultingRevision === null) {
+        if (commandRevisions.length > 0 || updatedRevision !== undefined) {
+          throw this.semanticReferenceError("Ticket result revision may be null only when the command writes no ticket revision.");
+        }
+        continue;
+      }
+      const latestRevision = commandRevisions.at(-1);
+      if (
+        latestRevision?.revision !== ticket.resultingRevision
+        || latestRevision.current_revision !== ticket.resultingRevision
+        || updatedRevision !== ticket.resultingRevision
+      ) {
+        throw this.semanticReferenceError("Ticket result revision does not match the command's committed ticket revision.");
+      }
+    }
+
+    this.assertSemanticReference(
+      "message",
+      result.messageId,
+      ticketIds,
+      this.database.prepare(`
+        SELECT messages.id, messages.ticket_id
+        FROM conversation_messages AS messages
+        JOIN operational_events AS events ON events.id = messages.operational_event_id
+        WHERE events.command_id = ?
+      `).all(commandId) as SemanticReferenceRow[],
+    );
+    this.assertSemanticReference(
+      "recommendation",
+      result.recommendationId,
+      ticketIds,
+      this.database.prepare(`
+        SELECT DISTINCT recommendations.id, recommendations.ticket_id
+        FROM recommendations
+        JOIN recommendation_revisions AS revisions
+          ON revisions.recommendation_id = recommendations.id
+        JOIN operational_events AS events ON events.id = revisions.operational_event_id
+        WHERE events.command_id = ?
+      `).all(commandId) as SemanticReferenceRow[],
+    );
+    this.assertSemanticReference(
+      "diagnosis",
+      result.diagnosisId,
+      ticketIds,
+      this.database.prepare(`
+        SELECT diagnoses.id, diagnoses.ticket_id
+        FROM diagnoses
+        JOIN operational_events AS events ON events.id = diagnoses.operational_event_id
+        WHERE events.command_id = ?
+      `).all(commandId) as SemanticReferenceRow[],
+    );
+  }
+
+  private assertSemanticReference(
+    referenceType: "message" | "recommendation" | "diagnosis",
+    expectedId: string | undefined,
+    resultTicketIds: ReadonlySet<string>,
+    rows: readonly SemanticReferenceRow[],
+  ): void {
+    if (expectedId === undefined) {
+      if (rows.length > 0) {
+        throw this.semanticReferenceError(
+          `Operational command result omitted its written ${referenceType} reference.`,
+        );
+      }
+      return;
+    }
+    const row = rows.find((candidate) => candidate.id === expectedId);
+    if (row === undefined || !resultTicketIds.has(row.ticket_id)) {
+      throw this.semanticReferenceError(
+        `Operational command ${referenceType} result must reference a record written for an affected ticket by this command.`,
+      );
+    }
+  }
+
+  private semanticReferenceError(message: string): OperationalStoreError {
+    return new OperationalStoreError(message, "IDEMPOTENCY_CONFLICT");
   }
 
   private readJoinedPayloads<T>(

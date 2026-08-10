@@ -2,7 +2,13 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { TicketSchema, type Ticket } from "../src/domain.js";
+import {
+  TicketSchema,
+  TriageRecommendationSchema,
+  type Ticket,
+  type TicketId,
+} from "../src/domain.js";
+import { CompletedDiagnosisSchema } from "../src/knowledge-evolution/domain.js";
 import {
   canonicalRequestHash,
   type OperationalCommandContext,
@@ -10,12 +16,14 @@ import {
 import {
   OperationalSqliteStore,
 } from "../src/operational/sqlite-store.js";
+import type { OperationalUnitOfWork } from "../src/operational/unit-of-work.js";
 
 const commandIds = {
   single: "33333333-3333-4333-8333-333333333333",
   compound: "43333333-3333-4333-8333-333333333333",
   multiTicket: "53333333-3333-4333-8333-333333333333",
   rollback: "63333333-3333-4333-8333-333333333333",
+  semantic: "73333333-3333-4333-8333-333333333333",
 } as const;
 const eventIds = {
   seed: "01111111-1111-4111-8111-111111111111",
@@ -28,7 +36,14 @@ const eventIds = {
   secondTicketSecond: "71111111-1111-4111-8111-111111111111",
   rollbackFirst: "81111111-1111-4111-8111-111111111111",
   rollbackSecond: "91111111-1111-4111-8111-111111111111",
+  semanticRevision: "a1111111-1111-4111-8111-111111111111",
+  semanticMessage: "b1111111-1111-4111-8111-111111111111",
+  semanticRecommendation: "c1111111-1111-4111-8111-111111111111",
+  semanticDiagnosis: "d1111111-1111-4111-8111-111111111111",
+  wrongTicket: "e1111111-1111-4111-8111-111111111111",
 } as const;
+const messageId = "22222222-2222-4222-8222-222222222222";
+const recommendationId = "10000000-0000-4000-8000-000000000001";
 const temporaryRoots: string[] = [];
 
 afterEach(() => {
@@ -48,6 +63,49 @@ describe("canonicalRequestHash", () => {
     expect(canonicalRequestHash("ticket-close", { a: "alpha", z: 2 })).not.toBe(
       canonicalRequestHash("ticket-update", { a: "alpha", z: 2 }),
     );
+  });
+
+  it("projects retry and server-generated metadata out of the semantic request", () => {
+    const semanticRequest = {
+      ticketId: "TKT-0001",
+      expectedRevision: 3,
+      status: "in-progress",
+    };
+    expect(canonicalRequestHash("ticket-update", {
+      ...semanticRequest,
+      commandId: "33333333-3333-4333-8333-333333333333",
+      idempotencyKey: "first-transport-key",
+      eventId: "11111111-1111-4111-8111-111111111111",
+      operationalEventId: "21111111-1111-4111-8111-111111111111",
+      occurredAt: "2026-08-10T10:00:00.000Z",
+      attemptTimestamp: "2026-08-10T10:00:01.000Z",
+      retry: 1,
+      retryAttempt: 1,
+      transportRequestId: "provider-request-first",
+    })).toBe(canonicalRequestHash("ticket-update", {
+      ...semanticRequest,
+      commandId: "43333333-3333-4333-8333-333333333333",
+      idempotencyKey: "second-transport-key",
+      eventId: "31111111-1111-4111-8111-111111111111",
+      operationalEventId: "41111111-1111-4111-8111-111111111111",
+      occurredAt: "2026-08-10T10:05:00.000Z",
+      attemptTimestamp: "2026-08-10T10:05:01.000Z",
+      retry: 2,
+      retryAttempt: 2,
+      transportRequestId: "provider-request-second",
+    }));
+  });
+
+  it.each([
+    ["Date", new Date("2026-08-10T10:00:00.000Z")],
+    ["Map", new Map([["ticketId", "TKT-0001"]])],
+    ["Set", new Set(["TKT-0001"])],
+    ["RegExp", /TKT-0001/],
+    ["class instance", new (class SemanticRequest {
+      readonly ticketId = "TKT-0001";
+    })()],
+  ])("rejects non-canonical %s request values instead of hashing them as plain objects", (_label, value) => {
+    expect(() => canonicalRequestHash("ticket-update", { value })).toThrow(/plain|canonical|json/i);
   });
 });
 
@@ -177,6 +235,104 @@ describe("persistent operational command idempotency", () => {
     store.close();
   });
 
+  it("closes a new command against event and non-event writes after its result is persisted", () => {
+    const store = openedStore();
+    try {
+      store.transaction((unit) => unit.insertTicket(ticket("TKT-0001")));
+      const request = { ticketId: "TKT-0001" };
+      const hash = canonicalRequestHash("ticket-update", request);
+
+      expect(() => store.transaction((unit) => {
+        expect(unit.beginCommand(commandIds.single, "ticket-update", request)).toBe("new");
+        const sequences = unit.allocateEventSequences("TKT-0001", 2);
+        unit.appendEvent(event("TKT-0001", sequences[0]!, eventIds.single, commandIds.single));
+        unit.persistCommandResult(commandIds.single, hash, {
+          operation: "ticket-update",
+          tickets: [{
+            ticketId: "TKT-0001",
+            operationalEventIds: [eventIds.single],
+            resultingRevision: null,
+          }],
+        });
+        unit.appendEvent(event(
+          "TKT-0001",
+          sequences[1]!,
+          eventIds.compoundFirst,
+          commandIds.single,
+        ));
+      })).toThrowError(expect.objectContaining({ code: "IDEMPOTENCY_CONFLICT" }));
+      expect(store.readWorkflowSnapshot("TKT-0001").events).toEqual([]);
+
+      expect(() => store.transaction((unit) => {
+        expect(unit.beginCommand(commandIds.single, "ticket-update", request)).toBe("new");
+        const [sequence] = unit.allocateEventSequences("TKT-0001", 1);
+        unit.appendEvent(event("TKT-0001", sequence!, eventIds.single, commandIds.single));
+        unit.persistCommandResult(commandIds.single, hash, {
+          operation: "ticket-update",
+          tickets: [{
+            ticketId: "TKT-0001",
+            operationalEventIds: [eventIds.single],
+            resultingRevision: null,
+          }],
+        });
+        unit.insertMessage({
+          id: "22222222-2222-4222-8222-222222222222",
+          ticketId: "TKT-0001",
+          operationalEventId: eventIds.single,
+          kind: "customer",
+          createdAt: "2026-08-10T10:00:00.000Z",
+          body: "This write must not escape the closed command result.",
+        });
+      })).toThrowError(expect.objectContaining({ code: "IDEMPOTENCY_CONFLICT" }));
+      expect(store.readWorkflowSnapshot("TKT-0001").events).toEqual([]);
+    } finally {
+      store.close();
+    }
+  });
+
+  it("makes a replay transaction read-only before and after the replay check", () => {
+    const store = openedStore();
+    try {
+      store.transaction((unit) => unit.insertTicket(ticket("TKT-0001")));
+      const request = { ticketId: "TKT-0001" };
+      const hash = canonicalRequestHash("ticket-update", request);
+      store.transaction((unit) => {
+        expect(unit.beginCommand(commandIds.single, "ticket-update", request)).toBe("new");
+        const [sequence] = unit.allocateEventSequences("TKT-0001", 1);
+        unit.appendEvent(event("TKT-0001", sequence!, eventIds.single, commandIds.single));
+        unit.persistCommandResult(commandIds.single, hash, {
+          operation: "ticket-update",
+          tickets: [{
+            ticketId: "TKT-0001",
+            operationalEventIds: [eventIds.single],
+            resultingRevision: null,
+          }],
+        });
+      });
+
+      expect(() => store.transaction((unit) => {
+        expect(unit.beginCommand(commandIds.single, "ticket-update", request)).not.toBe("new");
+        const [sequence] = unit.allocateEventSequences("TKT-0001", 1);
+        unit.appendEvent(event(
+          "TKT-0001",
+          sequence!,
+          eventIds.compoundFirst,
+          commandIds.single,
+        ));
+      })).toThrowError(expect.objectContaining({ code: "IDEMPOTENCY_CONFLICT" }));
+      expect(store.readWorkflowSnapshot("TKT-0001").events.map(({ id }) => id))
+        .toEqual([eventIds.single]);
+
+      expect(() => store.transaction((unit) => {
+        unit.insertTicket(ticket("TKT-0002"));
+        unit.beginCommand(commandIds.single, "ticket-update", request);
+      })).toThrowError(expect.objectContaining({ code: "IDEMPOTENCY_CONFLICT" }));
+      expect(() => store.readTicket("TKT-0002")).toThrow(/not found/i);
+    } finally {
+      store.close();
+    }
+  });
+
   it("persists and replays an ordered multi-event result without appending a second event set", () => {
     const store = openedStore();
     store.transaction((unit) => unit.insertTicket(ticket("TKT-0001")));
@@ -187,9 +343,9 @@ describe("persistent operational command idempotency", () => {
       tickets: [{
         ticketId: "TKT-0001" as const,
         operationalEventIds: [eventIds.compoundFirst, eventIds.compoundSecond],
-        resultingRevision: 1,
+        resultingRevision: null,
       }],
-      messageId: "22222222-2222-4222-8222-222222222222",
+      messageId,
     };
 
     store.transaction((unit) => {
@@ -197,6 +353,14 @@ describe("persistent operational command idempotency", () => {
       const sequences = unit.allocateEventSequences("TKT-0001", 2);
       unit.appendEvent(event("TKT-0001", sequences[0]!, eventIds.compoundFirst, commandIds.compound));
       unit.appendEvent(event("TKT-0001", sequences[1]!, eventIds.compoundSecond, commandIds.compound));
+      unit.insertMessage({
+        id: messageId,
+        ticketId: "TKT-0001",
+        operationalEventId: eventIds.compoundSecond,
+        kind: "support",
+        createdAt: "2026-08-10T10:00:00.000Z",
+        body: "The approved response was sent.",
+      });
       unit.persistCommandResult(commandIds.compound, hash, result);
     });
 
@@ -273,6 +437,28 @@ describe("persistent operational command idempotency", () => {
       unit.appendEvent(event("TKT-0002", 1, eventIds.secondTicketFirst, commandIds.multiTicket));
       unit.appendEvent(event("TKT-0001", 3, eventIds.firstTicketSecond, commandIds.multiTicket));
       unit.appendEvent(event("TKT-0002", 2, eventIds.secondTicketSecond, commandIds.multiTicket));
+      const firstUpdated = advanceTicket(unit.readTicket("TKT-0001"), "in-progress");
+      const secondUpdated = advanceTicket(unit.readTicket("TKT-0002"), "in-progress");
+      unit.updateTicket(firstUpdated, 0);
+      unit.updateTicket(secondUpdated, 0);
+      unit.appendTicketRevision({
+        ticketId: firstUpdated.id,
+        revision: firstUpdated.revision,
+        ticket: firstUpdated,
+        operationalEventId: eventIds.firstTicketSecond,
+        createdAt: firstUpdated.updatedAt,
+      });
+      unit.appendTicketRevision({
+        ticketId: secondUpdated.id,
+        revision: secondUpdated.revision,
+        ticket: secondUpdated,
+        operationalEventId: eventIds.secondTicketSecond,
+        createdAt: secondUpdated.updatedAt,
+      });
+      unit.insertDiagnosis({
+        diagnosis: diagnosisFor("TKT-0001", "diagnosis-001"),
+        operationalEventId: eventIds.firstTicketFirst,
+      });
       unit.persistCommandResult(commandIds.multiTicket, hash, result);
     });
 
@@ -285,6 +471,197 @@ describe("persistent operational command idempotency", () => {
       .toEqual([1, 2]);
     store.close();
   });
+
+  it("binds every semantic result reference to records written by the command", () => {
+    const store = openedStore();
+    try {
+      store.transaction((unit) => unit.insertTicket(ticket("TKT-0001")));
+      const request = { ticketId: "TKT-0001", expectedRevision: 0 };
+      const hash = canonicalRequestHash("ticket-update", request);
+      const result = {
+        operation: "ticket-update",
+        tickets: [{
+          ticketId: "TKT-0001" as const,
+          operationalEventIds: [
+            eventIds.semanticRevision,
+            eventIds.semanticMessage,
+            eventIds.semanticRecommendation,
+            eventIds.semanticDiagnosis,
+          ],
+          resultingRevision: 1,
+        }],
+        messageId,
+        recommendationId,
+        diagnosisId: "diagnosis-semantic",
+      };
+
+      store.transaction((unit) => {
+        expect(unit.beginCommand(commandIds.semantic, "ticket-update", request)).toBe("new");
+        const sequences = unit.allocateEventSequences("TKT-0001", 4);
+        const semanticEventIds = result.tickets[0].operationalEventIds;
+        semanticEventIds.forEach((id, index) => {
+          unit.appendEvent(event("TKT-0001", sequences[index]!, id, commandIds.semantic));
+        });
+        const updated = advanceTicket(unit.readTicket("TKT-0001"), "in-progress");
+        unit.updateTicket(updated, 0);
+        unit.appendTicketRevision({
+          ticketId: updated.id,
+          revision: updated.revision,
+          ticket: updated,
+          operationalEventId: eventIds.semanticRevision,
+          createdAt: updated.updatedAt,
+        });
+        unit.insertMessage({
+          id: messageId,
+          ticketId: updated.id,
+          operationalEventId: eventIds.semanticMessage,
+          kind: "customer",
+          createdAt: "2026-08-10T10:00:00.000Z",
+          body: "The credential refresh still fails.",
+        });
+        const recommendation = recommendationFor(updated, recommendationId);
+        unit.insertRecommendation(recommendation);
+        unit.appendRecommendationRevision({
+          recommendation,
+          operationalEventId: eventIds.semanticRecommendation,
+          createdAt: "2026-08-10T10:00:00.000Z",
+        });
+        unit.insertDiagnosis({
+          diagnosis: diagnosisFor(updated.id, "diagnosis-semantic"),
+          operationalEventId: eventIds.semanticDiagnosis,
+        });
+        unit.persistCommandResult(commandIds.semantic, hash, result);
+      });
+
+      expect(store.transaction((unit) =>
+        unit.beginCommand(commandIds.semantic, "ticket-update", request)))
+        .toEqual({ result });
+    } finally {
+      store.close();
+    }
+  });
+
+  it.each([null, 2] as const)(
+    "rejects resulting revision %s when the command wrote ticket revision 1",
+    (resultingRevision) => {
+      const store = openedStore();
+      try {
+        store.transaction((unit) => unit.insertTicket(ticket("TKT-0001")));
+        const request = { ticketId: "TKT-0001", expectedRevision: 0 };
+        const hash = canonicalRequestHash("ticket-update", request);
+
+        expect(() => store.transaction((unit) => {
+          expect(unit.beginCommand(commandIds.single, "ticket-update", request)).toBe("new");
+          const [sequence] = unit.allocateEventSequences("TKT-0001", 1);
+          unit.appendEvent(event("TKT-0001", sequence!, eventIds.single, commandIds.single));
+          const updated = advanceTicket(unit.readTicket("TKT-0001"), "in-progress");
+          unit.updateTicket(updated, 0);
+          unit.appendTicketRevision({
+            ticketId: updated.id,
+            revision: updated.revision,
+            ticket: updated,
+            operationalEventId: eventIds.single,
+            createdAt: updated.updatedAt,
+          });
+          unit.persistCommandResult(commandIds.single, hash, {
+            operation: "ticket-update",
+            tickets: [{
+              ticketId: "TKT-0001",
+              operationalEventIds: [eventIds.single],
+              resultingRevision,
+            }],
+          });
+        })).toThrowError(expect.objectContaining({ code: "IDEMPOTENCY_CONFLICT" }));
+        expect(store.readTicket("TKT-0001").revision).toBe(0);
+      } finally {
+        store.close();
+      }
+    },
+  );
+
+  it.each(["message", "recommendation", "diagnosis"] as const)(
+    "rejects a missing %s result reference",
+    (kind) => {
+      const store = openedStore();
+      try {
+        store.transaction((unit) => unit.insertTicket(ticket("TKT-0001")));
+        const request = { ticketId: "TKT-0001" };
+        const hash = canonicalRequestHash("ticket-update", request);
+        expect(() => store.transaction((unit) => {
+          expect(unit.beginCommand(commandIds.single, "ticket-update", request)).toBe("new");
+          const [sequence] = unit.allocateEventSequences("TKT-0001", 1);
+          unit.appendEvent(event("TKT-0001", sequence!, eventIds.single, commandIds.single));
+          unit.persistCommandResult(
+            commandIds.single,
+            hash,
+            resultWithReference(kind, "TKT-0001", eventIds.single),
+          );
+        })).toThrowError(expect.objectContaining({ code: "IDEMPOTENCY_CONFLICT" }));
+        expect(store.readWorkflowSnapshot("TKT-0001").events).toEqual([]);
+      } finally {
+        store.close();
+      }
+    },
+  );
+
+  it.each(["message", "recommendation", "diagnosis"] as const)(
+    "rejects an omitted %s result reference when the command wrote that record",
+    (kind) => {
+      const store = openedStore();
+      try {
+        store.transaction((unit) => unit.insertTicket(ticket("TKT-0001")));
+        const request = { ticketId: "TKT-0001" };
+        const hash = canonicalRequestHash("ticket-update", request);
+        expect(() => store.transaction((unit) => {
+          expect(unit.beginCommand(commandIds.single, "ticket-update", request)).toBe("new");
+          const [sequence] = unit.allocateEventSequences("TKT-0001", 1);
+          unit.appendEvent(event("TKT-0001", sequence!, eventIds.single, commandIds.single));
+          writeSemanticReference(unit, kind, "TKT-0001", eventIds.single);
+          unit.persistCommandResult(commandIds.single, hash, {
+            operation: "ticket-update",
+            tickets: [{
+              ticketId: "TKT-0001",
+              operationalEventIds: [eventIds.single],
+              resultingRevision: null,
+            }],
+          });
+        })).toThrowError(expect.objectContaining({ code: "IDEMPOTENCY_CONFLICT" }));
+        expect(store.readWorkflowSnapshot("TKT-0001").events).toEqual([]);
+      } finally {
+        store.close();
+      }
+    },
+  );
+
+  it.each(["message", "recommendation", "diagnosis"] as const)(
+    "rejects a %s result reference owned by another ticket and command",
+    (kind) => {
+      const store = openedStore();
+      try {
+        store.transaction((unit) => {
+          unit.insertTicket(ticket("TKT-0001"));
+          unit.insertTicket(ticket("TKT-0002"));
+        });
+        store.transaction((unit) => seedWrongTicketReference(unit, kind));
+        const request = { ticketId: "TKT-0001" };
+        const hash = canonicalRequestHash("ticket-update", request);
+
+        expect(() => store.transaction((unit) => {
+          expect(unit.beginCommand(commandIds.single, "ticket-update", request)).toBe("new");
+          const [sequence] = unit.allocateEventSequences("TKT-0001", 1);
+          unit.appendEvent(event("TKT-0001", sequence!, eventIds.single, commandIds.single));
+          unit.persistCommandResult(
+            commandIds.single,
+            hash,
+            resultWithReference(kind, "TKT-0001", eventIds.single),
+          );
+        })).toThrowError(expect.objectContaining({ code: "IDEMPOTENCY_CONFLICT" }));
+        expect(store.readWorkflowSnapshot("TKT-0001").events).toEqual([]);
+      } finally {
+        store.close();
+      }
+    },
+  );
 
   it("rolls back every ticket event and the command result when an atomic multi-ticket command fails", () => {
     const store = openedStore();
@@ -308,7 +685,6 @@ describe("persistent operational command idempotency", () => {
           resultingRevision: null,
         },
       ],
-      diagnosisId: "diagnosis-rollback",
     };
 
     expect(() => store.transaction((unit) => {
@@ -411,4 +787,146 @@ function event(
     commandId,
     facts: {},
   };
+}
+
+function advanceTicket(value: Ticket, status: "in-progress" | "waiting-customer"): Ticket {
+  return TicketSchema.parse({
+    ...value,
+    revision: value.revision + 1,
+    status,
+    updatedAt: "2026-08-10T10:00:00.000Z",
+  });
+}
+
+function recommendationFor(value: Ticket, id: string) {
+  return TriageRecommendationSchema.parse({
+    id,
+    ticketId: value.id,
+    sourceRevision: value.revision,
+    category: "api",
+    priority: "P2",
+    team: "api-platform",
+    duplicateCandidates: [],
+    outageRisk: "none",
+    securityRisk: "none",
+    slaRisk: "none",
+    missingInformation: [],
+    supportState: "diagnosing",
+    requiredEvidence: [],
+    providedEvidence: [],
+    missingEvidence: [],
+    knowledgeArticleIds: ["api-auth"],
+    draftCustomerResponse: "We are reviewing the credential evidence.",
+    rationale: "The ticket matches API credential rotation.",
+    confidence: 0.9,
+    recommendedNextAction: "Compare the active credential version.",
+    escalationRequired: false,
+    escalationReasons: [],
+    resolution: "pending",
+    createdAt: "2026-08-10T10:00:00.000Z",
+  });
+}
+
+function diagnosisFor(ticketId: TicketId, id: string) {
+  return CompletedDiagnosisSchema.parse({
+    id,
+    ticketId,
+    problem: "API requests fail after rotating credentials.",
+    symptoms: ["Requests return 401 after rotation."],
+    evidenceUsed: ["Request ID req-123 returned 401."],
+    evidenceReferences: [{
+      id: "request-id",
+      labelAtDiagnosis: "Request ID",
+      source: "reply",
+      sourceRef: "reply-123",
+    }],
+    ownerTeam: "api-platform",
+    fixSteps: ["Refresh the service credential in the deployment secret store."],
+    verificationSteps: ["Confirm a request succeeds with the refreshed credential."],
+    completedAt: "2026-08-10T10:00:00.000Z",
+  });
+}
+
+function resultWithReference(
+  kind: "message" | "recommendation" | "diagnosis",
+  ticketId: "TKT-0001" | "TKT-0002",
+  operationalEventId: string,
+) {
+  const base = {
+    operation: "ticket-update" as const,
+    tickets: [{
+      ticketId,
+      operationalEventIds: [operationalEventId],
+      resultingRevision: null,
+    }],
+  };
+  if (kind === "message") return { ...base, messageId };
+  if (kind === "recommendation") return { ...base, recommendationId };
+  return { ...base, diagnosisId: "diagnosis-semantic" };
+}
+
+function seedWrongTicketReference(
+  unit: OperationalUnitOfWork,
+  kind: "message" | "recommendation" | "diagnosis",
+): void {
+  const [sequence] = unit.allocateEventSequences("TKT-0002", 1);
+  unit.appendEvent(event("TKT-0002", sequence!, eventIds.wrongTicket, commandIds.compound));
+  if (kind === "message") {
+    unit.insertMessage({
+      id: messageId,
+      ticketId: "TKT-0002",
+      operationalEventId: eventIds.wrongTicket,
+      kind: "customer",
+      createdAt: "2026-08-10T10:00:00.000Z",
+      body: "This message belongs to the other ticket.",
+    });
+    return;
+  }
+  if (kind === "recommendation") {
+    const recommendation = recommendationFor(unit.readTicket("TKT-0002"), recommendationId);
+    unit.insertRecommendation(recommendation);
+    unit.appendRecommendationRevision({
+      recommendation,
+      operationalEventId: eventIds.wrongTicket,
+      createdAt: "2026-08-10T10:00:00.000Z",
+    });
+    return;
+  }
+  unit.insertDiagnosis({
+    diagnosis: diagnosisFor("TKT-0002", "diagnosis-semantic"),
+    operationalEventId: eventIds.wrongTicket,
+  });
+}
+
+function writeSemanticReference(
+  unit: OperationalUnitOfWork,
+  kind: "message" | "recommendation" | "diagnosis",
+  ticketId: "TKT-0001" | "TKT-0002",
+  operationalEventId: string,
+): void {
+  if (kind === "message") {
+    unit.insertMessage({
+      id: messageId,
+      ticketId,
+      operationalEventId,
+      kind: "customer",
+      createdAt: "2026-08-10T10:00:00.000Z",
+      body: "This command wrote a canonical message.",
+    });
+    return;
+  }
+  if (kind === "recommendation") {
+    const recommendation = recommendationFor(unit.readTicket(ticketId), recommendationId);
+    unit.insertRecommendation(recommendation);
+    unit.appendRecommendationRevision({
+      recommendation,
+      operationalEventId,
+      createdAt: "2026-08-10T10:00:00.000Z",
+    });
+    return;
+  }
+  unit.insertDiagnosis({
+    diagnosis: diagnosisFor(ticketId, "diagnosis-semantic"),
+    operationalEventId,
+  });
 }

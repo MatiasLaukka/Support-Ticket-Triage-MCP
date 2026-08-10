@@ -19,7 +19,11 @@ import { evaluateTicketWithAi } from "../src/approval-desk/ai-evaluation.js";
 import type { ClassificationReasoningProvider } from "../src/approval-desk/classification-reasoning-provider.js";
 import type { CustomerResponseDraftProvider } from "../src/approval-desk/draft-response-provider.js";
 import type { CandidateDraftProvider } from "../src/knowledge-evolution/candidate-draft-provider.js";
-import { KnowledgeCandidateWriteSchema, type KnowledgeObject } from "../src/knowledge-evolution/domain.js";
+import {
+  KnowledgeCandidateWriteSchema,
+  KnowledgeObjectWriteSchema,
+  type KnowledgeObject,
+} from "../src/knowledge-evolution/domain.js";
 import { KnowledgeEvolutionService } from "../src/knowledge-evolution/service.js";
 import { createRuntimeDependencies } from "../src/runtime.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -3728,6 +3732,87 @@ describe("createApprovalDeskHttpServer", () => {
     });
     expect((await deps.tickets.get("TKT-1005")).revision).toBe(0);
   });
+  it("recognizes exact security audit evidence through the Approval Desk evaluation route", async () => {
+    const { json } = await startFixture();
+
+    const evaluated = await json("/api/tickets/TKT-1004/recommendations", {
+      method: "POST",
+      body: JSON.stringify({
+        actor: "approval-desk",
+        aiPreference: "deterministic",
+        customerReplies: [{
+          id: "reply-security-holdout-001",
+          createdAt: "2026-06-10T09:00:00.000Z",
+          body: "The audit source shown is IP 198.51.100.24. The affected scope appears to be 12 profiles in the latest export.",
+        }],
+      }),
+    });
+    const recommendation = TriageRecommendationSchema.parse(
+      evaluated.body.recommendation,
+    );
+
+    expect(evaluated.status, JSON.stringify(evaluated.body)).toBe(201);
+    expect(recommendation.requiredEvidence?.map(({ id }) => id).sort()).toEqual([
+      "key-identifier",
+      "exposure-location",
+      "key-usage-status",
+      "rotation-status",
+      "audit-source",
+      "affected-scope",
+    ].sort());
+    expect(recommendation.providedEvidence?.map(({ id }) => id).sort()).toEqual([
+      "exposure-location",
+      "audit-source",
+      "affected-scope",
+    ].sort());
+    expect(recommendation.missingEvidence?.map(({ id }) => id).sort()).toEqual([
+      "key-identifier",
+      "key-usage-status",
+      "rotation-status",
+    ].sort());
+    expect(recommendation.supportState).toBe("information-received");
+  });
+
+  it("keeps the Approval Desk evidence-gated until an approved request-ID-only cause receives its ID", async () => {
+    const { deps, json } = await startFixture();
+    const reusableKnowledge = await reusableRequestIdKnowledge();
+    deps.knowledgeEvolution.service.listReusableApproved = async () => reusableKnowledge;
+
+    const withoutRequestId = await json("/api/tickets/TKT-1010/recommendations", {
+      method: "POST",
+      body: JSON.stringify({ actor: "approval-desk", aiPreference: "deterministic" }),
+    });
+    const before = TriageRecommendationSchema.parse(withoutRequestId.body.recommendation);
+    expect(withoutRequestId.status, JSON.stringify(withoutRequestId.body)).toBe(201);
+    expect(before.requiredEvidence?.map(({ id }) => id).sort()).toEqual(["request-id"]);
+    expect(before.providedEvidence).toEqual([]);
+    expect(before.missingEvidence?.map(({ id }) => id).sort()).toEqual(["request-id"]);
+    expect(before.supportState).toBe("needs-information");
+
+    const withRequestId = await json("/api/tickets/TKT-1010/recommendations", {
+      method: "POST",
+      body: JSON.stringify({
+        actor: "approval-desk",
+        aiPreference: "deterministic",
+        customerReplies: [{
+          id: "reply-request-id-holdout-001",
+          createdAt: "2026-06-10T09:00:00.000Z",
+          body: "Request ID: req_holdout_001.",
+        }],
+      }),
+    });
+    const after = TriageRecommendationSchema.parse(withRequestId.body.recommendation);
+    expect(withRequestId.status, JSON.stringify(withRequestId.body)).toBe(201);
+    expect(after.requiredEvidence?.map(({ id }) => id).sort()).toEqual(["request-id"]);
+    expect(after.providedEvidence?.map(({ id }) => id).sort()).toEqual(["request-id"]);
+    expect(after.missingEvidence).toEqual([]);
+    expect(after.supportState).toBe("known-cause");
+    expect(after.knownCauseRef).toEqual({
+      objectId: "request-id-holdout",
+      version: 1,
+    });
+  });
+
   it("routes the same unavailable reusable-knowledge snapshot through HTTP and MCP evaluation", async () => {
     const { deps, json } = await startFixture();
     const calls: string[] = [];
@@ -3828,6 +3913,53 @@ describe("createApprovalDeskHttpServer", () => {
     });
   });
 });
+
+async function reusableRequestIdKnowledge(): Promise<ReusableKnowledgeResult> {
+  const object = KnowledgeObjectWriteSchema.parse({
+    id: "request-id-holdout",
+    version: 1,
+    learningGovernance: "ledger",
+    kind: "known-cause",
+    name: "Request ID confirmation path",
+    summary: "An approved support path requiring only a request identifier.",
+    triggerPatterns: ["problem"],
+    evidencePolicy: { mode: "required", evidenceIds: ["request-id"] },
+    timeConstraints: ["Apply when the documented problem pattern is present."],
+    diagnosticSteps: ["Review the request identifier."],
+    fixSteps: ["Apply the documented correction."],
+    verificationSteps: ["Verify the next request."],
+    customerSafeExplanation: "We will review the documented support path.",
+    operatorRationale: "This controlled path requires a request identifier.",
+    owner: "api-platform",
+    supportingDiagnosisIds: ["diagnosis-request-id-holdout"],
+    supportingTicketIds: ["TKT-1010"],
+    provenance: { source: "test", recordedAt: "2026-08-08T08:00:00.000Z" },
+    status: "approved",
+    approval: { approvedBy: "support-lead", approvedAt: "2026-08-08T08:00:00.000Z" },
+  });
+  return listReusableApproved({
+    asOf: "2026-08-08T12:00:00.000Z",
+    snapshotReader: {
+      async snapshotForReuse() {
+        return {
+          versions: [object],
+          heads: new Map([[object.id, object.version]]),
+          events: [{
+            id: "00000000-0000-4000-8000-000000000102",
+            occurredAt: "2026-08-08T08:00:00.000Z",
+            actor: "support-lead",
+            correlationId: "10000000-0000-4000-8000-000000000102",
+            candidateId: "candidate-request-id-holdout",
+            objectId: object.id,
+            sourceVersion: object.version,
+            eventType: "candidate-promoted",
+            payload: { maturity: "promoted", health: "active", provenance: "test promotion" },
+          }],
+        };
+      },
+    },
+  });
+}
 
 async function reusableCampaignEditorKnowledge(version: number): Promise<ReusableKnowledgeResult> {
   const object: KnowledgeObject = {

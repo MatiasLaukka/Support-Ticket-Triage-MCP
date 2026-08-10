@@ -8,6 +8,8 @@ import {
 } from "../src/domain.js";
 import { analyzeEvidenceReadiness } from "../src/approval-desk/evidence-readiness.js";
 import { getKnownCause } from "../src/approval-desk/known-cause-catalog.js";
+import { KnowledgeObjectWriteSchema } from "../src/knowledge-evolution/domain.js";
+import { listReusableApproved } from "../src/knowledge-evolution/reusable-context.js";
 
 describe("analyzeEvidenceReadiness", () => {
   it("returns evidence requirements accepted by the strict recommendation schema", async () => {
@@ -556,12 +558,104 @@ describe("analyzeEvidenceReadiness", () => {
       },
     });
 
-    expect(readiness.providedEvidence.map((requirement) => requirement.id)).toEqual(
-      expect.arrayContaining(["audit-source", "affected-scope"]),
-    );
-    expect(readiness.missingEvidence.map((requirement) => requirement.id)).not.toEqual(
-      expect.arrayContaining(["audit-source", "affected-scope"]),
-    );
+    expect(readiness.providedEvidence.map(({ id }) => id).sort()).toEqual([
+      "exposure-location",
+      "audit-source",
+      "affected-scope",
+    ].sort());
+    expect(readiness.missingEvidence.map(({ id }) => id).sort()).toEqual([
+      "key-identifier",
+      "key-usage-status",
+      "rotation-status",
+    ].sort());
+    expect(readiness.supportState).toBe("needs-information");
+  });
+
+  it("keeps an ordinary API ticket evidence-gated when only its request ID is provided", async () => {
+    const apiTicket = TicketSchema.parse({
+      ...(await loadSeedTicket("TKT-1005")),
+      subject: "API request needs review",
+      description: "Customer reply: Request ID: req_holdout_001.",
+      category: "api",
+      priority: "P3",
+      team: "api-platform",
+      tags: [],
+    });
+    const apiReadiness = analyzeEvidenceReadiness({
+      ticket: apiTicket,
+      outcome: {
+        ticketId: apiTicket.id,
+        category: "api",
+        acceptablePriorities: ["P3"],
+        team: "api-platform",
+        requiredEscalations: [],
+        knowledgeArticleIds: ["api-reference"],
+      },
+    });
+
+    expect(apiReadiness.requiredEvidence.map(({ id }) => id).sort()).toEqual([
+      "endpoint-url",
+      "request-id",
+      "api-response-status",
+      "sample-payload",
+      "failure-timestamp",
+    ].sort());
+    expect(apiReadiness.providedEvidence.map(({ id }) => id).sort()).toEqual(["request-id"]);
+    expect(apiReadiness.missingEvidence.map(({ id }) => id).sort()).toEqual([
+      "endpoint-url",
+      "api-response-status",
+      "sample-payload",
+      "failure-timestamp",
+    ].sort());
+    expect(apiReadiness.supportState).toBe("needs-information");
+  });
+
+  it("requires an approved request-ID-only cause to receive its required evidence before activation", async () => {
+    const reusableKnowledge = await reusableCredentialRotationKnowledge();
+    const matchedTicket = TicketSchema.parse({
+      ...(await loadSeedTicket("TKT-1005")),
+      subject: "Credential rotation request failure",
+      description: "Credential rotation request failure. Request ID: req_holdout_001.",
+      category: "api",
+      priority: "P3",
+      team: "api-platform",
+      tags: [],
+    });
+    const matchedReadiness = analyzeEvidenceReadiness({
+      ticket: matchedTicket,
+      outcome: {
+        ticketId: matchedTicket.id,
+        category: "api",
+        acceptablePriorities: ["P3"],
+        team: "api-platform",
+        requiredEscalations: [],
+        knowledgeArticleIds: ["api-reference"],
+      },
+      reusableKnowledge,
+    });
+    const missingReadiness = analyzeEvidenceReadiness({
+      ticket: TicketSchema.parse({
+        ...matchedTicket,
+        description: "Credential rotation request failure.",
+      }),
+      outcome: {
+        ticketId: matchedTicket.id,
+        category: "api",
+        acceptablePriorities: ["P3"],
+        team: "api-platform",
+        requiredEscalations: [],
+        knowledgeArticleIds: ["api-reference"],
+      },
+      reusableKnowledge,
+    });
+
+    expect(matchedReadiness.requiredEvidence.map(({ id }) => id).sort()).toEqual(["request-id"]);
+    expect(matchedReadiness.providedEvidence.map(({ id }) => id).sort()).toEqual(["request-id"]);
+    expect(matchedReadiness.supportState).toBe("known-cause");
+    expect(missingReadiness.requiredEvidence.map(({ id }) => id).sort()).toEqual(["request-id"]);
+    expect(missingReadiness.providedEvidence).toEqual([]);
+    expect(missingReadiness.missingEvidence.map(({ id }) => id).sort()).toEqual(["request-id"]);
+    expect(missingReadiness.supportState).toBe("needs-information");
   });
 
   it("keeps unknown private-key facts missing for TKT-1019", async () => {
@@ -858,4 +952,51 @@ async function loadSeedTicket(ticketId: string): Promise<Ticket> {
     throw new Error(`Seed ticket ${ticketId} was not found.`);
   }
   return ticket;
+}
+
+async function reusableCredentialRotationKnowledge() {
+  const object = KnowledgeObjectWriteSchema.parse({
+    id: "credential-rotation-holdout",
+    version: 1,
+    learningGovernance: "ledger",
+    kind: "known-cause",
+    name: "Credential rotation request failure",
+    summary: "An approved request-ID-only credential rotation support path.",
+    triggerPatterns: ["credential rotation request failure"],
+    evidencePolicy: { mode: "required", evidenceIds: ["request-id"] },
+    timeConstraints: ["Apply after the documented credential rotation condition is present."],
+    diagnosticSteps: ["Review the request identifier."],
+    fixSteps: ["Apply the documented credential correction."],
+    verificationSteps: ["Verify a new request succeeds."],
+    customerSafeExplanation: "We will review the documented credential condition.",
+    operatorRationale: "This controlled object requires a request identifier.",
+    owner: "api-platform",
+    supportingDiagnosisIds: ["diagnosis-credential-rotation"],
+    supportingTicketIds: ["TKT-1005"],
+    provenance: { source: "test", recordedAt: "2026-08-08T08:00:00.000Z" },
+    status: "approved",
+    approval: { approvedBy: "support-lead", approvedAt: "2026-08-08T08:00:00.000Z" },
+  });
+  return listReusableApproved({
+    asOf: "2026-08-08T12:00:00.000Z",
+    snapshotReader: {
+      async snapshotForReuse() {
+        return {
+          versions: [object],
+          heads: new Map([[object.id, object.version]]),
+          events: [{
+            id: "00000000-0000-4000-8000-000000000101",
+            occurredAt: "2026-08-08T08:00:00.000Z",
+            actor: "support-lead",
+            correlationId: "10000000-0000-4000-8000-000000000101",
+            candidateId: "candidate-credential-rotation-holdout",
+            objectId: object.id,
+            sourceVersion: object.version,
+            eventType: "candidate-promoted",
+            payload: { maturity: "promoted", health: "active", provenance: "test promotion" },
+          }],
+        };
+      },
+    },
+  });
 }

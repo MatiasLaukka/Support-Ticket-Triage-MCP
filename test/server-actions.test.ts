@@ -16,6 +16,11 @@ import {
 } from "../src/domain.js";
 import type { ClassificationReasoningProvider } from "../src/approval-desk/classification-reasoning-provider.js";
 import type { CustomerResponseDraftProvider } from "../src/approval-desk/draft-response-provider.js";
+import { KnowledgeObjectWriteSchema } from "../src/knowledge-evolution/domain.js";
+import {
+  listReusableApproved,
+  type ReusableKnowledgeResult,
+} from "../src/knowledge-evolution/reusable-context.js";
 import { KnowledgeRepository } from "../src/knowledge-repository.js";
 import { RecommendationRepository } from "../src/recommendation-repository.js";
 import { createTriageServer } from "../src/server.js";
@@ -295,6 +300,7 @@ async function connect(
     classificationReasoningProvider: ClassificationReasoningProvider;
     draftProvider: CustomerResponseDraftProvider;
     env: NodeJS.ProcessEnv;
+    knowledgeEvolution: ReturnType<typeof nonProductionReusableKnowledgeAdapter>;
   }> = {},
 ): Promise<Client> {
   const server = createTriageServer({
@@ -331,6 +337,64 @@ function nonProductionReusableKnowledgeAdapter() {
       },
     } as never,
   };
+}
+
+async function reusableCredentialRotationKnowledgeAdapter(): Promise<ReturnType<typeof nonProductionReusableKnowledgeAdapter>> {
+  const reusableKnowledge = await reusableCredentialRotationKnowledge();
+  return {
+    service: {
+      async listReusableApproved(): Promise<ReusableKnowledgeResult> {
+        return reusableKnowledge;
+      },
+    } as never,
+  };
+}
+
+async function reusableCredentialRotationKnowledge(): Promise<ReusableKnowledgeResult> {
+  const object = KnowledgeObjectWriteSchema.parse({
+    id: "credential-rotation-holdout",
+    version: 1,
+    learningGovernance: "ledger",
+    kind: "known-cause",
+    name: "Credential rotation request failure",
+    summary: "An approved request-ID-only credential rotation support path.",
+    triggerPatterns: ["credential rotation request failure"],
+    evidencePolicy: { mode: "required", evidenceIds: ["request-id"] },
+    timeConstraints: ["Apply after the documented credential rotation condition is present."],
+    diagnosticSteps: ["Review the request identifier."],
+    fixSteps: ["Apply the documented credential correction."],
+    verificationSteps: ["Verify a new request succeeds."],
+    customerSafeExplanation: "We will review the documented credential condition.",
+    operatorRationale: "This controlled object requires a request identifier.",
+    owner: "api-platform",
+    supportingDiagnosisIds: ["diagnosis-credential-rotation"],
+    supportingTicketIds: ["TKT-1001"],
+    provenance: { source: "test", recordedAt: "2026-08-08T08:00:00.000Z" },
+    status: "approved",
+    approval: { approvedBy: "support-lead", approvedAt: "2026-08-08T08:00:00.000Z" },
+  });
+  return listReusableApproved({
+    asOf: "2026-08-08T12:00:00.000Z",
+    snapshotReader: {
+      async snapshotForReuse() {
+        return {
+          versions: [object],
+          heads: new Map([[object.id, object.version]]),
+          events: [{
+            id: "00000000-0000-4000-8000-000000000101",
+            occurredAt: "2026-08-08T08:00:00.000Z",
+            actor: "support-lead",
+            correlationId: "10000000-0000-4000-8000-000000000101",
+            candidateId: "candidate-credential-rotation-holdout",
+            objectId: object.id,
+            sourceVersion: object.version,
+            eventType: "candidate-promoted",
+            payload: { maturity: "promoted", health: "active", provenance: "test promotion" },
+          }],
+        };
+      },
+    },
+  });
 }
 
 async function callTool(
@@ -1404,6 +1468,122 @@ describe("createTriageServer action protocol", () => {
     expect(await fixture.recommendations.get(recommendation.id)).toEqual(
       recommendation,
     );
+  });
+
+  it("keeps an ordinary API ticket evidence-gated after MCP receives only a request ID", async () => {
+    const fixture = await createFixture(makeTicket({
+      subject: "API request needs review",
+      description: "An API request is failing for the merchant.",
+      category: "api",
+      priority: "P3",
+      team: "api-platform",
+      tags: [],
+    }));
+    const client = await connect(fixture);
+    await callTool(client, "add_customer_reply", {
+      ticketId: "TKT-1001",
+      actor: "Maya Chen",
+      body: "Request ID: req_holdout_001.",
+      source: "manual",
+    });
+
+    const evaluated = await callTool(client, "evaluate_ticket", {
+      ticketId: "TKT-1001",
+      actor: "approval-desk",
+      aiPreference: "deterministic",
+    });
+    const recommendation = TriageRecommendationSchema.parse(
+      expectStableStructured(evaluated).recommendation,
+    );
+
+    expect(recommendation.requiredEvidence?.map(({ id }) => id).sort()).toEqual([
+      "endpoint-url",
+      "request-id",
+      "api-response-status",
+      "sample-payload",
+      "failure-timestamp",
+    ].sort());
+    expect(recommendation.providedEvidence?.map(({ id }) => id).sort()).toEqual(["request-id"]);
+    expect(recommendation.missingEvidence?.map(({ id }) => id).sort()).toEqual([
+      "endpoint-url",
+      "api-response-status",
+      "sample-payload",
+      "failure-timestamp",
+    ].sort());
+    // The action surface deliberately records recognized partial progress as
+    // information-received, while the authoritative readiness result remains
+    // evidence-gated until every required API detail is present.
+    expect(recommendation.supportState).toBe("information-received");
+
+    const diagnosis = await callTool(client, "record_diagnosis", {
+      ticketId: "TKT-1001",
+      actor: "approval-desk",
+    });
+    const fix = await callTool(client, "mark_fix_available", {
+      ticketId: "TKT-1001",
+      actor: "approval-desk",
+    });
+    expect(diagnosis.isError).toBe(true);
+    expect(textOf(diagnosis)).toBe(
+      "INVALID_APPROVAL_FIELDS: Diagnosis requires all required evidence to be gathered.",
+    );
+    expect(fix.isError).toBe(true);
+    expect(textOf(fix)).toBe(
+      "INVALID_APPROVAL_FIELDS: A completed diagnosis is required before marking a fix available.",
+    );
+    const auditActions = (await fixture.audits.list("TKT-1001")).map(({ action }) => action);
+    expect(auditActions).not.toContain("diagnosis-completed");
+    expect(auditActions).not.toContain("fix-available");
+  });
+
+  it("activates a reusable request-ID-only cause through MCP only after the request ID arrives", async () => {
+    const fixture = await createFixture(makeTicket({
+      subject: "Credential rotation request failure",
+      description: "Credential rotation request failure.",
+      category: "api",
+      priority: "P3",
+      team: "api-platform",
+      tags: [],
+    }));
+    const client = await connect(fixture, {
+      knowledgeEvolution: await reusableCredentialRotationKnowledgeAdapter(),
+    });
+
+    const beforeEvidence = await callTool(client, "evaluate_ticket", {
+      ticketId: "TKT-1001",
+      actor: "approval-desk",
+      aiPreference: "deterministic",
+    });
+    const beforeRecommendation = TriageRecommendationSchema.parse(
+      expectStableStructured(beforeEvidence).recommendation,
+    );
+    expect(beforeRecommendation.requiredEvidence?.map(({ id }) => id).sort()).toEqual(["request-id"]);
+    expect(beforeRecommendation.providedEvidence).toEqual([]);
+    expect(beforeRecommendation.missingEvidence?.map(({ id }) => id).sort()).toEqual(["request-id"]);
+    expect(beforeRecommendation.supportState).toBe("needs-information");
+
+    await callTool(client, "add_customer_reply", {
+      ticketId: "TKT-1001",
+      actor: "Maya Chen",
+      body: "Request ID: req_holdout_001.",
+      source: "manual",
+    });
+    const afterEvidence = await callTool(client, "evaluate_ticket", {
+      ticketId: "TKT-1001",
+      actor: "approval-desk",
+      aiPreference: "deterministic",
+    });
+    const afterRecommendation = TriageRecommendationSchema.parse(
+      expectStableStructured(afterEvidence).recommendation,
+    );
+
+    expect(afterRecommendation.requiredEvidence?.map(({ id }) => id).sort()).toEqual(["request-id"]);
+    expect(afterRecommendation.providedEvidence?.map(({ id }) => id).sort()).toEqual(["request-id"]);
+    expect(afterRecommendation.supportState).toBe("known-cause");
+    expect(afterRecommendation.knownCauseRef).toEqual({
+      objectId: "credential-rotation-holdout",
+      version: 1,
+    });
   });
 
   it("supersedes an older pending recommendation after a newer reply during evaluate_ticket", async () => {

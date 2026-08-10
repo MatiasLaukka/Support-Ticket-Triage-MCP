@@ -57,17 +57,17 @@ Existing `TicketRepository`, `RecommendationRepository`, and `AuditRepository` r
 - Modify: `src/domain.ts` only where an existing validated domain type must be reused without changing its authority semantics.
 
 **Interfaces:**
-- Produces `OperationalEvent`, `TicketRevision`, `ConversationMessage`, `OperationalWorkflowSnapshot`, `OperationalOutboxRow`, `CommandIdempotencyRecord`, `ImportState`, `ImportResolution`, `DecisionTimelineEntry`, and `OperationalResultReference` schemas.
+- Produces `OperationalEvent`, `DecisionTraceEvent`, `TicketRevision`, `ConversationMessage`, `OperationalWorkflowSnapshot`, `OperationalOutboxRow`, `CommandIdempotencyRecord`, `ImportState`, `ImportResolution`, `DecisionTimelineEntry`, and `OperationalResultReference` schemas.
 - Produces canonical request normalization and immutable result-envelope types consumed by the persistence and service-migration tasks.
 
-- [ ] **Step 1: Write the failing schema tests.** Cover strict parsing for event IDs, ticket IDs, ticket sequences, command IDs, request hashes, message IDs, revision numbers, result references, outbox statuses (`pending | delivered | dead-letter`), import states (`empty | import-in-progress | imported | native`), and timeline entries.
+- [ ] **Step 1: Write the failing schema tests.** Cover strict parsing for event IDs, ticket IDs, ticket sequences, command IDs, request hashes, message IDs, revision numbers, sanitized event facts, all typed decision-trace variants, single- and multi-ticket result references, outbox statuses (`pending | delivered | dead-letter`), import states (`empty | import-in-progress | imported | native`), and timeline entries. Cover cross-record ticket ownership, unique event IDs, and ordered causal events in workflow snapshots.
 - [ ] **Step 2: Run the focused test to verify RED.**
 
   Run: `npm test -- --run test/operational-domain.test.ts`
 
   Expected: FAIL because the operational module and schemas do not exist.
-- [ ] **Step 3: Implement the schemas.** Reuse `TicketSchema`, `TriageRecommendationSchema`, `AuditEventSchema`, `IsoTimestampSchema`, and existing ID schemas rather than creating incompatible duplicates. Make related records point to `operationalEventId`; do not put reverse record foreign keys on `OperationalEvent`.
-- [ ] **Step 4: Encode revision and outbox semantics.** The type for diagnosis completion must allow a ticket revision only when the canonical `Ticket` projection changed. The outbox envelope must be a discriminated immutable operational-fact envelope covering every existing learning-capture mapping (`diagnosis-recorded`, `diagnosis-approved`, `fix-available`, and `outcome-verified`), with the committed operational-event reference and only facts captured at commit time.
+- [ ] **Step 3: Implement the schemas.** Reuse `TicketSchema`, `TriageRecommendationSchema`, `AuditEventSchema`, `IsoTimestampSchema`, and existing ID schemas rather than creating incompatible duplicates. Make related records point to `operationalEventId`; do not put reverse record foreign keys on `OperationalEvent`. Operational event facts must use a closed sanitized value schema (safe text, finite numbers, booleans, and bounded arrays/records of those values), never unrestricted `unknown` JSON, and must reject body/customer-response/prompt/reasoning/credential/path fields. Add a discriminated `DecisionTraceEventSchema` for the approved classification, evidence, known-cause, lifecycle, and provider-telemetry trace payloads.
+- [ ] **Step 4: Encode revision, replay, and outbox semantics.** The type for diagnosis completion must allow a ticket revision only when the canonical `Ticket` projection changed. The immutable result envelope must represent every affected ticket in a multi-ticket command, including each ticket's event IDs and resulting revision, so replay is semantically complete. The outbox envelope must be a discriminated immutable operational-fact envelope covering every existing learning-capture mapping (`diagnosis-recorded`, `diagnosis-approved`, `fix-available`, and `outcome-verified`), with the committed operational-event reference and only facts captured at commit time.
 - [ ] **Step 5: Run the focused test and typecheck.**
 
   Run: `npm test -- --run test/operational-domain.test.ts` and `npm run typecheck`
@@ -134,6 +134,7 @@ Existing `TicketRepository`, `RecommendationRepository`, and `AuditRepository` r
 - `beginCommand(commandId: string, operation: string, request: unknown): CommandReplay | "new"`.
 - `persistCommandResult(commandId: string, hash: string, result: OperationalResultReference): void`.
 - `CommandReplay` returns the immutable semantic result envelope, never the current mutable projection.
+- `OperationalResultReference.ticketResults` identifies each affected ticket with its ordered event IDs and resulting ticket revision.
 - `OperationalCommandContext` is `{ commandId: string }`; service mutations receive it explicitly rather than hiding command IDs in generated server values.
 
 - [ ] **Step 1: Write failing idempotency tests.** Cover same command/hash replay, same command/different hash rejection, multiple event references, replay after closing/reopening SQLite, and no partial writes when a duplicate or conflict is rejected.
@@ -283,7 +284,7 @@ Existing `TicketRepository`, `RecommendationRepository`, and `AuditRepository` r
 
   Expected: FAIL because current diagnosis/fix/closure paths compensate separate file writes and direct learning calls.
 - [ ] **Step 4: Implement each exact write set.** Revalidate the diagnosis, approval, fix, lifecycle, ticket revision, and reply-watermark gates through the transaction snapshot; append events in explicit domain order; allocate a separate contiguous sequence range for each affected ticket in a multi-ticket command; persist typed traces and replay envelopes atomically.
-- [ ] **Step 5: Add the scoped multi-ticket sequencing regression.** For `applyDiagnosisFix`, affect at least two tickets in one command and assert every ticket is revalidated before writing, each ticket's event sequences are independently contiguous and ordered, no range crosses ticket IDs, all changes roll back together on one-ticket failure, and an idempotent replay creates no duplicate event on either ticket.
+- [ ] **Step 5: Add the scoped multi-ticket sequencing regression.** For `applyDiagnosisFix`, affect at least two tickets in one command and assert every ticket is revalidated before writing, each ticket's event sequences are independently contiguous and ordered, no range crosses ticket IDs, all changes roll back together on one-ticket failure, and an idempotent replay returns a semantic result with per-ticket event IDs/revisions without creating a duplicate event on either ticket.
 - [ ] **Step 6: Run focused diagnosis/lifecycle regressions.**
 
   Run: `npm test -- --run test/triage-operational-diagnosis-lifecycle.test.ts test/diagnosis-review.test.ts test/approval-desk-diagnostic-workflow.test.ts test/approval-desk-http.test.ts`

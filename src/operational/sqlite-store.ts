@@ -39,6 +39,12 @@ interface OperationalSqliteStoreOptions {
 
 interface MigrationRow { version: number; name: string; }
 interface MetadataRow { key: string; value: string; }
+interface SchemaObjectRow {
+  type: string;
+  name: string;
+  table_name: string;
+  sql: string | null;
+}
 
 export class OperationalSqliteStore {
   private initialized = false;
@@ -256,6 +262,12 @@ export class OperationalSqliteStore {
         "SCHEMA_ERROR",
       );
     }
+    if (this.schemaSignature() !== expectedSchemaSignature()) {
+      throw new OperationalStoreError(
+        "Corrupt operational schema: tables, columns, constraints, indexes, or triggers differ from the current schema.",
+        "SCHEMA_ERROR",
+      );
+    }
     const migrations = this.database.prepare(
       "SELECT version, name FROM schema_migrations ORDER BY version ASC",
     ).all() as MigrationRow[];
@@ -280,6 +292,13 @@ export class OperationalSqliteStore {
         "SCHEMA_ERROR",
       );
     }
+    const foreignKeyViolations = this.database.pragma("foreign_key_check") as unknown[];
+    if (foreignKeyViolations.length > 0) {
+      throw new OperationalStoreError(
+        "Corrupt operational schema: foreign-key violations were detected.",
+        "SCHEMA_ERROR",
+      );
+    }
   }
 
   private tableNames(): Set<string> {
@@ -288,6 +307,10 @@ export class OperationalSqliteStore {
       WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
     `).all() as Array<{ name: string }>;
     return new Set(rows.map(({ name }) => name));
+  }
+
+  private schemaSignature(): string {
+    return schemaSignatureFor(this.database);
   }
 
   private assertOpen(): void {
@@ -307,6 +330,40 @@ export class OperationalSqliteStore {
     const detail = error instanceof Error ? error.message : "unknown SQLite error";
     return new OperationalStoreError(`${action}: ${detail}.`, "PERSISTENCE_ERROR", { cause: error });
   }
+}
+
+let cachedExpectedSchemaSignature: string | undefined;
+
+function expectedSchemaSignature(): string {
+  if (cachedExpectedSchemaSignature !== undefined) return cachedExpectedSchemaSignature;
+  const reference = new Database(":memory:");
+  try {
+    reference.exec(INITIAL_SCHEMA_SQL);
+    cachedExpectedSchemaSignature = schemaSignatureFor(reference);
+    return cachedExpectedSchemaSignature;
+  } finally {
+    reference.close();
+  }
+}
+
+function schemaSignatureFor(database: Database.Database): string {
+  const rows = database.prepare(`
+    SELECT type, name, tbl_name AS table_name, sql
+    FROM sqlite_master
+    WHERE name NOT LIKE 'sqlite_%'
+      AND type IN ('table', 'index', 'trigger')
+    ORDER BY type ASC, name ASC
+  `).all() as SchemaObjectRow[];
+  return JSON.stringify(rows.map((row) => ({
+    type: row.type,
+    name: row.name,
+    tableName: row.table_name,
+    sql: normalizeSchemaSql(row.sql),
+  })));
+}
+
+function normalizeSchemaSql(sql: string | null): string {
+  return (sql ?? "").replace(/\s+/g, " ").trim();
 }
 
 function isDeclaredAsync(work: Function): boolean {

@@ -1,7 +1,9 @@
 import Database from "better-sqlite3";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
+import { Worker } from "node:worker_threads";
 import { afterEach, describe, expect, it } from "vitest";
 import { CompletedDiagnosisSchema } from "../src/knowledge-evolution/domain.js";
 import { TicketSchema, TriageRecommendationSchema, type Ticket } from "../src/domain.js";
@@ -171,44 +173,152 @@ describe("OperationalUnitOfWork", () => {
     store.close();
   });
 
-  it("serializes two connections into contiguous sequences and rejects a stale ticket revision", () => {
+  it("serializes genuinely overlapping connections, rolls back the stale command, and keeps sequences contiguous", async () => {
     const path = temporaryDatabasePath();
-    const first = OperationalSqliteStore.open(path);
-    const second = OperationalSqliteStore.open(path);
+    const first = OperationalSqliteStore.open(path, { busyTimeoutMs: 2_000 });
     first.initialize();
-    second.initialize();
     first.transaction((unit) => unit.insertTicket(ticket("TKT-0001")));
 
-    const firstSnapshot = first.readTicket("TKT-0001");
-    const staleSnapshot = second.readTicket("TKT-0001");
-    first.transaction((unit) => {
-      expect(unit.allocateEventSequences("TKT-0001", 1)).toEqual([1]);
-      unit.appendEvent(event("TKT-0001", 1, eventIds[0]));
-      unit.updateTicket({
-        ...firstSnapshot,
-        revision: 1,
-        status: "in-progress",
-        updatedAt: "2026-08-10T10:00:00.000Z",
-      }, firstSnapshot.revision);
+    const startSignal = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT);
+    const worker = new Worker(CONCURRENT_COMMAND_WORKER, {
+      eval: true,
+      workerData: {
+        databasePath: path,
+        moduleUrl: pathToFileURL(resolve(import.meta.dirname, "../dist/src/operational/sqlite-store.js")).href,
+        startSignal,
+        event: event("TKT-0001", 1, eventIds[1], "2026-08-10T10:01:00.000Z"),
+      },
     });
-    second.transaction((unit) => {
-      expect(unit.allocateEventSequences("TKT-0001", 1)).toEqual([2]);
-      unit.appendEvent(event("TKT-0001", 2, eventIds[1]));
-    });
+    const workerReady = waitForWorkerMessage<{ type: "ready"; revision: number }>(worker, "ready");
+    const workerResult = waitForWorkerMessage<ConcurrentCommandResult & { type: "result" }>(worker, "result");
 
-    expect(() => second.transaction((unit) => unit.updateTicket({
-      ...staleSnapshot,
-      revision: 1,
-      status: "waiting-customer",
-      updatedAt: "2026-08-10T10:01:00.000Z",
-    }, staleSnapshot.revision))).toThrow(/stale/i);
-    expect(first.readTicketAggregate("TKT-0001").events.map(({ sequence }) => sequence))
-      .toEqual([1, 2]);
-    expect(first.readTicket("TKT-0001")).toMatchObject({ revision: 1, status: "in-progress" });
-    first.close();
-    second.close();
+    try {
+      const ready = await workerReady;
+      const firstSnapshot = first.readTicket("TKT-0001");
+      expect(ready.revision).toBe(0);
+      expect(firstSnapshot.revision).toBe(0);
+
+      Atomics.store(new Int32Array(startSignal), 0, 1);
+      Atomics.notify(new Int32Array(startSignal), 0);
+      const mainResult = runConcurrentCommand(eventIds[0], () => first.transaction((unit) => {
+        const [sequence] = unit.allocateEventSequences("TKT-0001", 1);
+        unit.appendEvent(event("TKT-0001", sequence!, eventIds[0]));
+        unit.updateTicket({
+          ...firstSnapshot,
+          revision: 1,
+          status: "in-progress",
+          updatedAt: "2026-08-10T10:00:00.000Z",
+        }, firstSnapshot.revision);
+      }));
+      const workerOutcome = await workerResult;
+      const outcomes = [mainResult, workerOutcome];
+      expect(outcomes.map(({ status }) => status).sort()).toEqual(["committed", "rejected"]);
+      expect(outcomes.find(({ status }) => status === "rejected")).toMatchObject({
+        code: "STALE_REVISION",
+      });
+
+      const committed = outcomes.find(({ status }) => status === "committed")!;
+      const snapshot = first.readTicketAggregate("TKT-0001");
+      expect(snapshot.events.map(({ id, sequence }) => ({ id, sequence }))).toEqual([
+        { id: committed.eventId, sequence: 1 },
+      ]);
+      expect(snapshot.ticket).toMatchObject({
+        revision: 1,
+        status: committed.eventId === eventIds[0] ? "in-progress" : "waiting-customer",
+      });
+    } finally {
+      await worker.terminate();
+      first.close();
+    }
   });
 });
+
+interface ConcurrentCommandResult {
+  readonly status: "committed" | "rejected";
+  readonly eventId: string;
+  readonly code?: string;
+  readonly message?: string;
+}
+
+function runConcurrentCommand(eventId: string, command: () => void): ConcurrentCommandResult {
+  try {
+    command();
+    return { status: "committed", eventId };
+  } catch (error) {
+    return {
+      status: "rejected",
+      eventId,
+      code: error instanceof Error && "code" in error ? String(error.code) : undefined,
+      message: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+function waitForWorkerMessage<T>(worker: Worker, expectedType: string): Promise<T> {
+  return new Promise<T>((resolveMessage, rejectMessage) => {
+    const onMessage = (message: { type?: string; message?: string }) => {
+      if (message.type === "fatal") {
+        cleanup();
+        rejectMessage(new Error(message.message ?? "Concurrent command worker failed."));
+      } else if (message.type === expectedType) {
+        cleanup();
+        resolveMessage(message as T);
+      }
+    };
+    const onError = (error: Error) => {
+      cleanup();
+      rejectMessage(error);
+    };
+    const cleanup = () => {
+      worker.off("message", onMessage);
+      worker.off("error", onError);
+    };
+    worker.on("message", onMessage);
+    worker.on("error", onError);
+  });
+}
+
+const CONCURRENT_COMMAND_WORKER = String.raw`
+  const { parentPort, workerData } = require("node:worker_threads");
+
+  void (async () => {
+    let store;
+    try {
+      const { OperationalSqliteStore } = await import(workerData.moduleUrl);
+      store = OperationalSqliteStore.open(workerData.databasePath, { busyTimeoutMs: 2000 });
+      store.initialize();
+      const staleSnapshot = store.readTicket("TKT-0001");
+      parentPort.postMessage({ type: "ready", revision: staleSnapshot.revision });
+      const signal = new Int32Array(workerData.startSignal);
+      Atomics.wait(signal, 0, 0);
+      try {
+        store.transaction((unit) => {
+          const [sequence] = unit.allocateEventSequences("TKT-0001", 1);
+          unit.appendEvent({ ...workerData.event, sequence });
+          unit.updateTicket({
+            ...staleSnapshot,
+            revision: 1,
+            status: "waiting-customer",
+            updatedAt: "2026-08-10T10:01:00.000Z",
+          }, staleSnapshot.revision);
+        });
+        parentPort.postMessage({ type: "result", status: "committed", eventId: workerData.event.id });
+      } catch (error) {
+        parentPort.postMessage({
+          type: "result",
+          status: "rejected",
+          eventId: workerData.event.id,
+          code: error && typeof error === "object" && "code" in error ? String(error.code) : undefined,
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
+    } catch (error) {
+      parentPort.postMessage({ type: "fatal", message: error instanceof Error ? error.stack : String(error) });
+    } finally {
+      store?.close();
+    }
+  })();
+`;
 
 function openedStore(): OperationalSqliteStore {
   const store = OperationalSqliteStore.open(temporaryDatabasePath());

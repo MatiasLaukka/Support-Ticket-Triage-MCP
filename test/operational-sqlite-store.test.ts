@@ -114,6 +114,81 @@ describe("OperationalSqliteStore migrations and transaction boundary", () => {
     corruptInspector.close();
   });
 
+  it("fails closed when required columns, indexes, or append-only triggers are missing without repairing the database", () => {
+    const path = temporaryDatabasePath();
+    const initialized = OperationalSqliteStore.open(path);
+    initialized.initialize();
+    initialized.transaction((unit) => unit.insertTicket(ticket()));
+    initialized.close();
+
+    const corruptRaw = new Database(path);
+    corruptRaw.exec(`
+      ALTER TABLE tickets RENAME COLUMN updated_at TO modified_at;
+      DROP INDEX operational_events_command_idx;
+      DROP TRIGGER operational_events_no_update;
+    `);
+    corruptRaw.close();
+
+    const corrupt = OperationalSqliteStore.open(path);
+    expect(() => corrupt.initialize()).toThrow(/corrupt operational schema/i);
+    corrupt.close();
+
+    const inspector = new Database(path, { readonly: true });
+    expect(inspector.prepare("SELECT COUNT(*) AS count FROM tickets").get()).toEqual({ count: 1 });
+    expect((inspector.prepare("PRAGMA table_info(tickets)").all() as Array<{ name: string }>).map(({ name }) => name))
+      .toEqual(["id", "revision", "modified_at", "payload_json"]);
+    expect(inspector.prepare(`
+      SELECT type, name FROM sqlite_master
+      WHERE name IN ('operational_events_command_idx', 'operational_events_no_update')
+      ORDER BY name
+    `).all()).toEqual([]);
+    inspector.close();
+  });
+
+  it("fails closed when foreign_key_check finds persisted orphan records", () => {
+    const path = temporaryDatabasePath();
+    const initialized = OperationalSqliteStore.open(path);
+    initialized.initialize();
+    initialized.close();
+
+    const corruptRaw = new Database(path);
+    corruptRaw.pragma("foreign_keys = OFF");
+    const orphan = {
+      id: "11111111-1111-4111-8111-111111111111",
+      ticketId: "TKT-9999",
+      sequence: 1,
+      occurredAt: "2026-08-10T10:00:00.000Z",
+      actor: "support-lead",
+      action: "ticket-updated",
+      commandId: "33333333-3333-4333-8333-333333333333",
+      facts: {},
+    };
+    corruptRaw.prepare(`
+      INSERT INTO operational_events(
+        id, ticket_id, sequence, occurred_at, actor, action, command_id, facts_json, event_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      orphan.id,
+      orphan.ticketId,
+      orphan.sequence,
+      orphan.occurredAt,
+      orphan.actor,
+      orphan.action,
+      orphan.commandId,
+      JSON.stringify(orphan.facts),
+      JSON.stringify(orphan),
+    );
+    corruptRaw.close();
+
+    const corrupt = OperationalSqliteStore.open(path);
+    expect(() => corrupt.initialize()).toThrow(/foreign-key violations/i);
+    corrupt.close();
+    const inspector = new Database(path, { readonly: true });
+    expect(inspector.prepare("SELECT ticket_id FROM operational_events").all())
+      .toEqual([{ ticket_id: "TKT-9999" }]);
+    inspector.close();
+  });
+
   it("rolls back synchronous failures and rejects async callbacks before invoking them", () => {
     const store = OperationalSqliteStore.open(temporaryDatabasePath());
     store.initialize();

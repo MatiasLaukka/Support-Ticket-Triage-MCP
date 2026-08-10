@@ -4,7 +4,7 @@ import { AuditRepository } from "./audit-repository.js";
 import { KnowledgeRepository } from "./knowledge-repository.js";
 import { RecommendationRepository } from "./recommendation-repository.js";
 import { TicketRepository } from "./ticket-repository.js";
-import { TriageService } from "./triage-service.js";
+import { TriageService, type OperationalCommandStore } from "./triage-service.js";
 import { DiagnosisRepository } from "./knowledge-evolution/diagnosis-repository.js";
 import { KnowledgeEvolutionService } from "./knowledge-evolution/service.js";
 import type { CandidateDraftProvider } from "./knowledge-evolution/candidate-draft-provider.js";
@@ -37,6 +37,7 @@ export interface RuntimeOptions {
   cwd?: string;
   now?: () => Date;
   knowledgeCandidateDraftProvider?: CandidateDraftProvider;
+  operationalStore?: OperationalCommandStore;
 }
 
 export interface RuntimePaths {
@@ -55,6 +56,7 @@ export interface RuntimeDependencies {
   audits: AuditRepository;
   knowledgeEvolution: { diagnoses: DiagnosisRepository; objects: SqliteKnowledgeEvolutionStore; audits: SqliteKnowledgeEvolutionStore; ledger: SqliteLearningLedger; service: KnowledgeEvolutionService };
   service: TriageService;
+  operationalStore?: OperationalCommandStore;
   now: () => Date;
   minutesPerAcceptedRecommendation: number;
   paths: RuntimePaths;
@@ -190,6 +192,7 @@ export async function createRuntimeDependencies(
     audit: audits,
     diagnoses,
     learningCapture,
+    ...(options.operationalStore === undefined ? {} : { operationalStore: options.operationalStore }),
     now,
   });
 
@@ -200,6 +203,7 @@ export async function createRuntimeDependencies(
     audits,
     knowledgeEvolution,
     service,
+    ...(options.operationalStore === undefined ? {} : { operationalStore: options.operationalStore }),
     now,
     minutesPerAcceptedRecommendation,
     paths: {

@@ -400,6 +400,39 @@ export class OperationalUnitOfWork {
     this.recommendationAggregateWrites.push(parsed.id);
   }
 
+  updateRecommendation(
+    recommendation: TriageRecommendation,
+    expectedResolution: TriageRecommendation["resolution"],
+  ): void {
+    this.assertActive();
+    this.assertMutationOpen();
+    const parsed = parseWith(
+      TriageRecommendationSchema,
+      recommendation,
+      "Recommendation failed operational schema validation.",
+    );
+    const result = this.database.prepare(`
+      UPDATE recommendations
+      SET source_revision = ?, resolution = ?, created_at = ?, payload_json = ?
+      WHERE id = ? AND ticket_id = ? AND resolution = ?
+    `).run(
+      parsed.sourceRevision,
+      parsed.resolution,
+      parsed.createdAt,
+      JSON.stringify(parsed),
+      parsed.id,
+      parsed.ticketId,
+      expectedResolution,
+    );
+    if (result.changes !== 1) {
+      throw new OperationalStoreError(
+        "Recommendation resolution is stale.",
+        "STALE_REVISION",
+      );
+    }
+    this.recommendationAggregateWrites.push(parsed.id);
+  }
+
   appendRecommendationRevision(
     revision: RecommendationRevisionWrite,
   ): void {

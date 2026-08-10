@@ -1,0 +1,177 @@
+import Database from "better-sqlite3";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import {
+  OperationalSqliteStore,
+  OperationalStoreError,
+} from "../src/operational/sqlite-store.js";
+
+const requiredTables = [
+  "command_idempotency",
+  "conversation_messages",
+  "decision_trace_events",
+  "diagnoses",
+  "learning_capture_outbox",
+  "operational_events",
+  "operational_import_resolutions",
+  "operational_metadata",
+  "recommendation_revisions",
+  "recommendations",
+  "schema_migrations",
+  "ticket_revisions",
+  "tickets",
+] as const;
+
+const temporaryRoots: string[] = [];
+
+afterEach(() => {
+  for (const root of temporaryRoots.splice(0)) {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+function temporaryDatabasePath(): string {
+  const root = mkdtempSync(join(tmpdir(), "operational-store-"));
+  temporaryRoots.push(root);
+  return join(root, "nested", "operational.sqlite");
+}
+
+describe("OperationalSqliteStore migrations and transaction boundary", () => {
+  it("initializes the complete versioned schema and enforces deferred foreign keys", () => {
+    const path = temporaryDatabasePath();
+    const store = OperationalSqliteStore.open(path);
+    store.initialize();
+
+    const inspector = new Database(path, { readonly: true });
+    const tableNames = (inspector.prepare(`
+      SELECT name FROM sqlite_master
+      WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
+      ORDER BY name
+    `).all() as Array<{ name: string }>).map(({ name }) => name);
+    const migrations = inspector.prepare(
+      "SELECT version, name FROM schema_migrations ORDER BY version",
+    ).all();
+    const metadata = inspector.prepare(
+      "SELECT key, value FROM operational_metadata ORDER BY key",
+    ).all();
+    inspector.close();
+
+    expect(tableNames).toEqual([...requiredTables].sort());
+    expect(migrations).toEqual([{ version: 1, name: "initial-operational-schema" }]);
+    expect(metadata).toEqual([
+      { key: "import_state", value: "empty" },
+      { key: "schema_version", value: "1" },
+    ]);
+
+    expect(() => store.transaction((unit) => {
+      unit.appendTicketRevision({
+        ticketId: "TKT-0001",
+        revision: 0,
+        ticket: ticket(),
+        operationalEventId: "11111111-1111-4111-8111-111111111111",
+        createdAt: "2026-08-10T10:00:00.000Z",
+      });
+    })).toThrowError(OperationalStoreError);
+    store.close();
+  });
+
+  it("fails closed for newer and structurally corrupt schemas without overwriting them", () => {
+    const newerPath = temporaryDatabasePath();
+    const newer = OperationalSqliteStore.open(newerPath);
+    newer.initialize();
+    newer.close();
+    const newerRaw = new Database(newerPath);
+    newerRaw.prepare("INSERT INTO schema_migrations(version, name, applied_at) VALUES (999, 'future', ?)")
+      .run("2026-08-10T10:00:00.000Z");
+    newerRaw.close();
+
+    const reopenedNewer = OperationalSqliteStore.open(newerPath);
+    expect(() => reopenedNewer.initialize()).toThrow(/newer schema version/i);
+    reopenedNewer.close();
+    const newerInspector = new Database(newerPath, { readonly: true });
+    expect(newerInspector.prepare("SELECT MAX(version) AS version FROM schema_migrations").get())
+      .toEqual({ version: 999 });
+    newerInspector.close();
+
+    const corruptPath = temporaryDatabasePath();
+    mkdirSync(dirname(corruptPath), { recursive: true });
+    const corruptRaw = new Database(corruptPath);
+    corruptRaw.exec(`
+      CREATE TABLE schema_migrations(version TEXT NOT NULL);
+      CREATE TABLE preserve_me(value TEXT NOT NULL);
+      INSERT INTO preserve_me(value) VALUES ('untouched');
+    `);
+    corruptRaw.close();
+
+    const corrupt = OperationalSqliteStore.open(corruptPath);
+    expect(() => corrupt.initialize()).toThrow(/corrupt operational schema/i);
+    corrupt.close();
+    const corruptInspector = new Database(corruptPath, { readonly: true });
+    expect(corruptInspector.prepare("SELECT value FROM preserve_me").get())
+      .toEqual({ value: "untouched" });
+    corruptInspector.close();
+  });
+
+  it("rolls back synchronous failures and rejects async callbacks before invoking them", () => {
+    const store = OperationalSqliteStore.open(temporaryDatabasePath());
+    store.initialize();
+
+    expect(() => store.transaction((unit) => {
+      unit.insertTicket(ticket());
+      throw new Error("injected failure");
+    })).toThrow("injected failure");
+    expect(() => store.readTicket("TKT-0001")).toThrow(/not found/i);
+
+    let asyncCallbackRan = false;
+    expect(() => store.transaction(async () => {
+      asyncCallbackRan = true;
+      return "not allowed";
+    })).toThrow(/synchronous/i);
+    expect(asyncCallbackRan).toBe(false);
+
+    expect(() => store.transaction(() => Promise.resolve("also not allowed")))
+      .toThrow(/promise/i);
+    store.close();
+  });
+
+  it("uses a bounded busy timeout and makes close idempotent", () => {
+    const path = temporaryDatabasePath();
+    const first = OperationalSqliteStore.open(path, { busyTimeoutMs: 80 });
+    const second = OperationalSqliteStore.open(path, { busyTimeoutMs: 80 });
+    first.initialize();
+    second.initialize();
+
+    const locker = new Database(path);
+    locker.exec("BEGIN IMMEDIATE");
+    const startedAt = Date.now();
+    expect(() => second.transaction(() => undefined)).toThrow(/busy|locked/i);
+    expect(Date.now() - startedAt).toBeLessThan(1_000);
+    locker.exec("ROLLBACK");
+    locker.close();
+
+    first.close();
+    first.close();
+    second.close();
+    const reopened = OperationalSqliteStore.open(path);
+    reopened.initialize();
+    reopened.close();
+  });
+});
+
+function ticket() {
+  return {
+    id: "TKT-0001" as const,
+    createdAt: "2026-08-10T09:00:00.000Z",
+    updatedAt: "2026-08-10T09:00:00.000Z",
+    customer: { name: "Ada", plan: "Pro", region: "EU", vip: false },
+    subject: "Requests fail",
+    description: "Requests return 401 after credential rotation.",
+    status: "triage" as const,
+    tags: [],
+    sla: { responseDueAt: "2026-08-10T11:00:00.000Z", breached: false },
+    relatedTicketIds: [],
+    revision: 0,
+  };
+}

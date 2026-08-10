@@ -64,10 +64,11 @@ result of a domain action; it is not a workflow engine.
 The learning store remains advisory memory. It records verified outcomes and
 approved knowledge changes. The authoritative diagnosis is committed to the
 operational store first. Learning capture is attempted separately after that
-commit. A learning-store read or write failure produces no learned context or
-learning event, but the valid operational result remains intact and the
-failure is observable. An operational-store failure must prevent an unsafe
-mutation from being reported as persisted.
+commit. A learning-store read or write failure produces no learned context and
+no `learning.sqlite` event; the durable operational outbox intent remains,
+the valid operational result remains intact, and the failure is observable.
+An operational-store failure must prevent an unsafe mutation from being
+reported as persisted.
 
 ## Persistence architecture
 
@@ -77,6 +78,7 @@ Two independent SQLite databases are used:
 operational.sqlite
   schema_migrations
   operational_metadata
+  command_idempotency
   tickets
   ticket_revisions
   conversation_messages
@@ -85,6 +87,7 @@ operational.sqlite
   diagnoses
   operational_events
   decision_trace_events
+  learning_capture_outbox
 
 learning.sqlite
   learning_events
@@ -115,14 +118,16 @@ avoid introducing a patch-reconstruction engine.
 ### Conversation messages
 
 `conversation_messages` stores customer and support messages with stable IDs,
-per-ticket monotonic causal sequence, actor/source, timestamp, and message
-content. The sequence—not timestamp sorting alone—determines conversation
-causality and Decision Timeline ordering. Customer replies retain the
-watermark semantics used by stale-evaluation and diagnosis protections.
+message sequence, actor/source, timestamp, and message content. Message
+sequence controls conversation rendering; the ticket-wide operational-event
+sequence defined below controls workflow causality and Decision Timeline
+ordering. Customer replies retain the watermark semantics used by
+stale-evaluation and diagnosis protections.
 
-Each customer-reply operational event stores `messageId` pointing to the
-canonical message. During legacy import, the existing customer-reply audit
-event ID may become the message ID so existing watermarks remain valid.
+Each customer-reply or sent-support-response operational event stores
+`messageId` pointing to the canonical message and does not duplicate the
+message body in its payload. During legacy import, the existing customer-reply
+audit event ID may become the message ID so existing watermarks remain valid.
 
 Conversation content is operational data and remains available to the support
 workflow; it is not copied into decision traces unless a trace field
@@ -132,13 +137,17 @@ explicitly stores a sanitized catalog ID or message reference.
 
 `recommendations` contains one aggregate row per recommendation ID and its
 current resolution/projection. `recommendation_revisions` preserves each
-evaluated or edited proposal, its actor, approval outcome, exact knowledge
-reference when present, and corresponding ticket revision.
+evaluated or edited recommendation payload snapshot, its actor, exact
+knowledge reference when present, and corresponding ticket revision.
 
 The “current recommendation for a ticket” is a derived read model based on
 causal events and recommendation resolution. It is not an independent
 workflow authority. No ticket pointer is required unless it is explicitly
 maintained as a disposable projection.
+
+Approval, rejection, supersession, and resolution authority live in
+`operational_events` and are reflected in the aggregate projection. They are
+not a second truth embedded as mutable approval state in a revision row.
 
 ### Finalized diagnoses
 
@@ -146,21 +155,27 @@ maintained as a disposable projection.
 the ticket revision, actor, timestamp, evidence references, and diagnosis
 content required by the existing domain contract. The operational store owns
 this authoritative record. Learning discovery consumes it only after the
-operational transaction commits.
+operational transaction commits. Diagnosis review, approval, rejection, and
+revalidation never mutate the diagnosis row; they are append-only operational
+events and optional derived projections.
 
 ### Operational events
 
 `operational_events` is an append-only audit stream for lifecycle actions,
 approvals, rejections, diagnosis/fix actions, customer replies, and
-verification outcomes. Event IDs are globally unique. Caller retry safety is
-provided by the separate command/idempotency key described below.
+verification outcomes. Every event has a ticket-wide monotonic causal
+`sequence`, a globally unique event ID, and references to associated message,
+recommendation revision, or diagnosis records. Events contain no duplicated
+customer/support message bodies. Repositories expose append/read operations,
+not update/delete operations after commit. Caller retry safety is provided by
+the separate command/idempotency key described below.
 
 ### Decision traces
 
 `decision_trace_events` is an append-only, sanitized observability stream.
 Each event identifies its ticket, recommendation revision when applicable,
-stage, actor, outcome, safe target identifiers, and optional provider/model,
-latency, and token-usage metadata.
+stage, actor, outcome, safe target identifiers, its associated operational
+event, and optional provider/model, latency, and token-usage metadata.
 
 Trace payloads use discriminated, typed allowlists rather than arbitrary JSON:
 
@@ -180,6 +195,66 @@ observability: domain state never reads them to make a decision, while an
 unsafe or invalid trace prevents the enclosing operational write from
 committing.
 
+### Ticket-wide causal sequence
+
+Every `operational_events` row receives the next monotonic sequence for its
+ticket inside the same transaction. Associated records reference the event:
+
+```text
+conversation_message.operationalEventId
+recommendation_revision.operationalEventId
+diagnosis.operationalEventId
+decision_trace_event.operationalEventId
+```
+
+The unique `(ticketId, sequence)` pair is the authoritative workflow order for
+the Decision Timeline. A separate message sequence may remain for rendering
+conversation messages. Timestamps are descriptive metadata, not causal order.
+
+### Persistent idempotency
+
+`command_idempotency` makes retry semantics survive restarts:
+
+```text
+command_id PRIMARY KEY
+operation
+request_hash
+result_type
+result_id
+committed_at
+```
+
+The request hash is computed from a canonical normalized representation, so
+JSON property ordering does not change command identity. A known command may
+be short-circuited before expensive evaluation, but the command/hash check is
+repeated inside the write transaction. The same command and hash returns the
+original result; the same command with a different hash is rejected.
+
+### Learning-capture outbox
+
+`learning_capture_outbox` stores durable intent whenever an operational
+transaction produces a verified diagnosis/outcome eligible for learning:
+
+```text
+outbox_id PRIMARY KEY
+ticket_id
+operational_event_id
+payload_reference
+status: pending | delivered | failed
+attempt_count
+last_error_code
+created_at
+delivered_at
+```
+
+The outbox intent is committed atomically with the operational diagnosis,
+event, and traces. After commit, runtime may attempt immediate delivery to
+`learning.sqlite`; a failed attempt remains pending or records a retryable
+failure. Startup or an explicit drain command retries pending items. This is
+not cross-database ACID and never makes ordinary support actions depend on
+learning availability; it closes the crash window between operational commit
+and learning-capture attempt.
+
 ## Transaction boundary and unit of work
 
 Evaluation and other potentially expensive work happen outside the SQLite
@@ -192,11 +267,15 @@ read ticket/recommendation/conversation snapshot
        re-check ticket revision
        re-check customer-reply watermark and causal sequence
        re-check required approval or lifecycle state
+       claim/check command idempotency
+       allocate the next ticket causal sequence
        apply the authoritative domain transition
        persist projections and immutable revisions
        persist finalized diagnosis when applicable
        append the authoritative operational event
        append typed, sanitized trace events
+       append learning-capture intent when eligible
+       persist idempotency result
      COMMIT
   -> attempt learning capture separately
 ```
@@ -240,6 +319,25 @@ with conflicting input is rejected. Globally unique event IDs remain separate
 from command IDs. Optimistic revision checks reject stale edits rather than
 silently overwriting newer operator work.
 
+The write set is explicit per domain command rather than one generic
+transaction for every action:
+
+```text
+evaluation
+  -> recommendation revision + operational event + typed traces
+
+diagnosis completion
+  -> immutable diagnosis + ticket revision/projection
+     + operational event + typed traces + learning outbox intent when eligible
+
+approval, fix, verification, or closure
+  -> their exact ticket/recommendation projection changes
+     + operational event + typed traces
+```
+
+The domain service selects the set; the operational unit of work persists it
+atomically.
+
 ## Import and migration
 
 An explicit `import:operational-data` command imports existing JSONL and
@@ -273,13 +371,17 @@ database is initialized. A newer or corrupt schema fails with an actionable
 error instead of being overwritten. The implementation enables foreign-key
 enforcement, uses an explicit bounded busy timeout, records schema version
 metadata, and indexes ticket, event, recommendation, message-sequence, and
-causal lookup keys. WAL mode may be evaluated for the runtime workload but is
-not a correctness requirement.
+causal lookup keys, outbox status, and command IDs. Uniqueness constraints
+cover `(ticketId, sequence)`, `command_id`, event IDs, message IDs, and outbox
+IDs. WAL mode may be evaluated for the runtime workload but is not a
+correctness requirement.
 
-An explicitly initialized new deployment enters `native` mode after schema
-creation. An imported deployment enters `imported` mode only after a
-successful import batch. The `empty` state permits inspection and import but
-not operational mutation.
+Every new database begins in `empty` mode. An explicit
+`initialize:operational-native` command transitions it to `native`; that
+command refuses if recognizable legacy operational files exist until the
+operator chooses import or explicitly resolves them. An imported deployment
+enters `imported` mode only after a successful import batch. The `empty` state
+permits inspection and import but not operational mutation.
 
 ## Decision Timeline UI
 
@@ -327,25 +429,33 @@ to relevant message or revision IDs instead of duplicating them.
 
 The implementation must prove:
 
-1. Evaluation persists recommendation, finalized diagnosis when applicable,
-   audit, and trace records atomically.
-2. Expensive evaluation occurs outside the write transaction and stale
+1. Evaluation persists its recommendation revision, operational event, and
+   typed traces atomically.
+2. Diagnosis completion persists its immutable diagnosis, ticket
+   revision/projection, operational event, typed traces, and outbox intent
+   atomically.
+3. Approval, fix, verification, and closure each persist their own exact
+   transactional write set.
+4. Expensive evaluation occurs outside the write transaction and stale
    revision/watermark changes reject the commit.
-3. A restart reloads the same ticket lifecycle and Decision Timeline in causal
-   sequence order.
-4. Import preserves IDs, revisions, timestamps, and is safely rerunnable.
-5. Conflicting duplicate command/event IDs are rejected without partial
-   writes.
-6. MCP, HTTP, and UI continue to produce equivalent domain outcomes.
-7. Diagnosis, fix, approval, and lifecycle gates remain centralized.
-8. Operational-store failure blocks unsafe mutation.
-9. Learning capture failure leaves the committed operational result valid and
-   observable.
-10. Learning-store failure preserves deterministic triage without learned
-   context.
-11. Typed trace schemas exclude prompts, hidden reasoning, credentials, raw
-   provider payloads, and unnecessary customer content.
-12. Existing deterministic, lifecycle, knowledge-holdout, and portfolio
+5. A restart reloads the same ticket lifecycle and Decision Timeline in
+   ticket-wide causal sequence order.
+6. Import preserves IDs, revisions, timestamps, and is safely rerunnable;
+   native initialization refuses recognizable legacy files.
+7. Conflicting duplicate command/event IDs are rejected without partial
+   writes, including after restart.
+8. MCP, HTTP, and UI continue to produce equivalent domain outcomes.
+9. Diagnosis, fix, approval, and lifecycle gates remain centralized.
+10. Operational-store failure blocks unsafe mutation.
+11. Learning capture can fail after commit while the outbox remains pending
+    and the operational result remains valid.
+12. Learning-store failure preserves deterministic triage without learned
+    context.
+13. Operational events and decision traces have no update/delete API after
+    commit.
+14. Typed trace schemas exclude prompts, hidden reasoning, credentials, raw
+    provider payloads, and unnecessary customer content.
+15. Existing deterministic, lifecycle, knowledge-holdout, and portfolio
    suites remain green.
 
 The showcase journey is:

@@ -66,7 +66,7 @@ Existing `TicketRepository`, `RecommendationRepository`, and `AuditRepository` r
 
   Expected: FAIL because the operational module and schemas do not exist.
 - [ ] **Step 3: Implement the schemas.** Reuse `TicketSchema`, `TriageRecommendationSchema`, `AuditEventSchema`, `IsoTimestampSchema`, and existing ID schemas rather than creating incompatible duplicates. Make related records point to `operationalEventId`; do not put reverse record foreign keys on `OperationalEvent`.
-- [ ] **Step 4: Encode revision and outbox semantics.** The type for diagnosis completion must allow a ticket revision only when the canonical `Ticket` projection changed. The outbox envelope must represent one learning event for this slice and include the finalized diagnosis/outcome snapshot plus the committed operational-event reference.
+- [ ] **Step 4: Encode revision and outbox semantics.** The type for diagnosis completion must allow a ticket revision only when the canonical `Ticket` projection changed. The outbox envelope must be a discriminated immutable operational-fact envelope covering every existing learning-capture mapping (`diagnosis-recorded`, `diagnosis-approved`, `fix-available`, and `outcome-verified`), with the committed operational-event reference and only facts captured at commit time.
 - [ ] **Step 5: Run the focused test and typecheck.**
 
   Run: `npm test -- --run test/operational-domain.test.ts` and `npm run typecheck`
@@ -90,6 +90,7 @@ Existing `TicketRepository`, `RecommendationRepository`, and `AuditRepository` r
 **Interfaces:**
 - `OperationalSqliteStore.open(path: string): OperationalSqliteStore`.
 - `initialize(): void` applies versioned migrations transactionally and records schema metadata.
+- `close(): void` releases the SQLite handle and is safe to call during restart/test cleanup.
 - `transaction<T>(work: (unit: OperationalUnitOfWork) => T): T` runs a synchronous `better-sqlite3` transaction with foreign keys, `BEGIN IMMEDIATE`, and bounded busy timeout; the callback must not `await`.
 - `readTicket(ticketId: TicketId): Ticket` and `readWorkflowSnapshot(ticketId: TicketId): OperationalWorkflowSnapshot` read through the same connection.
 - `readRecommendation(id: string): TriageRecommendation | undefined` and `readDiagnosis(id: string): CompletedDiagnosis | undefined` are available both outside and inside a transaction.
@@ -97,7 +98,7 @@ Existing `TicketRepository`, `RecommendationRepository`, and `AuditRepository` r
 - `OperationalUnitOfWork.appendEvent(event: OperationalEvent): void`, `appendTrace(trace: DecisionTraceEvent): void`, and typed insert methods for revisions/messages/diagnoses/recommendations.
 - `readTicketAggregate(ticketId: TicketId): OperationalWorkflowSnapshot` reloads canonical projections and causal records after restart.
 
-- [ ] **Step 1: Write failing migration and transaction tests.** Assert all required tables exist, foreign-key enforcement is on, schema version is recorded, a newer/corrupt schema fails without overwrite, a thrown synchronous unit-of-work callback rolls back every write, and an async callback is rejected by the operational API rather than running inside SQLite.
+- [ ] **Step 1: Write failing migration and transaction tests.** Assert all required tables exist, foreign-key enforcement is on, schema version is recorded, a newer/corrupt schema fails without overwrite, a thrown synchronous unit-of-work callback rolls back every write, an async callback is rejected by the operational API rather than running inside SQLite, and close/reopen releases the handle and reloads identical state.
 - [ ] **Step 2: Run the focused tests to verify RED.**
 
   Run: `npm test -- --run test/operational-sqlite-store.test.ts test/operational-unit-of-work.test.ts`
@@ -105,7 +106,7 @@ Existing `TicketRepository`, `RecommendationRepository`, and `AuditRepository` r
   Expected: FAIL because the SQLite store is absent.
 - [ ] **Step 3: Add migrations for the operational tables.** Include `schema_migrations`, `operational_metadata`, `command_idempotency`, `tickets`, `ticket_revisions`, `conversation_messages`, `operational_import_resolutions`, `recommendations`, `recommendation_revisions`, `diagnoses`, `operational_events`, `decision_trace_events`, and `learning_capture_outbox`. Add uniqueness for `(ticket_id, sequence)`, command IDs, event IDs, message IDs, outbox IDs, and delivery keys; add causal/ticket/status lookup indexes.
 - [ ] **Step 4: Implement the transaction wrapper and sequence allocator.** Start every operational write unit with `BEGIN IMMEDIATE`, read the current maximum sequence for the ticket, reserve N contiguous values, and require callers to append events in the returned order. The busy timeout is only bounded retry behavior; the write lock is the concurrency mechanism. Related records store only their event ID.
-- [ ] **Step 5: Implement typed append/read primitives.** Reject updates/deletes for events and traces after commit. Validate every payload with the Task 1 schemas before SQL execution. Keep timeline reads anchored to event sequence rather than timestamp sorting.
+- [ ] **Step 5: Implement typed append/read primitives.** Reject updates/deletes for events and traces after commit. Validate every payload with the Task 1 schemas before SQL execution. Keep timeline reads anchored to event sequence rather than timestamp sorting. Expose `close()` for runtime shutdown and test fixtures.
 - [ ] **Step 6: Add the transaction-scoped workflow snapshot.** Return the canonical ticket, recommendations, events, messages, diagnoses, and a customer-reply watermark ordered by the associated operational-event sequence so Tasks 4A–4D can revalidate revision, lifecycle, approval, and reply preconditions through the same SQLite transaction.
 - [ ] **Step 7: Add the two-connection concurrency regression.** Run concurrent commands against one ticket from two `OperationalSqliteStore` instances and assert no duplicate sequences, a contiguous final sequence set, and normal stale-revision rejection.
 - [ ] **Step 8: Run focused tests, build, and typecheck.**
@@ -176,7 +177,7 @@ Existing `TicketRepository`, `RecommendationRepository`, and `AuditRepository` r
   Run: `npm test -- --run test/triage-operational-evaluation.test.ts`
 
   Expected: FAIL because production evaluation still writes file-backed recommendations/audits separately.
-- [ ] **Step 4: Route `TriageService.submit` through one synchronous unit-of-work callback.** Reuse the existing classifier/evidence/gate output, insert the aggregate projection and revision, allocate the event sequence, append event/traces, persist the semantic result envelope, and commit once.
+- [ ] **Step 4: Route `TriageService.submit` and `TriageService.submitEvaluation` through one synchronous operational command boundary.** `submitEvaluation` owns the complete evaluation command: revalidate the evaluated customer-reply watermark inside the transaction, persist the new recommendation aggregate/revision, supersede any pending recommendation required by the newer evaluation, allocate all resulting event sequences contiguously in domain order, persist one semantic idempotency result, and commit once. Do not implement this as a committed `submit()` followed by a separate supersession transaction.
 - [ ] **Step 5: Run focused tests and existing submit/server regressions.**
 
   Run: `npm test -- --run test/triage-operational-evaluation.test.ts test/triage-service.test.ts test/server-actions.test.ts`
@@ -299,7 +300,9 @@ Existing `TicketRepository`, `RecommendationRepository`, and `AuditRepository` r
 - Create: `src/operational/learning-outbox.ts`
 - Modify: `src/knowledge-evolution/learning-capture.ts`
 - Modify: `src/knowledge-evolution/learning-ledger.ts`
+- Modify: `src/knowledge-evolution/sqlite-learning-ledger.ts`
 - Modify: `src/triage-service.ts`
+- Modify: `src/operational/unit-of-work.ts`
 - Modify: `src/runtime.ts`
 - Test: `test/operational-learning-outbox.test.ts`
 - Regression tests: `test/knowledge-learning-capture.test.ts`, `test/knowledge-learning-ledger.test.ts`, `test/knowledge-learning-ledger-sqlite.test.ts`
@@ -329,7 +332,7 @@ Existing `TicketRepository`, `RecommendationRepository`, and `AuditRepository` r
 - [ ] **Step 8: Commit.**
 
   ```powershell
-  git add src/operational/learning-outbox.ts src/knowledge-evolution/learning-capture.ts src/knowledge-evolution/learning-ledger.ts src/runtime.ts test/operational-learning-outbox.test.ts test/knowledge-learning-capture.test.ts test/knowledge-learning-ledger.test.ts test/knowledge-learning-ledger-sqlite.test.ts
+  git add src/operational/learning-outbox.ts src/knowledge-evolution/learning-capture.ts src/knowledge-evolution/learning-ledger.ts src/knowledge-evolution/sqlite-learning-ledger.ts src/triage-service.ts src/operational/unit-of-work.ts src/runtime.ts test/operational-learning-outbox.test.ts test/knowledge-learning-capture.test.ts test/knowledge-learning-ledger.test.ts test/knowledge-learning-ledger-sqlite.test.ts
   git commit -m "feat: add durable idempotent learning outbox"
   ```
 
@@ -428,7 +431,7 @@ Existing `TicketRepository`, `RecommendationRepository`, and `AuditRepository` r
   Run: `npm test -- --run test/operational-runtime-parity.test.ts`
 
   Expected: FAIL because runtime still constructs file-backed operational repositories.
-- [ ] **Step 3: Switch production runtime construction.** Keep fixture seed and knowledge roots unchanged, add `OPERATIONAL_DB_PATH` to `RuntimePaths` and startup validation, initialize SQLite before serving, and fail startup safely for corrupt/newer schemas or blocked import states.
+- [ ] **Step 3: Switch production runtime construction.** Keep fixture seed and knowledge roots unchanged, add `OPERATIONAL_DB_PATH` to `RuntimePaths` and startup validation, initialize SQLite before serving, and fail startup for corrupt/newer schemas. For `empty` or `import-in-progress`, start in restricted inspection/import mode and reject operational mutations rather than failing startup. Add runtime shutdown/test-fixture cleanup that closes both operational and learning SQLite handles.
 - [ ] **Step 4: Thread stable command IDs through all mutation adapters.** Validate `Idempotency-Key` at HTTP boundaries, require `commandId` on MCP mutation tools, and use `crypto.randomUUID()` once per UI user action. Retry the same validated caller semantic request with the same ID; never include generated event UUIDs or server timestamps in the request hash.
 - [ ] **Step 5: Add the restart/import showcase.** Demonstrate legacy import, evaluation, Decision Timeline inspection, process restart, identical reload, approval, fix, verification, closure, and separate learning reuse.
 - [ ] **Step 6: Document the boundary.** README and case study must explain operational truth vs advisory learning, transactional write sets, outbox failure behavior, causal ordering, migration states, and the exact commands to initialize/import/run the showcase.

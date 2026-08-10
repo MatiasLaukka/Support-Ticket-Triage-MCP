@@ -12,23 +12,36 @@ import {
   type CompletedDiagnosis,
 } from "../knowledge-evolution/domain.js";
 import {
+  CommandIdempotencyRecordSchema,
+  CommandIdSchema,
   ConversationMessageSchema,
   DecisionTraceEventSchema,
   OperationalDiagnosisRecordSchema,
   OperationalEventSchema,
+  OperationalResultReferenceSchema,
   OperationalWorkflowSnapshotSchema,
   RecommendationRevisionSchema,
+  RequestHashSchema,
   TicketRevisionSchema,
+  type CommandIdempotencyRecord,
   type ConversationMessage,
   type DecisionTraceEvent,
   type OperationalEvent,
+  type OperationalResultReference,
   type OperationalWorkflowSnapshot,
   type TicketRevision,
 } from "./domain.js";
+import {
+  canonicalRequestHash,
+  immutableCommandReplay,
+  normalizeOperationName,
+  type CommandReplay,
+} from "./idempotency.js";
 
 export type OperationalStoreErrorCode =
   | "ASYNC_TRANSACTION"
   | "CLOSED"
+  | "IDEMPOTENCY_CONFLICT"
   | "NOT_FOUND"
   | "NOT_INITIALIZED"
   | "PERSISTENCE_ERROR"
@@ -53,6 +66,18 @@ interface JsonRow { payload_json: string; }
 interface EventRow { event_json: string; }
 interface TraceRow { trace_json: string; }
 interface SequenceRow { sequence: number; }
+interface CommandRow {
+  command_id: string;
+  operation: string;
+  request_hash: string;
+  result_json: string;
+  created_at: string;
+}
+interface CommandEventRow {
+  id: string;
+  ticket_id: string;
+  sequence: number;
+}
 
 /** Task 1's enum-keyed Zod record infers every allowlisted key as required. */
 export type OperationalEventWrite = Omit<OperationalEvent, "facts"> & {
@@ -77,8 +102,130 @@ export interface OperationalDiagnosisWrite {
 export class OperationalUnitOfWork {
   private active = true;
   private readonly reservedSequences = new Map<string, number[]>();
+  private readonly pendingCommandClaims = new Map<string, {
+    readonly operation: string;
+    readonly requestHash: string;
+  }>();
 
   constructor(private readonly database: Database.Database) {}
+
+  beginCommand(
+    commandId: string,
+    operation: string,
+    request: unknown,
+  ): CommandReplay | "new" {
+    this.assertActive();
+    const parsedCommandId = parseWith(
+      CommandIdSchema,
+      commandId,
+      "Operational command ID is invalid.",
+    );
+    let parsedOperation: string;
+    let requestHash: string;
+    try {
+      parsedOperation = normalizeOperationName(operation);
+      requestHash = canonicalRequestHash(parsedOperation, request);
+    } catch (error) {
+      throw new OperationalStoreError(
+        "Operational command request could not be normalized.",
+        "VALIDATION_ERROR",
+        { cause: error },
+      );
+    }
+
+    const stored = this.readCommandRecord(parsedCommandId);
+    if (stored !== undefined) {
+      if (stored.operation !== parsedOperation || stored.requestHash !== requestHash) {
+        throw new OperationalStoreError(
+          "Operational command ID was already used for a different operation or request.",
+          "IDEMPOTENCY_CONFLICT",
+        );
+      }
+      return immutableCommandReplay(stored.result);
+    }
+
+    const pending = this.pendingCommandClaims.get(parsedCommandId);
+    if (
+      pending !== undefined
+      && (pending.operation !== parsedOperation || pending.requestHash !== requestHash)
+    ) {
+      throw new OperationalStoreError(
+        "Operational command ID was already claimed for a different operation or request.",
+        "IDEMPOTENCY_CONFLICT",
+      );
+    }
+    this.pendingCommandClaims.set(parsedCommandId, {
+      operation: parsedOperation,
+      requestHash,
+    });
+    return "new";
+  }
+
+  persistCommandResult(
+    commandId: string,
+    hash: string,
+    result: OperationalResultReference,
+  ): void {
+    this.assertActive();
+    const parsedCommandId = parseWith(
+      CommandIdSchema,
+      commandId,
+      "Operational command ID is invalid.",
+    );
+    const parsedHash = parseWith(
+      RequestHashSchema,
+      hash,
+      "Operational command request hash is invalid.",
+    );
+    const parsedResult = parseWith(
+      OperationalResultReferenceSchema,
+      result,
+      "Operational command result failed schema validation.",
+    );
+    const claim = this.pendingCommandClaims.get(parsedCommandId);
+    if (claim === undefined) {
+      throw new OperationalStoreError(
+        "Operational command result requires a new transaction-local command claim.",
+        "IDEMPOTENCY_CONFLICT",
+      );
+    }
+    if (claim.requestHash !== parsedHash || claim.operation !== parsedResult.operation) {
+      throw new OperationalStoreError(
+        "Operational command result does not match its transaction-local claim.",
+        "IDEMPOTENCY_CONFLICT",
+      );
+    }
+    if (this.readCommandRecord(parsedCommandId) !== undefined) {
+      throw new OperationalStoreError(
+        "Operational command result is already persisted and immutable.",
+        "IDEMPOTENCY_CONFLICT",
+      );
+    }
+    this.assertCommandEvents(parsedCommandId, parsedResult);
+    const record = parseWith(
+      CommandIdempotencyRecordSchema,
+      {
+        commandId: parsedCommandId,
+        operation: claim.operation,
+        requestHash: claim.requestHash,
+        result: parsedResult,
+        createdAt: new Date().toISOString(),
+      },
+      "Operational command record failed schema validation.",
+    );
+    this.database.prepare(`
+      INSERT INTO command_idempotency(
+        command_id, operation, request_hash, result_json, created_at
+      ) VALUES (?, ?, ?, ?, ?)
+    `).run(
+      record.commandId,
+      record.operation,
+      record.requestHash,
+      JSON.stringify(record.result),
+      record.createdAt,
+    );
+    this.pendingCommandClaims.delete(parsedCommandId);
+  }
 
   allocateEventSequences(ticketId: TicketId, count: number): number[] {
     this.assertActive();
@@ -421,6 +568,12 @@ export class OperationalUnitOfWork {
         "SEQUENCE_ERROR",
       );
     }
+    if (this.pendingCommandClaims.size > 0) {
+      throw new OperationalStoreError(
+        "Every new operational command claim must persist its immutable result before commit.",
+        "IDEMPOTENCY_CONFLICT",
+      );
+    }
   }
 
   /** @internal Prevents a callback from retaining write access after commit. */
@@ -438,6 +591,80 @@ export class OperationalUnitOfWork {
     const row = this.database.prepare("SELECT 1 AS found FROM tickets WHERE id = ? LIMIT 1")
       .get(ticketId) as { found?: number } | undefined;
     if (row?.found !== 1) throw new OperationalStoreError("Operational ticket was not found.", "NOT_FOUND");
+  }
+
+  private readCommandRecord(commandId: string): CommandIdempotencyRecord | undefined {
+    const row = this.database.prepare(`
+      SELECT command_id, operation, request_hash, result_json, created_at
+      FROM command_idempotency WHERE command_id = ?
+    `).get(commandId) as CommandRow | undefined;
+    if (row === undefined) return undefined;
+    let result: unknown;
+    try {
+      result = JSON.parse(row.result_json) as unknown;
+    } catch (error) {
+      throw new OperationalStoreError(
+        "Operational command result data is corrupt.",
+        "PERSISTENCE_ERROR",
+        { cause: error },
+      );
+    }
+    const parsed = CommandIdempotencyRecordSchema.safeParse({
+      commandId: row.command_id,
+      operation: row.operation,
+      requestHash: row.request_hash,
+      result,
+      createdAt: row.created_at,
+    });
+    if (!parsed.success) {
+      throw new OperationalStoreError(
+        "Operational command result data is corrupt.",
+        "PERSISTENCE_ERROR",
+        { cause: parsed.error },
+      );
+    }
+    return parsed.data;
+  }
+
+  private assertCommandEvents(
+    commandId: string,
+    result: OperationalResultReference,
+  ): void {
+    const rows = this.database.prepare(`
+      SELECT id, ticket_id, sequence
+      FROM operational_events
+      WHERE command_id = ?
+      ORDER BY ticket_id ASC, sequence ASC
+    `).all(commandId) as CommandEventRow[];
+    const expected = [...result.tickets]
+      .sort((left, right) => left.ticketId.localeCompare(right.ticketId))
+      .flatMap((ticket) => ticket.operationalEventIds.map((id) => ({
+        id,
+        ticket_id: ticket.ticketId,
+      })));
+    if (
+      rows.length !== expected.length
+      || rows.some((row, index) => (
+        row.id !== expected[index]?.id
+        || row.ticket_id !== expected[index]?.ticket_id
+      ))
+    ) {
+      throw new OperationalStoreError(
+        "Operational command result must reference every command event in ticket-causal order.",
+        "IDEMPOTENCY_CONFLICT",
+      );
+    }
+    for (const ticket of result.tickets) {
+      const sequences = rows
+        .filter((row) => row.ticket_id === ticket.ticketId)
+        .map((row) => row.sequence);
+      if (sequences.some((sequence, index) => index > 0 && sequence !== sequences[index - 1]! + 1)) {
+        throw new OperationalStoreError(
+          "Operational command event sequences must be contiguous within each affected ticket.",
+          "IDEMPOTENCY_CONFLICT",
+        );
+      }
+    }
   }
 
   private readJoinedPayloads<T>(

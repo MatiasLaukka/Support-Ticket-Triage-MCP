@@ -9,6 +9,12 @@
   "cases": [
     {
       "fixtureId": "sufficient-evidence-true-positive",
+      "evidencePolicy": {
+        "requiredIds": [
+          "request-id"
+        ],
+        "reasonCode": "approved-known-cause-required"
+      },
       "reusableKnowledge": {
         "status": "available",
         "issues": []
@@ -101,6 +107,12 @@
     },
     {
       "fixtureId": "missing-evidence-then-supplied",
+      "evidencePolicy": {
+        "requiredIds": [
+          "request-id"
+        ],
+        "reasonCode": "approved-known-cause-required"
+      },
       "reusableKnowledge": {
         "status": "available",
         "issues": []
@@ -230,6 +242,10 @@
     },
     {
       "fixtureId": "near-miss",
+      "evidencePolicy": {
+        "requiredIds": [],
+        "reasonCode": "successful-near-miss-no-failure"
+      },
       "reusableKnowledge": {
         "status": "available",
         "issues": []
@@ -297,6 +313,16 @@
     },
     {
       "fixtureId": "unrelated",
+      "evidencePolicy": {
+        "requiredIds": [
+          "invoice-number",
+          "billing-account",
+          "plan-or-promotion",
+          "failure-timestamp",
+          "error-banner"
+        ],
+        "reasonCode": "billing-knowledge-article"
+      },
       "reusableKnowledge": {
         "status": "available",
         "issues": []
@@ -390,6 +416,16 @@
     },
     {
       "fixtureId": "stale-version",
+      "evidencePolicy": {
+        "requiredIds": [
+          "endpoint-url",
+          "request-id",
+          "api-response-status",
+          "sample-payload",
+          "failure-timestamp"
+        ],
+        "reasonCode": "ordinary-knowledge-article"
+      },
       "reusableKnowledge": {
         "status": "available",
         "issues": [
@@ -490,6 +526,16 @@
     },
     {
       "fixtureId": "contradicted-version",
+      "evidencePolicy": {
+        "requiredIds": [
+          "endpoint-url",
+          "request-id",
+          "api-response-status",
+          "sample-payload",
+          "failure-timestamp"
+        ],
+        "reasonCode": "ordinary-knowledge-article"
+      },
       "reusableKnowledge": {
         "status": "available",
         "issues": [
@@ -590,6 +636,12 @@
     },
     {
       "fixtureId": "draft-version-isolation",
+      "evidencePolicy": {
+        "requiredIds": [
+          "request-id"
+        ],
+        "reasonCode": "approved-known-cause-required"
+      },
       "reusableKnowledge": {
         "status": "available",
         "issues": []
@@ -682,6 +734,12 @@
     },
     {
       "fixtureId": "replacement-and-draft-isolation",
+      "evidencePolicy": {
+        "requiredIds": [
+          "request-id"
+        ],
+        "reasonCode": "approved-known-cause-required"
+      },
       "reusableKnowledge": {
         "status": "available",
         "issues": []

@@ -214,6 +214,31 @@ remain zero. Learned-minus-baseline comparisons are safety-first, so a new
 unsafe lifecycle code, wrong version, or lost evidence is a regression even if
 a later turn recovers.
 
+### Evidence-policy reporting checkpoint
+
+The controlled report carries a narrow, allowlisted `evidencePolicy` for each
+fixture: catalog `requiredIds` and a stable reason code only. The readable
+fixture rationale and all customer reply bodies, prompts, drafts, and internal
+traces stay out of the generated JSON and Markdown artifacts. This makes the
+metric's policy basis inspectable without turning the report into a record of
+customer content.
+
+Evidence precision distinguishes a legitimate catalogued request from an
+unnecessary one. A request is unnecessary only when it is outside the fixture
+policy; it is not unnecessary merely because the customer has not supplied it
+yet. An approved known cause is an explicit policy exception, not an implicit
+confidence bypass: `required` policies remain evidence-gated, while a
+`none-required` policy must have been explicitly approved under the knowledge
+governance workflow.
+
+Metric changes are recorded in three stages. The original controlled report
+showed learned evidence precision `0.286` and a missing-evidence rate of
+`0.333`. The post-policy/oracle-correction report shows `1.000` and `0.000`.
+That change corrects the holdout's ground truth and does **not** claim a
+production behavior improvement: the shared evidence matcher did not change
+in this slice. Any later matcher or lifecycle change is reported as a separate
+behavior delta, only when a regression proves it.
+
 The reusable boundary fails closed for learning: a ledger read failure returns
 `status: "ledger-unavailable"` with no learned contexts, while deterministic
 triage proceeds normally. It does not resurrect an older version implicitly.

@@ -937,6 +937,26 @@ safety-first:
 new unsafe lifecycle codes, wrong-version reuse, or lost evidence are
 regressions even when a later turn recovers.
 
+#### Evidence-policy checkpoint
+
+Each generated case now exposes only an allowlisted evidence-policy summary:
+its catalog `requiredIds` and a stable reason code. It never emits the fixture
+rationale, customer reply text, prompts, drafts, or internal traces. A request
+is counted as unnecessary only when it falls outside the fixture's documented
+policy. A catalogued request is therefore not penalized merely because it is
+still missing. An approved known cause remains an explicit exception: it can
+narrow or waive requirements only through its approved policy; a `required`
+known-cause policy keeps the normal evidence gate in force.
+
+The evidence metrics have a deliberately traceable checkpoint. The original
+controlled report recorded learned evidence precision `0.286` and
+missing-evidence rate `0.333`. After correcting the fixture policy oracle, the
+same deterministic behavior records `1.000` and `0.000`, respectively. This
+is a scoring-ground-truth correction, **not** a claimed production improvement:
+no shared evidence matcher changed in this slice. A later behavior change, if
+one is proven by a shared matcher regression, will be recorded separately from
+this policy correction.
+
 If the learning ledger cannot be read, `listReusableApproved({ asOf })`
 returns `ledger-unavailable` with no reusable contexts. Deterministic triage
 continues without learned context, and it never silently falls back to an

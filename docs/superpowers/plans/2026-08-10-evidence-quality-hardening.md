@@ -14,6 +14,7 @@
 - A known cause can waive or narrow evidence only when its approved policy explicitly allows that behavior.
 - GPT advice cannot add, remove, or satisfy required evidence without deterministic validation.
 - Evidence supplied in complete conversation snapshots is recognized through the same aliases and IDs in every evaluation surface.
+- Cross-surface parity means identical evidence facts and gating semantics; surface-specific lifecycle projection is allowed. Direct readiness may report `needs-information`, while recommendation surfaces may report `information-received` after partial recognized evidence. `missingEvidence` remains the diagnosis/fix gate everywhere.
 - Expected outcomes and policy labels are scoring-only; they never enter production classification, diagnosis, drafting, or lifecycle decisions.
 - Do not add semantic search, embeddings, prompt tuning, live-provider calls, or new promotion states in this slice.
 - Preserve zero-denominator `null` rates and zero count totals in holdout scorecards.
@@ -29,7 +30,7 @@
 
 **Interfaces:**
 - Consumes: `knowledgeHoldoutFixtures()`, `EvidenceRequirementId`, and the existing `HoldoutLaneResult` evidence fields.
-- Produces: a fixture-level `evidencePolicy` value with immutable `requiredIds`, a stable `reasonCode`, and a non-customer-facing `rationale`, plus a test matrix proving each expectation is registered in `EVIDENCE_CATALOG`.
+- Produces: a fixture-level `evidencePolicy` value with immutable `requiredIds`, a stable `reasonCode`, a traceable `policySource`, and a non-customer-facing `rationale`, plus a test matrix proving each expectation is registered in `EVIDENCE_CATALOG`.
 
 - [ ] **Step 1: Write the failing policy audit test.** Add a matrix that expects these policy-backed required IDs:
 
@@ -73,11 +74,17 @@ contradicted expectations do not match this policy matrix.
 evidencePolicy: {
   requiredIds: readonly EvidenceRequirementId[];
   reasonCode: "approved-known-cause-required" | "ordinary-knowledge-article" | "successful-near-miss-no-failure" | "billing-knowledge-article";
+  policySource:
+    | { kind: "approved-known-cause"; objectId: string; version: number }
+    | { kind: "knowledge-article"; articleId: string }
+    | { kind: "successful-near-miss" };
   rationale: string;
 };
 ```
 
-Use the matrix above, the reason codes shown in the type, and concise rationales
+Use the matrix above, the reason codes shown in the type, a source matching the
+fixture's approved known cause, selected knowledge article, or near-miss policy,
+and concise rationales
 such as “successful near miss has no failure evidence requirement,” “billing
 article requires its catalogued invoice fields,” and “ordinary API fallback
 applies when unhealthy knowledge is excluded.” Keep `expectedEvidenceIds` as a
@@ -87,7 +94,9 @@ maintaining two independent lists.
 - [ ] **Step 3: Make the holdout tests consume the policy metadata.** Update
 `test/knowledge-holdout-evaluation.test.ts` to assert the scorer’s necessary
 evidence accounting uses `fixture.evidencePolicy.requiredIds`, and assert that
-the rationale is never passed to `evaluateTicketWithAi`.
+the rationale is never passed to `evaluateTicketWithAi`. Assert that each
+policy source is traceable to the fixture's known cause, article, or near-miss
+policy rather than merely being a registered evidence ID.
 
 - [ ] **Step 4: Run the focused audit and holdout tests.**
 
@@ -115,23 +124,27 @@ git commit -m "test: align holdout evidence policy"
 
 **Interfaces:**
 - Consumes: `analyzeEvidenceReadiness`, `evaluateTicketWithAi`, `listReusableApproved`, the MCP `evaluate_ticket` tool, and the Approval Desk HTTP evaluation route.
-- Produces: regression coverage showing equivalent evidence IDs, support states, and known-cause policy behavior across surfaces.
+- Produces: regression coverage showing equivalent provided/required/missing evidence IDs and known-cause gating semantics across surfaces. Surface state may differ intentionally: direct readiness reports `needs-information`, while MCP/Approval Desk recommendations may project `information-received` after partial recognized evidence. Remaining `missingEvidence` is authoritative for diagnosis/fix gating.
 
 - [ ] **Step 1: Add RED parity cases.** Cover these exact inputs through the
 direct readiness function, MCP `evaluate_ticket`, and Approval Desk HTTP
 evaluation route:
   - a complete customer reply containing `Request ID: req_holdout_001`, which must provide `request-id`;
   - TKT-1004-style wording containing “audit source shown is IP 198.51.100.24” and “affected scope appears to be 12 profiles,” which must provide `audit-source` and `affected-scope`;
-  - an ordinary API ticket with only `request-id`, which must remain `needs-information` when `api-reference` evidence is active;
+  - an ordinary API ticket with only `request-id`: direct readiness remains `needs-information`; MCP and Approval Desk may report `information-received`, but all surfaces must expose the same remaining missing IDs and keep diagnosis/fix blocked;
   - a reusable approved object whose policy requires only `request-id`, which may reach `known-cause` once that ID is present;
   - the same approved object with no request ID, which must remain evidence-gated.
 
-Assert exact ID sets and `supportState`; do not assert customer wording or draft prose.
+Assert exact ID sets as order-independent sets and surface-appropriate `supportState`; do not assert customer wording or draft prose.
+
+Also attempt the diagnosis/fix action at the action/service boundary for the
+partial-evidence case and assert that it is rejected or unavailable while
+`missingEvidence.length > 0`.
 
 - [ ] **Step 2: Run the RED cases.**
 
 ```powershell
-npm test -- --run test/evidence-readiness.test.ts test/approval-desk-http.test.ts test/knowledge-holdout-evaluation.test.ts
+npm test -- --run test/evidence-readiness.test.ts test/server-actions.test.ts test/approval-desk-http.test.ts test/knowledge-holdout-evaluation.test.ts
 ```
 
 Expected: the existing TKT-1004 cases remain green; any failure must identify
@@ -147,7 +160,7 @@ matcher in MCP, HTTP, or holdout code.
 - [ ] **Step 4: Run the focused evidence suite and verify both surfaces.**
 
 ```powershell
-npm test -- --run test/evidence-readiness.test.ts test/approval-desk-http.test.ts test/knowledge-holdout-evaluation.test.ts
+npm test -- --run test/evidence-readiness.test.ts test/server-actions.test.ts test/approval-desk-http.test.ts test/knowledge-holdout-evaluation.test.ts
 ```
 
 Expected: all cases pass, with no evidence-gate bypass or known-cause version
@@ -156,7 +169,7 @@ drift.
 - [ ] **Step 5: Commit.**
 
 ```powershell
-git add test/evidence-readiness.test.ts test/approval-desk-http.test.ts test/knowledge-holdout-evaluation.test.ts src/approval-desk/evidence-readiness.ts
+git add test/evidence-readiness.test.ts test/server-actions.test.ts test/approval-desk-http.test.ts test/knowledge-holdout-evaluation.test.ts src/approval-desk/evidence-readiness.ts
 git commit -m "test: verify shared evidence lifecycle gates"
 ```
 
@@ -174,7 +187,7 @@ git commit -m "test: verify shared evidence lifecycle gates"
 
 **Interfaces:**
 - Consumes: corrected immutable `evidencePolicy` metadata and scorecard output from Tasks 1–2.
-- Produces: sanitized reports that expose policy-backed evidence IDs/rationales without customer bodies, prompts, drafts, or internal traces.
+- Produces: sanitized reports that expose policy-backed evidence IDs and stable reason codes without customer bodies, prompts, drafts, free-form rationales, or internal traces.
 
 - [ ] **Step 1: Add a failing report-contract assertion.** Extend
 `test/demo-knowledge-holdout.test.ts` to assert each report case includes the
@@ -195,6 +208,11 @@ npm run evaluate:knowledge-holdout
 Confirm the report remains deterministic, exact-version precision/governance
 metrics remain valid, and evidence precision/missing-rate changes are
 explained by the policy matrix rather than hidden.
+
+Preserve the metric checkpoint: retain the original report as the baseline,
+record the post-policy/oracle-correction metrics before any matcher change,
+and describe any later behavior delta separately. Do not call an oracle-only
+change a production behavior improvement.
 
 - [ ] **Step 4: Update documentation.** State the corrected evidence policy,
 the distinction between legitimate catalogued requests and unnecessary
@@ -235,7 +253,7 @@ npm run typecheck
 - [ ] **Step 2: Run focused and full tests.**
 
 ```powershell
-npm test -- --run test/evidence-readiness.test.ts test/approval-desk-http.test.ts test/knowledge-holdout-evidence-policy.test.ts test/knowledge-holdout-evaluation.test.ts test/demo-knowledge-holdout.test.ts
+npm test -- --run test/evidence-readiness.test.ts test/server-actions.test.ts test/approval-desk-http.test.ts test/knowledge-holdout-evidence-policy.test.ts test/knowledge-holdout-evaluation.test.ts test/demo-knowledge-holdout.test.ts
 npm test -- --maxWorkers=1 --no-file-parallelism
 ```
 

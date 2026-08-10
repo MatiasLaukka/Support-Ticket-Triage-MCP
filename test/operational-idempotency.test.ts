@@ -13,6 +13,7 @@ import {
   canonicalRequestHash,
   type OperationalCommandContext,
 } from "../src/operational/idempotency.js";
+import { OperationalResultReferenceSchema } from "../src/operational/domain.js";
 import {
   OperationalSqliteStore,
 } from "../src/operational/sqlite-store.js";
@@ -24,6 +25,7 @@ const commandIds = {
   multiTicket: "53333333-3333-4333-8333-333333333333",
   rollback: "63333333-3333-4333-8333-333333333333",
   semantic: "73333333-3333-4333-8333-333333333333",
+  pluralRecommendation: "83333333-3333-4333-8333-333333333333",
 } as const;
 const eventIds = {
   seed: "01111111-1111-4111-8111-111111111111",
@@ -40,12 +42,16 @@ const eventIds = {
   semanticMessage: "b1111111-1111-4111-8111-111111111111",
   semanticRecommendation: "c1111111-1111-4111-8111-111111111111",
   semanticDiagnosis: "d1111111-1111-4111-8111-111111111111",
-  wrongTicket: "e1111111-1111-4111-8111-111111111111",
+  pluralFirst: "e1111111-1111-4111-8111-111111111111",
+  pluralSecond: "f1111111-1111-4111-8111-111111111111",
+  pluralThird: "a2111111-1111-4111-8111-111111111111",
+  wrongTicket: "b2111111-1111-4111-8111-111111111111",
 } as const;
 const messageId = "22222222-2222-4222-8222-222222222222";
 const secondMessageId = "32222222-2222-4222-8222-222222222222";
 const recommendationId = "10000000-0000-4000-8000-000000000001";
 const secondRecommendationId = "10000000-0000-4000-8000-000000000002";
+const thirdRecommendationId = "10000000-0000-4000-8000-000000000003";
 const temporaryRoots: string[] = [];
 
 afterEach(() => {
@@ -129,6 +135,39 @@ describe("canonicalRequestHash", () => {
     const request: unknown[] = [1];
     mutate(request);
     expect(() => canonicalRequestHash("ticket-update", { request })).toThrow(/array|canonical|data|propert/i);
+  });
+});
+
+describe("recommendation result references", () => {
+  const baseResult = {
+    operation: "ticket-update" as const,
+    tickets: [{
+      ticketId: "TKT-0001" as const,
+      operationalEventIds: [eventIds.single],
+      resultingRevision: null,
+    }],
+  };
+
+  it("accepts a singular recommendation reference for exactly one aggregate", () => {
+    expect(OperationalResultReferenceSchema.safeParse({
+      ...baseResult,
+      recommendationId,
+    }).success).toBe(true);
+  });
+
+  it("accepts an ordered plural recommendation reference for multiple aggregates", () => {
+    expect(OperationalResultReferenceSchema.safeParse({
+      ...baseResult,
+      recommendationIds: [recommendationId, secondRecommendationId],
+    }).success).toBe(true);
+  });
+
+  it.each([
+    ["both singular and plural", { recommendationId, recommendationIds: [recommendationId, secondRecommendationId] }],
+    ["one plural ID", { recommendationIds: [recommendationId] }],
+    ["duplicate plural IDs", { recommendationIds: [recommendationId, recommendationId] }],
+  ])("rejects %s recommendation result references", (_label, fields) => {
+    expect(OperationalResultReferenceSchema.safeParse({ ...baseResult, ...fields }).success).toBe(false);
   });
 });
 
@@ -560,6 +599,174 @@ describe("persistent operational command idempotency", () => {
       expect(store.transaction((unit) =>
         unit.beginCommand(commandIds.semantic, "ticket-update", request)))
         .toEqual({ result });
+    } finally {
+      store.close();
+    }
+  });
+
+  it("persists and replays an ordered plural recommendation result without duplicate retries", () => {
+    const path = temporaryDatabasePath();
+    const store = OperationalSqliteStore.open(path);
+    const request = { ticketId: "TKT-0001", supersedes: [secondRecommendationId, thirdRecommendationId] };
+    const hash = canonicalRequestHash("recommendation-refresh", request);
+    const result = {
+      operation: "recommendation-refresh",
+      tickets: [{
+        ticketId: "TKT-0001" as const,
+        operationalEventIds: [eventIds.pluralFirst, eventIds.pluralSecond, eventIds.pluralThird],
+        resultingRevision: null,
+      }],
+      recommendationIds: [recommendationId, secondRecommendationId, thirdRecommendationId],
+    };
+    try {
+      store.initialize();
+      store.transaction((unit) => {
+        unit.insertTicket(ticket("TKT-0001"));
+        const sequences = unit.allocateEventSequences("TKT-0001", 2);
+        unit.appendEvent(event("TKT-0001", sequences[0]!, eventIds.compoundFirst, commandIds.compound));
+        unit.appendEvent(event("TKT-0001", sequences[1]!, eventIds.compoundSecond, commandIds.compound));
+        const current = unit.readTicket("TKT-0001");
+        for (const id of [secondRecommendationId, thirdRecommendationId]) {
+          unit.insertRecommendation(recommendationFor(current, id));
+        }
+      });
+
+      store.transaction((unit) => {
+        expect(unit.beginCommand(commandIds.pluralRecommendation, "recommendation-refresh", request)).toBe("new");
+        const sequences = unit.allocateEventSequences("TKT-0001", 3);
+        unit.appendEvent(event("TKT-0001", sequences[0]!, eventIds.pluralFirst, commandIds.pluralRecommendation));
+        unit.appendEvent(event("TKT-0001", sequences[1]!, eventIds.pluralSecond, commandIds.pluralRecommendation));
+        unit.appendEvent(event("TKT-0001", sequences[2]!, eventIds.pluralThird, commandIds.pluralRecommendation));
+        const current = unit.readTicket("TKT-0001");
+        const created = recommendationFor(current, recommendationId);
+        unit.insertRecommendation(created);
+        unit.appendRecommendationRevision({
+          recommendation: created,
+          operationalEventId: eventIds.pluralFirst,
+          createdAt: "2026-08-10T10:00:00.000Z",
+        });
+        for (const [id, operationalEventId] of [
+          [secondRecommendationId, eventIds.pluralSecond],
+          [thirdRecommendationId, eventIds.pluralThird],
+        ] as const) {
+          unit.appendRecommendationRevision({
+            recommendation: recommendationFor(current, id),
+            operationalEventId,
+            createdAt: "2026-08-10T10:00:00.000Z",
+          });
+        }
+        unit.persistCommandResult(commandIds.pluralRecommendation, hash, result);
+      });
+
+      const beforeRetry = store.readWorkflowSnapshot("TKT-0001");
+      expect(beforeRetry.recommendations.map(({ id }) => id)).toEqual([
+        recommendationId,
+        secondRecommendationId,
+        thirdRecommendationId,
+      ]);
+      store.close();
+
+      const reopened = OperationalSqliteStore.open(path);
+      try {
+        reopened.initialize();
+        const replay = reopened.transaction((unit) =>
+          unit.beginCommand(commandIds.pluralRecommendation, "recommendation-refresh", request))
+        expect(replay).toEqual({ result });
+        if (typeof replay !== "string") {
+          expect(Object.isFrozen(replay.result.recommendationIds)).toBe(true);
+          expect(() => (replay.result.recommendationIds as string[]).push("20000000-0000-4000-8000-000000000001"))
+            .toThrow();
+        }
+        const afterRetry = reopened.readWorkflowSnapshot("TKT-0001");
+        expect(afterRetry.events.map(({ id }) => id)).toEqual(beforeRetry.events.map(({ id }) => id));
+        expect(afterRetry.recommendationRevisions).toHaveLength(beforeRetry.recommendationRevisions.length);
+        expect(afterRetry.recommendations).toHaveLength(beforeRetry.recommendations.length);
+      } finally {
+        reopened.close();
+      }
+    } finally {
+      if (store) {
+        try { store.close(); } catch { /* already closed for restart replay */ }
+      }
+    }
+  });
+
+  it.each([
+    ["wrong causal order", [recommendationId, thirdRecommendationId, secondRecommendationId]],
+    ["an omitted aggregate", [recommendationId, secondRecommendationId]],
+  ] as const)("rejects a plural recommendation result with %s", (_label, recommendationIds) => {
+    const store = openedStore();
+    try {
+      store.transaction((unit) => {
+        unit.insertTicket(ticket("TKT-0001"));
+        const sequences = unit.allocateEventSequences("TKT-0001", 2);
+        unit.appendEvent(event("TKT-0001", sequences[0]!, eventIds.compoundFirst, commandIds.compound));
+        unit.appendEvent(event("TKT-0001", sequences[1]!, eventIds.compoundSecond, commandIds.compound));
+        const current = unit.readTicket("TKT-0001");
+        unit.insertRecommendation(recommendationFor(current, secondRecommendationId));
+        unit.insertRecommendation(recommendationFor(current, thirdRecommendationId));
+      });
+      const request = { ticketId: "TKT-0001", supersedes: [secondRecommendationId, thirdRecommendationId] };
+      const hash = canonicalRequestHash("recommendation-refresh", request);
+      expect(() => store.transaction((unit) => {
+        expect(unit.beginCommand(commandIds.pluralRecommendation, "recommendation-refresh", request)).toBe("new");
+        const sequences = unit.allocateEventSequences("TKT-0001", 3);
+        unit.appendEvent(event("TKT-0001", sequences[0]!, eventIds.pluralFirst, commandIds.pluralRecommendation));
+        unit.appendEvent(event("TKT-0001", sequences[1]!, eventIds.pluralSecond, commandIds.pluralRecommendation));
+        unit.appendEvent(event("TKT-0001", sequences[2]!, eventIds.pluralThird, commandIds.pluralRecommendation));
+        const current = unit.readTicket("TKT-0001");
+        const created = recommendationFor(current, recommendationId);
+        unit.insertRecommendation(created);
+        for (const [id, operationalEventId] of [
+          [recommendationId, eventIds.pluralFirst],
+          [secondRecommendationId, eventIds.pluralSecond],
+          [thirdRecommendationId, eventIds.pluralThird],
+        ] as const) {
+          unit.appendRecommendationRevision({
+            recommendation: recommendationFor(current, id),
+            operationalEventId,
+            createdAt: "2026-08-10T10:00:00.000Z",
+          });
+        }
+        unit.persistCommandResult(commandIds.pluralRecommendation, hash, {
+          operation: "recommendation-refresh",
+          tickets: [{
+            ticketId: "TKT-0001",
+            operationalEventIds: [eventIds.pluralFirst, eventIds.pluralSecond, eventIds.pluralThird],
+            resultingRevision: null,
+          }],
+          recommendationIds: [...recommendationIds],
+        });
+      })).toThrowError(expect.objectContaining({ code: "IDEMPOTENCY_CONFLICT" }));
+      expect(store.readWorkflowSnapshot("TKT-0001").events.map(({ id }) => id))
+        .toEqual([eventIds.compoundFirst, eventIds.compoundSecond]);
+    } finally {
+      store.close();
+    }
+  });
+
+  it("rejects a newly inserted recommendation aggregate without a current-command revision", () => {
+    const store = openedStore();
+    try {
+      store.transaction((unit) => unit.insertTicket(ticket("TKT-0001")));
+      const request = { ticketId: "TKT-0001" };
+      const hash = canonicalRequestHash("recommendation-refresh", request);
+      expect(() => store.transaction((unit) => {
+        expect(unit.beginCommand(commandIds.pluralRecommendation, "recommendation-refresh", request)).toBe("new");
+        const [sequence] = unit.allocateEventSequences("TKT-0001", 1);
+        unit.appendEvent(event("TKT-0001", sequence!, eventIds.pluralFirst, commandIds.pluralRecommendation));
+        unit.insertRecommendation(recommendationFor(unit.readTicket("TKT-0001"), recommendationId));
+        unit.persistCommandResult(commandIds.pluralRecommendation, hash, {
+          operation: "recommendation-refresh",
+          tickets: [{
+            ticketId: "TKT-0001",
+            operationalEventIds: [eventIds.pluralFirst],
+            resultingRevision: null,
+          }],
+          recommendationId,
+        });
+      })).toThrowError(expect.objectContaining({ code: "IDEMPOTENCY_CONFLICT" }));
+      expect(store.readWorkflowSnapshot("TKT-0001").events).toEqual([]);
     } finally {
       store.close();
     }

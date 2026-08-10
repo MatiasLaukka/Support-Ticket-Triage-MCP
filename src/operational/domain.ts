@@ -244,9 +244,28 @@ export const OperationalResultReferenceSchema = z.object({
     "Result tickets must be unique.",
   ),
   recommendationId: z.uuid().optional(),
+  recommendationIds: z.array(z.uuid()).min(2).optional(),
   diagnosisId: IdentifierSchema.optional(),
   messageId: MessageIdSchema.optional(),
-}).strict().readonly();
+}).strict().superRefine((result, context) => {
+  if (result.recommendationId !== undefined && result.recommendationIds !== undefined) {
+    context.addIssue({
+      code: "custom",
+      path: ["recommendationIds"],
+      message: "Recommendation result references must use either recommendationId or recommendationIds, not both.",
+    });
+  }
+  if (
+    result.recommendationIds !== undefined
+    && new Set(result.recommendationIds).size !== result.recommendationIds.length
+  ) {
+    context.addIssue({
+      code: "custom",
+      path: ["recommendationIds"],
+      message: "Plural recommendation result references must be unique.",
+    });
+  }
+}).readonly();
 
 export const CommandIdempotencyRecordSchema = z.object({
   commandId: CommandIdSchema,

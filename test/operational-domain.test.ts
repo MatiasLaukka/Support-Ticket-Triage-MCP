@@ -166,8 +166,14 @@ describe("operational persistence domain", () => {
   it("accepts only closed sanitized operational facts", () => {
     const base = { id: eventId, ticketId: "TKT-0001", sequence: 1, occurredAt: "2026-08-10T10:00:00.000Z", actor: "support-lead", action: "ticket-updated", commandId };
     expect(OperationalEventSchema.safeParse({ ...base, facts: { count: 2, approved: true, evidence: ["request-id"] } }).success).toBe(true);
-    expect(OperationalEventSchema.safeParse({ ...base, facts: { messageId } }).success).toBe(true);
-    expect(OperationalEventSchema.safeParse({ ...base, facts: { messageId: "message-1" } }).success).toBe(false);
+    expect(OperationalEventSchema.safeParse({ ...base, action: "customer-reply-received", facts: { messageId } }).success).toBe(true);
+    expect(OperationalEventSchema.safeParse({ ...base, action: "customer-response-sent", facts: { messageId } }).success).toBe(true);
+    for (const event of [
+      { ...base, facts: { messageId } },
+      { ...base, action: "customer-reply-received", facts: {} },
+      { ...base, action: "customer-reply-received", facts: { messageId, status: "received" } },
+      { ...base, action: "customer-response-sent", facts: { messageId: "message-1" } },
+    ]) expect(OperationalEventSchema.safeParse(event).success).toBe(false);
     for (const facts of [
       { body: "Customer body must not be copied." },
       { content: "Customer content must not be copied." },
@@ -242,5 +248,45 @@ describe("operational persistence domain", () => {
       ...snapshot,
       customerReplyWatermark: { state: "reply", timestamp: messages[0]!.createdAt, id: messageId },
     }).success).toBe(false);
+  });
+
+  it("requires every snapshot message and message event to form one exact canonical pair", () => {
+    const event = {
+      id: eventId,
+      ticketId: "TKT-0001",
+      sequence: 1,
+      occurredAt: "2026-08-10T10:00:00.000Z",
+      actor: "customer",
+      action: "customer-reply-received",
+      commandId,
+      facts: { messageId },
+    };
+    const message = {
+      id: messageId,
+      ticketId: "TKT-0001",
+      operationalEventId: eventId,
+      kind: "customer",
+      createdAt: "2026-08-10T10:00:00.000Z",
+      body: "Canonical reply body.",
+    };
+    const snapshot = {
+      ticket,
+      ticketRevisions: [],
+      recommendations: [],
+      recommendationRevisions: [],
+      messages: [message],
+      diagnoses: [],
+      events: [event],
+      traces: [],
+      customerReplyWatermark: { state: "reply", timestamp: message.createdAt, id: message.id },
+    };
+    expect(OperationalWorkflowSnapshotSchema.safeParse(snapshot).success).toBe(true);
+    for (const invalid of [
+      { ...snapshot, messages: [], customerReplyWatermark: { state: "none" } },
+      { ...snapshot, events: [{ ...event, facts: { messageId: "24222222-2222-4222-8222-222222222222" } }] },
+      { ...snapshot, messages: [{ ...message, kind: "support" }], customerReplyWatermark: { state: "none" } },
+      { ...snapshot, events: [{ ...event, action: "ticket-updated", facts: {} }] },
+      { ...snapshot, events: [{ ...event, facts: { messageId, status: "received" } }] },
+    ]) expect(OperationalWorkflowSnapshotSchema.safeParse(invalid).success).toBe(false);
   });
 });

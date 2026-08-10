@@ -22,6 +22,9 @@ import {
   summarizeRecommendationsForSnapshot,
 } from "../src/approval-desk/workflow-read-model.js";
 import { OperationalSqliteStore } from "../src/operational/sqlite-store.js";
+import type { OperationalWorkflowSnapshot } from "../src/operational/domain.js";
+import type { OperationalUnitOfWork } from "../src/operational/unit-of-work.js";
+import { operationalMessageCausalPositions } from "../src/approval-desk/workflow-causal-context.js";
 import {
   TriageService,
   customerReplyWatermarkFromSnapshot,
@@ -132,7 +135,11 @@ describe("operational workflow reads", () => {
       } as const;
       const first = await harness.service.addCustomerReply(input, { commandId: replyCommandId });
       const beforeReplay = harness.store.readWorkflowSnapshot(ticketId);
-      const replay = await harness.service.addCustomerReply(input, { commandId: replyCommandId });
+      const replay = await harness.service.addCustomerReply({
+        ...input,
+        // Adapters generate this attempt timestamp; it is not caller-semantic.
+        receivedAt: "2026-08-11T10:05:00.000Z",
+      }, { commandId: replyCommandId });
       const afterReplay = harness.store.readWorkflowSnapshot(ticketId);
 
       expect(replay).toEqual(first);
@@ -189,6 +196,83 @@ describe("operational workflow reads", () => {
       expect(snapshot.customerReplyWatermark).toEqual({ state: "none" });
     } finally {
       harness.store.close();
+    }
+  });
+
+  it.each([
+    ["missing message row", (unit: OperationalUnitOfWork, eventId: string, messageId: string) => {
+      appendMessageEvent(unit, eventId, messageId, "customer-reply-received");
+    }],
+    ["mismatched message ID", (unit: OperationalUnitOfWork, eventId: string, messageId: string) => {
+      appendMessageEvent(unit, eventId, messageId, "customer-reply-received");
+      insertBoundMessage(unit, eventId, "71000000-0000-4000-8000-000000000099", "customer");
+    }],
+    ["wrong message kind", (unit: OperationalUnitOfWork, eventId: string, messageId: string) => {
+      appendMessageEvent(unit, eventId, messageId, "customer-reply-received");
+      insertBoundMessage(unit, eventId, messageId, "support");
+    }],
+    ["message linked to an unrelated action", (unit: OperationalUnitOfWork, eventId: string, messageId: string) => {
+      const [sequence] = unit.allocateEventSequences(ticketId, 1);
+      unit.appendEvent(workflowEvent({
+        id: eventId,
+        sequence: sequence!,
+        occurredAt: "2026-08-11T12:00:00.000Z",
+        action: "ticket-updated",
+        facts: {},
+      }));
+      insertBoundMessage(unit, eventId, messageId, "customer");
+    }],
+    ["extra message-event facts", (unit: OperationalUnitOfWork, eventId: string, messageId: string) => {
+      const [sequence] = unit.allocateEventSequences(ticketId, 1);
+      unit.appendEvent(workflowEvent({
+        id: eventId,
+        sequence: sequence!,
+        occurredAt: "2026-08-11T12:00:00.000Z",
+        action: "customer-reply-received",
+        facts: { messageId, status: "received" },
+      }));
+      insertBoundMessage(unit, eventId, messageId, "customer");
+    }],
+  ] as const)("rejects a transaction with %s", (_label, writeInvalidPair) => {
+    const { store } = openStore();
+    try {
+      store.transaction((unit) => unit.insertTicket(makeTicket()));
+      const eventId = "70000000-0000-4000-8000-000000000001";
+      const messageId = "71000000-0000-4000-8000-000000000001";
+      expect(() => store.transaction((unit) => writeInvalidPair(unit, eventId, messageId)))
+        .toThrow();
+      expect(store.readWorkflowSnapshot(ticketId)).toMatchObject({
+        events: [],
+        messages: [],
+        customerReplyWatermark: { state: "none" },
+      });
+    } finally {
+      store.close();
+    }
+  });
+
+  it("defensively ignores an unvalidated message/event pair in read projections", () => {
+    const { store } = seededWorkflowStore();
+    try {
+      const snapshot = store.readWorkflowSnapshot(ticketId);
+      const invalid = {
+        ...snapshot,
+        events: snapshot.events.map((event) => event.id === snapshot.messages.at(-1)!.operationalEventId
+          ? { ...event, facts: { messageId: firstReplyMessageId } }
+          : event),
+      } as unknown as OperationalWorkflowSnapshot;
+
+      expect(operationalMessageCausalPositions(invalid, "customer").map(({ message }) => message.id))
+        .toEqual([firstReplyMessageId]);
+      expect(customerRepliesFromSnapshot(invalid).map(({ id }) => id))
+        .toEqual([firstReplyMessageId]);
+      expect(buildConversationTimelineFromSnapshot(invalid))
+        .not.toContainEqual(expect.objectContaining({
+          kind: "customer-reply",
+          body: "Latest reply by sequence, despite its older timestamp.",
+        }));
+    } finally {
+      store.close();
     }
   });
 });
@@ -318,6 +402,38 @@ function workflowEvent(input: {
     commandId: "60000000-0000-4000-8000-000000000001",
     facts: input.facts,
   };
+}
+
+function appendMessageEvent(
+  unit: OperationalUnitOfWork,
+  eventId: string,
+  messageId: string,
+  action: "customer-reply-received" | "customer-response-sent",
+): void {
+  const [sequence] = unit.allocateEventSequences(ticketId, 1);
+  unit.appendEvent(workflowEvent({
+    id: eventId,
+    sequence: sequence!,
+    occurredAt: "2026-08-11T12:00:00.000Z",
+    action,
+    facts: { messageId },
+  }));
+}
+
+function insertBoundMessage(
+  unit: OperationalUnitOfWork,
+  operationalEventId: string,
+  id: string,
+  kind: "customer" | "support",
+): void {
+  unit.insertMessage({
+    id,
+    ticketId,
+    operationalEventId,
+    kind,
+    createdAt: "2026-08-11T12:00:00.000Z",
+    body: "Canonical message body.",
+  });
 }
 
 function openStore(): { store: OperationalSqliteStore; path: string } {

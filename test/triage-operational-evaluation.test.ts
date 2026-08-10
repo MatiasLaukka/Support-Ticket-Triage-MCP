@@ -228,7 +228,7 @@ describe("transactional operational evaluation", () => {
           actor: "customer",
           action: "customer-reply-received",
           commandId: seedCommandId,
-          facts: { status: "received" },
+          facts: { messageId: "30000000-0000-4000-8000-000000000002" },
         });
         unit.insertMessage({
           id: "30000000-0000-4000-8000-000000000002",
@@ -316,7 +316,7 @@ function openHarness(options: {
       actor: "customer",
       action: "customer-reply-received",
       commandId: seedCommandId,
-      facts: { status: "received" },
+      facts: { messageId: customerMessageId },
     });
     unit.insertMessage({
       id: customerMessageId,

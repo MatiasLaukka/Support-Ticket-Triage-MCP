@@ -4,9 +4,10 @@ import type {
   TriageRecommendation,
 } from "../domain.js";
 import { compareIsoInstants } from "../iso-instant.js";
-import type {
-  OperationalEvent,
-  OperationalWorkflowSnapshot,
+import {
+  isCanonicalConversationEventPair,
+  type OperationalEvent,
+  type OperationalWorkflowSnapshot,
 } from "../operational/domain.js";
 import { operationalCausalPositions } from "./workflow-causal-context.js";
 
@@ -189,7 +190,7 @@ function buildTimelineOperationalItem(
   event: OperationalEvent,
 ): ConversationTimelineItem {
   const message = snapshot.messages.find(
-    ({ operationalEventId }) => operationalEventId === event.id,
+    (candidate) => isCanonicalConversationEventPair(event, candidate),
   );
   if (
     event.action === "customer-response-sent"

@@ -133,7 +133,25 @@ export const OperationalEventSchema = z.object({
   action: AuditActionSchema,
   commandId: CommandIdSchema,
   facts: SanitizedOperationalFactsSchema,
-}).strict().readonly();
+}).strict().superRefine((event, context) => {
+  const messageKind = conversationMessageKindForOperationalAction(event.action);
+  const factKeys = Object.keys(event.facts);
+  if (messageKind !== undefined) {
+    if (factKeys.length !== 1 || factKeys[0] !== "messageId") {
+      context.addIssue({
+        code: "custom",
+        path: ["facts"],
+        message: "Conversation message events must contain exactly one messageId fact.",
+      });
+    }
+  } else if (Object.prototype.hasOwnProperty.call(event.facts, "messageId")) {
+    context.addIssue({
+      code: "custom",
+      path: ["facts", "messageId"],
+      message: "Only conversation message events may reference a messageId.",
+    });
+  }
+}).readonly();
 
 export const TicketRevisionSchema = z.object({
   ticketId: TicketIdSchema,
@@ -426,19 +444,43 @@ export const OperationalWorkflowSnapshotSchema = z.object({
       context.addIssue({ code: "custom", path: ["eventReferences", index], message: "Snapshot child records must reference a snapshot operational event." });
     }
   });
+  for (const [index, event] of snapshot.events.entries()) {
+    const expectedKind = conversationMessageKindForOperationalAction(event.action);
+    if (expectedKind === undefined) continue;
+    const linkedMessages = snapshot.messages.filter(
+      (message) => message.operationalEventId === event.id,
+    );
+    if (
+      linkedMessages.length !== 1
+      || !isCanonicalConversationEventPair(event, linkedMessages[0]!)
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["events", index],
+        message: "Every conversation message event must bind to exactly one canonical message.",
+      });
+    }
+  }
+  for (const [index, message] of snapshot.messages.entries()) {
+    const event = snapshot.events.find((candidate) => candidate.id === message.operationalEventId);
+    if (event === undefined || !isCanonicalConversationEventPair(event, message)) {
+      context.addIssue({
+        code: "custom",
+        path: ["messages", index],
+        message: "Every conversation message must bind to its canonical operational event.",
+      });
+    }
+  }
   const customerReplyWatermark = snapshot.customerReplyWatermark;
-  const sequenceByEventId = new Map(
-    snapshot.events.map((event) => [event.id, event.sequence] as const),
-  );
   const latestCustomerMessage = snapshot.messages
     .filter((message) => message.kind === "customer")
     .map((message) => ({
       message,
-      sequence: sequenceByEventId.get(message.operationalEventId),
+      event: snapshot.events.find((event) => event.id === message.operationalEventId),
     }))
-    .filter((entry): entry is { message: ConversationMessage; sequence: number } =>
-      entry.sequence !== undefined)
-    .sort((left, right) => left.sequence - right.sequence)
+    .filter((entry): entry is { message: ConversationMessage; event: OperationalEvent } =>
+      entry.event !== undefined && isCanonicalConversationEventPair(entry.event, entry.message))
+    .sort((left, right) => left.event.sequence - right.event.sequence)
     .at(-1)?.message;
   if (
     (latestCustomerMessage === undefined && customerReplyWatermark.state !== "none")
@@ -490,6 +532,34 @@ export type OperationalTicketResult = z.infer<typeof OperationalTicketResultSche
 export type LearningCaptureEnvelope = z.infer<typeof LearningCaptureEnvelopeSchema>;
 export type DiagnosisCompletion = z.infer<typeof DiagnosisCompletionSchema>;
 export type DecisionTraceEvent = z.infer<typeof DecisionTraceEventSchema>;
+
+export function conversationMessageKindForOperationalAction(
+  action: OperationalEvent["action"],
+): ConversationMessage["kind"] | undefined {
+  if (action === "customer-reply-received") return "customer";
+  if (action === "customer-response-sent") return "support";
+  return undefined;
+}
+
+export function isCanonicalConversationEventPair(
+  event: {
+    readonly id: string;
+    readonly ticketId: string;
+    readonly action: OperationalEvent["action"];
+    readonly facts: Readonly<Record<string, unknown>>;
+  },
+  message: Pick<ConversationMessage, "id" | "ticketId" | "operationalEventId" | "kind">,
+): boolean {
+  const expectedKind = conversationMessageKindForOperationalAction(event.action);
+  const factKeys = Object.keys(event.facts);
+  return expectedKind !== undefined
+    && factKeys.length === 1
+    && factKeys[0] === "messageId"
+    && event.facts.messageId === message.id
+    && event.id === message.operationalEventId
+    && event.ticketId === message.ticketId
+    && expectedKind === message.kind;
+}
 
 export type CanonicalRequestValue =
   | null

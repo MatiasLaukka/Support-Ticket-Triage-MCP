@@ -1338,12 +1338,18 @@ export class TriageService {
   ): Promise<AuditEvent> {
     const store = this.dependencies.operationalStore;
     if (store === undefined) throw new Error("Operational store is not configured.");
-    const requestHash = canonicalRequestHash("add-customer-reply", reply);
+    const semanticRequest = {
+      ticketId: reply.ticketId,
+      actor: reply.actor,
+      body: reply.body,
+      ...(reply.source === undefined ? {} : { source: reply.source }),
+    };
+    const requestHash = canonicalRequestHash("add-customer-reply", semanticRequest);
     return store.transaction((unit) => {
       const replay = unit.beginCommand(
         commandContext.commandId,
         "add-customer-reply",
-        reply,
+        semanticRequest,
       );
       if (replay !== "new") return this.replayCustomerReply(unit, replay);
       const snapshot = unit.readWorkflowSnapshot(reply.ticketId);

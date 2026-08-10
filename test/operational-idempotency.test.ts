@@ -414,7 +414,14 @@ describe("persistent operational command idempotency", () => {
       expect(unit.beginCommand(commandIds.compound, "approve-and-send", request)).toBe("new");
       const sequences = unit.allocateEventSequences("TKT-0001", 2);
       unit.appendEvent(event("TKT-0001", sequences[0]!, eventIds.compoundFirst, commandIds.compound));
-      unit.appendEvent(event("TKT-0001", sequences[1]!, eventIds.compoundSecond, commandIds.compound));
+      unit.appendEvent(event(
+        "TKT-0001",
+        sequences[1]!,
+        eventIds.compoundSecond,
+        commandIds.compound,
+        "customer-response-sent",
+        { messageId },
+      ));
       unit.insertMessage({
         id: messageId,
         ticketId: "TKT-0001",
@@ -562,7 +569,14 @@ describe("persistent operational command idempotency", () => {
         const sequences = unit.allocateEventSequences("TKT-0001", 4);
         const semanticEventIds = result.tickets[0].operationalEventIds;
         semanticEventIds.forEach((id, index) => {
-          unit.appendEvent(event("TKT-0001", sequences[index]!, id, commandIds.semantic));
+          unit.appendEvent(event(
+            "TKT-0001",
+            sequences[index]!,
+            id,
+            commandIds.semantic,
+            id === eventIds.semanticMessage ? "customer-reply-received" : "ticket-updated",
+            id === eventIds.semanticMessage ? { messageId } : {},
+          ));
         });
         const updated = advanceTicket(unit.readTicket("TKT-0001"), "in-progress");
         unit.updateTicket(updated, 0);
@@ -848,7 +862,12 @@ describe("persistent operational command idempotency", () => {
       expect(() => store.transaction((unit) => {
         expect(unit.beginCommand(commandIds.single, "ticket-update", request)).toBe("new");
         const [sequence] = unit.allocateEventSequences("TKT-0001", 1);
-        unit.appendEvent(event("TKT-0001", sequence!, eventIds.single, commandIds.single));
+        unit.appendEvent(event(
+          "TKT-0001",
+          sequence!,
+          eventIds.single,
+          commandIds.single,
+        ));
         unit.appendTrace(decisionTrace("TKT-0001", eventIds.seed));
         unit.persistCommandResult(commandIds.single, hash, {
           operation: "ticket-update",
@@ -935,7 +954,14 @@ describe("persistent operational command idempotency", () => {
       store.transaction((unit) => {
         unit.insertTicket(ticket("TKT-0001"));
         const [sequence] = unit.allocateEventSequences("TKT-0001", 1);
-        unit.appendEvent(event("TKT-0001", sequence!, eventIds.single, commandIds.single));
+        unit.appendEvent(event(
+          "TKT-0001",
+          sequence!,
+          eventIds.single,
+          commandIds.single,
+          kind === "message" ? "customer-reply-received" : "ticket-updated",
+          kind === "message" ? { messageId } : {},
+        ));
         writeSemanticReference(unit, kind, "TKT-0001", eventIds.single);
       });
       store.close();
@@ -1119,6 +1145,8 @@ function event(
   sequence: number,
   id: string,
   commandId: string,
+  action: "ticket-updated" | "customer-reply-received" | "customer-response-sent" = "ticket-updated",
+  facts: Readonly<Record<string, unknown>> = {},
 ) {
   return {
     id,
@@ -1126,9 +1154,9 @@ function event(
     sequence,
     occurredAt: "2026-08-10T10:00:00.000Z",
     actor: "support-lead",
-    action: "ticket-updated" as const,
+    action,
     commandId,
-    facts: {},
+    facts,
   };
 }
 
@@ -1213,7 +1241,14 @@ function seedWrongTicketReference(
   kind: "message" | "recommendation" | "diagnosis",
 ): void {
   const [sequence] = unit.allocateEventSequences("TKT-0002", 1);
-  unit.appendEvent(event("TKT-0002", sequence!, eventIds.wrongTicket, commandIds.compound));
+  unit.appendEvent(event(
+    "TKT-0002",
+    sequence!,
+    eventIds.wrongTicket,
+    commandIds.compound,
+    kind === "message" ? "customer-reply-received" : "ticket-updated",
+    kind === "message" ? { messageId } : {},
+  ));
   if (kind === "message") {
     unit.insertMessage({
       id: messageId,

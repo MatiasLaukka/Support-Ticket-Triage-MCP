@@ -23,6 +23,8 @@ import {
   RecommendationRevisionSchema,
   RequestHashSchema,
   TicketRevisionSchema,
+  conversationMessageKindForOperationalAction,
+  isCanonicalConversationEventPair,
   type CommandIdempotencyRecord,
   type ConversationMessage,
   type DecisionTraceEvent,
@@ -81,6 +83,8 @@ interface CommandEventRow {
 }
 interface LocalCommandEventRow extends CommandEventRow {
   command_id: string;
+  action: OperationalEvent["action"];
+  facts: OperationalEventWrite["facts"];
 }
 interface TicketRevisionReferenceRow {
   ticket_id: string;
@@ -93,6 +97,9 @@ interface SemanticReferenceRow {
 }
 interface LocalEventChildRow extends SemanticReferenceRow {
   operational_event_id: string;
+}
+interface LocalMessageWriteRow extends LocalEventChildRow {
+  kind: ConversationMessage["kind"];
 }
 interface LocalTicketRevisionRow {
   ticket_id: string;
@@ -126,7 +133,7 @@ export class OperationalUnitOfWork {
   private persistedCommandRecord: CommandIdempotencyRecord | undefined;
   private readonly appendedEventWrites: LocalCommandEventRow[] = [];
   private readonly ticketRevisionWrites: LocalTicketRevisionRow[] = [];
-  private readonly messageWrites: LocalEventChildRow[] = [];
+  private readonly messageWrites: LocalMessageWriteRow[] = [];
   private readonly recommendationAggregateWrites: string[] = [];
   private readonly recommendationRevisionWrites: LocalEventChildRow[] = [];
   private readonly diagnosisWrites: LocalEventChildRow[] = [];
@@ -374,6 +381,7 @@ export class OperationalUnitOfWork {
       id: parsed.id,
       ticket_id: parsed.ticketId,
       operational_event_id: parsed.operationalEventId,
+      kind: parsed.kind,
     });
   }
 
@@ -524,6 +532,8 @@ export class OperationalUnitOfWork {
       ticket_id: parsed.ticketId,
       sequence: parsed.sequence,
       command_id: parsed.commandId,
+      action: parsed.action,
+      facts: parsed.facts,
     });
     pending.shift();
     if (pending.length === 0) this.reservedSequences.delete(parsed.ticketId);
@@ -683,6 +693,7 @@ export class OperationalUnitOfWork {
   /** @internal Used by the store immediately before COMMIT. */
   assertReadyToCommit(): void {
     this.assertActive();
+    this.assertMessageEventBindings();
     if (this.reservedSequences.size > 0) {
       throw new OperationalStoreError(
         "Every allocated event sequence must be appended before commit.",
@@ -728,6 +739,63 @@ export class OperationalUnitOfWork {
         "IDEMPOTENCY_CONFLICT",
       );
     }
+  }
+
+  private assertMessageEventBindings(): void {
+    const eventsById = new Map(this.appendedEventWrites.map((event) => [event.id, event] as const));
+    for (const event of this.appendedEventWrites) {
+      const expectedKind = conversationMessageKindForOperationalAction(event.action);
+      const linkedMessages = this.messageWrites.filter(
+        (message) => message.operational_event_id === event.id,
+      );
+      if (expectedKind === undefined) {
+        if (linkedMessages.length > 0) {
+          throw new OperationalStoreError(
+            "Only conversation message events may own a conversation message.",
+            "PERSISTENCE_ERROR",
+          );
+        }
+        continue;
+      }
+      if (
+        linkedMessages.length !== 1
+        || !this.isCanonicalLocalMessagePair(event, linkedMessages[0]!)
+      ) {
+        throw new OperationalStoreError(
+          "Every conversation message event must bind to exactly one matching canonical message.",
+          "PERSISTENCE_ERROR",
+        );
+      }
+    }
+    for (const message of this.messageWrites) {
+      const event = eventsById.get(message.operational_event_id);
+      if (event === undefined || !this.isCanonicalLocalMessagePair(event, message)) {
+        throw new OperationalStoreError(
+          "Every conversation message must bind to its transaction-local canonical event.",
+          "PERSISTENCE_ERROR",
+        );
+      }
+    }
+  }
+
+  private isCanonicalLocalMessagePair(
+    event: LocalCommandEventRow,
+    message: LocalMessageWriteRow,
+  ): boolean {
+    return isCanonicalConversationEventPair(
+      {
+        id: event.id,
+        ticketId: event.ticket_id,
+        action: event.action,
+        facts: event.facts,
+      },
+      {
+        id: message.id,
+        ticketId: message.ticket_id,
+        operationalEventId: message.operational_event_id,
+        kind: message.kind,
+      },
+    );
   }
 
   private hasMutationActivity(): boolean {
@@ -1224,15 +1292,14 @@ function latestMessageByEventSequence(
   events: readonly OperationalEvent[],
   kind: ConversationMessage["kind"],
 ): ConversationMessage | undefined {
-  const sequenceByEventId = new Map(events.map((event) => [event.id, event.sequence] as const));
   return messages
     .filter((message) => message.kind === kind)
     .map((message) => ({
       message,
-      sequence: sequenceByEventId.get(message.operationalEventId),
+      event: events.find((event) => event.id === message.operationalEventId),
     }))
-    .filter((entry): entry is { message: ConversationMessage; sequence: number } =>
-      entry.sequence !== undefined)
-    .sort((left, right) => left.sequence - right.sequence)
+    .filter((entry): entry is { message: ConversationMessage; event: OperationalEvent } =>
+      entry.event !== undefined && isCanonicalConversationEventPair(entry.event, entry.message))
+    .sort((left, right) => left.event.sequence - right.event.sequence)
     .at(-1)?.message;
 }

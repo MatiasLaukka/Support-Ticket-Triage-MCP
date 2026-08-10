@@ -1,9 +1,10 @@
 import type { AuditEvent, TriageRecommendation } from "../domain.js";
 import { compareIsoInstants } from "../iso-instant.js";
-import type {
-  ConversationMessage,
-  OperationalEvent,
-  OperationalWorkflowSnapshot,
+import {
+  isCanonicalConversationEventPair,
+  type ConversationMessage,
+  type OperationalEvent,
+  type OperationalWorkflowSnapshot,
 } from "../operational/domain.js";
 
 /** @deprecated File-backed audit position retained only until operational cutover. */
@@ -63,7 +64,8 @@ export function operationalMessageCausalPositions(
       message,
       event: snapshot.events.find(({ id }) => id === message.operationalEventId),
     }))
-    .filter((entry): entry is OperationalMessageCausalPosition => entry.event !== undefined)
+    .filter((entry): entry is OperationalMessageCausalPosition =>
+      entry.event !== undefined && isCanonicalConversationEventPair(entry.event, entry.message))
     .sort(compareOperationalCausalOrder);
 }
 

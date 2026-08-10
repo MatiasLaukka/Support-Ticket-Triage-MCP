@@ -386,6 +386,8 @@ function event(
     actor: "support-lead",
     action,
     commandId,
-    facts: {},
+    facts: action === "customer-reply-received"
+      ? { messageId: "22222222-2222-4222-8222-222222222222" }
+      : {},
   };
 }

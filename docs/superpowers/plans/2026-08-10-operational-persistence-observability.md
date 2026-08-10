@@ -18,6 +18,7 @@
 - HTTP, MCP, UI, scripts, and replay code must call shared domain services and must not write operational tables or reimplement gates.
 - Operational events, ticket revisions, messages, diagnoses, and decision traces are append-only after commit; no update/delete APIs are added.
 - Every operational event has a unique ticket-wide causal sequence; one transaction producing N events allocates N contiguous sequences in explicit domain order.
+- Multi-ticket commands may share one atomic SQLite transaction, but each affected ticket receives its own contiguous sequence range; ranges never span ticket IDs. Every affected ticket is revalidated before writing, and all ticket changes/replays commit or roll back together.
 - Ticket revision increments only when the canonical `Ticket` projection changes; messages, recommendations, and traces use their own records and watermarks.
 - Every mutation boundary carries a stable command/idempotency ID across transport retries.
 - Learning capture uses an immutable validated envelope and stable delivery identity; retries never recalculate from mutable ticket state.
@@ -281,13 +282,14 @@ Existing `TicketRepository`, `RecommendationRepository`, and `AuditRepository` r
   Run: `npm test -- --run test/triage-operational-diagnosis-lifecycle.test.ts`
 
   Expected: FAIL because current diagnosis/fix/closure paths compensate separate file writes and direct learning calls.
-- [ ] **Step 4: Implement each exact write set.** Revalidate the diagnosis, approval, fix, lifecycle, ticket revision, and reply-watermark gates through the transaction snapshot; append events in explicit domain order; allocate contiguous sequences for multi-ticket/multi-event commands; persist typed traces and replay envelopes atomically.
-- [ ] **Step 5: Run focused diagnosis/lifecycle regressions.**
+- [ ] **Step 4: Implement each exact write set.** Revalidate the diagnosis, approval, fix, lifecycle, ticket revision, and reply-watermark gates through the transaction snapshot; append events in explicit domain order; allocate a separate contiguous sequence range for each affected ticket in a multi-ticket command; persist typed traces and replay envelopes atomically.
+- [ ] **Step 5: Add the scoped multi-ticket sequencing regression.** For `applyDiagnosisFix`, affect at least two tickets in one command and assert every ticket is revalidated before writing, each ticket's event sequences are independently contiguous and ordered, no range crosses ticket IDs, all changes roll back together on one-ticket failure, and an idempotent replay creates no duplicate event on either ticket.
+- [ ] **Step 6: Run focused diagnosis/lifecycle regressions.**
 
   Run: `npm test -- --run test/triage-operational-diagnosis-lifecycle.test.ts test/diagnosis-review.test.ts test/approval-desk-diagnostic-workflow.test.ts test/approval-desk-http.test.ts`
 
   Expected: all tests pass without changing evidence or diagnosis authority.
-- [ ] **Step 6: Commit.**
+- [ ] **Step 7: Commit.**
 
   ```powershell
   git add src/triage-service.ts src/operational/unit-of-work.ts test/triage-operational-diagnosis-lifecycle.test.ts test/diagnosis-review.test.ts test/approval-desk-diagnostic-workflow.test.ts test/approval-desk-http.test.ts

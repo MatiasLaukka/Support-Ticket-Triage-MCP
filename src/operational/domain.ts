@@ -2,8 +2,11 @@ import { z } from "zod";
 import {
   AuditActionSchema,
   AuditEventSchema,
+  CategorySchema,
   IsoTimestampSchema,
   KnownEventIdSchema,
+  PrioritySchema,
+  TeamSchema,
   TicketIdSchema,
   TicketSchema,
   TriageRecommendationSchema,
@@ -36,6 +39,27 @@ const UniqueIdentifierSchema = z.array(IdentifierSchema).refine(
   (ids) => new Set(ids).size === ids.length,
   "Identifiers must be unique.",
 );
+const SafeFactKeySchema = z.string().trim().min(1).max(80).refine(
+  (key) => !/(?:body|customer.?response|prompt|reasoning|credential|secret|token|password|path)/i.test(key),
+  "Operational fact keys must not name customer content or sensitive data.",
+);
+const SanitizedOperationalFactValueSchema: z.ZodType<unknown> = z.lazy(() => z.union([
+  SafeFactTextSchema,
+  z.number().finite(),
+  z.boolean(),
+  z.array(SanitizedOperationalFactValueSchema).max(32),
+  z.record(SafeFactKeySchema, SanitizedOperationalFactValueSchema).refine(
+    (record) => Object.keys(record).length <= 32,
+    "Operational fact records may contain at most 32 values.",
+  ),
+]));
+const SanitizedOperationalFactsSchema = z.record(
+  SafeFactKeySchema,
+  SanitizedOperationalFactValueSchema,
+).refine(
+  (record) => Object.keys(record).length <= 32,
+  "Operational facts may contain at most 32 values.",
+);
 
 /**
  * The append-only causal spine. Child aggregates reference this event; the
@@ -49,7 +73,7 @@ export const OperationalEventSchema = z.object({
   actor: NonBlankStringSchema.max(120),
   action: AuditActionSchema,
   commandId: CommandIdSchema,
-  facts: z.record(z.string(), z.unknown()),
+  facts: SanitizedOperationalFactsSchema,
 }).strict().readonly();
 
 export const TicketRevisionSchema = z.object({
@@ -167,12 +191,20 @@ export const OperationalOutboxRowSchema = z.object({
   }
 }).readonly();
 
+/** Per-ticket outcome required to replay a multi-ticket command faithfully. */
+export const OperationalTicketResultSchema = z.object({
+  ticketId: TicketIdSchema,
+  operationalEventIds: UniqueOperationalEventIdsSchema,
+  resultingRevision: RevisionNumberSchema.nullable(),
+}).strict().readonly();
+
 /** The immutable semantic result replayed for a duplicate command. */
 export const OperationalResultReferenceSchema = z.object({
   operation: IdentifierSchema,
-  operationalEventIds: UniqueOperationalEventIdsSchema,
-  ticketId: TicketIdSchema.optional(),
-  ticketRevision: RevisionNumberSchema.optional(),
+  tickets: z.array(OperationalTicketResultSchema).min(1).refine(
+    (tickets) => new Set(tickets.map((ticket) => ticket.ticketId)).size === tickets.length,
+    "Result tickets must be unique.",
+  ),
   recommendationId: z.uuid().optional(),
   diagnosisId: IdentifierSchema.optional(),
   messageId: MessageIdSchema.optional(),
@@ -199,6 +231,67 @@ export const ImportResolutionSchema = z.object({
   correlationId: CommandIdSchema,
 }).strict().readonly();
 
+const UniqueSafeFactTextsSchema = z.array(SafeFactTextSchema).refine(
+  (values) => new Set(values).size === values.length,
+  "Trace text values must be unique.",
+);
+const DecisionTraceBase = {
+  id: z.uuid(),
+  operationalEventId: OperationalEventIdSchema,
+  ticketId: TicketIdSchema,
+  occurredAt: IsoTimestampSchema,
+  actor: NonBlankStringSchema.max(120),
+};
+
+/** Sanitized, typed decision evidence attached to a committed operational event. */
+export const DecisionTraceEventSchema = z.discriminatedUnion("traceType", [
+  z.object({
+    ...DecisionTraceBase,
+    traceType: z.literal("classification"),
+    category: CategorySchema,
+    priority: PrioritySchema,
+    team: TeamSchema,
+    confidence: z.number().min(0).max(1),
+    reasons: UniqueSafeFactTextsSchema,
+  }).strict().readonly(),
+  z.object({
+    ...DecisionTraceBase,
+    traceType: z.literal("evidence"),
+    requiredEvidenceIds: UniqueIdentifierSchema,
+    providedEvidenceIds: UniqueIdentifierSchema,
+    missingEvidenceIds: UniqueIdentifierSchema,
+  }).strict().readonly(),
+  z.object({
+    ...DecisionTraceBase,
+    traceType: z.literal("known-cause"),
+    knownCause: IdentifierSchema.optional(),
+    knownEventId: KnownEventIdSchema.optional(),
+    matchReasons: UniqueSafeFactTextsSchema,
+  }).strict().superRefine((trace, context) => {
+    if (trace.knownCause === undefined && trace.knownEventId === undefined) {
+      context.addIssue({ code: "custom", message: "Known-cause traces require a known cause or event reference.", path: ["knownCause"] });
+    }
+  }).readonly(),
+  z.object({
+    ...DecisionTraceBase,
+    traceType: z.literal("lifecycle"),
+    stage: IdentifierSchema,
+    outcome: z.enum(["success", "rejected"]),
+    reason: SafeFactTextSchema.optional(),
+  }).strict().readonly(),
+  z.object({
+    ...DecisionTraceBase,
+    traceType: z.literal("provider-telemetry"),
+    provider: z.enum(["openai", "deterministic", "fallback"]),
+    model: z.string().max(120).regex(/^[A-Za-z0-9]+(?:[._:-][A-Za-z0-9]+)*$/).optional(),
+    status: z.enum(["skipped", "used", "fallback"]),
+    latencyMs: z.number().int().nonnegative().optional(),
+    inputTokens: z.number().int().nonnegative().optional(),
+    outputTokens: z.number().int().nonnegative().optional(),
+    fallbackReason: SafeFactTextSchema.optional(),
+  }).strict().readonly(),
+]);
+
 export const OperationalWorkflowSnapshotSchema = z.object({
   ticket: TicketSchema,
   ticketRevisions: z.array(TicketRevisionSchema),
@@ -207,11 +300,62 @@ export const OperationalWorkflowSnapshotSchema = z.object({
   messages: z.array(ConversationMessageSchema),
   diagnoses: z.array(OperationalDiagnosisRecordSchema),
   events: z.array(OperationalEventSchema),
+  traces: z.array(DecisionTraceEventSchema),
   customerReplyWatermark: z.discriminatedUnion("state", [
     z.object({ state: z.literal("none") }).strict(),
     z.object({ state: z.literal("reply"), timestamp: IsoTimestampSchema, id: MessageIdSchema }).strict(),
   ]),
-}).strict().readonly();
+}).strict().superRefine((snapshot, context) => {
+  const eventIds = new Set<string>();
+  const sequences: number[] = [];
+  for (const [index, event] of snapshot.events.entries()) {
+    if (event.ticketId !== snapshot.ticket.id) {
+      context.addIssue({ code: "custom", path: ["events", index, "ticketId"], message: "Snapshot events must belong to the canonical ticket." });
+    }
+    if (eventIds.has(event.id)) {
+      context.addIssue({ code: "custom", path: ["events", index, "id"], message: "Snapshot event IDs must be unique." });
+    }
+    eventIds.add(event.id);
+    sequences.push(event.sequence);
+  }
+  for (let index = 1; index < sequences.length; index += 1) {
+    if (sequences[index - 1]! >= sequences[index]!) {
+      context.addIssue({ code: "custom", path: ["events", index, "sequence"], message: "Snapshot events must be in ascending causal sequence." });
+    }
+  }
+  const childTicketIds = [
+    ...snapshot.ticketRevisions.map((revision) => revision.ticketId),
+    ...snapshot.recommendations.map((recommendation) => recommendation.ticketId),
+    ...snapshot.recommendationRevisions.map((revision) => revision.recommendation.ticketId),
+    ...snapshot.messages.map((message) => message.ticketId),
+    ...snapshot.diagnoses.map((diagnosis) => diagnosis.diagnosis.ticketId),
+    ...snapshot.traces.map((trace) => trace.ticketId),
+  ];
+  childTicketIds.forEach((ticketId, index) => {
+    if (ticketId !== snapshot.ticket.id) {
+      context.addIssue({ code: "custom", path: ["children", index], message: "Snapshot child records must belong to the canonical ticket." });
+    }
+  });
+  const eventReferences = [
+    ...snapshot.ticketRevisions.map((revision) => revision.operationalEventId),
+    ...snapshot.recommendationRevisions.map((revision) => revision.operationalEventId),
+    ...snapshot.messages.map((message) => message.operationalEventId),
+    ...snapshot.diagnoses.map((diagnosis) => diagnosis.operationalEventId),
+    ...snapshot.traces.map((trace) => trace.operationalEventId),
+  ];
+  eventReferences.forEach((eventId, index) => {
+    if (!eventIds.has(eventId)) {
+      context.addIssue({ code: "custom", path: ["eventReferences", index], message: "Snapshot child records must reference a snapshot operational event." });
+    }
+  });
+  const customerReplyWatermark = snapshot.customerReplyWatermark;
+  if (customerReplyWatermark.state === "reply") {
+    const message = snapshot.messages.find((candidate) => candidate.id === customerReplyWatermark.id);
+    if (message?.kind !== "customer" || message.createdAt !== customerReplyWatermark.timestamp) {
+      context.addIssue({ code: "custom", path: ["customerReplyWatermark"], message: "Customer reply watermark must reference its canonical customer message." });
+    }
+  }
+}).readonly();
 
 export const DecisionTimelineEntrySchema = z.object({
   operationalEventId: OperationalEventIdSchema,
@@ -243,8 +387,10 @@ export type ImportState = z.infer<typeof ImportStateSchema>;
 export type ImportResolution = z.infer<typeof ImportResolutionSchema>;
 export type DecisionTimelineEntry = z.infer<typeof DecisionTimelineEntrySchema>;
 export type OperationalResultReference = z.infer<typeof OperationalResultReferenceSchema>;
+export type OperationalTicketResult = z.infer<typeof OperationalTicketResultSchema>;
 export type LearningCaptureEnvelope = z.infer<typeof LearningCaptureEnvelopeSchema>;
 export type DiagnosisCompletion = z.infer<typeof DiagnosisCompletionSchema>;
+export type DecisionTraceEvent = z.infer<typeof DecisionTraceEventSchema>;
 
 export type CanonicalRequestValue =
   | null

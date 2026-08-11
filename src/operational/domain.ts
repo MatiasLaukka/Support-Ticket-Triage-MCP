@@ -35,6 +35,17 @@ const UniqueOperationalEventIdsSchema = z.array(OperationalEventIdSchema).min(1)
   (ids) => new Set(ids).size === ids.length,
   "Operational event IDs must be unique.",
 );
+const OperationalLifecycleAuditEventSchema = AuditEventSchema.refine(
+  (event) => [
+    "diagnosis-completed",
+    "diagnostic-escalated",
+    "diagnosis-reviewed",
+    "fix-available",
+    "platform-mitigation-available",
+    "ticket-updated",
+  ].includes(event.action),
+  "Operational lifecycle audit results are limited to Task 4D actions.",
+);
 const UniqueIdentifierSchema = z.array(IdentifierSchema).refine(
   (ids) => new Set(ids).size === ids.length,
   "Identifiers must be unique.",
@@ -288,6 +299,7 @@ export const OperationalResultReferenceSchema = z.object({
   messageId: MessageIdSchema.optional(),
   ticketSnapshot: TicketSchema.optional(),
   auditsBeforeSentEventIds: UniqueOperationalEventIdsSchema.optional(),
+  lifecycleAuditEvents: z.array(OperationalLifecycleAuditEventSchema).min(1).optional(),
 }).strict().superRefine((result, context) => {
   if (result.recommendationId !== undefined && result.recommendationIds !== undefined) {
     context.addIssue({
@@ -332,6 +344,37 @@ export const OperationalResultReferenceSchema = z.object({
       path: ["auditsBeforeSentEventIds"],
       message: "A pre-send audit view requires one affected ticket and a canonical support message.",
     });
+  }
+  if (result.lifecycleAuditEvents !== undefined) {
+    const referencedEvents = new Map(
+      result.tickets.flatMap((ticket) =>
+        ticket.operationalEventIds.map((eventId) => [eventId, ticket.ticketId] as const)),
+    );
+    const auditIds = new Set<string>();
+    for (const [index, audit] of result.lifecycleAuditEvents.entries()) {
+      if (auditIds.has(audit.id)) {
+        context.addIssue({
+          code: "custom",
+          path: ["lifecycleAuditEvents", index, "id"],
+          message: "Operational lifecycle audit result IDs must be unique.",
+        });
+      }
+      auditIds.add(audit.id);
+      if (referencedEvents.get(audit.id) !== audit.ticketId) {
+        context.addIssue({
+          code: "custom",
+          path: ["lifecycleAuditEvents", index, "id"],
+          message: "Operational lifecycle audits must match an affected ticket event.",
+        });
+      }
+    }
+    if (auditIds.size !== referencedEvents.size) {
+      context.addIssue({
+        code: "custom",
+        path: ["lifecycleAuditEvents"],
+        message: "Operational lifecycle audits must describe every command event exactly once.",
+      });
+    }
   }
 }).readonly();
 

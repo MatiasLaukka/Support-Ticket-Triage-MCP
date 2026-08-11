@@ -2061,8 +2061,142 @@ export class TriageService {
     });
   }
 
-  async recordDiagnosis(input: RecordDiagnosisInput): Promise<AuditEvent> {
+  async recordDiagnosis(
+    input: RecordDiagnosisInput,
+    commandContext?: OperationalCommandContext,
+  ): Promise<AuditEvent> {
     const diagnosis = RecordDiagnosisInputSchema.parse(input);
+    if (this.dependencies.operationalStore !== undefined) {
+      if (commandContext === undefined) {
+        throw new DomainError(
+          "Operational diagnoses require an explicit command context.",
+          "REPOSITORY_ERROR",
+        );
+      }
+      const [diagnosisReview, workflowGuidance, workflowReadModel] = await Promise.all([
+        import("./approval-desk/diagnosis-review.js"),
+        import("./approval-desk/workflow-guidance.js"),
+        import("./approval-desk/workflow-read-model.js"),
+      ]);
+      const store = this.dependencies.operationalStore;
+      const { diagnosedAt: _diagnosedAt, ...semanticRequest } = diagnosis;
+      const operation = "record-diagnosis";
+      const requestHash = canonicalRequestHash(operation, semanticRequest);
+      return store.transaction((unit) => {
+        const replay = unit.beginCommand(commandContext.commandId, operation, semanticRequest);
+        if (replay !== "new") {
+          return this.replayOperationalLifecycleAudit(replay, [
+            "diagnosis-completed",
+            "diagnostic-escalated",
+          ]);
+        }
+        const snapshot = unit.readWorkflowSnapshot(diagnosis.ticketId);
+        const audits = this.operationalAuditsFromSnapshot(unit, snapshot);
+        if (diagnosis.sourceWorkflow !== undefined) {
+          if (snapshot.ticket.revision !== diagnosis.sourceWorkflow.ticketRevision) {
+            throw stale("Diagnosis ticket snapshot is stale.");
+          }
+          if (!diagnosisReview.customerReplyWatermarksMatch(
+            diagnosis.sourceWorkflow.customerReplyWatermark,
+            customerReplyWatermarkFromSnapshot(snapshot),
+          )) {
+            throw stale("Diagnosis customer reply snapshot is stale.");
+          }
+          const recommendation = workflowReadModel.summarizeRecommendationsForTicket(
+            snapshot.ticket,
+            snapshot.recommendations,
+            audits,
+          ).latest;
+          if (recommendation?.id !== diagnosis.sourceWorkflow.recommendationId) {
+            throw stale("Diagnosis recommendation snapshot is stale.");
+          }
+          const [diagnosisBlocker] = workflowGuidance.diagnosisBlockers({
+            recommendation,
+            audits,
+          });
+          if (diagnosisBlocker !== undefined) {
+            throw new DomainError(diagnosisBlocker, "INVALID_APPROVAL_FIELDS");
+          }
+        }
+        const escalated = diagnosis.diagnosis.diagnosticState?.state === "escalated";
+        const eventId = this.uuid();
+        const auditEvent = AuditEventSchema.parse({
+          id: eventId,
+          timestamp: diagnosis.diagnosedAt,
+          actor: diagnosis.actor,
+          action: escalated ? "diagnostic-escalated" : "diagnosis-completed",
+          ticketId: diagnosis.ticketId,
+          before: {},
+          after: {
+            diagnosis: diagnosis.diagnosis,
+            sourceTicketRevision: snapshot.ticket.revision,
+            sourceConversationWatermark: customerReplyWatermarkFromSnapshot(snapshot),
+          },
+          rationale: escalated
+            ? "Diagnosis reached a bounded ambiguity limit and was escalated for specialist review."
+            : "Diagnosis completed from trusted support context.",
+          knowledgeArticleIds: diagnosis.knowledgeArticleIds,
+          result: "success",
+        });
+        const [sequence] = unit.allocateEventSequences(diagnosis.ticketId, 1);
+        unit.appendEvent({
+          id: eventId,
+          ticketId: diagnosis.ticketId,
+          sequence: sequence!,
+          occurredAt: diagnosis.diagnosedAt,
+          actor: diagnosis.actor,
+          action: auditEvent.action,
+          commandId: commandContext.commandId,
+          facts: {
+            diagnosisOutcome: escalated ? "escalated" : "completed",
+            sourceRevision: snapshot.ticket.revision,
+            knowledgeArticleIds: diagnosis.knowledgeArticleIds,
+            ...(diagnosis.diagnosis.knownEventId === undefined
+              ? {}
+              : { knownEventId: diagnosis.diagnosis.knownEventId }),
+          },
+        });
+        const completedDiagnosis = escalated
+          ? undefined
+          : completedDiagnosisFrom(auditEvent, diagnosis);
+        if (completedDiagnosis !== undefined) {
+          unit.insertDiagnosis({ diagnosis: completedDiagnosis, operationalEventId: eventId });
+        }
+        unit.appendTrace({
+          id: this.uuid(),
+          operationalEventId: eventId,
+          ticketId: diagnosis.ticketId,
+          occurredAt: diagnosis.diagnosedAt,
+          actor: diagnosis.actor,
+          traceType: "evidence",
+          requiredEvidenceIds: [],
+          providedEvidenceIds: stableUnique(
+            (diagnosis.diagnosis.evidenceReferences ?? []).map(({ id }) => id),
+          ),
+          missingEvidenceIds: [],
+        });
+        this.appendLifecycleTrace(
+          unit,
+          eventId,
+          diagnosis.ticketId,
+          diagnosis.actor,
+          diagnosis.diagnosedAt,
+          auditEvent.action,
+        );
+        const result: OperationalResultReference = {
+          operation,
+          tickets: [{
+            ticketId: diagnosis.ticketId,
+            operationalEventIds: [eventId],
+            resultingRevision: null,
+          }],
+          ...(completedDiagnosis === undefined ? {} : { diagnosisId: completedDiagnosis.id }),
+          lifecycleAuditEvents: [auditEvent],
+        };
+        unit.persistCommandResult(commandContext.commandId, requestHash, result);
+        return auditEvent;
+      });
+    }
     return serializeTicket(diagnosis.ticketId, async () => {
       const [ticket, audits, recommendations] = await Promise.all([
         this.dependencies.tickets.get(diagnosis.ticketId),
@@ -2160,7 +2294,10 @@ export class TriageService {
     });
   }
 
-  async reviewDiagnosis(input: DiagnosisReviewInput): Promise<AuditEvent> {
+  async reviewDiagnosis(
+    input: DiagnosisReviewInput,
+    commandContext?: OperationalCommandContext,
+  ): Promise<AuditEvent> {
     const {
       DiagnosisReviewDecisionSchema,
       compareAuditCausalOrder,
@@ -2169,6 +2306,154 @@ export class TriageService {
       latestDiagnosisReview,
     } = await import("./approval-desk/diagnosis-review.js");
     const review = DiagnosisReviewDecisionSchema.parse(input);
+
+    if (this.dependencies.operationalStore !== undefined) {
+      if (commandContext === undefined) {
+        throw new DomainError(
+          "Operational diagnosis reviews require an explicit command context.",
+          "REPOSITORY_ERROR",
+        );
+      }
+      const store = this.dependencies.operationalStore;
+      const { reviewedAt: _reviewedAt, ...semanticRequest } = review;
+      const operation = "review-diagnosis";
+      const requestHash = canonicalRequestHash(operation, semanticRequest);
+      return store.transaction((unit) => {
+        const replay = unit.beginCommand(commandContext.commandId, operation, semanticRequest);
+        if (replay !== "new") {
+          return this.replayOperationalLifecycleAudit(replay, ["diagnosis-reviewed"]);
+        }
+        const snapshot = unit.readWorkflowSnapshot(review.ticketId);
+        const audits = this.operationalAuditsFromSnapshot(unit, snapshot);
+        if (snapshot.ticket.revision !== review.sourceTicketRevision) {
+          throw stale("Diagnosis review ticket revision is stale.");
+        }
+        const currentConversationWatermark = customerReplyWatermarkFromSnapshot(snapshot);
+        if (!customerReplyWatermarksMatch(
+          review.sourceConversationWatermark,
+          currentConversationWatermark,
+        )) {
+          throw stale("Diagnosis review conversation snapshot is stale.");
+        }
+        const original = audits.find(
+          (event) =>
+            event.id === review.diagnosisId
+            && event.ticketId === review.ticketId
+            && (event.action === "diagnosis-completed" || event.action === "diagnostic-escalated"),
+        );
+        const originalDiagnosis = DiagnosisContextSchema.safeParse(original?.after.diagnosis);
+        if (original === undefined || !originalDiagnosis.success) {
+          throw invalidDiagnosisReview("Diagnosis review must reference an original diagnosis audit.");
+        }
+        const diagnosticState = originalDiagnosis.data.diagnosticState?.state;
+        if (
+          review.decision !== "reject"
+          && (original.action === "diagnostic-escalated"
+            || diagnosticState === "ambiguous"
+            || diagnosticState === "escalated")
+        ) {
+          throw invalidDiagnosisReview(
+            "An ambiguous or escalated diagnosis cannot become authoritative.",
+          );
+        }
+        const previousReview = latestDiagnosisReview(audits, original.id);
+        const previousDiagnosis = previousReview?.editedDiagnosis ?? originalDiagnosis.data;
+        if (
+          review.decision === "revalidate"
+          && !sameStructuredValue(review.editedDiagnosis, previousDiagnosis)
+        ) {
+          throw invalidDiagnosisReview(
+            "Revalidation must preserve the previously reviewed diagnosis fields.",
+          );
+        }
+        const originalSourceRevision = readNonnegativeInteger(
+          original.after.sourceTicketRevision,
+        ) ?? review.sourceTicketRevision;
+        const originalConversationWatermark = CustomerReplyWatermarkSchema.safeParse(
+          original.after.sourceConversationWatermark,
+        ).data ?? conversationWatermarkAt(audits, original.id);
+        const originalPosition = {
+          event: original,
+          index: audits.findIndex((event) => event.id === original.id),
+        };
+        const newerDiagnoses = audits.filter(
+          (event, index) =>
+            event.id !== original.id
+            && (event.action === "diagnosis-completed" || event.action === "diagnostic-escalated")
+            && compareAuditCausalOrder({ event, index }, originalPosition) > 0,
+        );
+        const staleDiagnosis = isDiagnosisStale({
+          diagnosisTimestamp: original.timestamp,
+          diagnosisTicketRevision: originalSourceRevision,
+          diagnosisConversationWatermark: originalConversationWatermark,
+          currentTicketRevision: snapshot.ticket.revision,
+          latestConversationWatermark: currentConversationWatermark,
+          ...(newerDiagnoses[0] === undefined
+            ? {}
+            : { newerDiagnosisAt: newerDiagnoses[0].timestamp }),
+        });
+        if (
+          review.decision === "approve"
+          && (staleDiagnosis.stale || newerDiagnoses.length > 0)
+        ) {
+          throw invalidDiagnosisReview(
+            "A stale diagnosis must be re-evaluated or revalidated before approval.",
+          );
+        }
+        if (review.decision === "revalidate" && newerDiagnoses.length > 0) {
+          throw invalidDiagnosisReview("A superseded diagnosis cannot be revalidated.");
+        }
+        const eventId = this.uuid();
+        const auditEvent = AuditEventSchema.parse({
+          id: eventId,
+          timestamp: review.reviewedAt,
+          actor: review.actor,
+          action: "diagnosis-reviewed",
+          ticketId: review.ticketId,
+          before: { diagnosisId: original.id, previousReview: previousReview ?? null },
+          after: { diagnosisReview: review },
+          rationale: review.rationale ?? (review.decision === "approve"
+            ? "Diagnosis approved by the operator."
+            : "Diagnosis review recorded by the operator."),
+          knowledgeArticleIds: original.knowledgeArticleIds,
+          result: "success",
+        });
+        const [sequence] = unit.allocateEventSequences(review.ticketId, 1);
+        unit.appendEvent({
+          id: eventId,
+          ticketId: review.ticketId,
+          sequence: sequence!,
+          occurredAt: review.reviewedAt,
+          actor: review.actor,
+          action: "diagnosis-reviewed",
+          commandId: commandContext.commandId,
+          facts: {
+            diagnosisOutcome: review.decision,
+            sourceRevision: review.sourceTicketRevision,
+          },
+        });
+        this.appendLifecycleTrace(
+          unit,
+          eventId,
+          review.ticketId,
+          review.actor,
+          review.reviewedAt,
+          "diagnosis-reviewed",
+          `Diagnosis review decision: ${review.decision}.`,
+        );
+        const result: OperationalResultReference = {
+          operation,
+          tickets: [{
+            ticketId: review.ticketId,
+            operationalEventIds: [eventId],
+            resultingRevision: null,
+          }],
+          lifecycleAuditEvents: [auditEvent],
+        };
+        unit.persistCommandResult(commandContext.commandId, requestHash, result);
+        return auditEvent;
+      });
+    }
 
     return serializeTicket(review.ticketId, async () => {
       const [ticket, audits] = await Promise.all([
@@ -2295,8 +2580,45 @@ export class TriageService {
     });
   }
 
-  async recordFix(input: RecordFixInput): Promise<AuditEvent> {
+  async recordFix(
+    input: RecordFixInput,
+    commandContext?: OperationalCommandContext,
+  ): Promise<AuditEvent> {
     const fix = RecordFixInputSchema.parse(input);
+    if (this.dependencies.operationalStore !== undefined) {
+      if (commandContext === undefined) {
+        throw new DomainError(
+          "Operational fixes require an explicit command context.",
+          "REPOSITORY_ERROR",
+        );
+      }
+      const [auditEvent] = await this.applyDiagnosisFixValidated(
+        ApplyDiagnosisFixInputSchema.parse({
+          // The record-fix command resolves the authoritative diagnosis from
+          // its transaction-local snapshot before any write. This placeholder
+          // is never persisted or included in the semantic request.
+          diagnosisId: commandContext.commandId,
+          sourceTicketId: fix.ticketId,
+          impactSet: {
+            tickets: [{
+              ticketId: fix.ticketId,
+              reason: "The source ticket was explicitly selected for the legacy fix operation.",
+            }],
+            actor: fix.actor,
+            rationale: "The legacy single-ticket fix operation selected the source ticket.",
+          },
+          actor: fix.actor,
+          fixedAt: fix.fixedAt,
+        }),
+        { fix: fix.fix, knowledgeArticleIds: fix.knowledgeArticleIds },
+        commandContext,
+        "record-fix",
+      );
+      if (auditEvent === undefined) {
+        throw new DomainError("A scoped fix audit was not created.", "REPOSITORY_ERROR");
+      }
+      return auditEvent;
+    }
     const [ticket, audits] = await Promise.all([
       this.dependencies.tickets.get(fix.ticketId),
       this.dependencies.audit.list(fix.ticketId),
@@ -2344,11 +2666,121 @@ export class TriageService {
 
   async recordPlatformMitigation(
     input: RecordPlatformMitigationInput,
+    commandContext?: OperationalCommandContext,
   ): Promise<AuditEvent> {
     const eventId = z.string().trim().min(1).parse(input.eventId);
     const actor = NonBlankStringSchema.parse(input.actor);
     const recordedAt = IsoTimestampSchema.parse(input.recordedAt);
     const rationale = NonBlankStringSchema.parse(input.rationale);
+    if (this.dependencies.operationalStore !== undefined) {
+      if (commandContext === undefined) {
+        throw new DomainError(
+          "Operational platform mitigations require an explicit command context.",
+          "REPOSITORY_ERROR",
+        );
+      }
+      const store = this.dependencies.operationalStore;
+      const semanticRequest = {
+        ticketId: input.ticketId,
+        eventId,
+        actor,
+        rationale,
+      };
+      const operation = "record-platform-mitigation";
+      const requestHash = canonicalRequestHash(operation, semanticRequest);
+      const { summarizeRecommendationsForTicket } = await import(
+        "./approval-desk/workflow-read-model.js"
+      );
+      return store.transaction((unit) => {
+        const replay = unit.beginCommand(commandContext.commandId, operation, semanticRequest);
+        if (replay !== "new") {
+          return this.replayOperationalLifecycleAudit(
+            replay,
+            ["platform-mitigation-available"],
+          );
+        }
+        const snapshot = unit.readWorkflowSnapshot(input.ticketId);
+        const audits = this.operationalAuditsFromSnapshot(unit, snapshot);
+        if (snapshot.ticket.status === "resolved") {
+          throw new DomainError(
+            "A resolved ticket cannot receive a platform mitigation signal.",
+            "INVALID_APPROVAL_FIELDS",
+          );
+        }
+        const knownEvent = getKnownEvent(eventId);
+        if (knownEvent?.status !== "active") {
+          throw new DomainError(
+            "Only an active known event can receive a platform mitigation signal.",
+            "INVALID_APPROVAL_FIELDS",
+          );
+        }
+        const recommendation = summarizeRecommendationsForTicket(
+          snapshot.ticket,
+          snapshot.recommendations,
+          audits,
+        ).latest;
+        if (
+          recommendation?.knownEventId !== eventId
+          || recommendation.supportState !== "waiting-on-platform-fix"
+        ) {
+          throw new DomainError(
+            "The current ticket recommendation is not waiting on this platform event.",
+            "INVALID_APPROVAL_FIELDS",
+          );
+        }
+        if (audits.some((audit) =>
+          audit.action === "platform-mitigation-available"
+          && audit.after.eventId === eventId
+        )) {
+          throw new DomainError(
+            "A platform mitigation signal already exists for this event.",
+            "STALE_APPROVAL",
+          );
+        }
+        const auditEvent = AuditEventSchema.parse({
+          id: this.uuid(),
+          timestamp: recordedAt,
+          actor,
+          action: "platform-mitigation-available",
+          ticketId: input.ticketId,
+          before: { eventId, status: knownEvent.status },
+          after: { eventId, status: "available" },
+          rationale,
+          knowledgeArticleIds: recommendation.knowledgeArticleIds,
+          result: "success",
+        });
+        const [sequence] = unit.allocateEventSequences(input.ticketId, 1);
+        unit.appendEvent({
+          id: auditEvent.id,
+          ticketId: input.ticketId,
+          sequence: sequence!,
+          occurredAt: recordedAt,
+          actor,
+          action: "platform-mitigation-available",
+          commandId: commandContext.commandId,
+          facts: { knownEventId: eventId, outcome: "available" },
+        });
+        this.appendLifecycleTrace(
+          unit,
+          auditEvent.id,
+          input.ticketId,
+          actor,
+          recordedAt,
+          "platform-mitigation-available",
+        );
+        const result: OperationalResultReference = {
+          operation,
+          tickets: [{
+            ticketId: input.ticketId,
+            operationalEventIds: [auditEvent.id],
+            resultingRevision: null,
+          }],
+          lifecycleAuditEvents: [auditEvent],
+        };
+        unit.persistCommandResult(commandContext.commandId, requestHash, result);
+        return auditEvent;
+      });
+    }
     return serializeTicket(input.ticketId, async () => {
       const [ticket, audits, recommendations] = await Promise.all([
         this.dependencies.tickets.get(input.ticketId),
@@ -2410,8 +2842,118 @@ export class TriageService {
    */
   async closeTicket(
     input: CloseTicketInput,
+    commandContext?: OperationalCommandContext,
   ): Promise<{ ticket: Ticket; auditEvent: AuditEvent }> {
     const close = CloseTicketInputSchema.parse(input);
+    if (this.dependencies.operationalStore !== undefined) {
+      if (commandContext === undefined) {
+        throw new DomainError(
+          "Operational ticket closure requires an explicit command context.",
+          "REPOSITORY_ERROR",
+        );
+      }
+      const store = this.dependencies.operationalStore;
+      const { closedAt: _closedAt, ...semanticRequest } = close;
+      const operation = "close-ticket";
+      const requestHash = canonicalRequestHash(operation, semanticRequest);
+      const [{ closeBlockers }, { summarizeRecommendationsForTicket }] = await Promise.all([
+        import("./approval-desk/workflow-guidance.js"),
+        import("./approval-desk/workflow-read-model.js"),
+      ]);
+      return store.transaction((unit) => {
+        const replay = unit.beginCommand(commandContext.commandId, operation, semanticRequest);
+        if (replay !== "new") return this.replayOperationalClosure(replay);
+        const snapshot = unit.readWorkflowSnapshot(close.ticketId);
+        const audits = this.operationalAuditsFromSnapshot(unit, snapshot);
+        const recommendation = summarizeRecommendationsForTicket(
+          snapshot.ticket,
+          snapshot.recommendations,
+          audits,
+        ).latest;
+        const [closeBlocker] = closeBlockers({
+          ticket: snapshot.ticket,
+          recommendation,
+          audits,
+        });
+        if (closeBlocker !== undefined) {
+          throw new DomainError(closeBlocker, "INVALID_APPROVAL_FIELDS");
+        }
+        if (recommendation === undefined) {
+          throw new DomainError(
+            "Ticket must have a ready-to-close recommendation before it can be closed.",
+            "INVALID_APPROVAL_FIELDS",
+          );
+        }
+        const updated = TicketSchema.parse({
+          ...snapshot.ticket,
+          status: "resolved",
+          revision: snapshot.ticket.revision + 1,
+          updatedAt: close.closedAt,
+        });
+        const auditEvent = AuditEventSchema.parse({
+          id: this.uuid(),
+          timestamp: close.closedAt,
+          actor: close.actor,
+          action: "ticket-updated",
+          ticketId: close.ticketId,
+          recommendationId: recommendation.id,
+          before: { status: snapshot.ticket.status, revision: snapshot.ticket.revision },
+          after: {
+            status: updated.status,
+            revision: updated.revision,
+            closedAt: close.closedAt,
+          },
+          rationale:
+            "Ticket closed after the customer confirmed resolution and the closing response was sent.",
+          knowledgeArticleIds: recommendation.knowledgeArticleIds,
+          result: "success",
+        });
+        const [sequence] = unit.allocateEventSequences(close.ticketId, 1);
+        unit.appendEvent({
+          id: auditEvent.id,
+          ticketId: close.ticketId,
+          sequence: sequence!,
+          occurredAt: close.closedAt,
+          actor: close.actor,
+          action: "ticket-updated",
+          commandId: commandContext.commandId,
+          facts: {
+            status: "resolved",
+            expectedRevision: snapshot.ticket.revision,
+            revision: updated.revision,
+            verificationType: "customer-confirmed",
+          },
+        });
+        unit.updateTicket(updated, snapshot.ticket.revision);
+        unit.appendTicketRevision({
+          ticketId: updated.id,
+          revision: updated.revision,
+          ticket: updated,
+          operationalEventId: auditEvent.id,
+          createdAt: close.closedAt,
+        });
+        this.appendLifecycleTrace(
+          unit,
+          auditEvent.id,
+          close.ticketId,
+          close.actor,
+          close.closedAt,
+          "ticket-closed",
+        );
+        const result: OperationalResultReference = {
+          operation,
+          tickets: [{
+            ticketId: close.ticketId,
+            operationalEventIds: [auditEvent.id],
+            resultingRevision: updated.revision,
+          }],
+          ticketSnapshot: updated,
+          lifecycleAuditEvents: [auditEvent],
+        };
+        unit.persistCommandResult(commandContext.commandId, requestHash, result);
+        return { ticket: updated, auditEvent };
+      });
+    }
     return serializeTicket(close.ticketId, async () => {
       const [ticket, audits, recommendations] = await Promise.all([
         this.dependencies.tickets.get(close.ticketId),
@@ -2486,16 +3028,162 @@ export class TriageService {
     });
   }
 
-  async applyDiagnosisFix(input: ApplyDiagnosisFixInput): Promise<AuditEvent[]> {
+  async applyDiagnosisFix(
+    input: ApplyDiagnosisFixInput,
+    commandContext?: OperationalCommandContext,
+  ): Promise<AuditEvent[]> {
+    const parsed = ApplyDiagnosisFixInputSchema.parse(input);
+    if (this.dependencies.operationalStore !== undefined && commandContext === undefined) {
+      throw new DomainError(
+        "Operational scoped fixes require an explicit command context.",
+        "REPOSITORY_ERROR",
+      );
+    }
     return this.applyDiagnosisFixValidated(
-      ApplyDiagnosisFixInputSchema.parse(input),
+      parsed,
+      undefined,
+      commandContext,
+      "apply-diagnosis-fix",
     );
   }
 
   private async applyDiagnosisFixValidated(
     input: z.infer<typeof ApplyDiagnosisFixInputSchema>,
     legacy?: { fix: FixContext; knowledgeArticleIds: string[] },
+    commandContext?: OperationalCommandContext,
+    operation = "apply-diagnosis-fix",
   ): Promise<AuditEvent[]> {
+    if (this.dependencies.operationalStore !== undefined) {
+      if (commandContext === undefined) {
+        throw new DomainError(
+          "Operational scoped fixes require an explicit command context.",
+          "REPOSITORY_ERROR",
+        );
+      }
+      const store = this.dependencies.operationalStore;
+      const { fixedAt: _fixedAt, ...scopedSemanticRequest } = input;
+      const semanticRequest = operation === "record-fix" && legacy !== undefined
+        ? {
+            ticketId: input.sourceTicketId,
+            actor: input.actor,
+            fix: legacy.fix,
+            knowledgeArticleIds: legacy.knowledgeArticleIds,
+          }
+        : scopedSemanticRequest;
+      const requestHash = canonicalRequestHash(operation, semanticRequest);
+      const { fixBlockers, latestAuthoritativeDiagnosis } = await import(
+        "./approval-desk/workflow-guidance.js"
+      );
+      const { fixContextForTicket } = await import(
+        "./approval-desk/diagnostic-workflow.js"
+      );
+      return store.transaction((unit) => {
+        const replay = unit.beginCommand(commandContext.commandId, operation, semanticRequest);
+        if (replay !== "new") {
+          return this.replayOperationalLifecycleAudits(replay, "fix-available");
+        }
+        const ticketIds = input.impactSet.tickets.map(({ ticketId }) => ticketId);
+        const snapshots = ticketIds.map((ticketId) => unit.readWorkflowSnapshot(ticketId));
+        const snapshotByTicket = new Map(snapshots.map((snapshot) => [snapshot.ticket.id, snapshot]));
+        const selectedTickets = snapshots.map(({ ticket }) => ticket);
+        const sourceSnapshot = snapshotByTicket.get(input.sourceTicketId);
+        if (sourceSnapshot === undefined) {
+          throw new DomainError(
+            "The source ticket must be explicitly selected in the impact set.",
+            "INVALID_APPROVAL_FIELDS",
+          );
+        }
+        const closedTicket = selectedTickets.find((ticket) => ticket.status === "resolved");
+        if (closedTicket !== undefined) {
+          throw new DomainError(
+            "A fix cannot be applied to a closed ticket.",
+            "INVALID_APPROVAL_FIELDS",
+          );
+        }
+        const auditsByTicket = new Map(snapshots.map((snapshot) => [
+          snapshot.ticket.id,
+          this.operationalAuditsFromSnapshot(unit, snapshot),
+        ] as const));
+        const sourceAudits = auditsByTicket.get(input.sourceTicketId) ?? [];
+        assertFixTimestampIsCurrent(input.fixedAt, [...auditsByTicket.values()].flat());
+        const diagnosis = latestAuthoritativeDiagnosis(input.sourceTicketId, sourceAudits);
+        const diagnosisId = operation === "record-fix"
+          ? diagnosis?.diagnosisId
+          : input.diagnosisId;
+        const [fixBlocker] = fixBlockers({
+          ticket: sourceSnapshot.ticket,
+          audits: sourceAudits,
+          ...(diagnosisId === undefined ? {} : { diagnosisId }),
+        });
+        if (fixBlocker !== undefined) {
+          throw new DomainError(fixBlocker, "INVALID_APPROVAL_FIELDS");
+        }
+        if (diagnosis === undefined || diagnosis.diagnosisId !== diagnosisId) {
+          throw new DomainError(
+            "An approved current diagnosis is required before marking a fix available.",
+            "INVALID_APPROVAL_FIELDS",
+          );
+        }
+        const payload = DiagnosisScopedFixAuditPayloadSchema.parse({
+          diagnosisId,
+          sourceTicketId: input.sourceTicketId,
+          impactSet: input.impactSet,
+          fix: legacy?.fix ?? fixContextForTicket(diagnosis.reviewAudit),
+        });
+        const auditEvents = input.impactSet.tickets.map((selectedTicket) =>
+          AuditEventSchema.parse({
+            id: this.uuid(),
+            timestamp: input.fixedAt,
+            actor: input.actor,
+            action: "fix-available",
+            ticketId: selectedTicket.ticketId,
+            before: { diagnosisId, sourceTicketId: input.sourceTicketId },
+            after: payload,
+            rationale:
+              `Fix or mitigation is available for customer verification. `
+              + `Impact selection: ${selectedTicket.reason}`,
+            knowledgeArticleIds:
+              legacy?.knowledgeArticleIds ?? diagnosis.originalDiagnosis.knowledgeArticleIds,
+            result: "success",
+          })
+        );
+        for (const auditEvent of auditEvents) {
+          const [sequence] = unit.allocateEventSequences(auditEvent.ticketId, 1);
+          unit.appendEvent({
+            id: auditEvent.id,
+            ticketId: auditEvent.ticketId,
+            sequence: sequence!,
+            occurredAt: auditEvent.timestamp,
+            actor: auditEvent.actor,
+            action: "fix-available",
+            commandId: commandContext.commandId,
+            facts: {
+              diagnosisOutcome: "approved",
+              outcome: "available",
+            },
+          });
+          this.appendLifecycleTrace(
+            unit,
+            auditEvent.id,
+            auditEvent.ticketId,
+            auditEvent.actor,
+            auditEvent.timestamp,
+            "fix-available",
+          );
+        }
+        const result: OperationalResultReference = {
+          operation,
+          tickets: input.impactSet.tickets.map(({ ticketId }, index) => ({
+            ticketId,
+            operationalEventIds: [auditEvents[index]!.id],
+            resultingRevision: null,
+          })),
+          lifecycleAuditEvents: auditEvents,
+        };
+        unit.persistCommandResult(commandContext.commandId, requestHash, result);
+        return auditEvents;
+      });
+    }
     const ticketIds = input.impactSet.tickets.map(({ ticketId }) => ticketId);
     return serializeTickets(ticketIds, async () => {
       const selectedTickets = await Promise.all(
@@ -2594,6 +3282,68 @@ export class TriageService {
       })));
       return events;
     });
+  }
+
+  private operationalAuditsFromSnapshot(
+    unit: OperationalUnitOfWork,
+    snapshot: OperationalWorkflowSnapshot,
+  ): AuditEvent[] {
+    return snapshot.events.flatMap((event) => {
+      const lifecycleAudit = unit.readCommandResult(event.commandId)
+        ?.lifecycleAuditEvents?.find(({ id }) => id === event.id);
+      if (lifecycleAudit !== undefined) {
+        return [AuditEventSchema.parse(lifecycleAudit)];
+      }
+      return operationalConversationAuditsForEventIds(snapshot, [event.id]);
+    });
+  }
+
+  private replayOperationalLifecycleAudits(
+    replay: CommandReplay,
+    expectedAction: AuditEvent["action"],
+  ): AuditEvent[] {
+    const audits = replay.result.lifecycleAuditEvents?.map((event) =>
+      AuditEventSchema.parse(event)
+    );
+    if (
+      audits === undefined
+      || audits.length !== replay.result.tickets.length
+      || audits.some(({ action }) => action !== expectedAction)
+    ) {
+      throw stale("Operational lifecycle replay is missing its persisted audit result.");
+    }
+    return audits;
+  }
+
+  private replayOperationalLifecycleAudit(
+    replay: CommandReplay,
+    expectedActions: readonly AuditEvent["action"][],
+  ): AuditEvent {
+    const audits = replay.result.lifecycleAuditEvents?.map((event) =>
+      AuditEventSchema.parse(event)
+    );
+    const audit = audits?.[0];
+    if (
+      audit === undefined
+      || audits?.length !== 1
+      || !expectedActions.includes(audit.action)
+    ) {
+      throw stale("Operational lifecycle replay is missing its persisted audit result.");
+    }
+    return audit;
+  }
+
+  private replayOperationalClosure(
+    replay: CommandReplay,
+  ): { ticket: Ticket; auditEvent: AuditEvent } {
+    const ticket = replay.result.ticketSnapshot;
+    if (ticket === undefined) {
+      throw stale("Operational closure replay is missing its persisted ticket snapshot.");
+    }
+    return {
+      ticket: TicketSchema.parse(ticket),
+      auditEvent: this.replayOperationalLifecycleAudit(replay, ["ticket-updated"]),
+    };
   }
 
   async supersedeRecommendation(

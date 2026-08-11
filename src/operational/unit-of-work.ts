@@ -84,6 +84,8 @@ interface CommandEventRow {
 interface LocalCommandEventRow extends CommandEventRow {
   command_id: string;
   action: OperationalEvent["action"];
+  actor: string;
+  occurred_at: string;
   facts: OperationalEventWrite["facts"];
 }
 interface TicketRevisionReferenceRow {
@@ -282,6 +284,19 @@ export class OperationalUnitOfWork {
     this.pendingCommandClaims.delete(parsedCommandId);
     this.persistedCommandRecord = record;
     this.commandClosure = "result-persisted";
+  }
+
+  readCommandResult(commandId: string): OperationalResultReference | undefined {
+    this.assertActive();
+    const parsedCommandId = parseWith(
+      CommandIdSchema,
+      commandId,
+      "Operational command ID is invalid.",
+    );
+    const record = this.readCommandRecord(parsedCommandId);
+    return record === undefined
+      ? undefined
+      : immutableCommandReplay(record.result).result;
   }
 
   allocateEventSequences(ticketId: TicketId, count: number): number[] {
@@ -538,6 +553,8 @@ export class OperationalUnitOfWork {
       sequence: parsed.sequence,
       command_id: parsed.commandId,
       action: parsed.action,
+      actor: parsed.actor,
+      occurred_at: parsed.occurredAt,
       facts: parsed.facts,
     });
     pending.shift();
@@ -1044,6 +1061,38 @@ export class OperationalUnitOfWork {
         ORDER BY traces.id ASC
       `).all(commandId) as SemanticReferenceRow[],
     );
+    this.assertLifecycleAuditReferences(result, commandEvents);
+  }
+
+  private assertLifecycleAuditReferences(
+    result: OperationalResultReference,
+    commandEvents: ReadonlyMap<string, LocalCommandEventRow>,
+  ): void {
+    const audits = result.lifecycleAuditEvents;
+    if (audits === undefined) return;
+    const expectedIds = result.tickets.flatMap(({ operationalEventIds }) => operationalEventIds);
+    if (
+      audits.length !== expectedIds.length
+      || audits.some((audit, index) => audit.id !== expectedIds[index])
+    ) {
+      throw this.semanticReferenceError(
+        "Operational lifecycle audits must exactly follow the command result's explicit ticket and event order.",
+      );
+    }
+    for (const audit of audits) {
+      const event = commandEvents.get(audit.id);
+      if (
+        event === undefined
+        || event.ticket_id !== audit.ticketId
+        || event.action !== audit.action
+        || event.actor !== audit.actor
+        || event.occurred_at !== audit.timestamp
+      ) {
+        throw this.semanticReferenceError(
+          "Operational lifecycle audits must bind to matching transaction-local command events.",
+        );
+      }
+    }
   }
 
   private assertAuditsBeforeSentReferences(result: OperationalResultReference): void {

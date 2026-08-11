@@ -39,6 +39,15 @@ function isMissing(error: unknown): boolean {
   );
 }
 
+function isUnresolvedPathComponent(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    (error.code === "ENOENT" || error.code === "ENOTDIR")
+  );
+}
+
 async function assertNoLinkedPath(path: string): Promise<void> {
   const absolutePath = resolve(path);
   const root = parse(absolutePath).root;
@@ -52,7 +61,7 @@ async function assertNoLinkedPath(path: string): Promise<void> {
       if (error instanceof DomainError) {
         throw error;
       }
-      if (!isMissing(error)) {
+      if (!isUnresolvedPathComponent(error)) {
         throw repositoryError("Repository path could not be inspected.");
       }
     }

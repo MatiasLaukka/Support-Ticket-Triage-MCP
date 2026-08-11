@@ -169,7 +169,8 @@ function expectDomainError(
 ): (error: unknown) => boolean {
   return (error) => {
     expect(error).toBeInstanceOf(DomainError);
-    expect(error).toMatchObject({ code, message });
+    expect(error).toMatchObject({ code });
+    expect((error as Error).message).toBe(message);
     for (const root of temporaryRoots) {
       expect(String((error as Error).message)).not.toContain(root);
     }

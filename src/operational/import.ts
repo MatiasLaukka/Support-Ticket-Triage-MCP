@@ -618,7 +618,7 @@ function runCli(): void {
       initializeOperationalNative({
         store,
         legacyPaths: [
-          resolve(dataRoot, "tickets"),
+          resolve(dataRoot, "tickets.json"),
           resolve(dataRoot, "recommendations"),
           resolve(dataRoot, "audit", "events.jsonl"),
           resolve(dataRoot, "knowledge-evolution", "diagnoses"),

@@ -1,4 +1,5 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -369,6 +370,35 @@ describe("operational import and cutover", () => {
     runtimeStore.transaction((unit) => unit.insertTicket(ticket("TKT-0003")));
     expect(runtimeStore.readTicket("TKT-0003").id).toBe("TKT-0003");
     expect(() => initializeOperationalNative({ store, legacyPaths: [] })).toThrow(/only.*empty/i);
+  });
+
+  it("makes the native package CLI discover the TicketRepository tickets.json source", () => {
+    const root = temporaryRoot();
+    const dataRoot = join(root, "runtime");
+    const databasePath = join(root, "operational.sqlite");
+    mkdirSync(dataRoot, { recursive: true });
+    writeFileSync(join(dataRoot, "tickets.json"), "[]\n", "utf8");
+
+    const result = spawnSync(
+      process.execPath,
+      [join(process.cwd(), "dist", "src", "operational", "import.js"), "initialize-native"],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          TRIAGE_DATA_ROOT: dataRoot,
+          OPERATIONAL_DB_PATH: databasePath,
+        },
+      },
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toMatch(/legacy operational files.*import/i);
+    const store = OperationalSqliteStore.open(databasePath);
+    stores.push(store);
+    store.initialize();
+    expect(store.readImportState()).toBe("empty");
   });
 });
 

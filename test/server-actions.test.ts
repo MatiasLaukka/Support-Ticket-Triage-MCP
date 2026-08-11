@@ -27,6 +27,7 @@ import { TicketRepository } from "../src/ticket-repository.js";
 import {
   TriageService,
   customerReplyWatermarkFromAudits,
+  derivedOperationalCommandContext,
   type DiagnosisContext,
   type FixContext,
   type RejectRecommendationInput,
@@ -41,6 +42,15 @@ import {
 const now = new Date("2026-06-10T10:00:00.000Z");
 const temporaryRoots: string[] = [];
 const connections: Array<{ client: Client; server: McpServer }> = [];
+let mcpCommandCounter = 1;
+const commandBoundTools = new Set([
+  "submit_triage_recommendation",
+  "add_customer_reply",
+  "evaluate_ticket",
+  "approve_triage_recommendation",
+  "mark_response_done",
+  "reject_triage_recommendation",
+]);
 type SubmitToolInput = Omit<SubmitRecommendationInput, "submittedAt">;
 type ApprovalToolInput = Omit<Approval, "approvedAt">;
 type RejectToolInput = Omit<RejectRecommendationInput, "rejectedAt">;
@@ -375,7 +385,13 @@ async function callTool(
   name: string,
   args: Record<string, unknown>,
 ): Promise<CallToolResult> {
-  const result = await client.callTool({ name, arguments: args });
+  const commandId = commandBoundTools.has(name) && args.commandId === undefined
+    ? `90000000-0000-4000-8000-${String(mcpCommandCounter++).padStart(12, "0")}`
+    : undefined;
+  const result = await client.callTool({
+    name,
+    arguments: commandId === undefined ? args : { commandId, ...args },
+  });
   expect("content" in result).toBe(true);
   if (!("content" in result)) {
     throw new Error("Expected a synchronous MCP tool result.");
@@ -1208,6 +1224,38 @@ describe("createTriageServer action protocol", () => {
     ).toEqual(auditEvent);
   });
 
+  it("requires MCP mutation commandId and passes it as the operational command context", async () => {
+    const fixture = await createFixture();
+    const client = await connect(fixture);
+    const submitted = await submit(client, {
+      outageRisk: "none",
+      slaRisk: "none",
+      category: "api",
+      team: "api-platform",
+    });
+    const recommendation = TriageRecommendationSchema.parse(
+      expectStableStructured(submitted).recommendation,
+    );
+    const missing = await client.callTool({
+      name: "approve_triage_recommendation",
+      arguments: makeApproval(recommendation.id),
+    });
+    expect(missing.isError).toBe(true);
+    expect(textOf(missing as CallToolResult)).toContain("commandId");
+
+    const commandId = "91000000-0000-4000-8000-000000000001";
+    const approval = vi.spyOn(fixture.service, "approve");
+    const approved = await callTool(client, "approve_triage_recommendation", {
+      commandId,
+      ...makeApproval(recommendation.id),
+    });
+    expect(approved.isError, textOf(approved)).not.toBe(true);
+    expect(approval).toHaveBeenCalledWith(
+      expect.objectContaining({ recommendationId: recommendation.id }),
+      { commandId },
+    );
+  });
+
   it("returns stale and replayed approvals as MCP tool errors", async () => {
     const staleFixture = await createFixture();
     const staleClient = await connect(staleFixture);
@@ -1859,6 +1907,7 @@ describe("createTriageServer action protocol", () => {
       "approveAndMarkResponseSent",
     );
     const separateApproval = vi.spyOn(fixture.service, "approve");
+    const automaticReply = vi.spyOn(fixture.service, "addCustomerReply");
     const client = await connect(fixture);
     const evaluated = await callTool(client, "evaluate_ticket", {
       ticketId: "TKT-1001",
@@ -1868,7 +1917,9 @@ describe("createTriageServer action protocol", () => {
       expectStableStructured(evaluated).recommendation,
     );
 
+    const commandId = "96000000-0000-4000-8000-000000000001";
     const done = await callTool(client, "mark_response_done", {
+      commandId,
       recommendationId: recommendation.id,
       ticketId: "TKT-1001",
       expectedRevision: 2,
@@ -1899,6 +1950,10 @@ describe("createTriageServer action protocol", () => {
     });
     expect(atomicCompletion).toHaveBeenCalledOnce();
     expect(separateApproval).not.toHaveBeenCalled();
+    expect(automaticReply).toHaveBeenCalledWith(
+      expect.objectContaining({ source: "demo-auto-reply" }),
+      derivedOperationalCommandContext(commandId, "automatic-customer-reply"),
+    );
     const workflow = await callTool(client, "get_ticket_workflow", {
       id: "TKT-1001",
     });

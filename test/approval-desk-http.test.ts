@@ -248,6 +248,7 @@ describe("createApprovalDeskHttpServer", () => {
       const mcpEvaluation = await client.callTool({
         name: "evaluate_ticket",
         arguments: {
+          commandId: "93000000-0000-4000-8000-000000000001",
           ticketId: ticket.id,
           actor: "approval-desk",
           aiPreference: "gpt-preferred",
@@ -3576,6 +3577,92 @@ describe("createApprovalDeskHttpServer", () => {
     });
   });
 
+  it("accepts Idempotency-Key and passes it as the operational command context", async () => {
+    const { deps, json } = await startFixture();
+    const created = await json("/api/tickets/TKT-1005/recommendations", {
+      method: "POST",
+      body: JSON.stringify({ actor: "approval-desk" }),
+    });
+    const commandId = "92000000-0000-4000-8000-000000000001";
+    const approval = vi.spyOn(deps.service, "approve");
+
+    const approved = await json(
+      `/api/recommendations/${created.body.recommendation.id}/approve`,
+      {
+        method: "POST",
+        headers: { "Idempotency-Key": commandId },
+        body: JSON.stringify({
+          ticketId: "TKT-1005",
+          expectedRevision: 0,
+          approvedFields: ["category"],
+          actor: "matias-reviewer",
+          confirm: true,
+        }),
+      },
+    );
+
+    expect(approved.status).toBe(200);
+    expect(approval).toHaveBeenCalledWith(
+      expect.objectContaining({ recommendationId: created.body.recommendation.id }),
+      { commandId },
+    );
+  });
+
+  it("lets the operational service replay an already-sent HTTP command with the same Idempotency-Key", async () => {
+    const { deps, json } = await startFixture();
+    const created = await json("/api/tickets/TKT-1005/recommendations", {
+      method: "POST",
+      body: JSON.stringify({ actor: "approval-desk" }),
+    });
+    const recommendation = created.body.recommendation;
+    await json(`/api/recommendations/${recommendation.id}/approve`, {
+      method: "POST",
+      body: JSON.stringify({
+        ticketId: "TKT-1005",
+        expectedRevision: 0,
+        approvedFields: ["customerResponse"],
+        editedCustomerResponse: recommendation.draftCustomerResponse,
+        actor: "matias-reviewer",
+        confirm: true,
+      }),
+    });
+    (deps as typeof deps & { operationalStore: any }).operationalStore = {
+      readWorkflowSnapshot: () => ({ recommendations: [{ ...recommendation, resolution: "approved" }] }),
+    };
+    const replayedAudit = AuditEventSchema.parse({
+      id: "95000000-0000-4000-8000-000000000001",
+      timestamp: now.toISOString(),
+      actor: "matias-reviewer",
+      action: "customer-response-sent",
+      ticketId: "TKT-1005",
+      recommendationId: recommendation.id,
+      before: {},
+      after: { sentAt: now.toISOString(), customerResponse: recommendation.draftCustomerResponse },
+      rationale: "Approved customer response was sent.",
+      knowledgeArticleIds: recommendation.knowledgeArticleIds,
+      result: "success",
+    });
+    const mark = vi.spyOn(deps.service, "markResponseSent").mockResolvedValue(replayedAudit);
+    const commandId = "95000000-0000-4000-8000-000000000002";
+    const request = () => json(`/api/recommendations/${recommendation.id}/mark-sent`, {
+      method: "POST",
+      headers: { "Idempotency-Key": commandId },
+      body: JSON.stringify({ ticketId: "TKT-1005", actor: "matias-reviewer", automaticReplyEnabled: false }),
+    });
+
+    const first = await request();
+    const replay = await request();
+
+    expect(first.status).toBe(200);
+    expect(replay.status).toBe(200);
+    expect(replay.body).toEqual(first.body);
+    expect(mark).toHaveBeenCalledTimes(2);
+    expect(mark.mock.calls.map(([, context]) => context)).toEqual([
+      { commandId },
+      { commandId },
+    ]);
+  });
+
   it("cancels an approved recommendation and returns the ticket workflow to active", async () => {
     const { deps, json } = await startFixture();
     const created = await json("/api/tickets/TKT-1005/recommendations", {
@@ -3884,7 +3971,7 @@ describe("createApprovalDeskHttpServer", () => {
     try {
       const mcp = await client.callTool({
         name: "evaluate_ticket",
-        arguments: { ticketId: "TKT-1010", actor: "approval-desk", aiPreference: "deterministic" },
+        arguments: { commandId: "93000000-0000-4000-8000-000000000002", ticketId: "TKT-1010", actor: "approval-desk", aiPreference: "deterministic" },
       });
       expect(mcp.isError, mcpText(mcp as any)).not.toBe(true);
       expect(mcp.structuredContent).toMatchObject({
@@ -3937,7 +4024,7 @@ describe("createApprovalDeskHttpServer", () => {
     try {
       const mcp = await client.callTool({
         name: "evaluate_ticket",
-        arguments: { ticketId: "TKT-1010", actor: "approval-desk", aiPreference: "deterministic" },
+        arguments: { commandId: "93000000-0000-4000-8000-000000000003", ticketId: "TKT-1010", actor: "approval-desk", aiPreference: "deterministic" },
       });
       expect(mcp.isError, mcpText(mcp as any)).not.toBe(true);
       expect(mcp.structuredContent).toMatchObject({

@@ -76,7 +76,11 @@ import type {
   SubmitRecommendationInput,
   TriageService,
 } from "./triage-service.js";
-import { customerReplyWatermarkFromAudits } from "./triage-service.js";
+import {
+  customerReplyWatermarkFromAudits,
+  derivedOperationalCommandContext,
+} from "./triage-service.js";
+import { CommandIdSchema } from "./operational/domain.js";
 import type { KnowledgeEvolutionService } from "./knowledge-evolution/service.js";
 import type { KnowledgeAuditRepository } from "./knowledge-evolution/knowledge-audit-repository.js";
 import type { KnowledgeObjectRepository } from "./knowledge-evolution/knowledge-object-repository.js";
@@ -135,15 +139,16 @@ const KnowledgeArticleIdSchema = z
 type SubmitRecommendationToolInput = Omit<
   SubmitRecommendationInput,
   "submittedAt"
->;
+> & { commandId: string };
 type RejectRecommendationToolInput = Omit<
   RejectRecommendationInput,
   "rejectedAt"
->;
-type ApprovalToolInput = Omit<Approval, "approvedAt">;
+> & { commandId: string };
+type ApprovalToolInput = Omit<Approval, "approvedAt"> & { commandId: string };
 
 const SubmitRecommendationInputSchema: z.ZodType<SubmitRecommendationToolInput> = z
   .object({
+    commandId: CommandIdSchema,
     ticketId: TicketIdSchema,
     sourceRevision: z.number().int().nonnegative(),
     category: CategorySchema,
@@ -168,6 +173,7 @@ const SubmitRecommendationInputSchema: z.ZodType<SubmitRecommendationToolInput> 
 
 const ApprovalInputSchema: z.ZodType<ApprovalToolInput> = z
   .object({
+    commandId: CommandIdSchema,
     recommendationId: ApprovalSchema.shape.recommendationId,
     ticketId: ApprovalSchema.shape.ticketId,
     expectedRevision: ApprovalSchema.shape.expectedRevision,
@@ -200,6 +206,7 @@ const ApprovalInputSchema: z.ZodType<ApprovalToolInput> = z
 
 const RejectRecommendationInputSchema: z.ZodType<RejectRecommendationToolInput> = z
   .object({
+    commandId: CommandIdSchema,
     recommendationId: z.uuid(),
     ticketId: TicketIdSchema,
     actor: NonBlankStringSchema,
@@ -208,6 +215,7 @@ const RejectRecommendationInputSchema: z.ZodType<RejectRecommendationToolInput> 
   .strict();
 const AddCustomerReplyInputSchema = z
   .object({
+    commandId: CommandIdSchema,
     ticketId: TicketIdSchema,
     actor: NonBlankStringSchema,
     body: NonBlankStringSchema.max(4_000),
@@ -216,6 +224,7 @@ const AddCustomerReplyInputSchema = z
   .strict();
 const EvaluateTicketInputSchema = z
   .object({
+    commandId: CommandIdSchema,
     ticketId: TicketIdSchema,
     actor: NonBlankStringSchema.default("approval-desk"),
     responseStyle: DraftCustomerResponseStyleInputSchema.default("auto"),
@@ -648,12 +657,12 @@ export function createTriageServer(
       outputSchema: SubmitRecommendationOutputSchema,
       annotations: SubmissionAnnotations,
     },
-    async (input) =>
+    async ({ commandId, ...input }) =>
       toolResult(async () => ({
         recommendation: await deps.service.submit({
           ...input,
           submittedAt: deps.now().toISOString(),
-        }),
+        }, { commandId }),
       })),
   );
 
@@ -666,12 +675,12 @@ export function createTriageServer(
       outputSchema: AddCustomerReplyOutputSchema,
       annotations: SubmissionAnnotations,
     },
-    async (input) =>
+    async ({ commandId, ...input }) =>
       toolResult(async () => ({
         auditEvent: await deps.service.addCustomerReply({
           ...input,
           receivedAt: deps.now().toISOString(),
-        }),
+        }, { commandId }),
       })),
   );
 
@@ -766,12 +775,12 @@ export function createTriageServer(
       outputSchema: ApprovalOutputSchema,
       annotations: FinalizingAnnotations,
     },
-    async (input) =>
+    async ({ commandId, ...input }) =>
       toolResult(() =>
         deps.service.approve({
           ...input,
           approvedAt: deps.now().toISOString(),
-        }),
+        }, { commandId }),
       ),
   );
 
@@ -810,12 +819,12 @@ export function createTriageServer(
       outputSchema: RejectionOutputSchema,
       annotations: FinalizingAnnotations,
     },
-    async (input) =>
+    async ({ commandId, ...input }) =>
       toolResult(async () => ({
         auditEvent: await deps.service.reject({
           ...input,
           rejectedAt: deps.now().toISOString(),
-        }),
+        }, { commandId }),
       })),
   );
 
@@ -923,6 +932,7 @@ async function evaluateTicket(
   deps: TriageServerDependencies,
   input: z.infer<typeof EvaluateTicketInputSchema>,
 ): Promise<z.infer<typeof EvaluateTicketOutputSchema>> {
+  const { commandId } = input;
   const reusableKnowledge = await knowledgeService(deps).listReusableApproved({
     asOf: deps.now().toISOString(),
   });
@@ -968,7 +978,7 @@ async function evaluateTicket(
     ...recommendationInput,
     submittedAt: deps.now().toISOString(),
     evaluatedCustomerReplyWatermark: customerReplyWatermarkFromAudits(audits),
-  });
+  }, { commandId });
   const { recommendation, recommendations: persistedRecommendations } =
     evaluation;
   const [persistedTicket, persistedAudits] =
@@ -990,6 +1000,7 @@ async function markResponseDone(
   deps: TriageServerDependencies,
   input: z.infer<typeof MarkResponseDoneInputSchema>,
 ): Promise<z.infer<typeof MarkResponseDoneOutputSchema>> {
+  const { commandId, ...approvalInput } = input;
   const customerResponse = input.editedCustomerResponse;
   if (customerResponse === undefined) {
     throw new DomainError(
@@ -999,7 +1010,7 @@ async function markResponseDone(
   }
   const completed = await deps.service.approveAndMarkResponseSent({
     approval: {
-      ...input,
+      ...approvalInput,
       approvedAt: deps.now().toISOString(),
     },
     responseSent: {
@@ -1009,7 +1020,7 @@ async function markResponseDone(
       sentAt: deps.now().toISOString(),
       customerResponse,
     },
-  });
+  }, { commandId });
   const recommendation = await deps.recommendations.get(input.recommendationId);
   const automaticReply = await maybeAddAutomaticCustomerReplyAfterSent({
     deps,
@@ -1017,6 +1028,7 @@ async function markResponseDone(
     recommendation,
     auditsBeforeSent: completed.auditsBeforeSent,
     sentAt: completed.sentEvent.timestamp,
+    parentCommandId: commandId,
   });
   return {
     ticket: completed.ticket,
@@ -1116,6 +1128,7 @@ async function maybeAddAutomaticCustomerReplyAfterSent(input: {
   recommendation: TriageRecommendation;
   auditsBeforeSent: readonly AuditEvent[];
   sentAt: string;
+  parentCommandId?: string;
 }): Promise<AuditEvent | undefined> {
   if (
     hasCustomerReplyAfterRecommendation(
@@ -1140,7 +1153,9 @@ async function maybeAddAutomaticCustomerReplyAfterSent(input: {
     body,
     receivedAt: plusMilliseconds(input.sentAt, 1),
     source: "demo-auto-reply",
-  });
+  }, input.parentCommandId === undefined
+    ? undefined
+    : derivedOperationalCommandContext(input.parentCommandId, "automatic-customer-reply"));
 }
 
 function plusMilliseconds(timestamp: string, milliseconds: number): string {

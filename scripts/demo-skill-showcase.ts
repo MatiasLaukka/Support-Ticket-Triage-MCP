@@ -477,9 +477,23 @@ async function callTool(
     name,
     kind: name === "get_ticket_workflow" ? "read" : "action",
   });
+  const commandBound = new Set([
+    "submit_triage_recommendation",
+    "add_customer_reply",
+    "evaluate_ticket",
+    "approve_triage_recommendation",
+    "mark_response_done",
+    "reject_triage_recommendation",
+  ]);
+  const argumentsWithCommand = commandBound.has(name)
+    ? {
+        commandId: `94000000-0000-4000-8000-${String(toolCalls.length).padStart(12, "0")}`,
+        ...args,
+      }
+    : args;
   const result = (await client.callTool({
     name,
-    arguments: args,
+    arguments: argumentsWithCommand,
   })) as CallToolResult;
   if (result.isError === true || result.structuredContent === undefined) {
     throw new Error(`MCP tool ${name} failed.`);

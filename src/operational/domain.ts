@@ -286,6 +286,7 @@ export const OperationalResultReferenceSchema = z.object({
   recommendationIds: z.array(z.uuid()).min(2).optional(),
   diagnosisId: IdentifierSchema.optional(),
   messageId: MessageIdSchema.optional(),
+  ticketSnapshot: TicketSchema.optional(),
 }).strict().superRefine((result, context) => {
   if (result.recommendationId !== undefined && result.recommendationIds !== undefined) {
     context.addIssue({
@@ -303,6 +304,23 @@ export const OperationalResultReferenceSchema = z.object({
       path: ["recommendationIds"],
       message: "Plural recommendation result references must be unique.",
     });
+  }
+  if (result.ticketSnapshot !== undefined) {
+    if (result.tickets.length !== 1 || result.tickets[0]?.ticketId !== result.ticketSnapshot.id) {
+      context.addIssue({
+        code: "custom",
+        path: ["ticketSnapshot"],
+        message: "A ticket snapshot must belong to the result's single affected ticket.",
+      });
+    }
+    const resultingRevision = result.tickets[0]?.resultingRevision;
+    if (resultingRevision !== null && resultingRevision !== result.ticketSnapshot.revision) {
+      context.addIssue({
+        code: "custom",
+        path: ["ticketSnapshot", "revision"],
+        message: "A changed ticket snapshot must match the resulting ticket revision.",
+      });
+    }
   }
 }).readonly();
 

@@ -17,9 +17,13 @@ import type {
   TriageRecommendation,
 } from "../domain.js";
 import { DomainError } from "../errors.js";
+import { CommandIdSchema } from "../operational/domain.js";
 import { calculateQueueMetrics } from "../metrics.js";
 import type { RuntimeDependencies } from "../runtime.js";
-import { customerReplyWatermarkFromAudits } from "../triage-service.js";
+import {
+  customerReplyWatermarkFromAudits,
+  derivedOperationalCommandContext,
+} from "../triage-service.js";
 import {
   loadExpectedOutcomes,
 } from "./recommendation-builder.js";
@@ -744,7 +748,7 @@ async function createRecommendation(
     ...input,
     submittedAt: deps.now().toISOString(),
     evaluatedCustomerReplyWatermark: customerReplyWatermarkFromAudits(audits),
-  });
+  }, commandContextFromRequest(request));
   return { recommendation };
 }
 
@@ -759,7 +763,7 @@ async function addCustomerReply(
       ...body,
       ticketId,
       receivedAt: deps.now().toISOString(),
-    }),
+    }, commandContextFromRequest(request)),
   };
 }
 
@@ -941,7 +945,7 @@ async function approveRecommendation(
     ...body,
     recommendationId,
     approvedAt: deps.now().toISOString(),
-  });
+  }, commandContextFromRequest(request));
 }
 
 async function markRecommendationSent(
@@ -951,26 +955,27 @@ async function markRecommendationSent(
   const recommendationId = RecommendationIdSchema.parse(id);
   const body = MarkSentBodySchema.parse(await readJsonBody(request));
   return serializeMarkSent(recommendationId, async () => {
+    const commandContext = commandContextFromRequest(request);
     const audits = await deps.audits.list(body.ticketId);
-    const alreadySent = audits.some(
-      (event) =>
-        event.action === "customer-response-sent" &&
-        event.recommendationId === recommendationId,
-    );
-    if (alreadySent) {
+    const operationalRecommendation = deps.operationalStore
+      ?.readWorkflowSnapshot(body.ticketId).recommendations
+      .find(({ id: candidateId }) => candidateId === recommendationId);
+    const approval = operationalRecommendation === undefined
+      ? latestRecommendationApprovalAudit(audits, recommendationId)
+      : undefined;
+    if (deps.operationalStore === undefined && audits.some(
+      (event) => event.action === "customer-response-sent"
+        && event.recommendationId === recommendationId,
+    )) {
       throw invalidRequest("Customer response has already been marked sent.");
     }
-    const approval = latestRecommendationApprovalAudit(
-      audits,
-      recommendationId,
-    );
-    if (approval === undefined) {
+    if (deps.operationalStore === undefined && approval === undefined) {
       throw invalidRequest("Approved recommendation audit was not found.");
     }
-    const customerResponse =
-      typeof approval.after.customerResponse === "string"
+    const customerResponse = operationalRecommendation?.draftCustomerResponse
+      ?? (typeof approval?.after.customerResponse === "string"
         ? approval.after.customerResponse
-        : undefined;
+        : undefined);
     if (customerResponse === undefined) {
       throw invalidRequest(
         "Customer response must be approved before it can be marked sent.",
@@ -983,14 +988,16 @@ async function markRecommendationSent(
       recommendationId,
       sentAt,
       customerResponse,
-    });
-    const recommendation = await deps.recommendations.get(recommendationId);
+    }, commandContext);
+    const recommendation = operationalRecommendation
+      ?? await deps.recommendations.get(recommendationId);
     const automaticReply = await maybeAddAutomaticCustomerReplyAfterSent({
       deps,
       ticketId: body.ticketId,
       recommendation,
       auditsBeforeSent: audits,
-      sentAt,
+      sentAt: auditEvent.timestamp,
+      parentCommandId: commandContext?.commandId,
       automaticReplyEnabled: body.automaticReplyEnabled,
     });
     return {
@@ -1006,6 +1013,7 @@ async function maybeAddAutomaticCustomerReplyAfterSent(input: {
   recommendation: TriageRecommendation;
   auditsBeforeSent: readonly AuditEvent[];
   sentAt: string;
+  parentCommandId?: string;
   automaticReplyEnabled?: boolean;
 }): Promise<AuditEvent | undefined> {
   if (input.automaticReplyEnabled === false) {
@@ -1034,7 +1042,9 @@ async function maybeAddAutomaticCustomerReplyAfterSent(input: {
     body,
     receivedAt: plusMilliseconds(input.sentAt, 1),
     source: "demo-auto-reply",
-  });
+  }, input.parentCommandId === undefined
+    ? undefined
+    : derivedOperationalCommandContext(input.parentCommandId, "automatic-customer-reply"));
 }
 
 function plusMilliseconds(timestamp: string, milliseconds: number): string {
@@ -1052,7 +1062,7 @@ async function rejectRecommendation(
       ...body,
       recommendationId,
       rejectedAt: deps.now().toISOString(),
-    }),
+    }, commandContextFromRequest(request)),
   };
 }
 
@@ -1067,7 +1077,7 @@ async function cancelApproval(
       ...body,
       recommendationId,
       canceledAt: deps.now().toISOString(),
-    }),
+    }, commandContextFromRequest(request)),
   };
 }
 
@@ -1109,6 +1119,17 @@ function optionalParam(
   key: string,
 ): string | undefined {
   return searchParams.has(key) ? (searchParams.get(key) ?? "") : undefined;
+}
+
+function commandContextFromRequest(
+  request: IncomingMessage,
+): { commandId: string } | undefined {
+  const value = request.headers["idempotency-key"];
+  if (value === undefined) return undefined;
+  if (Array.isArray(value)) {
+    throw invalidRequest("Idempotency-Key must contain exactly one command ID.");
+  }
+  return { commandId: CommandIdSchema.parse(value) };
 }
 
 async function readJsonBody(request: IncomingMessage): Promise<unknown> {

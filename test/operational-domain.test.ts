@@ -112,6 +112,16 @@ describe("operational persistence domain", () => {
       operation: "record-diagnosis",
       tickets: [{ ticketId: "TKT-0001", operationalEventIds: [], resultingRevision: 2 }],
     }).success).toBe(false);
+    expect(OperationalResultReferenceSchema.safeParse({
+      operation: "approve-recommendation",
+      tickets: [{ ticketId: "TKT-0001", operationalEventIds: [eventId], resultingRevision: null }],
+      ticketSnapshot: ticket,
+    }).success).toBe(true);
+    expect(OperationalResultReferenceSchema.safeParse({
+      operation: "approve-recommendation",
+      tickets: [{ ticketId: "TKT-0002", operationalEventIds: [eventId], resultingRevision: null }],
+      ticketSnapshot: ticket,
+    }).success).toBe(false);
     expect(OperationalOutboxRowSchema.safeParse({
       id: "55555555-5555-4555-8555-555555555555",
       operationalEventId: eventId,

@@ -17,6 +17,8 @@ import {
   CommandIdSchema,
   ConversationMessageSchema,
   DecisionTraceEventSchema,
+  ImportResolutionSchema,
+  ImportStateSchema,
   LearningCaptureEnvelopeSchema,
   OperationalDiagnosisRecordSchema,
   OperationalEventSchema,
@@ -33,6 +35,8 @@ import {
   type CommandIdempotencyRecord,
   type ConversationMessage,
   type DecisionTraceEvent,
+  type ImportResolution,
+  type ImportState,
   type OperationalEvent,
   type OperationalOutboxRow,
   type OperationalResultReference,
@@ -55,6 +59,7 @@ export type OperationalStoreErrorCode =
   | "PERSISTENCE_ERROR"
   | "SCHEMA_ERROR"
   | "SEQUENCE_ERROR"
+  | "STATE_ERROR"
   | "STALE_REVISION"
   | "VALIDATION_ERROR";
 
@@ -132,6 +137,8 @@ interface OutboxRow {
   error_code: string | null;
   envelope_json: string;
 }
+interface MetadataValueRow { value: string; }
+interface ImportResolutionRow { resolution_json: string; }
 
 /** Task 1's enum-keyed Zod record infers every allowlisted key as required. */
 export type OperationalEventWrite = Omit<OperationalEvent, "facts"> & {
@@ -317,6 +324,126 @@ export class OperationalUnitOfWork {
     return record === undefined
       ? undefined
       : immutableCommandReplay(record.result).result;
+  }
+
+  readImportState(): ImportState {
+    this.assertActive();
+    const row = this.database.prepare(
+      "SELECT value FROM operational_metadata WHERE key = 'import_state'",
+    ).get() as MetadataValueRow | undefined;
+    return parseWith(
+      ImportStateSchema,
+      row?.value,
+      "Operational import state is invalid.",
+    );
+  }
+
+  transitionImportState(expected: ImportState, next: ImportState): void {
+    this.assertActive();
+    this.assertMutationOpen();
+    const parsedExpected = parseWith(ImportStateSchema, expected, "Expected import state is invalid.");
+    const parsedNext = parseWith(ImportStateSchema, next, "Next import state is invalid.");
+    const allowed = (
+      (parsedExpected === "empty" && (parsedNext === "import-in-progress" || parsedNext === "native"))
+      || (parsedExpected === "import-in-progress" && parsedNext === "imported")
+    );
+    if (!allowed) {
+      throw new OperationalStoreError(
+        `Operational import state cannot transition from ${parsedExpected} to ${parsedNext}.`,
+        "STATE_ERROR",
+      );
+    }
+    const result = this.database.prepare(
+      "UPDATE operational_metadata SET value = ? WHERE key = 'import_state' AND value = ?",
+    ).run(parsedNext, parsedExpected);
+    if (result.changes !== 1) {
+      throw new OperationalStoreError(
+        `Operational import state is not ${parsedExpected}; reload before retrying.`,
+        "STATE_ERROR",
+      );
+    }
+  }
+
+  readImportManifest(): readonly string[] | undefined {
+    this.assertActive();
+    return this.readMetadataStringArray("import_manifest", "Operational import manifest is corrupt.");
+  }
+
+  writeImportManifest(sourceIds: readonly string[]): void {
+    this.assertActive();
+    this.assertMutationOpen();
+    const parsed = parseSourceIdList(sourceIds, "Operational import manifest is invalid.");
+    this.database.prepare(
+      "INSERT INTO operational_metadata(key, value) VALUES ('import_manifest', ?)",
+    ).run(JSON.stringify(parsed));
+  }
+
+  readImportedSourceIds(): readonly string[] {
+    this.assertActive();
+    return this.readMetadataStringArray(
+      "imported_source_ids",
+      "Operational imported-source metadata is corrupt.",
+    ) ?? [];
+  }
+
+  markImportedSource(sourceId: string): void {
+    this.assertActive();
+    this.assertMutationOpen();
+    const parsedSourceId = parseSourceId(sourceId, "Operational import source ID is invalid.");
+    const imported = [...this.readImportedSourceIds()];
+    if (imported.includes(parsedSourceId)) return;
+    imported.push(parsedSourceId);
+    const payload = JSON.stringify(imported);
+    this.database.prepare(`
+      INSERT INTO operational_metadata(key, value) VALUES ('imported_source_ids', ?)
+      ON CONFLICT(key) DO UPDATE SET value = excluded.value
+    `).run(payload);
+  }
+
+  appendImportResolution(resolution: ImportResolution): void {
+    this.assertActive();
+    this.assertMutationOpen();
+    const parsed = parseWith(
+      ImportResolutionSchema,
+      resolution,
+      "Operational import resolution is invalid.",
+    );
+    try {
+      this.database.prepare(`
+        INSERT INTO operational_import_resolutions(
+          source_id, reason, actor, resolved_at, command_id, correlation_id, resolution_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        parsed.sourceId,
+        parsed.reason,
+        parsed.actor,
+        parsed.resolvedAt,
+        parsed.commandId,
+        parsed.correlationId,
+        JSON.stringify(parsed),
+      );
+    } catch (error) {
+      if (error instanceof Error && /UNIQUE constraint failed/i.test(error.message)) {
+        throw new OperationalStoreError(
+          "An import resolution is already recorded for this source and command.",
+          "IDEMPOTENCY_CONFLICT",
+          { cause: error },
+        );
+      }
+      throw error;
+    }
+  }
+
+  listImportResolutions(): ImportResolution[] {
+    this.assertActive();
+    const rows = this.database.prepare(
+      "SELECT resolution_json FROM operational_import_resolutions ORDER BY id ASC",
+    ).all() as ImportResolutionRow[];
+    return rows.map((row) => parseStoredJson(
+      row.resolution_json,
+      ImportResolutionSchema,
+      "Operational import resolution data is corrupt.",
+    ));
   }
 
   allocateEventSequences(ticketId: TicketId, count: number): number[] {
@@ -1485,6 +1612,42 @@ export class OperationalUnitOfWork {
     return (this.database.prepare(query).all(ticketId) as JsonRow[]).map((row) =>
       parseStoredJson(row.payload_json, schema, message));
   }
+
+  private readMetadataStringArray(key: string, message: string): readonly string[] | undefined {
+    const row = this.database.prepare(
+      "SELECT value FROM operational_metadata WHERE key = ?",
+    ).get(key) as MetadataValueRow | undefined;
+    if (row === undefined) return undefined;
+    let value: unknown;
+    try {
+      value = JSON.parse(row.value) as unknown;
+    } catch (error) {
+      throw new OperationalStoreError(message, "PERSISTENCE_ERROR", { cause: error });
+    }
+    return parseSourceIdList(value, message);
+  }
+}
+
+function parseSourceId(value: unknown, message: string): string {
+  if (
+    typeof value !== "string"
+    || value.trim() !== value
+    || value.length < 1
+    || value.length > 240
+    || !/^[A-Za-z0-9][A-Za-z0-9._:-]*$/.test(value)
+  ) {
+    throw new OperationalStoreError(message, "VALIDATION_ERROR");
+  }
+  return value;
+}
+
+function parseSourceIdList(value: unknown, message: string): string[] {
+  if (!Array.isArray(value)) throw new OperationalStoreError(message, "VALIDATION_ERROR");
+  const parsed = value.map((entry) => parseSourceId(entry, message));
+  if (new Set(parsed).size !== parsed.length) {
+    throw new OperationalStoreError(message, "VALIDATION_ERROR");
+  }
+  return parsed;
 }
 
 function parseWith<T>(

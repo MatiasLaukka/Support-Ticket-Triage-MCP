@@ -14,6 +14,8 @@
     "test": "vitest run --dir test",
     "test:watch": "vitest --dir test",
     "generate:fixtures": "node dist/scripts/generate-fixtures.js",
+    "initialize:operational-native": "npm run build && node dist/src/operational/import.js initialize-native",
+    "import:operational-data": "npm run build && node dist/src/operational/import.js import",
     "evaluate": "node dist/scripts/evaluate.js",
     "evaluate:diagnostics": "npm test -- --run test/diagnostic-evaluation.test.ts",
     "evaluate:lifecycle": "npm run build && node dist/scripts/evaluate-all-ticket-lifecycles.js",

@@ -17,6 +17,8 @@ import {
   LearningOutboxWorker,
   type OperationalLearningOutboxStore,
 } from "./operational/learning-outbox.js";
+import { createRuntimeOperationalStore } from "./operational/import.js";
+import type { OperationalSqliteStore } from "./operational/sqlite-store.js";
 import { DEFAULT_MINUTES_PER_ACCEPTED_RECOMMENDATION } from "./metrics.js";
 
 const STARTUP_PATH_MESSAGES = {
@@ -199,12 +201,15 @@ export async function createRuntimeDependencies(
       now,
     }),
   };
+  const serviceOperationalStore = isImportStateAwareOperationalStore(options.operationalStore)
+    ? createRuntimeOperationalStore(options.operationalStore)
+    : options.operationalStore;
   const service = new TriageService({
     tickets,
     recommendations,
     audit: audits,
     diagnoses,
-    ...(options.operationalStore === undefined ? {} : { operationalStore: options.operationalStore }),
+    ...(serviceOperationalStore === undefined ? {} : { operationalStore: serviceOperationalStore }),
     now,
   });
 
@@ -228,6 +233,15 @@ export async function createRuntimeDependencies(
       knowledgeEvolution: knowledgeEvolutionPaths,
     },
   };
+}
+
+function isImportStateAwareOperationalStore(
+  store: OperationalCommandStore | undefined,
+): store is OperationalSqliteStore {
+  if (store === undefined) return false;
+  const candidate = store as Partial<OperationalSqliteStore>;
+  return typeof candidate.readImportState === "function"
+    && typeof candidate.assertRuntimeMutationsAllowed === "function";
 }
 
 function isOperationalLearningOutboxStore(

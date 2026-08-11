@@ -7,7 +7,12 @@ import type {
   TriageRecommendation,
 } from "../domain.js";
 import type { CompletedDiagnosis } from "../knowledge-evolution/domain.js";
-import type { OperationalOutboxRow, OperationalWorkflowSnapshot } from "./domain.js";
+import type {
+  ImportResolution,
+  ImportState,
+  OperationalOutboxRow,
+  OperationalWorkflowSnapshot,
+} from "./domain.js";
 import {
   OperationalStoreError,
   OperationalUnitOfWork,
@@ -188,6 +193,26 @@ export class OperationalSqliteStore {
   listPendingOutbox(staleBefore?: string): OperationalOutboxRow[] {
     this.assertInitialized();
     return this.withReader((reader) => reader.listPendingOutbox(staleBefore));
+  }
+
+  readImportState(): ImportState {
+    this.assertInitialized();
+    return this.withReader((reader) => reader.readImportState());
+  }
+
+  listImportResolutions(): ImportResolution[] {
+    this.assertInitialized();
+    return this.withReader((reader) => reader.listImportResolutions());
+  }
+
+  assertRuntimeMutationsAllowed(): void {
+    const state = this.readImportState();
+    if (state === "empty" || state === "import-in-progress") {
+      throw new OperationalStoreError(
+        `Operational database is ${state}; initialize or complete the operational import before runtime mutations.`,
+        "STATE_ERROR",
+      );
+    }
   }
 
   private withReader<T>(work: (reader: OperationalUnitOfWork) => T): T {

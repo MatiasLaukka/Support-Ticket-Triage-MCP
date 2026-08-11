@@ -80,7 +80,14 @@ import {
   customerReplyWatermarkFromAudits,
   derivedOperationalCommandContext,
 } from "./triage-service.js";
-import { CommandIdSchema } from "./operational/domain.js";
+import {
+  CommandIdSchema,
+  DecisionTimelineEntrySchema,
+} from "./operational/domain.js";
+import {
+  readDecisionTimeline,
+  type DecisionTimelineSource,
+} from "./operational/timeline.js";
 import type { KnowledgeEvolutionService } from "./knowledge-evolution/service.js";
 import type { KnowledgeAuditRepository } from "./knowledge-evolution/knowledge-audit-repository.js";
 import type { KnowledgeObjectRepository } from "./knowledge-evolution/knowledge-object-repository.js";
@@ -410,6 +417,7 @@ const TicketWorkflowOutputSchema = z
       .strict(),
     latestRecommendation: TriageRecommendationSchema.optional(),
     operatorGuidance: OperatorGuidanceSchema,
+    decisionTimeline: z.array(DecisionTimelineEntrySchema),
   })
   .strict();
 
@@ -429,6 +437,7 @@ export interface TriageServerDependencies {
     objects?: Pick<KnowledgeObjectRepository, "listCandidates">;
     audits?: Pick<KnowledgeAuditRepository, "list">;
   };
+  operationalStore?: DecisionTimelineSource;
 }
 
 export function createTriageServer(
@@ -876,11 +885,15 @@ async function getTicketWorkflow(
     deps.recommendations.list(),
     knowledgeEvolutionRead,
   ]);
+  const decisionTimeline = deps.operationalStore === undefined
+    ? []
+    : await readDecisionTimeline(ticketId, deps.operationalStore);
   return TicketWorkflowOutputSchema.parse(
     buildTicketWorkflowReadModel({
       ticket,
       audits,
       recommendations,
+      decisionTimeline,
       ...(knowledgeEvolution === undefined ? {} : { knowledgeEvolution }),
     }),
   );

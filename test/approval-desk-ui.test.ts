@@ -56,6 +56,46 @@ describe("approvalDeskHtml", () => {
     expect(approvalDeskHtml).toContain("Done");
     expect(approvalDeskHtml).toContain("202 Accepted");
     expect(approvalDeskHtml).toContain("profile activity timeline");
+    expect(approvalDeskHtml).toContain("Decision Timeline");
+    expect(approvalDeskHtml).toContain('id="decisionTimelinePanel"');
+    expect(approvalDeskHtml).toContain("timeline-category-filter");
+    expect(approvalDeskHtml).toContain("timeline-actor-filter");
+  });
+
+  it("renders compact read-only decision milestones without adding another action bar", async () => {
+    const app = await startApprovalDeskApp({
+      ticketDetail: {
+        decisionTimeline: [{
+          operationalEventId: "97500000-0000-4000-8000-000000000001",
+          ticketId: "TKT-1001",
+          sequence: 1,
+          occurredAt: "2026-06-10T09:05:00.000Z",
+          actor: "approval-desk",
+          action: "recommendation-submitted",
+          category: "recommendation",
+          outcome: "success",
+          references: { recommendationId: fixtureRecommendation.id },
+          evidenceIds: ["request-id"],
+          missingEvidenceIds: ["log-bundle"],
+          fallbackReason: "Provider unavailable; deterministic evaluation used.",
+          providerTelemetry: [{ provider: "fallback", status: "fallback", latencyMs: 12 }],
+        }],
+      },
+    });
+
+    await app.selectFirstTicket();
+
+    const timeline = app.el("decisionTimelinePanel").innerHTML;
+    expect(timeline).toContain("Decision Timeline");
+    expect(timeline).toContain("Recommendation");
+    expect(timeline).toContain("approval-desk");
+    expect(timeline).toContain("request-id");
+    expect(timeline).toContain("Missing: log-bundle");
+    expect(timeline).toContain("Provider unavailable; deterministic evaluation used.");
+    expect(timeline).not.toContain("RAW_CUSTOMER_BODY_SENTINEL");
+    expect(approvalDeskHtml.match(/id="workflowActionBar"/g)).toHaveLength(1);
+    expect(approvalDeskHtml.match(/id="patternActionBar"/g)).toHaveLength(1);
+    expect(approvalDeskHtml).not.toContain('id="decisionTimelineActionBar"');
   });
 
   it("uses only local API routes", () => {
@@ -3099,6 +3139,7 @@ async function startApprovalDeskApp(options: {
   ticketDetailRecommendation?: FixtureRecommendation;
   ticketDetail?: {
     conversationTimeline?: Array<Record<string, unknown>>;
+    decisionTimeline?: Array<Record<string, unknown>>;
     recommendationHistory?: FixtureRecommendation[];
     recommendationSummary?: Record<string, unknown>;
     operatorGuidance?: Record<string, unknown>;
@@ -3232,6 +3273,7 @@ async function startApprovalDeskApp(options: {
           ticket,
           audits: { events: [] },
           conversationTimeline: ticket.id === selectedFixtureTicket.id ? conversationTimeline : [],
+          decisionTimeline: ticket.id === selectedFixtureTicket.id ? (options.ticketDetail?.decisionTimeline ?? []) : [],
           recommendationHistory: ticket.id === selectedFixtureTicket.id ? (options.ticketDetail?.recommendationHistory ?? []) : [],
           recommendationSummary: ticket.id === selectedFixtureTicket.id ? options.ticketDetail?.recommendationSummary : undefined,
           latestRecommendation: ticket.id === selectedFixtureTicket.id ? options.ticketDetailRecommendation : undefined,
@@ -3261,6 +3303,7 @@ async function startApprovalDeskApp(options: {
         ticket: selectedFixtureTicket,
         audits: { events: [] },
         conversationTimeline,
+        decisionTimeline: options.ticketDetail?.decisionTimeline ?? [],
         recommendationHistory,
         recommendationSummary: options.ticketDetail?.recommendationSummary,
         latestRecommendation:
@@ -3535,6 +3578,7 @@ function createElements(): Record<string, FakeElement> {
       "confirmApproval",
       "continueApproval",
       "conversationContextPanel",
+      "decisionTimelinePanel",
       "createRecommendation",
       "createUpdatedRecommendation",
       "discoverKnowledgeButton",

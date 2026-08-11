@@ -1,9 +1,11 @@
 import { z } from "zod";
 import {
+  ApprovedFieldSchema,
   AuditActionSchema,
   AuditEventSchema,
   CategorySchema,
   IsoTimestampSchema,
+  KnowledgeReferenceSchema,
   KnownEventIdSchema,
   PrioritySchema,
   TeamSchema,
@@ -608,16 +610,37 @@ export const DecisionTimelineEntrySchema = z.object({
   occurredAt: IsoTimestampSchema,
   actor: NonBlankStringSchema.max(120),
   action: AuditActionSchema,
+  category: z.enum(["recommendation", "approval", "conversation", "diagnosis", "resolution"]),
   outcome: z.enum(["success", "rejected"]),
   references: z.object({
     ticketRevision: RevisionNumberSchema.optional(),
     recommendationId: z.uuid().optional(),
     diagnosisId: IdentifierSchema.optional(),
     messageId: MessageIdSchema.optional(),
-    auditEvent: AuditEventSchema.optional(),
   }).strict(),
   evidenceIds: UniqueIdentifierSchema.optional(),
   missingEvidenceIds: UniqueIdentifierSchema.optional(),
+  approval: z.object({
+    decision: z.enum(["approved", "rejected", "canceled", "superseded"]),
+    fields: z.array(ApprovedFieldSchema).refine(
+      (fields) => new Set(fields).size === fields.length,
+      "Approved timeline fields must be unique.",
+    ).optional(),
+    reason: SafeFactTextSchema.optional(),
+  }).strict().optional(),
+  knowledge: z.object({
+    articleIds: UniqueIdentifierSchema,
+    object: KnowledgeReferenceSchema.optional(),
+  }).strict().optional(),
+  fallbackReason: SafeFactTextSchema.optional(),
+  providerTelemetry: z.array(z.object({
+    provider: z.enum(["openai", "deterministic", "fallback"]),
+    model: z.string().max(120).regex(/^[A-Za-z0-9]+(?:[._:-][A-Za-z0-9]+)*$/).optional(),
+    status: z.enum(["skipped", "used", "fallback"]),
+    latencyMs: z.number().int().nonnegative().optional(),
+    inputTokens: z.number().int().nonnegative().optional(),
+    outputTokens: z.number().int().nonnegative().optional(),
+  }).strict()).optional(),
   reason: SafeFactTextSchema.optional(),
 }).strict().readonly();
 

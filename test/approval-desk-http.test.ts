@@ -973,6 +973,69 @@ describe("createApprovalDeskHttpServer", () => {
     }
   });
 
+  it("returns the same operational Decision Timeline through HTTP and MCP workflow reads", async () => {
+    const { deps, json } = await startFixture();
+    const ticket = await deps.tickets.get("TKT-1005");
+    (deps as typeof deps & { operationalStore: any }).operationalStore = {
+      readWorkflowSnapshot: () => ({
+        ticket,
+        ticketRevisions: [],
+        recommendations: [],
+        recommendationRevisions: [],
+        messages: [],
+        diagnoses: [],
+        events: [{
+          id: "97500000-0000-4000-8000-000000000001",
+          ticketId: ticket.id,
+          sequence: 1,
+          occurredAt: "2026-06-10T09:05:00.000Z",
+          actor: "approval-desk",
+          action: "recommendation-submitted",
+          commandId: "97500000-0000-4000-8000-000000000002",
+          facts: { outcome: "pending" },
+        }],
+        traces: [{
+          id: "97500000-0000-4000-8000-000000000003",
+          operationalEventId: "97500000-0000-4000-8000-000000000001",
+          ticketId: ticket.id,
+          occurredAt: "2026-06-10T09:05:00.000Z",
+          actor: "approval-desk",
+          traceType: "lifecycle",
+          stage: "recommendation-submitted",
+          outcome: "success",
+        }],
+        customerReplyWatermark: { state: "none" },
+      }),
+    };
+
+    const http = await json("/api/tickets/TKT-1005");
+    const server = createTriageServer(deps);
+    const client = new Client({ name: "decision-timeline-parity", version: "1.0.0" });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    await server.connect(serverTransport);
+    await client.connect(clientTransport);
+    try {
+      const mcp = await client.callTool({
+        name: "get_ticket_workflow",
+        arguments: { id: "TKT-1005" },
+      });
+      expect(mcp.isError, mcpText(mcp as any)).not.toBe(true);
+      expect(http.status).toBe(200);
+      expect(http.body.decisionTimeline).toEqual(
+        JSON.parse(JSON.stringify((mcp.structuredContent as any).decisionTimeline)),
+      );
+      expect(http.body.decisionTimeline).toEqual([expect.objectContaining({
+        operationalEventId: "97500000-0000-4000-8000-000000000001",
+        sequence: 1,
+        category: "recommendation",
+        actor: "approval-desk",
+        outcome: "success",
+      })]);
+    } finally {
+      await Promise.allSettled([client.close(), server.close()]);
+    }
+  });
+
   it("exposes the same knowledge-pattern gate in HTTP and MCP workflow reads", async () => {
     const { deps, json } = await startFixture();
     const ticket = await deps.tickets.get("TKT-1001");

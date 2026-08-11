@@ -2,7 +2,11 @@ import type { AuditEvent, Ticket, TriageRecommendation } from "../domain.js";
 import type { KnowledgeCandidate } from "../knowledge-evolution/domain.js";
 import type { KnowledgeAuditEvent } from "../knowledge-evolution/knowledge-audit-repository.js";
 import { compareIsoInstants } from "../iso-instant.js";
-import type { OperationalWorkflowSnapshot } from "../operational/domain.js";
+import type {
+  DecisionTimelineEntry,
+  OperationalWorkflowSnapshot,
+} from "../operational/domain.js";
+import { buildDecisionTimeline } from "../operational/timeline.js";
 import {
   buildConversationHistory,
   buildConversationHistoryFromSnapshot,
@@ -50,6 +54,7 @@ export function buildTicketWorkflowReadModel(input: {
     candidates: readonly KnowledgeCandidate[];
     audits: readonly KnowledgeAuditEvent[];
   };
+  decisionTimeline?: readonly DecisionTimelineEntry[];
 }) {
   const recommendation = summarizeRecommendationsForTicket(
     input.ticket,
@@ -68,6 +73,7 @@ export function buildTicketWorkflowReadModel(input: {
     recommendationSummary: recommendation.summary,
     latestRecommendation: recommendation.latest,
     operatorGuidance: buildOperatorGuidance(input),
+    decisionTimeline: [...(input.decisionTimeline ?? [])],
   };
 }
 
@@ -86,6 +92,7 @@ export function buildTicketWorkflowReadModelFromSnapshot(
     recommendationHistory: recommendation.history,
     recommendationSummary: recommendation.summary,
     latestRecommendation: recommendation.latest,
+    decisionTimeline: buildDecisionTimeline(snapshot),
   };
 }
 

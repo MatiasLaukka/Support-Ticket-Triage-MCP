@@ -876,6 +876,56 @@ export const approvalDeskHtml = `<!doctype html>
         border-left-color: #16a34a;
       }
 
+      .decision-timeline {
+        margin-top: 0.75rem;
+      }
+
+      .decision-timeline-header,
+      .decision-timeline-filters,
+      .decision-milestone-meta {
+        align-items: center;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.4rem;
+      }
+
+      .decision-timeline-header {
+        justify-content: space-between;
+      }
+
+      .decision-timeline-header h3 {
+        margin: 0;
+      }
+
+      .decision-timeline-filters {
+        margin: 0.55rem 0;
+      }
+
+      .timeline-category-filter,
+      .timeline-actor-filter {
+        background: white;
+        border: 1px solid var(--line);
+        color: var(--muted);
+        font-size: 0.76rem;
+        padding: 0.24rem 0.48rem;
+      }
+
+      .timeline-category-filter.active,
+      .timeline-actor-filter.active {
+        background: var(--panel-soft);
+        border-color: var(--accent);
+        color: var(--accent-dark);
+      }
+
+      .decision-milestone {
+        border-left-color: #7c3aed;
+        padding: 0.65rem;
+      }
+
+      .decision-milestone p {
+        margin: 0.35rem 0 0;
+      }
+
       .conversation-controls {
         display: flex;
         flex-wrap: wrap;
@@ -1289,6 +1339,13 @@ export const approvalDeskHtml = `<!doctype html>
               <p class="hint">Select a ticket to review conversation context.</p>
             </div>
           </section>
+          <section id="decisionTimelinePanel" class="card decision-timeline" aria-label="Decision Timeline">
+            <div class="decision-timeline-header">
+              <h3>Decision Timeline</h3>
+              <span class="meta">Read-only causal milestones</span>
+            </div>
+            <p class="hint">Select a ticket to inspect its persisted decision trail.</p>
+          </section>
           <details class="advanced-drawer">
             <summary><span class="advanced-icon">i</span><span>Advanced details</span></summary>
             <div id="ticketDetailsPanel">
@@ -1480,6 +1537,9 @@ export const approvalDeskHtml = `<!doctype html>
         queueFilter: 'active',
         approvedFields: [],
         conversationTimeline: [],
+        decisionTimeline: [],
+        decisionTimelineCategory: 'all',
+        decisionTimelineActor: 'all',
         recommendationHistory: [],
         consumedCustomerReplyTimestamp: null,
         knowledgeCandidate: null,
@@ -1531,6 +1591,7 @@ export const approvalDeskHtml = `<!doctype html>
         decisionChips: document.getElementById('decisionChips'),
         decisionControls: document.getElementById('decisionControls'),
         decisionSummary: document.getElementById('decisionSummary'),
+        decisionTimelinePanel: document.getElementById('decisionTimelinePanel'),
         diagnosisPanel: document.getElementById('diagnosisPanel'),
         diagnosisSummaryPanel: document.getElementById('diagnosisSummaryPanel'),
         diagnosisActionPanel: document.getElementById('diagnosisActionPanel'),
@@ -1698,6 +1759,7 @@ export const approvalDeskHtml = `<!doctype html>
               '<p class="hint">Select a ticket to inspect technical fields.</p>' +
             '</section>';
           els.createRecommendation.disabled = true;
+          renderDecisionTimeline();
           renderDiagnosisPanel();
           return;
         }
@@ -1729,7 +1791,83 @@ export const approvalDeskHtml = `<!doctype html>
               card('Tags', ticket.tags.join(', ')) +
             '</div>' +
           '</section>';
+        renderDecisionTimeline();
         renderDiagnosisPanel();
+      }
+
+      function renderDecisionTimeline() {
+        const entries = Array.isArray(state.decisionTimeline) ? state.decisionTimeline : [];
+        const categories = Array.from(new Set(entries.map(function (entry) { return entry.category; }).filter(Boolean)));
+        const actors = Array.from(new Set(entries.map(function (entry) { return entry.actor; }).filter(Boolean)));
+        const visible = entries.filter(function (entry) {
+          return (state.decisionTimelineCategory === 'all' || entry.category === state.decisionTimelineCategory) &&
+            (state.decisionTimelineActor === 'all' || entry.actor === state.decisionTimelineActor);
+        });
+        const categoryFilters = ['all'].concat(categories).map(function (category) {
+          return '<button type="button" class="chip timeline-category-filter' +
+            (state.decisionTimelineCategory === category ? ' active' : '') +
+            '" data-timeline-category="' + escapeHtml(category) + '">' +
+            escapeHtml(category === 'all' ? 'All events' : titleCase(category)) + '</button>';
+        }).join('');
+        const actorFilters = ['all'].concat(actors).map(function (actor) {
+          return '<button type="button" class="chip timeline-actor-filter' +
+            (state.decisionTimelineActor === actor ? ' active' : '') +
+            '" data-timeline-actor="' + escapeHtml(actor) + '">' +
+            escapeHtml(actor === 'all' ? 'All actors' : actor) + '</button>';
+        }).join('');
+        els.decisionTimelinePanel.innerHTML =
+          '<div class="decision-timeline-header"><h3>Decision Timeline</h3>' +
+            '<span class="meta">' + escapeHtml(String(entries.length)) + ' causal milestone' + (entries.length === 1 ? '' : 's') + '</span></div>' +
+          '<p class="hint">Read-only milestones ordered by persisted event sequence.</p>' +
+          '<div class="decision-timeline-filters" aria-label="Timeline category filters">' + categoryFilters + '</div>' +
+          '<div class="decision-timeline-filters" aria-label="Timeline actor filters">' + actorFilters + '</div>' +
+          (visible.length === 0
+            ? '<p class="meta">No decision milestones match these filters.</p>'
+            : visible.map(renderDecisionMilestone).join(''));
+      }
+
+      function renderDecisionMilestone(entry) {
+        const evidence = Array.isArray(entry.evidenceIds) && entry.evidenceIds.length > 0
+          ? '<p class="meta">Evidence: ' + escapeHtml(entry.evidenceIds.join(', ')) + '</p>'
+          : '';
+        const missing = Array.isArray(entry.missingEvidenceIds) && entry.missingEvidenceIds.length > 0
+          ? '<p class="meta">Missing: ' + escapeHtml(entry.missingEvidenceIds.join(', ')) + '</p>'
+          : '';
+        const approval = entry.approval === undefined
+          ? ''
+          : '<p class="meta">Approval: ' + escapeHtml(entry.approval.decision ?? 'recorded') +
+            (Array.isArray(entry.approval.fields) && entry.approval.fields.length > 0
+              ? ' · ' + escapeHtml(entry.approval.fields.join(', '))
+              : '') + '</p>';
+        const knowledge = entry.knowledge?.object === undefined
+          ? ''
+          : '<p class="meta">Knowledge: ' + escapeHtml(entry.knowledge.object.objectId) +
+            ' v' + escapeHtml(String(entry.knowledge.object.version)) + '</p>';
+        const fallback = entry.fallbackReason === undefined
+          ? ''
+          : '<p class="meta">Fallback: ' + escapeHtml(entry.fallbackReason) + '</p>';
+        const telemetry = Array.isArray(entry.providerTelemetry) && entry.providerTelemetry.length > 0
+          ? '<p class="meta">Provider: ' + entry.providerTelemetry.map(function (item) {
+              return escapeHtml(item.provider + ' · ' + item.status +
+                (item.latencyMs === undefined ? '' : ' · ' + item.latencyMs + 'ms'));
+            }).join(', ') + '</p>'
+          : '';
+        return '<article class="card timeline-item decision-milestone ' + escapeHtml(entry.category ?? 'resolution') + '">' +
+          '<strong>' + escapeHtml(decisionTimelineLabel(entry.action)) + '</strong>' +
+          '<div class="decision-milestone-meta"><span class="chip">' + escapeHtml(titleCase(entry.category ?? 'resolution')) + '</span>' +
+            '<span class="meta">#' + escapeHtml(String(entry.sequence ?? '?')) + ' · ' +
+              escapeHtml(entry.occurredAt ?? 'unknown time') + ' · ' + escapeHtml(entry.actor ?? 'unknown actor') + '</span></div>' +
+          evidence + missing + approval + knowledge + fallback + telemetry +
+        '</article>';
+      }
+
+      function decisionTimelineLabel(action) {
+        return String(action ?? 'decision milestone').split('-').map(titleCase).join(' ');
+      }
+
+      function titleCase(value) {
+        const text = String(value ?? '');
+        return text.length === 0 ? text : text.charAt(0).toUpperCase() + text.slice(1);
       }
 
       function resetDiagnosisInteraction() {
@@ -3009,6 +3147,9 @@ export const approvalDeskHtml = `<!doctype html>
           }
         });
         state.conversationTimeline = Array.isArray(data.conversationTimeline) ? data.conversationTimeline : [];
+        state.decisionTimeline = Array.isArray(data.decisionTimeline) ? data.decisionTimeline : [];
+        state.decisionTimelineCategory = 'all';
+        state.decisionTimelineActor = 'all';
         state.recommendationHistory = Array.isArray(data.recommendationHistory) ? data.recommendationHistory : [];
         state.recommendation = data.latestRecommendation ?? null;
         void loadKnowledgeCandidate(id, knowledgeRequestId).then(function () {
@@ -4479,11 +4620,23 @@ export const approvalDeskHtml = `<!doctype html>
           void applySelectedDiagnosisFix().catch(function (error) { setResult({ error: error.message }); });
         }
       });
-      els.conversationContextPanel.addEventListener('click', function (event) {
+       els.conversationContextPanel.addEventListener('click', function (event) {
         if (event.target?.className?.includes('conversation-scenario')) {
           void persistDemoCustomerReply(event.target.value).catch(function (error) { setResult({ error: error.message }); });
         }
-      });
+       });
+       els.decisionTimelinePanel.addEventListener('click', function (event) {
+         const category = event.target?.dataset?.timelineCategory;
+         const actor = event.target?.dataset?.timelineActor;
+         if (category !== undefined) {
+           state.decisionTimelineCategory = category;
+           renderDecisionTimeline();
+         }
+         if (actor !== undefined) {
+           state.decisionTimelineActor = actor;
+           renderDecisionTimeline();
+         }
+       });
       els.predictedReply.addEventListener('change', function () {
         if (els.predictedReply.value !== '') {
           els.customerReplyBody.value = conversationScenarioBody(els.predictedReply.value);

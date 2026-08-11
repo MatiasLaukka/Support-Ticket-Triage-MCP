@@ -18,6 +18,7 @@ import type {
 } from "../domain.js";
 import { DomainError } from "../errors.js";
 import { CommandIdSchema } from "../operational/domain.js";
+import { readDecisionTimeline } from "../operational/timeline.js";
 import { calculateQueueMetrics } from "../metrics.js";
 import type { RuntimeDependencies } from "../runtime.js";
 import {
@@ -664,18 +665,22 @@ async function getTicketDetail(
   id: string,
 ): Promise<unknown> {
   const ticketId = TicketIdSchema.parse(id);
-  const [ticket, auditPage, ticketAudits, recommendations, knowledgeCandidates, knowledgeAudits] = await Promise.all([
+  const [ticket, auditPage, ticketAudits, recommendations, knowledgeCandidates, knowledgeAudits, decisionTimeline] = await Promise.all([
     deps.tickets.get(ticketId),
     deps.audits.listPage({ ticketId, offset: 0, limit: 10 }),
     deps.audits.list(ticketId),
     deps.recommendations.list(),
     deps.knowledgeEvolution.objects.listCandidates(),
     deps.knowledgeEvolution.audits.list(),
+    deps.operationalStore === undefined
+      ? Promise.resolve([])
+      : readDecisionTimeline(ticketId, deps.operationalStore),
   ]);
   const workflow = buildTicketWorkflowReadModel({
     ticket,
     recommendations,
     audits: ticketAudits,
+    decisionTimeline,
     knowledgeEvolution: {
       candidates: knowledgeCandidates,
       audits: knowledgeAudits,

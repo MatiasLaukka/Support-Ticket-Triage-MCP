@@ -22,6 +22,12 @@ const SafeFactTextSchema = NonBlankStringSchema.max(500).refine(
   (value) => !/(?:\b(?:raw\s+)?(?:system|developer|user)\s+(?:prompt|message|instructions?)\b|\braw\s+prompt\b|\b(?:hidden|chain[- ]of[- ]thought|reasoning)\b|\b(?:api[-_]?key|access[-_]?token|secret|password)\s*[=:]\s*\S+|\bsk-[a-z0-9_-]+\b|\b(?:[a-z]:[\\/]|\\\\)|(?:^|\s)[~\/][^\s]*)/i.test(value),
   "Operational facts must not contain prompts, hidden reasoning, secrets, or paths.",
 );
+const SafeOperationalActorSchema = SafeFactTextSchema.and(
+  NonBlankStringSchema.max(120),
+);
+const SafeProviderModelSchema = SafeFactTextSchema.and(
+  z.string().max(120).regex(/^[A-Za-z0-9]+(?:[._:-][A-Za-z0-9]+)*$/),
+);
 
 export const OperationalEventIdSchema = z.uuid();
 export const CommandIdSchema = z.uuid();
@@ -151,7 +157,7 @@ export const OperationalEventSchema = z.object({
   ticketId: TicketIdSchema,
   sequence: TicketSequenceSchema,
   occurredAt: IsoTimestampSchema,
-  actor: NonBlankStringSchema.max(120),
+  actor: SafeOperationalActorSchema,
   action: AuditActionSchema,
   commandId: CommandIdSchema,
   facts: SanitizedOperationalFactsSchema,
@@ -441,7 +447,7 @@ const DecisionTraceBase = {
   operationalEventId: OperationalEventIdSchema,
   ticketId: TicketIdSchema,
   occurredAt: IsoTimestampSchema,
-  actor: NonBlankStringSchema.max(120),
+  actor: SafeOperationalActorSchema,
 };
 
 /** Sanitized, typed decision evidence attached to a committed operational event. */
@@ -484,7 +490,7 @@ export const DecisionTraceEventSchema = z.discriminatedUnion("traceType", [
     ...DecisionTraceBase,
     traceType: z.literal("provider-telemetry"),
     provider: z.enum(["openai", "deterministic", "fallback"]),
-    model: z.string().max(120).regex(/^[A-Za-z0-9]+(?:[._:-][A-Za-z0-9]+)*$/).optional(),
+    model: SafeProviderModelSchema.optional(),
     status: z.enum(["skipped", "used", "fallback"]),
     latencyMs: z.number().int().nonnegative().optional(),
     inputTokens: z.number().int().nonnegative().optional(),
@@ -608,9 +614,18 @@ export const DecisionTimelineEntrySchema = z.object({
   ticketId: TicketIdSchema,
   sequence: TicketSequenceSchema,
   occurredAt: IsoTimestampSchema,
-  actor: NonBlankStringSchema.max(120),
+  actor: SafeOperationalActorSchema,
   action: AuditActionSchema,
-  category: z.enum(["recommendation", "approval", "conversation", "diagnosis", "resolution"]),
+  category: z.enum([
+    "evaluation",
+    "evidence",
+    "diagnosis",
+    "approval",
+    "customer-response",
+    "fix-or-mitigation",
+    "verification",
+    "closure",
+  ]),
   outcome: z.enum(["success", "rejected"]),
   references: z.object({
     ticketRevision: RevisionNumberSchema.optional(),
@@ -635,12 +650,13 @@ export const DecisionTimelineEntrySchema = z.object({
   fallbackReason: SafeFactTextSchema.optional(),
   providerTelemetry: z.array(z.object({
     provider: z.enum(["openai", "deterministic", "fallback"]),
-    model: z.string().max(120).regex(/^[A-Za-z0-9]+(?:[._:-][A-Za-z0-9]+)*$/).optional(),
+    model: SafeProviderModelSchema.optional(),
     status: z.enum(["skipped", "used", "fallback"]),
     latencyMs: z.number().int().nonnegative().optional(),
     inputTokens: z.number().int().nonnegative().optional(),
     outputTokens: z.number().int().nonnegative().optional(),
   }).strict()).optional(),
+  reasons: UniqueSafeFactTextsSchema.optional(),
   reason: SafeFactTextSchema.optional(),
 }).strict().readonly();
 

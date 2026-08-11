@@ -65,21 +65,62 @@ describe("approvalDeskHtml", () => {
   it("renders compact read-only decision milestones without adding another action bar", async () => {
     const app = await startApprovalDeskApp({
       ticketDetail: {
-        decisionTimeline: [{
-          operationalEventId: "97500000-0000-4000-8000-000000000001",
-          ticketId: "TKT-1001",
-          sequence: 1,
-          occurredAt: "2026-06-10T09:05:00.000Z",
-          actor: "approval-desk",
-          action: "recommendation-submitted",
-          category: "recommendation",
-          outcome: "success",
-          references: { recommendationId: fixtureRecommendation.id },
-          evidenceIds: ["request-id"],
-          missingEvidenceIds: ["log-bundle"],
-          fallbackReason: "Provider unavailable; deterministic evaluation used.",
-          providerTelemetry: [{ provider: "fallback", status: "fallback", latencyMs: 12 }],
-        }],
+        decisionTimeline: [
+          {
+            operationalEventId: "97500000-0000-4000-8000-000000000001",
+            ticketId: "TKT-1001",
+            sequence: 1,
+            occurredAt: "2026-06-10T09:05:00.000Z",
+            actor: "approval-desk",
+            action: "recommendation-rejected",
+            category: "approval",
+            outcome: "rejected",
+            references: { recommendationId: fixtureRecommendation.id, ticketRevision: 2 },
+            evidenceIds: ["request-id"],
+            missingEvidenceIds: ["log-bundle"],
+            approval: {
+              decision: "rejected",
+              reason: "The evidence does not support the requested change.",
+            },
+            knowledge: { articleIds: ["api-auth"] },
+            reasons: ["The confidence gate was not met."],
+            fallbackReason: "Provider unavailable; deterministic evaluation used.",
+            providerTelemetry: [{ provider: "fallback", status: "fallback", latencyMs: 12 }],
+          },
+          {
+            operationalEventId: "97500000-0000-4000-8000-000000000002",
+            ticketId: "TKT-1001",
+            sequence: 2,
+            occurredAt: "2026-06-10T09:06:00.000Z",
+            actor: "product-support",
+            action: "fix-available",
+            category: "fix-or-mitigation",
+            outcome: "success",
+            references: { diagnosisId: "diagnosis-1001" },
+          },
+          {
+            operationalEventId: "97500000-0000-4000-8000-000000000003",
+            ticketId: "TKT-1001",
+            sequence: 3,
+            occurredAt: "2026-06-10T09:07:00.000Z",
+            actor: "product-support",
+            action: "ticket-updated",
+            category: "verification",
+            outcome: "success",
+            references: { messageId: "97600000-0000-4000-8000-000000000001" },
+          },
+          {
+            operationalEventId: "97500000-0000-4000-8000-000000000004",
+            ticketId: "TKT-1001",
+            sequence: 4,
+            occurredAt: "2026-06-10T09:08:00.000Z",
+            actor: "product-support",
+            action: "ticket-updated",
+            category: "closure",
+            outcome: "success",
+            references: {},
+          },
+        ],
       },
     });
 
@@ -87,8 +128,18 @@ describe("approvalDeskHtml", () => {
 
     const timeline = app.el("decisionTimelinePanel").innerHTML;
     expect(timeline).toContain("Decision Timeline");
-    expect(timeline).toContain("Recommendation");
+    expect(timeline).toContain("Fix-or-mitigation");
+    expect(timeline).toContain("Verification");
+    expect(timeline).toContain("Closure");
     expect(timeline).toContain("approval-desk");
+    expect(timeline).toContain("Outcome: rejected");
+    expect(timeline).toContain("Reasons: The confidence gate was not met.");
+    expect(timeline).toContain("Approval reason: The evidence does not support the requested change.");
+    expect(timeline).toContain("Articles: api-auth");
+    expect(timeline).toContain("Recommendation: " + fixtureRecommendation.id);
+    expect(timeline).toContain("Ticket revision: 2");
+    expect(timeline).toContain("Diagnosis: diagnosis-1001");
+    expect(timeline).toContain("Message: 97600000-0000-4000-8000-000000000001");
     expect(timeline).toContain("request-id");
     expect(timeline).toContain("Missing: log-bundle");
     expect(timeline).toContain("Provider unavailable; deterministic evaluation used.");

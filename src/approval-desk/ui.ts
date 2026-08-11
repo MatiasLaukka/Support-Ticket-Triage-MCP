@@ -1839,10 +1839,32 @@ export const approvalDeskHtml = `<!doctype html>
             (Array.isArray(entry.approval.fields) && entry.approval.fields.length > 0
               ? ' · ' + escapeHtml(entry.approval.fields.join(', '))
               : '') + '</p>';
-        const knowledge = entry.knowledge?.object === undefined
+        const approvalReason = entry.approval?.reason === undefined
+          ? ''
+          : '<p class="meta">Approval reason: ' + escapeHtml(entry.approval.reason) + '</p>';
+        const knowledgeObject = entry.knowledge?.object === undefined
           ? ''
           : '<p class="meta">Knowledge: ' + escapeHtml(entry.knowledge.object.objectId) +
             ' v' + escapeHtml(String(entry.knowledge.object.version)) + '</p>';
+        const articles = Array.isArray(entry.knowledge?.articleIds) && entry.knowledge.articleIds.length > 0
+          ? '<p class="meta">Articles: ' + escapeHtml(entry.knowledge.articleIds.join(', ')) + '</p>'
+          : '';
+        const reasons = Array.isArray(entry.reasons) && entry.reasons.length > 0
+          ? entry.reasons
+          : entry.reason === undefined ? [] : [entry.reason];
+        const renderedReasons = reasons.length === 0
+          ? ''
+          : '<p class="meta">Reasons: ' + escapeHtml(reasons.join(' · ')) + '</p>';
+        const outcome = '<p class="meta">Outcome: ' + escapeHtml(entry.outcome ?? 'unknown') + '</p>';
+        const references = entry.references ?? {};
+        const renderedReferences = [
+          references.ticketRevision === undefined ? '' : 'Ticket revision: ' + String(references.ticketRevision),
+          references.recommendationId === undefined ? '' : 'Recommendation: ' + references.recommendationId,
+          references.diagnosisId === undefined ? '' : 'Diagnosis: ' + references.diagnosisId,
+          references.messageId === undefined ? '' : 'Message: ' + references.messageId
+        ].filter(Boolean).map(function (reference) {
+          return '<p class="meta">' + escapeHtml(reference) + '</p>';
+        }).join('');
         const fallback = entry.fallbackReason === undefined
           ? ''
           : '<p class="meta">Fallback: ' + escapeHtml(entry.fallbackReason) + '</p>';
@@ -1852,12 +1874,13 @@ export const approvalDeskHtml = `<!doctype html>
                 (item.latencyMs === undefined ? '' : ' · ' + item.latencyMs + 'ms'));
             }).join(', ') + '</p>'
           : '';
-        return '<article class="card timeline-item decision-milestone ' + escapeHtml(entry.category ?? 'resolution') + '">' +
+        return '<article class="card timeline-item decision-milestone ' + escapeHtml(entry.category ?? 'evaluation') + '">' +
           '<strong>' + escapeHtml(decisionTimelineLabel(entry.action)) + '</strong>' +
-          '<div class="decision-milestone-meta"><span class="chip">' + escapeHtml(titleCase(entry.category ?? 'resolution')) + '</span>' +
+          '<div class="decision-milestone-meta"><span class="chip">' + escapeHtml(titleCase(entry.category ?? 'evaluation')) + '</span>' +
             '<span class="meta">#' + escapeHtml(String(entry.sequence ?? '?')) + ' · ' +
               escapeHtml(entry.occurredAt ?? 'unknown time') + ' · ' + escapeHtml(entry.actor ?? 'unknown actor') + '</span></div>' +
-          evidence + missing + approval + knowledge + fallback + telemetry +
+          outcome + renderedReasons + evidence + missing + approval + approvalReason +
+          knowledgeObject + articles + renderedReferences + fallback + telemetry +
         '</article>';
       }
 

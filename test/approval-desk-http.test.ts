@@ -28,6 +28,7 @@ import { createRuntimeDependencies } from "../src/runtime.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { createTriageServer } from "../src/server.js";
+import { OperationalStoreError } from "../src/operational/unit-of-work.js";
 import {
   listReusableApproved,
   type ReusableKnowledgeResult,
@@ -1027,10 +1028,49 @@ describe("createApprovalDeskHttpServer", () => {
       expect(http.body.decisionTimeline).toEqual([expect.objectContaining({
         operationalEventId: "97500000-0000-4000-8000-000000000001",
         sequence: 1,
-        category: "recommendation",
+        category: "evaluation",
         actor: "approval-desk",
         outcome: "success",
       })]);
+    } finally {
+      await Promise.allSettled([client.close(), server.close()]);
+    }
+  });
+
+  it("maps operational timeline read failures to the same safe actionable HTTP and MCP error", async () => {
+    const { deps, json } = await startFixture();
+    (deps as typeof deps & { operationalStore: any }).operationalStore = {
+      readWorkflowSnapshot: () => {
+        throw new OperationalStoreError(
+          "CREDENTIAL_FAILURE_SENTINEL sk-secret from C:\\private\\operational.sqlite",
+          "PERSISTENCE_ERROR",
+          { cause: new Error("RAW_DATABASE_CAUSE_SENTINEL") },
+        );
+      },
+    };
+
+    const http = await json("/api/tickets/TKT-1005");
+    const server = createTriageServer(deps);
+    const client = new Client({ name: "decision-timeline-error-parity", version: "1.0.0" });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    await server.connect(serverTransport);
+    await client.connect(clientTransport);
+    try {
+      const mcp = await client.callTool({
+        name: "get_ticket_workflow",
+        arguments: { id: "TKT-1005" },
+      });
+      const expected = {
+        code: "REPOSITORY_ERROR",
+        message: "Decision timeline is temporarily unavailable. Retry the workflow read.",
+      };
+      expect(http.status).toBe(503);
+      expect(http.body).toEqual({ error: expected });
+      expect(mcp.isError).toBe(true);
+      expect(mcpText(mcp as any)).toBe(`${expected.code}: ${expected.message}`);
+      expect(JSON.stringify(http.body) + mcpText(mcp as any)).not.toMatch(
+        /CREDENTIAL_FAILURE_SENTINEL|RAW_DATABASE_CAUSE_SENTINEL|sk-secret|operational\.sqlite/,
+      );
     } finally {
       await Promise.allSettled([client.close(), server.close()]);
     }

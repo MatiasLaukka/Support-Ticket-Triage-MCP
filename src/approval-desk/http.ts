@@ -1253,6 +1253,8 @@ function domainStatus(error: DomainError): number {
     case "TICKET_NOT_FOUND":
     case "RECOMMENDATION_NOT_FOUND":
       return 404;
+    case "REPOSITORY_ERROR":
+      return 503;
     default:
       return 400;
   }

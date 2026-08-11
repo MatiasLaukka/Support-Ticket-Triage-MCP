@@ -2,12 +2,17 @@ import {
   ApprovedFieldSchema,
   type TicketId,
 } from "../domain.js";
+import { DomainError } from "../errors.js";
 import {
   DecisionTimelineEntrySchema,
   type DecisionTimelineEntry,
   type DecisionTraceEvent,
   type OperationalWorkflowSnapshot,
 } from "./domain.js";
+import { OperationalStoreError } from "./unit-of-work.js";
+
+export const DECISION_TIMELINE_READ_ERROR_MESSAGE =
+  "Decision timeline is temporarily unavailable. Retry the workflow read.";
 
 export interface DecisionTimelineSource {
   readWorkflowSnapshot(
@@ -20,7 +25,15 @@ export async function readDecisionTimeline(
   ticketId: TicketId,
   source: DecisionTimelineSource,
 ): Promise<DecisionTimelineEntry[]> {
-  return buildDecisionTimeline(await source.readWorkflowSnapshot(ticketId));
+  try {
+    return buildDecisionTimeline(await source.readWorkflowSnapshot(ticketId));
+  } catch (error) {
+    if (!(error instanceof OperationalStoreError)) throw error;
+    if (error.code === "NOT_FOUND") {
+      throw new DomainError(`Ticket ${ticketId} was not found.`, "TICKET_NOT_FOUND");
+    }
+    throw new DomainError(DECISION_TIMELINE_READ_ERROR_MESSAGE, "REPOSITORY_ERROR");
+  }
 }
 
 /**
@@ -57,6 +70,10 @@ export function buildDecisionTimeline(
         (trace): trace is Extract<DecisionTraceEvent, { traceType: "provider-telemetry" }> =>
           trace.traceType === "provider-telemetry",
       );
+      const classificationTraces = eventTraces.filter(
+        (trace): trace is Extract<DecisionTraceEvent, { traceType: "classification" }> =>
+          trace.traceType === "classification",
+      );
       const evidenceIds = stableUnique([
         ...evidenceTraces.flatMap(({ providedEvidenceIds }) => providedEvidenceIds),
         ...(diagnosis?.evidenceReferences?.map(({ id }) => id) ?? []),
@@ -70,6 +87,13 @@ export function buildDecisionTimeline(
       ]);
       const reason = lifecycleTraces.find(({ reason }) => reason !== undefined)?.reason
         ?? safeString(event.facts.reasonCode);
+      const reasons = stableUnique([
+        ...classificationTraces.flatMap(({ reasons: traceReasons }) => traceReasons),
+        ...lifecycleTraces.flatMap(({ reason: traceReason }) =>
+          traceReason === undefined ? [] : [traceReason]
+        ),
+        ...(reason === undefined ? [] : [reason]),
+      ]);
       const fallbackReason = telemetryTraces.find(
         (trace) => trace.fallbackReason !== undefined,
       )?.fallbackReason;
@@ -83,10 +107,13 @@ export function buildDecisionTimeline(
         occurredAt: event.occurredAt,
         actor: event.actor,
         action: event.action,
-        category: categoryFor(event.action),
+        category: categoryFor(event.action, lifecycleTraces.map(({ stage }) => stage)),
         outcome: lifecycleTraces.some(({ outcome }) => outcome === "rejected")
-          || event.action === "approval-rejected"
-          || event.action === "learning-capture-failed"
+          || [
+            "recommendation-rejected",
+            "approval-rejected",
+            "learning-capture-failed",
+          ].includes(event.action)
           ? "rejected"
           : "success",
         references: {
@@ -121,6 +148,7 @@ export function buildDecisionTimeline(
                 ...(trace.outputTokens === undefined ? {} : { outputTokens: trace.outputTokens }),
               })),
             }),
+        ...(reasons.length === 0 ? {} : { reasons }),
         ...(reason === undefined ? {} : { reason }),
       });
     });
@@ -146,9 +174,10 @@ function tracesByOperationalEventId(
 
 function categoryFor(
   action: DecisionTimelineEntry["action"],
+  lifecycleStages: readonly string[],
 ): DecisionTimelineEntry["category"] {
   if (["recommendation-submitted", "recommendation-superseded"].includes(action)) {
-    return "recommendation";
+    return "evaluation";
   }
   if ([
     "recommendation-approved",
@@ -157,16 +186,40 @@ function categoryFor(
     "approval-rejected",
   ].includes(action)) return "approval";
   if (["customer-response-sent", "customer-reply-received"].includes(action)) {
-    return "conversation";
+    return "customer-response";
   }
   if ([
     "diagnosis-completed",
     "diagnosis-reviewed",
     "diagnostic-escalated",
-    "fix-available",
-    "platform-mitigation-available",
   ].includes(action)) return "diagnosis";
-  return "resolution";
+  if (["fix-available", "platform-mitigation-available"].includes(action)) {
+    return "fix-or-mitigation";
+  }
+  if (action === "ticket-updated") {
+    for (const stage of lifecycleStages) {
+      const stagedCategory = genericStageCategory(stage);
+      if (stagedCategory !== undefined) return stagedCategory;
+    }
+  }
+  if (["learning-capture-succeeded", "learning-capture-failed"].includes(action)) {
+    return "evidence";
+  }
+  return "evaluation";
+}
+
+function genericStageCategory(
+  stage: string,
+): DecisionTimelineEntry["category"] | undefined {
+  if (/evidence/.test(stage)) return "evidence";
+  if (/(?:verification|verified)/.test(stage)) return "verification";
+  if (/(?:closure|closed)/.test(stage)) return "closure";
+  if (/(?:fix|mitigation)/.test(stage)) return "fix-or-mitigation";
+  if (/diagnos/.test(stage)) return "diagnosis";
+  if (/approv|reject|cancel/.test(stage)) return "approval";
+  if (/(?:customer|response|reply)/.test(stage)) return "customer-response";
+  if (/evaluat|recommendation/.test(stage)) return "evaluation";
+  return undefined;
 }
 
 function approvalProjection(

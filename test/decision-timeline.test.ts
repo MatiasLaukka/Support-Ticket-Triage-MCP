@@ -4,7 +4,12 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { TicketSchema, TriageRecommendationSchema } from "../src/domain.js";
 import { CompletedDiagnosisSchema } from "../src/knowledge-evolution/domain.js";
-import { readDecisionTimeline } from "../src/operational/timeline.js";
+import {
+  DecisionTimelineEntrySchema,
+  DecisionTraceEventSchema,
+  OperationalEventSchema,
+} from "../src/operational/domain.js";
+import { buildDecisionTimeline, readDecisionTimeline } from "../src/operational/timeline.js";
 import { OperationalSqliteStore } from "../src/operational/sqlite-store.js";
 import { buildTicketWorkflowReadModelFromSnapshot } from "../src/approval-desk/workflow-read-model.js";
 
@@ -43,7 +48,7 @@ describe("causal Decision Timeline", () => {
         { operationalEventId: eventIds[3], sequence: 4, action: "customer-reply-received" },
       ]);
       expect(timeline[0]).toMatchObject({
-        category: "recommendation",
+        category: "evaluation",
         actor: "triage-engine",
         occurredAt: "2026-08-11T12:00:00.000Z",
         outcome: "success",
@@ -78,7 +83,7 @@ describe("causal Decision Timeline", () => {
         evidenceIds: ["request-id"],
       });
       expect(timeline[3]).toMatchObject({
-        category: "conversation",
+        category: "customer-response",
         references: { messageId },
       });
 
@@ -109,7 +114,171 @@ describe("causal Decision Timeline", () => {
       expect(workflow.decisionTimeline).not.toBe(direct);
       expect(workflow.decisionTimeline[0]).toMatchObject({
         operationalEventId: eventIds[0],
-        category: "recommendation",
+        category: "evaluation",
+      });
+    } finally {
+      store.close();
+    }
+  });
+
+  it("rejects prompt, reasoning, and credential sentinels at persisted and emitted identity boundaries", () => {
+    const safeEvent = {
+      id: eventIds[0],
+      ticketId,
+      sequence: 1,
+      occurredAt: "2026-08-11T12:00:00.000Z",
+      actor: "triage-engine",
+      action: "recommendation-submitted",
+      commandId,
+      facts: { outcome: "pending" },
+    } as const;
+    const safeTrace = {
+      id: "77400000-0000-4000-8000-000000000010",
+      operationalEventId: eventIds[0],
+      ticketId,
+      occurredAt: "2026-08-11T12:00:00.000Z",
+      actor: "triage-engine",
+      traceType: "provider-telemetry",
+      provider: "openai",
+      status: "used",
+      model: "gpt-5-mini",
+    } as const;
+    const safeTimelineEntry = {
+      operationalEventId: eventIds[0],
+      ticketId,
+      sequence: 1,
+      occurredAt: "2026-08-11T12:00:00.000Z",
+      actor: "triage-engine",
+      action: "recommendation-submitted",
+      category: "evaluation",
+      outcome: "success",
+      references: {},
+      providerTelemetry: [{ provider: "openai", status: "used", model: "gpt-5-mini" }],
+    } as const;
+
+    expect(OperationalEventSchema.safeParse({
+      ...safeEvent,
+      actor: "system prompt: RAW_PROMPT_ACTOR_SENTINEL",
+    }).success).toBe(false);
+    expect(DecisionTraceEventSchema.safeParse({
+      ...safeTrace,
+      actor: "hidden reasoning RAW_REASONING_ACTOR_SENTINEL",
+    }).success).toBe(false);
+    expect(DecisionTraceEventSchema.safeParse({
+      ...safeTrace,
+      model: "sk-CREDENTIAL_MODEL_SENTINEL",
+    }).success).toBe(false);
+    expect(DecisionTimelineEntrySchema.safeParse({
+      ...safeTimelineEntry,
+      actor: "developer instructions RAW_PROMPT_DTO_SENTINEL",
+    }).success).toBe(false);
+    expect(DecisionTimelineEntrySchema.safeParse({
+      ...safeTimelineEntry,
+      providerTelemetry: [{
+        provider: "openai",
+        status: "used",
+        model: "sk-CREDENTIAL_DTO_SENTINEL",
+      }],
+    }).success).toBe(false);
+
+    const { store } = seededTimelineStore();
+    try {
+      const before = store.readWorkflowSnapshot(ticketId);
+      expect(() => store.transaction((unit) => {
+        const [sequence] = unit.allocateEventSequences(ticketId, 1);
+        unit.appendEvent({
+          ...safeEvent,
+          id: "77500000-0000-4000-8000-000000000001",
+          sequence: sequence!,
+          actor: "system prompt: RAW_PERSISTED_EVENT_ACTOR_SENTINEL",
+        });
+      })).toThrow();
+      expect(() => store.transaction((unit) => {
+        unit.appendTrace({
+          ...safeTrace,
+          id: "77500000-0000-4000-8000-000000000002",
+          model: "sk-PERSISTED_TRACE_MODEL_SENTINEL",
+        });
+      })).toThrow();
+      expect(store.readWorkflowSnapshot(ticketId)).toEqual(before);
+    } finally {
+      store.close();
+    }
+  });
+
+  it("preserves the planned milestone taxonomy and uses lifecycle stage for generic actions", () => {
+    const { store } = seededTimelineStore();
+    try {
+      const base = store.readWorkflowSnapshot(ticketId);
+      const generic = (index: number, stage: string) => ({
+        id: `77900000-0000-4000-8000-00000000000${index}`,
+        ticketId,
+        sequence: 10 + index,
+        occurredAt: `2026-08-11T13:0${index}:00.000Z`,
+        actor: "workflow-engine",
+        action: "ticket-updated" as const,
+        commandId,
+        facts: { outcome: "recorded" },
+        stage,
+      });
+      const genericEvents = [
+        generic(1, "evidence-collected"),
+        generic(2, "outcome-verified"),
+        generic(3, "ticket-closed"),
+      ];
+      const stagedEvents = [
+        {
+          ...generic(4, "fix-available"),
+          action: "fix-available" as const,
+        },
+        ...genericEvents,
+        {
+          ...generic(5, "recommendation-rejected"),
+          action: "recommendation-rejected" as const,
+          facts: {
+            resolution: "rejected",
+            reasonCode: "The evidence does not support approval.",
+          },
+        },
+      ];
+      const timeline = buildDecisionTimeline({
+        ...base,
+        events: [
+          ...base.events,
+          ...stagedEvents.map(({ stage: _stage, ...event }) => event),
+        ],
+        traces: [
+          ...base.traces,
+          ...stagedEvents.map((item, index) => ({
+            id: `77800000-0000-4000-8000-00000000000${index + 1}`,
+            operationalEventId: item.id,
+            ticketId,
+            occurredAt: item.occurredAt,
+            actor: item.actor,
+            traceType: "lifecycle" as const,
+            stage: item.stage,
+            outcome: "success" as const,
+          })),
+        ],
+      } as any);
+
+      expect(timeline.map(({ category }) => category)).toEqual([
+        "evaluation",
+        "approval",
+        "diagnosis",
+        "customer-response",
+        "evidence",
+        "verification",
+        "closure",
+        "fix-or-mitigation",
+        "approval",
+      ]);
+      expect(timeline.at(-1)).toMatchObject({
+        outcome: "rejected",
+        approval: {
+          decision: "rejected",
+          reason: "The evidence does not support approval.",
+        },
       });
     } finally {
       store.close();

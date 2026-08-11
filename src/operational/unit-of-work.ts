@@ -140,6 +140,13 @@ interface OutboxRow {
 interface MetadataValueRow { value: string; }
 interface ImportResolutionRow { resolution_json: string; }
 
+export interface OperationalImportSourceMetadata {
+  readonly sourceId: string;
+  readonly ticketId?: TicketId;
+  readonly provenance: "legacy" | "unvalidated";
+  readonly aggregateHash: string;
+}
+
 /** Task 1's enum-keyed Zod record infers every allowlisted key as required. */
 export type OperationalEventWrite = Omit<OperationalEvent, "facts"> & {
   readonly facts: Readonly<Record<string, unknown>>;
@@ -364,15 +371,29 @@ export class OperationalUnitOfWork {
     }
   }
 
-  readImportManifest(): readonly string[] | undefined {
+  readImportManifest(): readonly OperationalImportSourceMetadata[] | undefined {
     this.assertActive();
-    return this.readMetadataStringArray("import_manifest", "Operational import manifest is corrupt.");
+    const row = this.database.prepare(
+      "SELECT value FROM operational_metadata WHERE key = 'import_manifest'",
+    ).get() as MetadataValueRow | undefined;
+    if (row === undefined) return undefined;
+    let value: unknown;
+    try {
+      value = JSON.parse(row.value) as unknown;
+    } catch (error) {
+      throw new OperationalStoreError(
+        "Operational import manifest is corrupt.",
+        "PERSISTENCE_ERROR",
+        { cause: error },
+      );
+    }
+    return parseImportSourceManifest(value, "Operational import manifest is corrupt.");
   }
 
-  writeImportManifest(sourceIds: readonly string[]): void {
+  writeImportManifest(sources: readonly OperationalImportSourceMetadata[]): void {
     this.assertActive();
     this.assertMutationOpen();
-    const parsed = parseSourceIdList(sourceIds, "Operational import manifest is invalid.");
+    const parsed = parseImportSourceManifest(sources, "Operational import manifest is invalid.");
     this.database.prepare(
       "INSERT INTO operational_metadata(key, value) VALUES ('import_manifest', ?)",
     ).run(JSON.stringify(parsed));
@@ -398,6 +419,20 @@ export class OperationalUnitOfWork {
       INSERT INTO operational_metadata(key, value) VALUES ('imported_source_ids', ?)
       ON CONFLICT(key) DO UPDATE SET value = excluded.value
     `).run(payload);
+  }
+
+  completeImportIfReady(): boolean {
+    this.assertActive();
+    this.assertMutationOpen();
+    if (this.readImportState() !== "import-in-progress") return false;
+    const manifest = this.readImportManifest() ?? [];
+    const completed = new Set(this.readImportedSourceIds());
+    for (const resolution of this.listImportResolutions()) completed.add(resolution.sourceId);
+    if (manifest.length === 0 || !manifest.every(({ sourceId }) => completed.has(sourceId))) {
+      return false;
+    }
+    this.transitionImportState("import-in-progress", "imported");
+    return true;
   }
 
   appendImportResolution(resolution: ImportResolution): void {
@@ -1648,6 +1683,45 @@ function parseSourceIdList(value: unknown, message: string): string[] {
     throw new OperationalStoreError(message, "VALIDATION_ERROR");
   }
   return parsed;
+}
+
+function parseImportSourceManifest(
+  value: unknown,
+  message: string,
+): OperationalImportSourceMetadata[] {
+  if (!Array.isArray(value)) throw new OperationalStoreError(message, "VALIDATION_ERROR");
+  const sources = value.map((entry): OperationalImportSourceMetadata => {
+    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
+      throw new OperationalStoreError(message, "VALIDATION_ERROR");
+    }
+    const keys = Object.keys(entry).sort();
+    const candidate = entry as Record<string, unknown>;
+    const hasTicketId = candidate.ticketId !== undefined;
+    const expectedKeys = hasTicketId
+      ? ["aggregateHash", "provenance", "sourceId", "ticketId"]
+      : ["aggregateHash", "provenance", "sourceId"];
+    if (JSON.stringify(keys) !== JSON.stringify(expectedKeys)) {
+      throw new OperationalStoreError(message, "VALIDATION_ERROR");
+    }
+    const sourceId = parseSourceId(candidate.sourceId, message);
+    const aggregateHash = parseWith(RequestHashSchema, candidate.aggregateHash, message);
+    if (candidate.provenance !== "legacy" && candidate.provenance !== "unvalidated") {
+      throw new OperationalStoreError(message, "VALIDATION_ERROR");
+    }
+    const ticketId = hasTicketId
+      ? parseWith(TicketIdSchema, candidate.ticketId, message)
+      : undefined;
+    return {
+      sourceId,
+      ...(ticketId === undefined ? {} : { ticketId }),
+      provenance: candidate.provenance,
+      aggregateHash,
+    };
+  });
+  if (new Set(sources.map(({ sourceId }) => sourceId)).size !== sources.length) {
+    throw new OperationalStoreError(message, "VALIDATION_ERROR");
+  }
+  return sources;
 }
 
 function parseWith<T>(

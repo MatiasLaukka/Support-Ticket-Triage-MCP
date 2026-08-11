@@ -1,4 +1,5 @@
 import { existsSync, lstatSync, readFileSync, readdirSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { z } from "zod";
@@ -18,6 +19,7 @@ import {
   OperationalWorkflowSnapshotSchema,
   RecommendationRevisionSchema,
   TicketRevisionSchema,
+  canonicalOperationalRequestJson,
   conversationMessageKindForOperationalAction,
   type ConversationMessage,
   type DecisionTraceEvent,
@@ -30,6 +32,7 @@ import {
 import { OperationalSqliteStore } from "./sqlite-store.js";
 import {
   OperationalStoreError,
+  type OperationalImportSourceMetadata,
   type OperationalDiagnosisWrite,
   type OperationalEventWrite,
   type RecommendationRevisionWrite,
@@ -125,10 +128,12 @@ export interface ImportSummary {
 interface ValidatedAggregate extends Omit<OperationalImportAggregate, "events"> {
   readonly expectedSnapshot: OperationalWorkflowSnapshot;
   readonly events: readonly OperationalEvent[];
+  readonly aggregateHash: string;
 }
 
 interface AggregateValidationResult {
   readonly sourceId: string;
+  readonly manifestSource: OperationalImportSourceMetadata;
   readonly aggregate?: ValidatedAggregate;
   readonly issues: readonly string[];
 }
@@ -136,6 +141,8 @@ interface AggregateValidationResult {
 /** Performs validation and conflict inspection without opening a write transaction. */
 export function validateImport(input: OperationalImportInput): ImportValidationReport {
   const validations = validateAggregates(input.aggregates);
+  const manifest = input.store.listImportSources();
+  const importedSourceIds = new Set(input.store.listImportedSourceIds());
   const duplicateSourceIds = duplicateValues(validations.map(({ sourceId }) => sourceId));
   const aggregates = validations.map((validation): ImportAggregateValidation => {
     if (duplicateSourceIds.has(validation.sourceId)) {
@@ -147,6 +154,19 @@ export function validateImport(input: OperationalImportInput): ImportValidationR
     }
     if (validation.aggregate === undefined) {
       return { sourceId: validation.sourceId, status: "invalid", issues: validation.issues };
+    }
+    const recordedSource = manifest.find(({ sourceId }) => sourceId === validation.sourceId);
+    if (recordedSource !== undefined) {
+      if (recordedSource.aggregateHash !== validation.aggregate.aggregateHash) {
+        return {
+          sourceId: validation.sourceId,
+          status: "conflict",
+          issues: ["The source aggregate differs from the durable import manifest."],
+        };
+      }
+      if (importedSourceIds.has(validation.sourceId)) {
+        return { sourceId: validation.sourceId, status: "already-imported", issues: [] };
+      }
     }
     const existing = readExistingSnapshot(input.store, validation.aggregate.ticket.id);
     if (existing === undefined) {
@@ -179,7 +199,7 @@ export function importOperationalData(input: OperationalImportInput): ImportSumm
     );
   }
   const duplicateSourceIds = duplicateValues(sourceIds);
-  beginOrResumeImport(input.store, sourceIds);
+  beginOrResumeImport(input.store, validations.map(({ manifestSource }) => manifestSource));
 
   const importedSourceIds: string[] = [];
   const alreadyImportedSourceIds: string[] = [];
@@ -212,7 +232,6 @@ export function importOperationalData(input: OperationalImportInput): ImportSumm
     }
   }
 
-  finalizeImportIfComplete(input.store);
   return {
     state: input.store.readImportState(),
     importedSourceIds,
@@ -245,15 +264,15 @@ export function recordImportSkip(input: {
       );
     }
     const manifest = unit.readImportManifest() ?? [];
-    if (!manifest.includes(resolution.sourceId)) {
+    if (!manifest.some(({ sourceId }) => sourceId === resolution.sourceId)) {
       throw new OperationalStoreError(
         "Import skip source is not part of the active manifest.",
         "VALIDATION_ERROR",
       );
     }
     unit.appendImportResolution(resolution);
+    unit.completeImportIfReady();
   });
-  finalizeImportIfComplete(input.store);
 }
 
 /** Explicitly enables a new native database only when no supplied legacy inputs exist. */
@@ -304,10 +323,12 @@ function validateAggregates(values: readonly unknown[]): AggregateValidationResu
 
 function validateAggregate(value: unknown, index: number): AggregateValidationResult {
   const fallbackSourceId = sourceIdFrom(value) ?? `invalid-source-${index + 1}`;
+  const fallbackManifest = manifestSourceFor(value, fallbackSourceId);
   const parsed = ImportAggregateContainerSchema.safeParse(value);
   if (!parsed.success) {
     return {
       sourceId: fallbackSourceId,
+      manifestSource: fallbackManifest,
       issues: uniqueIssues(parsed.error.issues.map((issue) => issue.message)),
     };
   }
@@ -328,7 +349,11 @@ function validateAggregate(value: unknown, index: number): AggregateValidationRe
     events.push(result.data);
   }
   if (eventIssues.length > 0) {
-    return { sourceId: source.sourceId, issues: uniqueIssues(eventIssues) };
+    return {
+      sourceId: source.sourceId,
+      manifestSource: fallbackManifest,
+      issues: uniqueIssues(eventIssues),
+    };
   }
 
   const latestCustomer = source.messages
@@ -337,15 +362,43 @@ function validateAggregate(value: unknown, index: number): AggregateValidationRe
     .filter((entry): entry is { message: ConversationMessage; event: OperationalEvent } => entry.event !== undefined)
     .sort((left, right) => left.event.sequence - right.event.sequence)
     .at(-1)?.message;
+  const eventSequence = new Map(events.map((event) => [event.id, event.sequence]));
+  const recommendationLatestSequence = new Map<string, number>();
+  for (const revision of source.recommendationRevisions) {
+    recommendationLatestSequence.set(
+      revision.recommendation.id,
+      Math.max(
+        recommendationLatestSequence.get(revision.recommendation.id) ?? 0,
+        eventSequence.get(revision.operationalEventId) ?? 0,
+      ),
+    );
+  }
   const expectedSnapshot = OperationalWorkflowSnapshotSchema.safeParse({
     ticket: source.ticket,
-    ticketRevisions: source.ticketRevisions,
-    recommendations: source.recommendations,
-    recommendationRevisions: source.recommendationRevisions,
-    messages: source.messages,
-    diagnoses: source.diagnoses,
+    ticketRevisions: [...source.ticketRevisions].sort((left, right) =>
+      causalSequence(eventSequence, left.operationalEventId)
+      - causalSequence(eventSequence, right.operationalEventId)),
+    recommendations: [...source.recommendations].sort((left, right) =>
+      (recommendationLatestSequence.get(left.id) ?? 0)
+      - (recommendationLatestSequence.get(right.id) ?? 0)
+      || left.id.localeCompare(right.id)),
+    recommendationRevisions: [...source.recommendationRevisions].sort((left, right) =>
+      causalSequence(eventSequence, left.operationalEventId)
+      - causalSequence(eventSequence, right.operationalEventId)
+      || left.recommendation.id.localeCompare(right.recommendation.id)),
+    messages: [...source.messages].sort((left, right) =>
+      causalSequence(eventSequence, left.operationalEventId)
+      - causalSequence(eventSequence, right.operationalEventId)
+      || left.id.localeCompare(right.id)),
+    diagnoses: [...source.diagnoses].sort((left, right) =>
+      causalSequence(eventSequence, left.operationalEventId)
+      - causalSequence(eventSequence, right.operationalEventId)
+      || left.diagnosis.id.localeCompare(right.diagnosis.id)),
     events,
-    traces: source.traces,
+    traces: [...source.traces].sort((left, right) =>
+      causalSequence(eventSequence, left.operationalEventId)
+      - causalSequence(eventSequence, right.operationalEventId)
+      || left.id.localeCompare(right.id)),
     customerReplyWatermark: latestCustomer === undefined
       ? { state: "none" }
       : { state: "reply", timestamp: latestCustomer.createdAt, id: latestCustomer.id },
@@ -353,16 +406,29 @@ function validateAggregate(value: unknown, index: number): AggregateValidationRe
   if (!expectedSnapshot.success) {
     return {
       sourceId: source.sourceId,
+      manifestSource: fallbackManifest,
       issues: uniqueIssues(expectedSnapshot.error.issues.map((issue) => issue.message)),
     };
   }
+  const aggregateHash = hashCanonical({
+    sourceId: source.sourceId,
+    provenance: source.provenance,
+    snapshot: expectedSnapshot.data,
+  });
   return {
     sourceId: source.sourceId,
+    manifestSource: {
+      sourceId: source.sourceId,
+      ticketId: source.ticket.id,
+      provenance: source.provenance,
+      aggregateHash,
+    },
     issues: [],
     aggregate: {
       ...source,
       events,
       expectedSnapshot: expectedSnapshot.data,
+      aggregateHash,
     },
   };
 }
@@ -373,6 +439,9 @@ function importAggregate(
 ): "imported" | "already-imported" {
   try {
     return store.transaction((unit) => {
+      if (unit.readImportedSourceIds().includes(aggregate.sourceId)) {
+        return "already-imported";
+      }
       let existing: OperationalWorkflowSnapshot | undefined;
       try {
         existing = unit.readWorkflowSnapshot(aggregate.ticket.id);
@@ -387,6 +456,7 @@ function importAggregate(
           );
         }
         unit.markImportedSource(aggregate.sourceId);
+        unit.completeImportIfReady();
         return "already-imported";
       }
 
@@ -411,6 +481,7 @@ function importAggregate(
       }
       for (const trace of aggregate.traces) unit.appendTrace(trace);
       unit.markImportedSource(aggregate.sourceId);
+      unit.completeImportIfReady();
       return "imported";
     });
   } catch (error) {
@@ -425,8 +496,12 @@ function importAggregate(
   }
 }
 
-function beginOrResumeImport(store: OperationalSqliteStore, sourceIds: readonly string[]): void {
-  const canonicalSourceIds = [...sourceIds].sort((left, right) => left.localeCompare(right));
+function beginOrResumeImport(
+  store: OperationalSqliteStore,
+  sources: readonly OperationalImportSourceMetadata[],
+): void {
+  const canonicalSources = [...sources].sort((left, right) =>
+    left.sourceId.localeCompare(right.sourceId));
   store.transaction((unit) => {
     const state = unit.readImportState();
     if (state === "native") {
@@ -437,27 +512,15 @@ function beginOrResumeImport(store: OperationalSqliteStore, sourceIds: readonly 
     }
     if (state === "empty") {
       unit.transitionImportState("empty", "import-in-progress");
-      unit.writeImportManifest(canonicalSourceIds);
+      unit.writeImportManifest(canonicalSources);
       return;
     }
     const manifest = unit.readImportManifest();
-    if (manifest === undefined || JSON.stringify(manifest) !== JSON.stringify(canonicalSourceIds)) {
+    if (manifest === undefined || JSON.stringify(manifest) !== JSON.stringify(canonicalSources)) {
       throw new OperationalStoreError(
         "Operational import manifest differs from the active or completed import.",
         "IDEMPOTENCY_CONFLICT",
       );
-    }
-  });
-}
-
-function finalizeImportIfComplete(store: OperationalSqliteStore): void {
-  store.transaction((unit) => {
-    if (unit.readImportState() !== "import-in-progress") return;
-    const manifest = unit.readImportManifest() ?? [];
-    const completed = new Set(unit.readImportedSourceIds());
-    for (const resolution of unit.listImportResolutions()) completed.add(resolution.sourceId);
-    if (manifest.length > 0 && manifest.every((sourceId) => completed.has(sourceId))) {
-      unit.transitionImportState("import-in-progress", "imported");
     }
   });
 }
@@ -483,6 +546,35 @@ function sourceIdFrom(value: unknown): string | undefined {
   return typeof value.sourceId === "string" && value.sourceId.length > 0
     ? value.sourceId.slice(0, 240)
     : undefined;
+}
+
+function manifestSourceFor(
+  value: unknown,
+  sourceId: string,
+): OperationalImportSourceMetadata {
+  const candidate = typeof value === "object" && value !== null
+    ? value as Record<string, unknown>
+    : undefined;
+  const ticketCandidate = candidate?.ticket;
+  const ticketId = typeof ticketCandidate === "object" && ticketCandidate !== null
+    && "id" in ticketCandidate && typeof ticketCandidate.id === "string"
+    && /^TKT-\d{4}$/.test(ticketCandidate.id)
+    ? ticketCandidate.id as Ticket["id"]
+    : undefined;
+  return {
+    sourceId,
+    ...(ticketId === undefined ? {} : { ticketId }),
+    provenance: candidate?.provenance === "legacy" ? "legacy" : "unvalidated",
+    aggregateHash: hashCanonical(value),
+  };
+}
+
+function hashCanonical(value: unknown): string {
+  return createHash("sha256").update(canonicalOperationalRequestJson(value)).digest("hex");
+}
+
+function causalSequence(sequences: ReadonlyMap<string, number>, eventId: string): number {
+  return sequences.get(eventId) ?? Number.MAX_SAFE_INTEGER;
 }
 
 function duplicateValues(values: readonly string[]): ReadonlySet<string> {

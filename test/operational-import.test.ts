@@ -108,6 +108,88 @@ describe("operational import and cutover", () => {
     });
   });
 
+  it("uses a durable source hash for reruns after live state changes and retains legacy provenance", () => {
+    const store = openStore();
+    const source = aggregate();
+    importOperationalData({ store, aggregates: [source] });
+    expect(store.listImportSources()).toEqual([{
+      sourceId: source.sourceId,
+      ticketId: source.ticket.id,
+      provenance: "legacy",
+      aggregateHash: expect.stringMatching(/^[a-f0-9]{64}$/),
+    }]);
+
+    store.transaction((unit) => {
+      const current = unit.readTicket("TKT-0001");
+      const [sequence] = unit.allocateEventSequences("TKT-0001", 1);
+      const eventId = "70000000-0000-4000-8000-000000000001";
+      const updated = TicketSchema.parse({
+        ...current,
+        subject: "Legitimate post-cutover mutation",
+        revision: 3,
+        updatedAt: "2026-08-11T12:00:00.000Z",
+      });
+      unit.updateTicket(updated, 2);
+      unit.appendTicketRevision({
+        ticketId: updated.id,
+        revision: updated.revision,
+        ticket: updated,
+        operationalEventId: eventId,
+        createdAt: updated.updatedAt,
+      });
+      unit.appendEvent({
+        id: eventId,
+        ticketId: updated.id,
+        sequence: sequence!,
+        occurredAt: updated.updatedAt,
+        actor: "native-agent",
+        action: "ticket-updated",
+        commandId: "70000000-0000-4000-8000-000000000002",
+        facts: { reasonCode: "native-operation", revision: 3 },
+      });
+    });
+
+    expect(importOperationalData({ store, aggregates: [source] })).toMatchObject({
+      state: "imported",
+      importedSourceIds: [],
+      alreadyImportedSourceIds: [source.sourceId],
+      conflicts: [],
+    });
+    expect(() => importOperationalData({
+      store,
+      aggregates: [{ ...source, ticket: { ...source.ticket, subject: "Changed legacy source" } }],
+    })).toThrow(/manifest differs/i);
+  });
+
+  it("commits the final source marker and imported cutover state atomically", () => {
+    const store = openStore();
+    const manifest = [{
+      sourceId: "legacy-atomic",
+      ticketId: "TKT-0001" as const,
+      provenance: "legacy" as const,
+      aggregateHash: "a".repeat(64),
+    }];
+    store.transaction((unit) => {
+      unit.transitionImportState("empty", "import-in-progress");
+      unit.writeImportManifest(manifest);
+    });
+
+    expect(() => store.transaction((unit) => {
+      unit.markImportedSource("legacy-atomic");
+      unit.completeImportIfReady();
+      throw new Error("simulated process failure before commit");
+    })).toThrow("simulated process failure");
+    expect(store.readImportState()).toBe("import-in-progress");
+    expect(store.listImportedSourceIds()).toEqual([]);
+
+    store.transaction((unit) => {
+      unit.markImportedSource("legacy-atomic");
+      unit.completeImportIfReady();
+    });
+    expect(store.readImportState()).toBe("imported");
+    expect(store.listImportedSourceIds()).toEqual(["legacy-atomic"]);
+  });
+
   it("isolates a conflicting aggregate and keeps partial imports mutation-blocked", () => {
     const store = openStore();
     const conflicting = aggregate({ sourceId: "legacy-conflict" });

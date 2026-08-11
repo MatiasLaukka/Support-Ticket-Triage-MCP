@@ -16,6 +16,7 @@ import type {
 import {
   OperationalStoreError,
   OperationalUnitOfWork,
+  type OperationalImportSourceMetadata,
 } from "./unit-of-work.js";
 
 export { OperationalStoreError } from "./unit-of-work.js";
@@ -203,6 +204,16 @@ export class OperationalSqliteStore {
   listImportResolutions(): ImportResolution[] {
     this.assertInitialized();
     return this.withReader((reader) => reader.listImportResolutions());
+  }
+
+  listImportSources(): OperationalImportSourceMetadata[] {
+    this.assertInitialized();
+    return [...(this.withReader((reader) => reader.readImportManifest()) ?? [])];
+  }
+
+  listImportedSourceIds(): string[] {
+    this.assertInitialized();
+    return [...this.withReader((reader) => reader.readImportedSourceIds())];
   }
 
   assertRuntimeMutationsAllowed(): void {

@@ -11,7 +11,11 @@ import {
   type TriageRecommendation,
 } from "../src/domain.js";
 import { OperationalSqliteStore } from "../src/operational/sqlite-store.js";
-import { TriageService } from "../src/triage-service.js";
+import { hasCustomerReplyAfterRecommendation } from "../src/approval-desk/workflow-causal-context.js";
+import {
+  TriageService,
+  derivedOperationalCommandContext,
+} from "../src/triage-service.js";
 
 const ticketId = "TKT-4301" as const;
 const recommendationId = "10000000-0000-4000-8000-000000000001";
@@ -288,6 +292,62 @@ describe("transactional operational recommendation lifecycle", () => {
       await expect(harness.service.approveAndMarkResponseSent(input, { commandId }))
         .resolves.toEqual(result);
       expect(harness.store.readWorkflowSnapshot(ticketId)).toEqual(snapshot);
+    } finally {
+      harness.store.close();
+    }
+  });
+
+  it("replays the exact composed result after its deterministic automatic-reply child commits", async () => {
+    const harness = openHarness("pending");
+    try {
+      const parentCommandId = command(41);
+      const input = {
+        approval: approval({
+          approvedFields: ["customerResponse"],
+          editedCustomerResponse: "The reviewed response is ready.",
+        }),
+        responseSent: {
+          recommendationId,
+          ticketId,
+          actor: "reviewer",
+          sentAt: "2026-08-11T12:31:00.000Z",
+          customerResponse: "The reviewed response is ready.",
+        },
+      };
+      const automaticReplyInput = {
+        ticketId,
+        actor: "Northstar",
+        body: "The failure still occurs after the reviewed response.",
+        receivedAt: "2026-08-11T12:31:00.001Z",
+        source: "demo-auto-reply",
+      } as const;
+      const childContext = derivedOperationalCommandContext(
+        parentCommandId,
+        "automatic-customer-reply",
+      );
+      const invokeComposed = async () => {
+        const completed = await harness.service.approveAndMarkResponseSent(
+          input,
+          { commandId: parentCommandId },
+        );
+        const automaticReply = hasCustomerReplyAfterRecommendation(
+          completed.auditsBeforeSent,
+          makeRecommendation("approved"),
+        )
+          ? undefined
+          : await harness.service.addCustomerReply(automaticReplyInput, childContext);
+        return {
+          ...completed,
+          ...(automaticReply === undefined ? {} : { automaticReply }),
+        };
+      };
+
+      const first = await invokeComposed();
+      const afterFirst = harness.store.readWorkflowSnapshot(ticketId);
+      expect(first).toHaveProperty("automaticReply.action", "customer-reply-received");
+
+      await expect(invokeComposed()).resolves.toEqual(first);
+      expect(harness.store.readWorkflowSnapshot(ticketId)).toEqual(afterFirst);
     } finally {
       harness.store.close();
     }

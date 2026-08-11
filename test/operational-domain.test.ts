@@ -122,6 +122,17 @@ describe("operational persistence domain", () => {
       tickets: [{ ticketId: "TKT-0002", operationalEventIds: [eventId], resultingRevision: null }],
       ticketSnapshot: ticket,
     }).success).toBe(false);
+    expect(OperationalResultReferenceSchema.safeParse({
+      operation: "approve-and-mark-response-sent",
+      tickets: [{ ticketId: "TKT-0001", operationalEventIds: [eventId, secondEventId], resultingRevision: null }],
+      messageId,
+      auditsBeforeSentEventIds: [eventId],
+    }).success).toBe(true);
+    expect(OperationalResultReferenceSchema.safeParse({
+      operation: "approve-and-mark-response-sent",
+      tickets: [{ ticketId: "TKT-0001", operationalEventIds: [eventId, secondEventId], resultingRevision: null }],
+      auditsBeforeSentEventIds: [eventId],
+    }).success).toBe(false);
     expect(OperationalOutboxRowSchema.safeParse({
       id: "55555555-5555-4555-8555-555555555555",
       operationalEventId: eventId,

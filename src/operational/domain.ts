@@ -287,6 +287,7 @@ export const OperationalResultReferenceSchema = z.object({
   diagnosisId: IdentifierSchema.optional(),
   messageId: MessageIdSchema.optional(),
   ticketSnapshot: TicketSchema.optional(),
+  auditsBeforeSentEventIds: UniqueOperationalEventIdsSchema.optional(),
 }).strict().superRefine((result, context) => {
   if (result.recommendationId !== undefined && result.recommendationIds !== undefined) {
     context.addIssue({
@@ -321,6 +322,16 @@ export const OperationalResultReferenceSchema = z.object({
         message: "A changed ticket snapshot must match the resulting ticket revision.",
       });
     }
+  }
+  if (
+    result.auditsBeforeSentEventIds !== undefined
+    && (result.messageId === undefined || result.tickets.length !== 1)
+  ) {
+    context.addIssue({
+      code: "custom",
+      path: ["auditsBeforeSentEventIds"],
+      message: "A pre-send audit view requires one affected ticket and a canonical support message.",
+    });
   }
 }).readonly();
 

@@ -95,6 +95,11 @@ interface SemanticReferenceRow {
   id: string;
   ticket_id: string;
 }
+interface EventSequenceReferenceRow {
+  id: string;
+  ticket_id: string;
+  sequence: number;
+}
 interface LocalEventChildRow extends SemanticReferenceRow {
   operational_event_id: string;
 }
@@ -983,6 +988,7 @@ export class OperationalUnitOfWork {
       ticketIds,
       localMessages,
     );
+    this.assertAuditsBeforeSentReferences(result);
 
     const localRecommendations = this.localRecommendationWriteSet(commandEvents);
     const durableRecommendations = this.database.prepare(`
@@ -1038,6 +1044,39 @@ export class OperationalUnitOfWork {
         ORDER BY traces.id ASC
       `).all(commandId) as SemanticReferenceRow[],
     );
+  }
+
+  private assertAuditsBeforeSentReferences(result: OperationalResultReference): void {
+    const referencedIds = result.auditsBeforeSentEventIds;
+    if (referencedIds === undefined) return;
+    const ticket = result.tickets[0];
+    const sentEvent = result.messageId === undefined
+      ? undefined
+      : this.database.prepare(`
+        SELECT events.id, events.ticket_id, events.sequence
+        FROM conversation_messages AS messages
+        JOIN operational_events AS events ON events.id = messages.operational_event_id
+        WHERE messages.id = ?
+      `).get(result.messageId) as EventSequenceReferenceRow | undefined;
+    if (ticket === undefined || sentEvent === undefined || sentEvent.ticket_id !== ticket.ticketId) {
+      throw this.semanticReferenceError(
+        "Operational pre-send audit references require the command's canonical support message.",
+      );
+    }
+    const causalPrefix = this.database.prepare(`
+      SELECT id, ticket_id, sequence
+      FROM operational_events
+      WHERE ticket_id = ? AND sequence < ?
+      ORDER BY sequence ASC
+    `).all(ticket.ticketId, sentEvent.sequence) as EventSequenceReferenceRow[];
+    if (
+      causalPrefix.length !== referencedIds.length
+      || causalPrefix.some((event, index) => event.id !== referencedIds[index])
+    ) {
+      throw this.semanticReferenceError(
+        "Operational pre-send audit references must exactly match the committed causal prefix.",
+      );
+    }
   }
 
   private assertLocalChildEvent(

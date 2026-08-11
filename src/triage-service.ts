@@ -1994,6 +1994,10 @@ export class TriageService {
         recommendationId: recommendation.id,
         messageId,
         ticketSnapshot: ticketAfter,
+        auditsBeforeSentEventIds: [
+          ...snapshot.events.map(({ id }) => id),
+          approvalEventId,
+        ],
       };
       unit.persistCommandResult(commandContext.commandId, requestHash, result);
       return this.replayOperationalApprovalAndSend(unit, { result });
@@ -2013,17 +2017,24 @@ export class TriageService {
     const sentEvent = this.replayOperationalResponseSent(unit, replay);
     const ticketResult = replay.result.tickets[0]!;
     const snapshot = unit.readWorkflowSnapshot(ticketResult.ticketId);
-    const sentEventId = snapshot.events.find(
+    const persistedSentEvent = snapshot.events.find(
       ({ id, action }) => ticketResult.operationalEventIds.includes(id)
         && action === "customer-response-sent",
-    )?.id;
+    );
+    if (persistedSentEvent === undefined) {
+      throw stale("Operational approval and send replay is missing its sent event.");
+    }
+    const auditsBeforeSentEventIds = replay.result.auditsBeforeSentEventIds
+      ?? snapshot.events
+        .filter(({ sequence }) => sequence < persistedSentEvent.sequence)
+        .map(({ id }) => id);
     return {
       ticket: approved.ticket,
       approvalEvent: approved.auditEvent,
       sentEvent,
-      auditsBeforeSent: operationalConversationAuditsBefore(
+      auditsBeforeSent: operationalConversationAuditsForEventIds(
         snapshot,
-        new Set(sentEventId === undefined ? [] : [sentEventId]),
+        auditsBeforeSentEventIds,
       ),
     };
   }
@@ -3291,12 +3302,22 @@ function operationalExpectedResolution(
   return action === "recommendation-canceled" ? "approved" : "pending";
 }
 
-function operationalConversationAuditsBefore(
+function operationalConversationAuditsForEventIds(
   snapshot: OperationalWorkflowSnapshot,
-  excludedEventIds: ReadonlySet<string>,
+  eventIds: readonly string[],
 ): AuditEvent[] {
+  const includedEventIds = new Set(eventIds);
+  const persistedEventIds = snapshot.events
+    .filter(({ id }) => includedEventIds.has(id))
+    .map(({ id }) => id);
+  if (
+    persistedEventIds.length !== eventIds.length
+    || persistedEventIds.some((id, index) => id !== eventIds[index])
+  ) {
+    throw stale("Operational pre-send audit replay is missing its causal events.");
+  }
   return snapshot.events.flatMap((event) => {
-    if (excludedEventIds.has(event.id)) return [];
+    if (!includedEventIds.has(event.id)) return [];
     const message = snapshot.messages.find(
       ({ operationalEventId }) => operationalEventId === event.id,
     );

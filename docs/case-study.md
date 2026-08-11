@@ -102,6 +102,13 @@ delivers it to `learning.sqlite` under a stable delivery key. Retryable failure
 leaves it pending; non-retryable failure is dead-lettered; neither outcome
 invalidates the already committed support workflow.
 
+That boundary also applies at startup. A learning SQLite open or initialization
+failure closes its partial handle, reports `LEARNING_UNAVAILABLE` with a path
+and permissions remediation, and leaves the validated operational runtime
+online. Core evaluation uses an explicit ledger-unavailable knowledge result,
+while knowledge-only HTTP/MCP operations return 503-style repository errors;
+operational corruption and incomplete cutover states still fail closed.
+
 ## Demo Scenario
 
 The fastest browser demo uses `TKT-1010`, a deliberately vague ticket that

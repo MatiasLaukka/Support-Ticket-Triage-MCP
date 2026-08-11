@@ -406,6 +406,14 @@ commit writes an immutable outbox envelope; learning delivery may retry or
 dead-letter without rolling back ticket truth. Stable delivery keys prevent a
 crash after learning-ledger commit from duplicating an event.
 
+If the learning SQLite file cannot be opened or initialized, startup reports
+`LEARNING_UNAVAILABLE` with a `TRIAGE_LEARNING_LEDGER_PATH` remediation hint
+but keeps the valid operational runtime online. Core ticket commands continue
+to commit and leave learning-outbox work pending; knowledge-specific HTTP/MCP
+operations return an actionable unavailable error until the path or permissions
+are repaired and the process is restarted. Operational database corruption or
+an incomplete cutover still fails closed as described above.
+
 Run the disposable import/restart/timeline demonstration with:
 
 ```powershell

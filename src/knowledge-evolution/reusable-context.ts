@@ -73,13 +73,13 @@ export async function listReusableApproved(input: {
   try {
     snapshot = await input.snapshotReader.snapshotForReuse(input.asOf);
   } catch {
-    return unavailable();
+    return unavailableReusableKnowledge();
   }
 
   try {
     return registerReusableKnowledgeResult(projectSnapshot(snapshot, input.asOf));
   } catch {
-    return unavailable();
+    return unavailableReusableKnowledge();
   }
 }
 
@@ -180,7 +180,7 @@ function versionIssue(objectId: string, version: number, code: Extract<ReusableK
   return { scope: "version", objectId, version, code };
 }
 
-function unavailable(): ReusableKnowledgeResult {
+export function unavailableReusableKnowledge(): ReusableKnowledgeResult {
   return registerReusableKnowledgeResult({
     status: "ledger-unavailable",
     contexts: [],

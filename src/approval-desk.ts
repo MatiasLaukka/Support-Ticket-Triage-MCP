@@ -65,6 +65,9 @@ async function main(): Promise<void> {
   const host = approvalDeskHost(process.env);
   const port = approvalDeskPort(process.env);
   const deps = await createRuntimeDependencies();
+  if (deps.learningAvailability.status === "unavailable") {
+    console.error(`[${deps.learningAvailability.code}] ${deps.learningAvailability.message}`);
+  }
   const server = createApprovalDeskHttpServer(deps);
   server.once("close", () => deps.close());
   for (const signal of ["SIGINT", "SIGTERM"] as const) {

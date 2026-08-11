@@ -89,6 +89,7 @@ import {
   type DecisionTimelineSource,
 } from "./operational/timeline.js";
 import type { KnowledgeEvolutionService } from "./knowledge-evolution/service.js";
+import { unavailableReusableKnowledge } from "./knowledge-evolution/reusable-context.js";
 import type { KnowledgeAuditRepository } from "./knowledge-evolution/knowledge-audit-repository.js";
 import type { KnowledgeObjectRepository } from "./knowledge-evolution/knowledge-object-repository.js";
 import {
@@ -440,6 +441,7 @@ export interface TriageServerDependencies {
     objects?: Pick<KnowledgeObjectRepository, "listCandidates">;
     audits?: Pick<KnowledgeAuditRepository, "list">;
   };
+  learningAvailability?: { readonly status: "available" | "unavailable" };
   operationalStore?: DecisionTimelineSource;
 }
 
@@ -868,6 +870,12 @@ function knowledgeService(deps: TriageServerDependencies): KnowledgeEvolutionSer
   if (deps.knowledgeEvolution === undefined) {
     throw new DomainError("Knowledge evolution service is not configured.", "REPOSITORY_ERROR");
   }
+  if (deps.learningAvailability?.status === "unavailable") {
+    throw new DomainError(
+      "Advisory learning is unavailable. Check TRIAGE_LEARNING_LEDGER_PATH and SQLite permissions, then restart.",
+      "REPOSITORY_ERROR",
+    );
+  }
   return deps.knowledgeEvolution.service;
 }
 
@@ -875,7 +883,8 @@ async function getTicketWorkflow(
   deps: TriageServerDependencies,
   ticketId: TicketId,
 ): Promise<z.infer<typeof TicketWorkflowOutputSchema>> {
-  const knowledgeEvolutionRead = deps.knowledgeEvolution?.objects !== undefined &&
+  const knowledgeEvolutionRead = deps.learningAvailability?.status !== "unavailable"
+      && deps.knowledgeEvolution?.objects !== undefined &&
       deps.knowledgeEvolution.audits !== undefined
     ? Promise.all([
         deps.knowledgeEvolution.objects.listCandidates(),
@@ -951,9 +960,11 @@ async function evaluateTicket(
   input: z.infer<typeof EvaluateTicketInputSchema>,
 ): Promise<z.infer<typeof EvaluateTicketOutputSchema>> {
   const { commandId } = input;
-  const reusableKnowledge = await knowledgeService(deps).listReusableApproved({
-    asOf: deps.now().toISOString(),
-  });
+  const reusableKnowledge = deps.learningAvailability?.status === "unavailable"
+    ? unavailableReusableKnowledge()
+    : await knowledgeService(deps).listReusableApproved({
+        asOf: deps.now().toISOString(),
+      });
   const [ticket, audits, allKnowledgeArticles] = await Promise.all([
     deps.tickets.get(input.ticketId),
     deps.audits.list(input.ticketId),

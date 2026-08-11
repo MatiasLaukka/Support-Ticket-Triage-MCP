@@ -25,6 +25,7 @@ import {
   OperationalTicketRepository,
 } from "./operational/runtime-repositories.js";
 import { DEFAULT_MINUTES_PER_ACCEPTED_RECOMMENDATION } from "./metrics.js";
+import { DomainError } from "./errors.js";
 
 const STARTUP_PATH_MESSAGES = {
   TRIAGE_DATA_ROOT: "TRIAGE_DATA_ROOT must not be blank.",
@@ -73,11 +74,23 @@ export interface RuntimeDependencies {
   service: TriageService;
   operationalStore?: OperationalCommandStore;
   learningOutbox?: LearningOutboxWorker;
+  learningAvailability: LearningAvailability;
   now: () => Date;
   minutesPerAcceptedRecommendation: number;
   paths: RuntimePaths;
   close(): void;
 }
+
+export type LearningAvailability =
+  | { readonly status: "available" }
+  | {
+      readonly status: "unavailable";
+      readonly code: "LEARNING_UNAVAILABLE";
+      readonly message: string;
+    };
+
+const LEARNING_UNAVAILABLE_MESSAGE =
+  "Advisory learning is unavailable. Check TRIAGE_LEARNING_LEDGER_PATH and SQLite permissions, then restart.";
 
 export function environmentPath(
   name: keyof typeof STARTUP_PATH_MESSAGES,
@@ -205,26 +218,31 @@ export async function createRuntimeDependencies(
     ? new OperationalAuditRepository(sqliteOperationalStore!)
     : new AuditRepository(auditFile);
   const diagnoses = new DiagnosisRepository(knowledgeEvolutionPaths.diagnosesRoot);
-  let ledger: SqliteLearningLedger;
+  let ledger: SqliteLearningLedger | undefined;
+  let store: SqliteKnowledgeEvolutionStore | undefined;
+  let learningAvailability: LearningAvailability = { status: "available" };
   try {
     ledger = new SqliteLearningLedger(knowledgeEvolutionPaths.learningLedgerFile);
     await ledger.initialize();
-  } catch (error) {
-    sqliteOperationalStore?.close();
-    throw error;
-  }
-  const store = new SqliteKnowledgeEvolutionStore(ledger.getDatabase(), {
-    reactivationAuthorizer: (actorId) => approvers.has(actorId),
-  });
-  try {
+    store = new SqliteKnowledgeEvolutionStore(ledger.getDatabase(), {
+      reactivationAuthorizer: (actorId) => approvers.has(actorId),
+    });
     await store.initialize();
-  } catch (error) {
-    ledger.close();
-    sqliteOperationalStore?.close();
-    throw error;
+  } catch {
+    ledger?.close();
+    ledger = undefined;
+    store = undefined;
+    learningAvailability = {
+      status: "unavailable",
+      code: "LEARNING_UNAVAILABLE",
+      message: LEARNING_UNAVAILABLE_MESSAGE,
+    };
   }
-  const learningCapture = new LearningCaptureService(ledger);
-  const learningOutbox = isOperationalLearningOutboxStore(runtimeOperationalStore)
+  const learningCapture = ledger === undefined
+    ? undefined
+    : new LearningCaptureService(ledger);
+  const learningOutbox = learningCapture !== undefined
+      && isOperationalLearningOutboxStore(runtimeOperationalStore)
     ? new LearningOutboxWorker({
         store: runtimeOperationalStore,
         delivery: learningCapture,
@@ -235,30 +253,32 @@ export async function createRuntimeDependencies(
     try {
       await learningOutbox.drainPending();
     } catch (error) {
-      ledger.close();
+      ledger?.close();
       sqliteOperationalStore?.close();
       throw error;
     }
   }
-  const knowledgeEvolution = {
-    diagnoses,
-    objects: store,
-    audits: store,
-    ledger,
-    service: new KnowledgeEvolutionService({
-      tickets,
-      knowledge,
-      diagnoses,
-      objects: store,
-      audits: store,
-      promotionAuthorizer: (actorId) => approvers.has(actorId),
-      ...(knowledgeCandidateDraftProvider === undefined
-        ? {}
-        : { draftProvider: knowledgeCandidateDraftProvider }),
-      ledger,
-      now,
-    }),
-  };
+  const knowledgeEvolution = ledger !== undefined && store !== undefined
+    ? {
+        diagnoses,
+        objects: store,
+        audits: store,
+        ledger,
+        service: new KnowledgeEvolutionService({
+          tickets,
+          knowledge,
+          diagnoses,
+          objects: store,
+          audits: store,
+          promotionAuthorizer: (actorId) => approvers.has(actorId),
+          ...(knowledgeCandidateDraftProvider === undefined
+            ? {}
+            : { draftProvider: knowledgeCandidateDraftProvider }),
+          ledger,
+          now,
+        }),
+      }
+    : unavailableKnowledgeEvolution(diagnoses);
   const serviceOperationalStore = isImportStateAwareOperationalStore(runtimeOperationalStore)
     ? createRuntimeOperationalStore(runtimeOperationalStore)
     : runtimeOperationalStore;
@@ -280,6 +300,7 @@ export async function createRuntimeDependencies(
     service,
     ...(runtimeOperationalStore === undefined ? {} : { operationalStore: runtimeOperationalStore }),
     ...(learningOutbox === undefined ? {} : { learningOutbox }),
+    learningAvailability,
     now,
     minutesPerAcceptedRecommendation,
     paths: {
@@ -293,9 +314,38 @@ export async function createRuntimeDependencies(
     },
     close() {
       sqliteOperationalStore?.close();
-      ledger.close();
+      ledger?.close();
     },
   };
+}
+
+function unavailableKnowledgeEvolution(
+  diagnoses: DiagnosisRepository,
+): RuntimeDependencies["knowledgeEvolution"] {
+  const component = unavailableLearningComponent<SqliteKnowledgeEvolutionStore>();
+  return {
+    diagnoses,
+    objects: component,
+    audits: component,
+    ledger: unavailableLearningComponent<SqliteLearningLedger>({
+      close: () => undefined,
+    }),
+    service: unavailableLearningComponent<KnowledgeEvolutionService>(),
+  };
+}
+
+function unavailableLearningComponent<T extends object>(overrides: Partial<T> = {}): T {
+  return new Proxy(overrides as T, {
+    get(target, property, receiver) {
+      if (property === "then") return undefined;
+      const configured = Reflect.get(target, property, receiver);
+      if (configured !== undefined) return configured;
+      return () => Promise.reject(new DomainError(
+        LEARNING_UNAVAILABLE_MESSAGE,
+        "REPOSITORY_ERROR",
+      ));
+    },
+  });
 }
 
 function isImportStateAwareOperationalStore(

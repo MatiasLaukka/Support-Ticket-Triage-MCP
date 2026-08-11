@@ -1025,7 +1025,7 @@ export class TriageService {
     });
     if (
       (recommendation.knownCause !== undefined && recommendation.knownCause !== null) ||
-      recommendation.knownEventId !== undefined
+      (recommendation.knownEventId !== undefined && recommendation.knownEventId !== null)
     ) {
       unit.appendTrace({
         id: this.uuid(),

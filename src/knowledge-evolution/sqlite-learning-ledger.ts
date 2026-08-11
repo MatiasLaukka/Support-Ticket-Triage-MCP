@@ -22,10 +22,13 @@ export class SqliteLearningLedger implements LearningDeliveryLedger {
 
   constructor(readonly filePath: string) {
     if (filePath !== ":memory:") mkdirSync(dirname(filePath), { recursive: true });
+    let database: Database.Database | undefined;
     try {
-      this.database = new Database(filePath);
-      this.database.pragma("foreign_keys = ON");
+      database = new Database(filePath);
+      database.pragma("foreign_keys = ON");
+      this.database = database;
     } catch (error) {
+      if (database?.open === true) database.close();
       throw new LearningLedgerError("Learning ledger database could not be opened.", "PERSISTENCE_ERROR", { cause: error });
     }
   }
@@ -70,6 +73,7 @@ export class SqliteLearningLedger implements LearningDeliveryLedger {
       this.database.exec("CREATE INDEX IF NOT EXISTS learning_events_occurred_epoch_idx ON learning_events(occurred_at_epoch, id)");
       this.initialized = true;
     } catch (error) {
+      this.close();
       throw new LearningLedgerError("Learning ledger schema could not be initialized.", "PERSISTENCE_ERROR", { cause: error });
     }
   }

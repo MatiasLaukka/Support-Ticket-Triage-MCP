@@ -16,6 +16,9 @@ function safeErrorDetail(error: unknown): string {
 
 async function main(): Promise<void> {
   const deps = await createRuntimeDependencies();
+  if (deps.learningAvailability.status === "unavailable") {
+    console.error(`[${deps.learningAvailability.code}] ${deps.learningAvailability.message}`);
+  }
   const server = createTriageServer(deps);
   let closed = false;
   const closeRuntime = (): void => {

@@ -184,6 +184,66 @@ describe("production operational runtime parity", () => {
       .toBeUndefined();
     inspection.close();
   });
+
+  it("keeps operational runtime available when the advisory learning database cannot open", async () => {
+    const fixture = await runtimeFixture();
+    const database = join(fixture.root, "operational-learning-failure.sqlite");
+    const corruptLearning = join(fixture.root, "corrupt-learning.sqlite");
+    importTicket(database, importedTicket());
+    await writeFile(corruptLearning, "not a sqlite database\n", "utf8");
+
+    const runtime = await createRuntimeDependencies({
+      env: fixture.env(database, "corrupt-learning.sqlite"),
+      now: () => new Date(fixedNow),
+    });
+    runtimes.push(runtime);
+
+    expect(runtime.learningAvailability).toEqual({
+      status: "unavailable",
+      code: "LEARNING_UNAVAILABLE",
+      message: expect.stringContaining("TRIAGE_LEARNING_LEDGER_PATH"),
+    });
+    expect(runtime.learningOutbox).toBeUndefined();
+    await expect(runtime.service.addCustomerReply({
+      ticketId: "TKT-0001",
+      actor: "Maya Chen",
+      body: "Operational truth must commit while learning is unavailable.",
+      receivedAt: fixedNow,
+      source: "learning-failure-regression",
+    }, { commandId: "85000000-0000-4000-8000-000000000001" }))
+      .resolves.toMatchObject({ action: "customer-reply-received" });
+    expect(operationalStore(runtime).readWorkflowSnapshot("TKT-0001").messages)
+      .toHaveLength(1);
+    const { baseUrl } = await startHttp(runtime);
+    expect((await fetch(`${baseUrl}/api/tickets/TKT-0001`)).status).toBe(200);
+    const evaluationResponse = await fetch(`${baseUrl}/api/tickets/TKT-0001/recommendations`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "Idempotency-Key": "85000000-0000-4000-8000-000000000002",
+      },
+      body: JSON.stringify({ actor: "approval-desk", aiPreference: "deterministic" }),
+    });
+    expect(evaluationResponse.status).toBe(201);
+    const learningResponse = await fetch(`${baseUrl}/api/knowledge-candidates/missing-candidate`);
+    expect(learningResponse.status).toBe(503);
+    await expect(learningResponse.json()).resolves.toEqual({
+      error: {
+        code: "REPOSITORY_ERROR",
+        message: runtime.learningAvailability.status === "unavailable"
+          ? runtime.learningAvailability.message
+          : "unexpected available learning status",
+      },
+    });
+
+    await rm(corruptLearning, { force: true });
+    await writeFile(corruptLearning, "closed learning handle\n", "utf8");
+    closeRuntime(runtime);
+    const reopened = OperationalSqliteStore.open(database);
+    reopened.initialize();
+    expect(reopened.readWorkflowSnapshot("TKT-0001").messages).toHaveLength(1);
+    reopened.close();
+  });
 });
 
 const importedRecommendation = TriageRecommendationSchema.parse({

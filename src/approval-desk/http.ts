@@ -82,6 +82,7 @@ import {
   knowledgeCandidateReview,
   knowledgeDiscoveryReview,
 } from "../knowledge-evolution/review-surface.js";
+import { unavailableReusableKnowledge } from "../knowledge-evolution/reusable-context.js";
 
 const JSON_BODY_LIMIT_BYTES = 65_536;
 const UNEXPECTED_ERROR_TEXT = "Unexpected local approval desk error.";
@@ -497,7 +498,8 @@ async function discoverKnowledgeCandidates(
   { deps, request }: RouteContext,
 ): Promise<unknown> {
   const input = KnowledgeDiscoveryBodySchema.parse(await readJsonBody(request));
-  const result = await deps.knowledgeEvolution.service.discover({
+  const service = learningService(deps);
+  const result = await service.discover({
     ...(input.ticketId === undefined ? {} : { ticketId: input.ticketId }),
     includeGpt: input.includeGpt,
     actorId: input.actor,
@@ -506,7 +508,7 @@ async function discoverKnowledgeCandidates(
     [
       ...result.candidates.map((candidate) => `known-cause-${candidate.id}`),
       ...(result.gptAdvisory.candidateId === undefined ? [] : [result.gptAdvisory.candidateId]),
-    ].map((candidateId) => deps.knowledgeEvolution.service.getCandidate(candidateId)),
+    ].map((candidateId) => service.getCandidate(candidateId)),
   );
   return KnowledgeDiscoveryReviewOutputSchema.parse(
     knowledgeDiscoveryReview(result, candidates),
@@ -518,9 +520,10 @@ async function getKnowledgeCandidate(
   id: string,
 ): Promise<unknown> {
   const candidateId = KnowledgeCandidateIdSchema.parse(id);
+  const service = learningService(deps);
   return KnowledgeCandidateReviewOutputSchema.parse({
     candidate: knowledgeCandidateReview(
-      await deps.knowledgeEvolution.service.getCandidate(candidateId),
+      await service.getCandidate(candidateId),
     ),
   });
 }
@@ -532,7 +535,7 @@ async function approveKnowledgeCandidate(
   const candidateId = KnowledgeCandidateIdSchema.parse(id);
   const input = KnowledgeApprovalBodySchema.parse(await readJsonBody(request));
   return KnowledgeCandidateApprovalOutputSchema.parse(
-    knowledgeApprovalReview(await deps.knowledgeEvolution.service.approve({
+    knowledgeApprovalReview(await learningService(deps).approve({
       candidateId,
       actorId: input.actor,
       expectedVersion: input.expectedVersion,
@@ -547,7 +550,7 @@ async function rejectKnowledgeCandidate(
 ): Promise<unknown> {
   const candidateId = KnowledgeCandidateIdSchema.parse(id);
   const input = KnowledgeRejectionBodySchema.parse(await readJsonBody(request));
-  await deps.knowledgeEvolution.service.reject({
+  await learningService(deps).reject({
     candidateId,
     actorId: input.actor,
     expectedVersion: input.expectedVersion,
@@ -562,7 +565,7 @@ async function deferKnowledgeCandidate(
 ): Promise<unknown> {
   const candidateId = KnowledgeCandidateIdSchema.parse(id);
   const input = KnowledgeDefermentBodySchema.parse(await readJsonBody(request));
-  await deps.knowledgeEvolution.service.defer({
+  await learningService(deps).defer({
     candidateId,
     actorId: input.actor,
     expectedVersion: input.expectedVersion,
@@ -665,13 +668,19 @@ async function getTicketDetail(
   id: string,
 ): Promise<unknown> {
   const ticketId = TicketIdSchema.parse(id);
+  const learningRead = deps.learningAvailability.status === "unavailable"
+    ? Promise.resolve({ candidates: [], audits: [] })
+    : Promise.all([
+        deps.knowledgeEvolution.objects.listCandidates(),
+        deps.knowledgeEvolution.audits.list(),
+      ]).then(([candidates, audits]) => ({ candidates, audits }));
   const [ticket, auditPage, ticketAudits, recommendations, knowledgeCandidates, knowledgeAudits, decisionTimeline] = await Promise.all([
     deps.tickets.get(ticketId),
     deps.audits.listPage({ ticketId, offset: 0, limit: 10 }),
     deps.audits.list(ticketId),
     deps.recommendations.list(),
-    deps.knowledgeEvolution.objects.listCandidates(),
-    deps.knowledgeEvolution.audits.list(),
+    learningRead.then(({ candidates }) => candidates),
+    learningRead.then(({ audits }) => audits),
     deps.operationalStore === undefined
       ? Promise.resolve([])
       : readDecisionTimeline(ticketId, deps.operationalStore),
@@ -681,10 +690,9 @@ async function getTicketDetail(
     recommendations,
     audits: ticketAudits,
     decisionTimeline,
-    knowledgeEvolution: {
-      candidates: knowledgeCandidates,
-      audits: knowledgeAudits,
-    },
+    ...(deps.learningAvailability.status === "unavailable"
+      ? {}
+      : { knowledgeEvolution: { candidates: knowledgeCandidates, audits: knowledgeAudits } }),
   });
   return {
     audits: auditPage,
@@ -698,9 +706,11 @@ async function createRecommendation(
 ): Promise<unknown> {
   const ticketId = TicketIdSchema.parse(id);
   const body = SubmitBodySchema.parse(await readJsonBody(request));
-  const reusableKnowledge = await deps.knowledgeEvolution.service.listReusableApproved({
-    asOf: deps.now().toISOString(),
-  });
+  const reusableKnowledge = deps.learningAvailability.status === "unavailable"
+    ? unavailableReusableKnowledge()
+    : await deps.knowledgeEvolution.service.listReusableApproved({
+        asOf: deps.now().toISOString(),
+      });
   const [ticket, audits, allKnowledgeArticles] = await Promise.all([
     deps.tickets.get(ticketId),
     deps.audits.list(ticketId),
@@ -816,7 +826,7 @@ async function getKnowledgeLearning(
   id: string,
 ): Promise<unknown> {
   const candidateId = KnowledgeCandidateIdSchema.parse(id);
-  return { learning: await deps.knowledgeEvolution.service.learningSummary({ candidateId }) };
+  return { learning: await learningService(deps).learningSummary({ candidateId }) };
 }
 
 async function recordPlatformMitigation(
@@ -1124,6 +1134,15 @@ function optionalParam(
   key: string,
 ): string | undefined {
   return searchParams.has(key) ? (searchParams.get(key) ?? "") : undefined;
+}
+
+function learningService(
+  deps: RuntimeDependencies,
+): RuntimeDependencies["knowledgeEvolution"]["service"] {
+  if (deps.learningAvailability.status === "unavailable") {
+    throw new DomainError(deps.learningAvailability.message, "REPOSITORY_ERROR");
+  }
+  return deps.knowledgeEvolution.service;
 }
 
 function commandContextFromRequest(

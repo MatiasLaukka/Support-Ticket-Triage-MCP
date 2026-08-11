@@ -1,10 +1,14 @@
+import { createHash } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { TicketSchema } from "../src/domain.js";
 import { LearningCaptureService } from "../src/knowledge-evolution/learning-capture.js";
-import { LearningLedgerError } from "../src/knowledge-evolution/learning-ledger.js";
+import {
+  canonicalLearningJson,
+  LearningLedgerError,
+} from "../src/knowledge-evolution/learning-ledger.js";
 import { SqliteLearningLedger } from "../src/knowledge-evolution/sqlite-learning-ledger.js";
 import type {
   LearningCaptureEnvelope,
@@ -116,6 +120,55 @@ describe("durable operational learning outbox", () => {
       harness.ledger.close();
       harness.store.close();
     }
+  });
+
+  it("rejects nested envelope mutation after hashing and preserves hash-to-event content", async () => {
+    const harness = openHarness();
+    const [envelope] = captureEnvelopes();
+    appendRows(harness.store, [envelope!]);
+    await harness.ledger.initialize();
+    const capture = new LearningCaptureService(harness.ledger);
+    const row = harness.store.readOutbox(outboxId(envelope!.operationalEventId))!;
+    const expectedHash = createHash("sha256")
+      .update(canonicalLearningJson(row.envelope))
+      .digest("hex");
+    let observedHash: string | undefined;
+    let rejectedMutations = 0;
+    const worker = new LearningOutboxWorker({
+      store: harness.store,
+      delivery: {
+        async deliverEnvelope(deliveryEnvelope, envelopeHash) {
+          observedHash = envelopeHash;
+          if (deliveryEnvelope.eventType !== "diagnosis-recorded") {
+            throw new Error("expected diagnosis capture envelope");
+          }
+          for (const collection of [
+            deliveryEnvelope.evidenceIds,
+            deliveryEnvelope.knowledgeArticleIds,
+          ]) {
+            try {
+              (collection as string[]).push("late-mutation");
+            } catch (error) {
+              if (error instanceof TypeError) rejectedMutations += 1;
+            }
+          }
+          return capture.deliverEnvelope(deliveryEnvelope, envelopeHash);
+        },
+      },
+    });
+
+    await expect(worker.deliverOutboxRow(row)).resolves.toEqual({ status: "delivered" });
+    expect(rejectedMutations).toBe(2);
+    expect(observedHash).toBe(expectedHash);
+    await expect(harness.ledger.list()).resolves.toMatchObject([{
+      eventType: "diagnosis-recorded",
+      payload: {
+        evidenceIds: ["request-trace"],
+        knowledgeArticleIds: ["api-reference"],
+      },
+    }]);
+    harness.ledger.close();
+    harness.store.close();
   });
 
   it("keeps a retryable failure pending and delivers it after an operational restart", async () => {

@@ -58,6 +58,7 @@ const UniqueIdentifierSchema = z.array(IdentifierSchema).refine(
   (ids) => new Set(ids).size === ids.length,
   "Identifiers must be unique.",
 );
+const ImmutableUniqueIdentifierSchema = UniqueIdentifierSchema.readonly();
 const SafeFactKeys = [
   "approved",
   "approvedFields",
@@ -235,8 +236,8 @@ const LearningEnvelopeBase = {
 };
 const LearningDiagnosisFacts = {
   diagnosisId: IdentifierSchema,
-  evidenceIds: UniqueIdentifierSchema,
-  knowledgeArticleIds: UniqueIdentifierSchema,
+  evidenceIds: ImmutableUniqueIdentifierSchema,
+  knowledgeArticleIds: ImmutableUniqueIdentifierSchema,
   provenance: SafeFactTextSchema.max(240),
 };
 
@@ -256,7 +257,7 @@ export const LearningCaptureEnvelopeSchema = z.discriminatedUnion("eventType", [
     ...LearningEnvelopeBase,
     eventType: z.literal("outcome-verified"),
     diagnosisId: IdentifierSchema,
-    evidenceIds: UniqueIdentifierSchema,
+    evidenceIds: ImmutableUniqueIdentifierSchema,
     verificationType: VerificationTypeSchema,
     outcomeStatus: z.literal("resolved"),
     provenance: SafeFactTextSchema.max(240),

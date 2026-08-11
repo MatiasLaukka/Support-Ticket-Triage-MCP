@@ -2,10 +2,13 @@ import {
   LearningEventSchema,
   LearningLedgerError,
   type LearningEvent,
+  type LearningDeliveryLedger,
+  type LearningDeliveryResult,
   type LearningLedger,
   type VerificationType,
 } from "./learning-ledger.js";
 import type { AuditEvent } from "../domain.js";
+import { LearningCaptureEnvelopeSchema, type LearningCaptureEnvelope } from "../operational/domain.js";
 
 export interface LearningCaptureContext {
   diagnosisId?: string;
@@ -28,6 +31,36 @@ export class LearningCaptureService {
     }
     await this.ledger.append(parsed.data);
     return parsed.data;
+  }
+
+  async deliverEnvelope(
+    envelope: LearningCaptureEnvelope,
+    envelopeHash: string,
+  ): Promise<LearningDeliveryResult> {
+    const parsedEnvelope = LearningCaptureEnvelopeSchema.safeParse(envelope);
+    if (!parsedEnvelope.success) {
+      throw new LearningLedgerError("Learning capture envelope failed validation.", "INVALID_EVENT", {
+        cause: parsedEnvelope.error,
+      });
+    }
+    const deliveryLedger = this.ledger as Partial<LearningDeliveryLedger>;
+    if (deliveryLedger.appendDelivery === undefined) {
+      throw new LearningLedgerError(
+        "Learning ledger does not support durable delivery identities.",
+        "PERSISTENCE_ERROR",
+      );
+    }
+    const parsedEvent = LearningEventSchema.safeParse(learningEventFromEnvelope(parsedEnvelope.data));
+    if (!parsedEvent.success) {
+      throw new LearningLedgerError("Learning capture envelope could not produce a valid event.", "INVALID_EVENT", {
+        cause: parsedEvent.error,
+      });
+    }
+    return deliveryLedger.appendDelivery(
+      parsedEnvelope.data.deliveryKey,
+      envelopeHash,
+      parsedEvent.data,
+    );
   }
 
   private toLearningEvent(event: AuditEvent, context: LearningCaptureContext): LearningEvent | undefined {
@@ -107,6 +140,53 @@ export class LearningCaptureService {
     }
 
     return undefined;
+  }
+}
+
+function learningEventFromEnvelope(envelope: LearningCaptureEnvelope): LearningEvent {
+  const common = {
+    id: envelope.deliveryKey,
+    occurredAt: envelope.occurredAt,
+    actor: envelope.actor,
+    correlationId: envelope.operationalEventId,
+    ticketId: envelope.ticketId,
+  };
+  switch (envelope.eventType) {
+    case "diagnosis-recorded":
+    case "diagnosis-approved":
+      return {
+        ...common,
+        eventType: envelope.eventType,
+        diagnosisId: envelope.diagnosisId,
+        payload: {
+          evidenceIds: [...envelope.evidenceIds],
+          knowledgeArticleIds: [...envelope.knowledgeArticleIds],
+          provenance: envelope.provenance,
+        },
+      };
+    case "fix-available":
+      return {
+        ...common,
+        eventType: envelope.eventType,
+        ...(envelope.diagnosisId === undefined ? {} : { diagnosisId: envelope.diagnosisId }),
+        ...(envelope.knownEventId === undefined ? {} : { knownEventId: envelope.knownEventId }),
+        payload: {
+          outcomeStatus: envelope.outcomeStatus,
+          provenance: envelope.provenance,
+        },
+      };
+    case "outcome-verified":
+      return {
+        ...common,
+        eventType: envelope.eventType,
+        diagnosisId: envelope.diagnosisId,
+        payload: {
+          evidenceIds: [...envelope.evidenceIds],
+          verificationType: envelope.verificationType,
+          outcomeStatus: envelope.outcomeStatus,
+          provenance: envelope.provenance,
+        },
+      };
   }
 }
 

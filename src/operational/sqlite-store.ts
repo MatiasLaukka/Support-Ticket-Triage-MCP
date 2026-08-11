@@ -7,7 +7,7 @@ import type {
   TriageRecommendation,
 } from "../domain.js";
 import type { CompletedDiagnosis } from "../knowledge-evolution/domain.js";
-import type { OperationalWorkflowSnapshot } from "./domain.js";
+import type { OperationalOutboxRow, OperationalWorkflowSnapshot } from "./domain.js";
 import {
   OperationalStoreError,
   OperationalUnitOfWork,
@@ -178,6 +178,16 @@ export class OperationalSqliteStore {
 
   readTicketAggregate(ticketId: TicketId): OperationalWorkflowSnapshot {
     return this.readWorkflowSnapshot(ticketId);
+  }
+
+  readOutbox(id: string): OperationalOutboxRow | undefined {
+    this.assertInitialized();
+    return this.withReader((reader) => reader.readOutbox(id));
+  }
+
+  listPendingOutbox(staleBefore?: string): OperationalOutboxRow[] {
+    this.assertInitialized();
+    return this.withReader((reader) => reader.listPendingOutbox(staleBefore));
   }
 
   private withReader<T>(work: (reader: OperationalUnitOfWork) => T): T {

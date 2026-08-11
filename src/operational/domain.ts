@@ -28,6 +28,14 @@ export const MessageIdSchema = z.uuid();
 export const TicketSequenceSchema = z.number().int().positive();
 export const RevisionNumberSchema = z.number().int().nonnegative();
 export const OperationalOutboxStatusSchema = z.enum(["pending", "delivered", "dead-letter"]);
+export const OutboxClaimTokenSchema = z.string().trim().min(1).max(120)
+  .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/);
+export const OutboxErrorCodeSchema = z.enum([
+  "DELIVERY_ERROR",
+  "EVENT_CONFLICT",
+  "INVALID_EVENT",
+  "PERSISTENCE_ERROR",
+]);
 export const ImportStateSchema = z.enum(["empty", "import-in-progress", "imported", "native"]);
 export const VerificationTypeSchema = z.enum(["customer-confirmed", "technically-verified"]);
 
@@ -263,10 +271,10 @@ export const OperationalOutboxRowSchema = z.object({
   status: OperationalOutboxStatusSchema,
   attempts: z.number().int().nonnegative(),
   createdAt: IsoTimestampSchema,
-  claimedBy: NonBlankStringSchema.max(120).optional(),
+  claimedBy: OutboxClaimTokenSchema.optional(),
   claimedAt: IsoTimestampSchema.optional(),
   deliveredAt: IsoTimestampSchema.optional(),
-  errorCode: NonBlankStringSchema.max(120).optional(),
+  errorCode: OutboxErrorCodeSchema.optional(),
 }).strict().superRefine((row, context) => {
   if (row.envelope.operationalEventId !== row.operationalEventId) {
     context.addIssue({ code: "custom", path: ["envelope", "operationalEventId"], message: "Outbox envelope must reference its committed operational event." });
@@ -274,8 +282,30 @@ export const OperationalOutboxRowSchema = z.object({
   if (row.envelope.deliveryKey !== row.deliveryKey) {
     context.addIssue({ code: "custom", path: ["envelope", "deliveryKey"], message: "Outbox envelope must use the row delivery key." });
   }
-  if (row.status === "delivered" && row.deliveredAt === undefined) {
-    context.addIssue({ code: "custom", path: ["deliveredAt"], message: "Delivered outbox rows require a delivery timestamp." });
+  if ((row.claimedBy === undefined) !== (row.claimedAt === undefined)) {
+    context.addIssue({ code: "custom", path: ["claimedAt"], message: "Outbox claim owner and timestamp must be present together." });
+  }
+  if (row.attempts === 0 && (row.claimedBy !== undefined || row.errorCode !== undefined)) {
+    context.addIssue({ code: "custom", path: ["attempts"], message: "An unattempted outbox row cannot carry claim or error metadata." });
+  }
+  if (row.status === "pending" && row.deliveredAt !== undefined) {
+    context.addIssue({ code: "custom", path: ["deliveredAt"], message: "Pending outbox rows cannot have a delivery timestamp." });
+  }
+  if (row.status === "delivered" && (
+    row.deliveredAt === undefined
+    || row.claimedBy !== undefined
+    || row.errorCode !== undefined
+    || row.attempts < 1
+  )) {
+    context.addIssue({ code: "custom", path: ["status"], message: "Delivered outbox rows require a completed unclaimed attempt without an error." });
+  }
+  if (row.status === "dead-letter" && (
+    row.errorCode === undefined
+    || row.deliveredAt !== undefined
+    || row.claimedBy !== undefined
+    || row.attempts < 1
+  )) {
+    context.addIssue({ code: "custom", path: ["status"], message: "Dead-letter outbox rows require a failed unclaimed attempt and safe error code." });
   }
 }).readonly();
 

@@ -13,6 +13,10 @@ import { createOpenAiKnowledgeCandidateDraftProvider } from "./knowledge-evoluti
 import { SqliteLearningLedger } from "./knowledge-evolution/sqlite-learning-ledger.js";
 import { SqliteKnowledgeEvolutionStore } from "./knowledge-evolution/sqlite-knowledge-evolution-store.js";
 import { LearningCaptureService } from "./knowledge-evolution/learning-capture.js";
+import {
+  LearningOutboxWorker,
+  type OperationalLearningOutboxStore,
+} from "./operational/learning-outbox.js";
 import { DEFAULT_MINUTES_PER_ACCEPTED_RECOMMENDATION } from "./metrics.js";
 
 const STARTUP_PATH_MESSAGES = {
@@ -57,6 +61,7 @@ export interface RuntimeDependencies {
   knowledgeEvolution: { diagnoses: DiagnosisRepository; objects: SqliteKnowledgeEvolutionStore; audits: SqliteKnowledgeEvolutionStore; ledger: SqliteLearningLedger; service: KnowledgeEvolutionService };
   service: TriageService;
   operationalStore?: OperationalCommandStore;
+  learningOutbox?: LearningOutboxWorker;
   now: () => Date;
   minutesPerAcceptedRecommendation: number;
   paths: RuntimePaths;
@@ -167,6 +172,14 @@ export async function createRuntimeDependencies(
   });
   await store.initialize();
   const learningCapture = new LearningCaptureService(ledger);
+  const learningOutbox = isOperationalLearningOutboxStore(options.operationalStore)
+    ? new LearningOutboxWorker({
+        store: options.operationalStore,
+        delivery: learningCapture,
+        now,
+      })
+    : undefined;
+  if (learningOutbox !== undefined) await learningOutbox.drainPending();
   const knowledgeEvolution = {
     diagnoses,
     objects: store,
@@ -191,7 +204,6 @@ export async function createRuntimeDependencies(
     recommendations,
     audit: audits,
     diagnoses,
-    learningCapture,
     ...(options.operationalStore === undefined ? {} : { operationalStore: options.operationalStore }),
     now,
   });
@@ -204,6 +216,7 @@ export async function createRuntimeDependencies(
     knowledgeEvolution,
     service,
     ...(options.operationalStore === undefined ? {} : { operationalStore: options.operationalStore }),
+    ...(learningOutbox === undefined ? {} : { learningOutbox }),
     now,
     minutesPerAcceptedRecommendation,
     paths: {
@@ -215,6 +228,15 @@ export async function createRuntimeDependencies(
       knowledgeEvolution: knowledgeEvolutionPaths,
     },
   };
+}
+
+function isOperationalLearningOutboxStore(
+  store: OperationalCommandStore | undefined,
+): store is OperationalCommandStore & OperationalLearningOutboxStore {
+  if (store === undefined) return false;
+  const candidate = store as Partial<OperationalLearningOutboxStore>;
+  return typeof candidate.readOutbox === "function"
+    && typeof candidate.listPendingOutbox === "function";
 }
 
 function parseKnowledgeCandidateTimeoutMs(value: string | undefined): number {

@@ -7,7 +7,8 @@ import {
   LearningLedgerError,
   type LearningEvent,
   type LearningEventFilters,
-  type LearningLedger,
+  type LearningDeliveryLedger,
+  type LearningDeliveryResult,
 } from "./learning-ledger.js";
 
 interface LearningEventRow {
@@ -15,7 +16,7 @@ interface LearningEventRow {
   event_json: string;
 }
 
-export class SqliteLearningLedger implements LearningLedger {
+export class SqliteLearningLedger implements LearningDeliveryLedger {
   private readonly database: Database.Database;
   private initialized = false;
 
@@ -50,6 +51,13 @@ export class SqliteLearningLedger implements LearningLedger {
           source_version INTEGER,
           payload_json TEXT NOT NULL,
           event_json TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS learning_deliveries (
+          delivery_key TEXT PRIMARY KEY NOT NULL,
+          envelope_hash TEXT NOT NULL,
+          event_id TEXT NOT NULL,
+          delivered_at TEXT NOT NULL,
+          FOREIGN KEY(event_id) REFERENCES learning_events(id)
         );
         CREATE INDEX IF NOT EXISTS learning_events_type_idx ON learning_events(event_type);
         CREATE INDEX IF NOT EXISTS learning_events_ticket_idx ON learning_events(ticket_id);
@@ -98,6 +106,46 @@ export class SqliteLearningLedger implements LearningLedger {
     } catch (error) {
       if (error instanceof LearningLedgerError) throw error;
       throw new LearningLedgerError("Learning event batch could not be persisted.", "PERSISTENCE_ERROR", { cause: error });
+    }
+  }
+
+  async appendDelivery(
+    deliveryKey: string,
+    envelopeHash: string,
+    event: LearningEvent,
+  ): Promise<LearningDeliveryResult> {
+    this.ensureInitialized();
+    const parsed = LearningEventSchema.safeParse(event);
+    if (!parsed.success || !/^[a-f0-9]{64}$/.test(envelopeHash) || deliveryKey.trim() === "") {
+      throw new LearningLedgerError("Learning delivery failed schema validation.", "INVALID_EVENT", {
+        cause: parsed.success ? undefined : parsed.error,
+      });
+    }
+    try {
+      const deliver = this.database.transaction((): LearningDeliveryResult => {
+        const prior = this.database.prepare(`
+          SELECT envelope_hash, event_id FROM learning_deliveries WHERE delivery_key = ?
+        `).get(deliveryKey) as { envelope_hash: string; event_id: string } | undefined;
+        if (prior !== undefined) {
+          if (prior.envelope_hash !== envelopeHash || prior.event_id !== parsed.data.id) {
+            throw new LearningLedgerError(
+              `Learning delivery key ${deliveryKey} conflicts with existing content.`,
+              "EVENT_CONFLICT",
+            );
+          }
+          return "duplicate";
+        }
+        this.appendParsed(parsed.data);
+        this.database.prepare(`
+          INSERT INTO learning_deliveries(delivery_key, envelope_hash, event_id, delivered_at)
+          VALUES (?, ?, ?, ?)
+        `).run(deliveryKey, envelopeHash, parsed.data.id, new Date().toISOString());
+        return "delivered";
+      });
+      return deliver();
+    } catch (error) {
+      if (error instanceof LearningLedgerError) throw error;
+      throw new LearningLedgerError("Learning delivery could not be persisted.", "PERSISTENCE_ERROR", { cause: error });
     }
   }
 

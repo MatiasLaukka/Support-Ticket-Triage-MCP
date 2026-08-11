@@ -48,4 +48,29 @@ describe("SqliteLearningLedger", () => {
     await expect(ledger.list()).resolves.toHaveLength(20);
     ledger.close();
   });
+
+  it("persists delivery-key and envelope-hash idempotency across restart", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "triage-ledger-delivery-"));
+    const file = join(directory, "learning.sqlite");
+    const deliveryKey = "delivery-key-4501";
+    const firstHash = "a".repeat(64);
+    const conflictingHash = "b".repeat(64);
+    const learningEvent = event("99999999-9999-4999-8999-999999999999");
+    try {
+      const first = new SqliteLearningLedger(file);
+      await first.initialize();
+      await expect(first.appendDelivery(deliveryKey, firstHash, learningEvent)).resolves.toBe("delivered");
+      first.close();
+
+      const reopened = new SqliteLearningLedger(file);
+      await reopened.initialize();
+      await expect(reopened.appendDelivery(deliveryKey, firstHash, learningEvent)).resolves.toBe("duplicate");
+      await expect(reopened.appendDelivery(deliveryKey, conflictingHash, learningEvent))
+        .rejects.toMatchObject({ code: "EVENT_CONFLICT" });
+      await expect(reopened.list()).resolves.toHaveLength(1);
+      reopened.close();
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
 });

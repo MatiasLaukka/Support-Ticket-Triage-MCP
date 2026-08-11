@@ -289,6 +289,17 @@ export interface LearningLedger {
   has(id: string): Promise<boolean>;
 }
 
+export type LearningDeliveryResult = "delivered" | "duplicate";
+
+/** Ledger capability used by the operational outbox delivery boundary. */
+export interface LearningDeliveryLedger extends LearningLedger {
+  appendDelivery(
+    deliveryKey: string,
+    envelopeHash: string,
+    event: LearningEvent,
+  ): Promise<LearningDeliveryResult>;
+}
+
 export type LearningLedgerErrorCode =
   | "INVALID_EVENT"
   | "EVENT_CONFLICT"

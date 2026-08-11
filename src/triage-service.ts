@@ -63,7 +63,6 @@ import {
   type DiagnosticStateSnapshot,
 } from "./approval-desk/diagnostic-state.js";
 import type { CompletedDiagnosis } from "./knowledge-evolution/domain.js";
-import type { LearningCaptureContext, LearningCaptureService } from "./knowledge-evolution/learning-capture.js";
 import type { DiagnosisReviewInput } from "./approval-desk/diagnosis-review.js";
 import {
   hasCustomerReplyAfterRecommendation,
@@ -81,6 +80,7 @@ import {
 } from "./operational/idempotency.js";
 import type {
   ConversationMessage,
+  LearningCaptureEnvelope,
   OperationalResultReference,
   OperationalWorkflowSnapshot,
 } from "./operational/domain.js";
@@ -524,7 +524,6 @@ export interface TriageServiceDependencies {
   recommendations: RecommendationStore;
   audit: AuditStore;
   diagnoses?: { save(record: CompletedDiagnosis): Promise<void>; remove(id: CompletedDiagnosis["id"]): Promise<void> };
-  learningCapture?: LearningCaptureService;
   operationalStore?: OperationalCommandStore;
   now?: () => Date;
   uuid?: () => string;
@@ -656,30 +655,6 @@ export class TriageService {
     return serializeTicket(parsed.ticketId, () =>
       this.submitValidated(parsed, classificationConfidence),
     );
-  }
-
-  private async captureLearning(event: AuditEvent, context: LearningCaptureContext = {}): Promise<void> {
-    if (this.dependencies.learningCapture === undefined) return;
-    try {
-      await this.dependencies.learningCapture.recordAuditOutcome(event, context);
-    } catch {
-      const failure = AuditEventSchema.safeParse({
-        id: this.uuid(),
-        timestamp: this.now().toISOString(),
-        actor: "learning-ledger",
-        action: "learning-capture-failed",
-        ticketId: event.ticketId,
-        before: { sourceAuditId: event.id, sourceAction: event.action },
-        after: { status: "failed" },
-        rationale: "The operational result was retained, but its learning record could not be persisted.",
-        knowledgeArticleIds: event.knowledgeArticleIds,
-        result: "rejected",
-        rejectionReason: "Learning ledger capture failed.",
-      });
-      if (failure.success) {
-        try { await this.dependencies.audit.append(failure.data); } catch { /* learning failure must not block operational work */ }
-      }
-    }
   }
 
   private async submitValidated(
@@ -2183,6 +2158,20 @@ export class TriageService {
           diagnosis.diagnosedAt,
           auditEvent.action,
         );
+        this.appendLearningOutbox(unit, {
+          operationalEventId: eventId,
+          deliveryKey: eventId,
+          occurredAt: diagnosis.diagnosedAt,
+          actor: diagnosis.actor,
+          ticketId: diagnosis.ticketId,
+          eventType: "diagnosis-recorded",
+          diagnosisId: eventId,
+          evidenceIds: stableUnique(
+            (diagnosis.diagnosis.evidenceReferences ?? []).map(({ id }) => id),
+          ),
+          knowledgeArticleIds: stableUnique(diagnosis.knowledgeArticleIds),
+          provenance: `Sanitized operational outcome: ${auditEvent.action}.`,
+        });
         const result: OperationalResultReference = {
           operation,
           tickets: [{
@@ -2279,17 +2268,9 @@ export class TriageService {
             auditError,
           );
         }
-        await this.captureLearning(auditEvent, {
-          diagnosisId: auditEvent.id,
-          evidenceIds: (diagnosis.diagnosis.evidenceReferences ?? []).map(({ id }) => id),
-        });
         return auditEvent;
       }
       await this.dependencies.audit.append(auditEvent);
-      await this.captureLearning(auditEvent, {
-        diagnosisId: auditEvent.id,
-        evidenceIds: (diagnosis.diagnosis.evidenceReferences ?? []).map(({ id }) => id),
-      });
       return auditEvent;
     });
   }
@@ -2441,6 +2422,22 @@ export class TriageService {
           "diagnosis-reviewed",
           `Diagnosis review decision: ${review.decision}.`,
         );
+        if (review.decision === "approve") {
+          this.appendLearningOutbox(unit, {
+            operationalEventId: eventId,
+            deliveryKey: eventId,
+            occurredAt: review.reviewedAt,
+            actor: review.actor,
+            ticketId: review.ticketId,
+            eventType: "diagnosis-approved",
+            diagnosisId: original.id,
+            evidenceIds: stableUnique(
+              (originalDiagnosis.data.evidenceReferences ?? []).map(({ id }) => id),
+            ),
+            knowledgeArticleIds: stableUnique(original.knowledgeArticleIds),
+            provenance: "Sanitized operational outcome: diagnosis-reviewed.",
+          });
+        }
         const result: OperationalResultReference = {
           operation,
           tickets: [{
@@ -2570,12 +2567,6 @@ export class TriageService {
         result: "success",
       });
       await this.dependencies.audit.append(auditEvent);
-      if (review.decision === "approve") {
-        await this.captureLearning(auditEvent, {
-          diagnosisId: original.id,
-          evidenceIds: (originalDiagnosis.data.evidenceReferences ?? []).map(({ id }) => id),
-        });
-      }
       return auditEvent;
     });
   }
@@ -2768,6 +2759,17 @@ export class TriageService {
           recordedAt,
           "platform-mitigation-available",
         );
+        this.appendLearningOutbox(unit, {
+          operationalEventId: auditEvent.id,
+          deliveryKey: auditEvent.id,
+          occurredAt: recordedAt,
+          actor,
+          ticketId: input.ticketId,
+          eventType: "fix-available",
+          knownEventId: eventId,
+          outcomeStatus: "available",
+          provenance: "Sanitized operational outcome: platform-mitigation-available.",
+        });
         const result: OperationalResultReference = {
           operation,
           tickets: [{
@@ -2830,7 +2832,6 @@ export class TriageService {
         result: "success",
       });
       await this.dependencies.audit.append(auditEvent);
-      await this.captureLearning(auditEvent, { knownEventId: eventId });
       return auditEvent;
     });
   }
@@ -2856,7 +2857,7 @@ export class TriageService {
       const { closedAt: _closedAt, ...semanticRequest } = close;
       const operation = "close-ticket";
       const requestHash = canonicalRequestHash(operation, semanticRequest);
-      const [{ closeBlockers }, { summarizeRecommendationsForTicket }] = await Promise.all([
+      const [{ closeBlockers, latestAuthoritativeDiagnosis }, { summarizeRecommendationsForTicket }] = await Promise.all([
         import("./approval-desk/workflow-guidance.js"),
         import("./approval-desk/workflow-read-model.js"),
       ]);
@@ -2940,6 +2941,28 @@ export class TriageService {
           close.closedAt,
           "ticket-closed",
         );
+        const authoritativeDiagnosis = latestAuthoritativeDiagnosis(close.ticketId, audits);
+        const verifiedDiagnosisId = authoritativeDiagnosis?.diagnosisId
+          ?? [...audits].reverse().flatMap((event) => {
+            if (event.action !== "fix-available") return [];
+            const parsedDiagnosisId = DiagnosisIdSchema.safeParse(event.before.diagnosisId);
+            return parsedDiagnosisId.success ? [parsedDiagnosisId.data] : [];
+          })[0];
+        if (verifiedDiagnosisId !== undefined) {
+          this.appendLearningOutbox(unit, {
+            operationalEventId: auditEvent.id,
+            deliveryKey: auditEvent.id,
+            occurredAt: close.closedAt,
+            actor: close.actor,
+            ticketId: close.ticketId,
+            eventType: "outcome-verified",
+            diagnosisId: verifiedDiagnosisId,
+            evidenceIds: [],
+            verificationType: "customer-confirmed",
+            outcomeStatus: "resolved",
+            provenance: "Sanitized operational outcome: ticket-updated.",
+          });
+        }
         const result: OperationalResultReference = {
           operation,
           tickets: [{
@@ -3019,11 +3042,6 @@ export class TriageService {
             return event;
           },
         );
-      const latestDiagnosis = (await import("./approval-desk/workflow-guidance.js")).latestAuthoritativeDiagnosis(close.ticketId, audits);
-      await this.captureLearning(auditEvent, {
-        ...(latestDiagnosis === undefined ? {} : { diagnosisId: latestDiagnosis.diagnosisId }),
-        verificationType: "customer-confirmed",
-      });
       return { ticket: updated, auditEvent };
     });
   }
@@ -3170,6 +3188,17 @@ export class TriageService {
             auditEvent.timestamp,
             "fix-available",
           );
+          this.appendLearningOutbox(unit, {
+            operationalEventId: auditEvent.id,
+            deliveryKey: auditEvent.id,
+            occurredAt: auditEvent.timestamp,
+            actor: auditEvent.actor,
+            ticketId: auditEvent.ticketId,
+            eventType: "fix-available",
+            diagnosisId,
+            outcomeStatus: "available",
+            provenance: "Sanitized operational outcome: fix-available.",
+          });
         }
         const result: OperationalResultReference = {
           operation,
@@ -3275,12 +3304,22 @@ export class TriageService {
         }),
       );
       await this.dependencies.audit.appendBatch(events);
-      const evidenceIds: string[] = [];
-      await Promise.all(events.map((event) => this.captureLearning(event, {
-        diagnosisId: input.diagnosisId,
-        evidenceIds,
-      })));
       return events;
+    });
+  }
+
+  private appendLearningOutbox(
+    unit: OperationalUnitOfWork,
+    envelope: LearningCaptureEnvelope,
+  ): void {
+    unit.appendLearningCaptureOutbox({
+      id: derivedLearningOutboxId(envelope.operationalEventId),
+      operationalEventId: envelope.operationalEventId,
+      deliveryKey: envelope.deliveryKey,
+      envelope,
+      status: "pending",
+      attempts: 0,
+      createdAt: envelope.occurredAt,
     });
   }
 
@@ -3791,6 +3830,13 @@ export class TriageService {
     }
     return auditEvent;
   }
+}
+
+function derivedLearningOutboxId(operationalEventId: string): string {
+  const hex = createHash("sha256")
+    .update(`learning-outbox\0${operationalEventId}`)
+    .digest("hex");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-8${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
 }
 
 function completedDiagnosisFrom(

@@ -55,6 +55,16 @@ describe("transactional operational diagnosis and verification lifecycle", () =>
           { traceType: "evidence" },
           { traceType: "lifecycle", stage: "diagnosis-completed", outcome: "success" },
         ]);
+      expect(harness.store.listPendingOutbox()).toMatchObject([{
+        operationalEventId: first.id,
+        deliveryKey: first.id,
+        envelope: {
+          eventType: "diagnosis-recorded",
+          diagnosisId: first.id,
+          evidenceIds: [],
+          knowledgeArticleIds: ["api-errors"],
+        },
+      }]);
 
       await expect(harness.service.recordDiagnosis(input, { commandId })).resolves.toEqual(first);
       expect(harness.store.readWorkflowSnapshot(sourceTicketId)).toEqual(snapshot);
@@ -80,6 +90,10 @@ describe("transactional operational diagnosis and verification lifecycle", () =>
         traceType: "lifecycle",
         stage: "diagnostic-escalated",
       });
+      expect(harness.store.listPendingOutbox()).toMatchObject([{
+        operationalEventId: escalated.id,
+        envelope: { eventType: "diagnosis-recorded", diagnosisId: escalated.id },
+      }]);
     } finally {
       harness.store.close();
     }
@@ -120,6 +134,8 @@ describe("transactional operational diagnosis and verification lifecycle", () =>
         "diagnosis-reviewed",
         "diagnosis-reviewed",
       ]);
+      expect(approved.store.listPendingOutbox().map(({ envelope }) => envelope.eventType))
+        .toEqual(["diagnosis-recorded", "diagnosis-approved"]);
       expect(approved.store.readWorkflowSnapshot(sourceTicketId).events
         .filter(({ action }) => action === "diagnosis-reviewed")
         .map(({ sequence }) => sequence)).toEqual([3, 5]);
@@ -175,6 +191,12 @@ describe("transactional operational diagnosis and verification lifecycle", () =>
       const relatedEvents = related.events.filter((event) => event.commandId === commandId);
       expect(sourceEvents.map(({ action }) => action)).toEqual(["fix-available"]);
       expect(relatedEvents.map(({ action }) => action)).toEqual(["fix-available"]);
+      expect(source.events.at(-1)?.id).toBe(sourceEvents[0]!.id);
+      expect(harness.store.listPendingOutbox().slice(-2).map(({ envelope }) => envelope))
+        .toEqual(expect.arrayContaining([
+          { eventType: "fix-available", diagnosisId, ticketId: sourceTicketId },
+          { eventType: "fix-available", diagnosisId, ticketId: relatedTicketId },
+        ].map((expected) => expect.objectContaining(expected))));
       expect(sourceEvents[0]!.sequence).toBe(source.events.at(-2)!.sequence + 1);
       expect(relatedEvents[0]!.sequence).toBe(2);
       expect(source.ticket.revision).toBe(0);
@@ -271,6 +293,14 @@ describe("transactional operational diagnosis and verification lifecycle", () =>
       });
       expect(mitigationHarness.store.readWorkflowSnapshot(sourceTicketId).traces.at(-1))
         .toMatchObject({ traceType: "lifecycle", stage: "platform-mitigation-available" });
+      expect(mitigationHarness.store.listPendingOutbox()).toMatchObject([{
+        operationalEventId: mitigation.id,
+        envelope: {
+          eventType: "fix-available",
+          knownEventId: "EVT-2026-06-10-WEBHOOK-LATENCY",
+          outcomeStatus: "available",
+        },
+      }]);
     } finally {
       fixHarness.store.close();
       mitigationHarness.store.close();
@@ -280,6 +310,12 @@ describe("transactional operational diagnosis and verification lifecycle", () =>
   it("atomically closes and replays the verified lifecycle with one ticket revision", async () => {
     const harness = openHarness({ supportState: "ready-for-close", resolution: "approved" });
     try {
+      const diagnosis = await harness.service.recordDiagnosis(recordDiagnosisInput(), {
+        commandId: command(68),
+      });
+      await harness.service.reviewDiagnosis(reviewInput(diagnosis.id, "approve"), {
+        commandId: command(69),
+      });
       appendSupportResponse(harness.store, sourceTicketId, recommendationId, 2);
       const commandId = command(70);
       const input = {
@@ -298,6 +334,15 @@ describe("transactional operational diagnosis and verification lifecycle", () =>
         traceType: "lifecycle",
         stage: "ticket-closed",
         outcome: "success",
+      });
+      expect(harness.store.listPendingOutbox().at(-1)).toMatchObject({
+        operationalEventId: first.auditEvent.id,
+        envelope: {
+          eventType: "outcome-verified",
+          diagnosisId: diagnosis.id,
+          verificationType: "customer-confirmed",
+          outcomeStatus: "resolved",
+        },
       });
 
       await expect(harness.service.closeTicket(input, { commandId })).resolves.toEqual(first);

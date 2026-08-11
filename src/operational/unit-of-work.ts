@@ -1,5 +1,6 @@
 import type Database from "better-sqlite3";
 import {
+  IsoTimestampSchema,
   TicketIdSchema,
   TicketSchema,
   TriageRecommendationSchema,
@@ -16,8 +17,12 @@ import {
   CommandIdSchema,
   ConversationMessageSchema,
   DecisionTraceEventSchema,
+  LearningCaptureEnvelopeSchema,
   OperationalDiagnosisRecordSchema,
   OperationalEventSchema,
+  OperationalOutboxRowSchema,
+  OutboxClaimTokenSchema,
+  OutboxErrorCodeSchema,
   OperationalResultReferenceSchema,
   OperationalWorkflowSnapshotSchema,
   RecommendationRevisionSchema,
@@ -29,6 +34,7 @@ import {
   type ConversationMessage,
   type DecisionTraceEvent,
   type OperationalEvent,
+  type OperationalOutboxRow,
   type OperationalResultReference,
   type OperationalWorkflowSnapshot,
   type TicketRevision,
@@ -113,6 +119,19 @@ interface LocalTicketRevisionRow {
   revision: number;
   operational_event_id: string;
 }
+interface OutboxRow {
+  id: string;
+  operational_event_id: string;
+  delivery_key: string;
+  status: string;
+  attempts: number;
+  created_at: string;
+  claimed_by: string | null;
+  claimed_at: string | null;
+  delivered_at: string | null;
+  error_code: string | null;
+  envelope_json: string;
+}
 
 /** Task 1's enum-keyed Zod record infers every allowlisted key as required. */
 export type OperationalEventWrite = Omit<OperationalEvent, "facts"> & {
@@ -145,6 +164,7 @@ export class OperationalUnitOfWork {
   private readonly recommendationRevisionWrites: LocalEventChildRow[] = [];
   private readonly diagnosisWrites: LocalEventChildRow[] = [];
   private readonly traceWrites: LocalEventChildRow[] = [];
+  private readonly outboxWrites: OperationalOutboxRow[] = [];
   private readonly reservedSequences = new Map<string, number[]>();
   private readonly ticketProjectionUpdates = new Map<string, number>();
   private readonly pendingCommandClaims = new Map<string, {
@@ -588,6 +608,132 @@ export class OperationalUnitOfWork {
     });
   }
 
+  appendLearningCaptureOutbox(row: OperationalOutboxRow): void {
+    this.assertActive();
+    this.assertMutationOpen();
+    const parsed = parseWith(
+      OperationalOutboxRowSchema,
+      row,
+      "Learning capture outbox row failed operational schema validation.",
+    );
+    if (parsed.status !== "pending" || parsed.attempts !== 0 || parsed.claimedBy !== undefined) {
+      throw new OperationalStoreError(
+        "New learning capture outbox rows must be unclaimed and pending.",
+        "VALIDATION_ERROR",
+      );
+    }
+    this.database.prepare(`
+      INSERT INTO learning_capture_outbox(
+        id, operational_event_id, delivery_key, status, attempts, created_at,
+        claimed_by, claimed_at, delivered_at, error_code, envelope_json
+      ) VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, ?)
+    `).run(
+      parsed.id,
+      parsed.operationalEventId,
+      parsed.deliveryKey,
+      parsed.status,
+      parsed.attempts,
+      parsed.createdAt,
+      JSON.stringify(parsed.envelope),
+    );
+    this.outboxWrites.push(parsed);
+  }
+
+  readOutbox(id: string): OperationalOutboxRow | undefined {
+    this.assertActive();
+    const row = this.database.prepare(`
+      SELECT id, operational_event_id, delivery_key, status, attempts, created_at,
+             claimed_by, claimed_at, delivered_at, error_code, envelope_json
+      FROM learning_capture_outbox WHERE id = ?
+    `).get(id) as OutboxRow | undefined;
+    return row === undefined ? undefined : parseOutboxRow(row);
+  }
+
+  listPendingOutbox(staleBefore?: string): OperationalOutboxRow[] {
+    this.assertActive();
+    const parsedStaleBefore = staleBefore === undefined
+      ? undefined
+      : parseWith(IsoTimestampSchema, staleBefore, "Learning outbox stale-claim timestamp is invalid.");
+    return (this.database.prepare(`
+      SELECT id, operational_event_id, delivery_key, status, attempts, created_at,
+             claimed_by, claimed_at, delivered_at, error_code, envelope_json
+      FROM learning_capture_outbox
+      WHERE status = 'pending'
+        AND (claimed_by IS NULL OR (? IS NOT NULL AND claimed_at <= ?))
+      ORDER BY created_at ASC, id ASC
+    `).all(parsedStaleBefore ?? null, parsedStaleBefore ?? null) as OutboxRow[]).map(parseOutboxRow);
+  }
+
+  claimPendingOutbox(
+    outboxId: string,
+    claimToken: string,
+    claimedAt: string,
+    staleBefore?: string,
+  ): boolean {
+    this.assertActive();
+    this.assertMutationOpen();
+    const parsedToken = parseWith(OutboxClaimTokenSchema, claimToken, "Learning outbox claim token is invalid.");
+    const parsedClaimedAt = parseWith(IsoTimestampSchema, claimedAt, "Learning outbox claim timestamp is invalid.");
+    const parsedStaleBefore = staleBefore === undefined
+      ? undefined
+      : parseWith(IsoTimestampSchema, staleBefore, "Learning outbox stale-claim timestamp is invalid.");
+    const result = this.database.prepare(`
+      UPDATE learning_capture_outbox
+      SET claimed_by = ?, claimed_at = ?, attempts = attempts + 1, error_code = NULL
+      WHERE id = ? AND status = 'pending'
+        AND (claimed_by IS NULL OR (? IS NOT NULL AND claimed_at <= ?))
+    `).run(parsedToken, parsedClaimedAt, outboxId, parsedStaleBefore ?? null, parsedStaleBefore ?? null);
+    return result.changes === 1;
+  }
+
+  markOutboxDelivered(outboxId: string, claimToken: string, deliveredAt: string): void {
+    this.assertActive();
+    this.assertMutationOpen();
+    const parsedToken = parseWith(OutboxClaimTokenSchema, claimToken, "Learning outbox claim token is invalid.");
+    const parsedDeliveredAt = parseWith(IsoTimestampSchema, deliveredAt, "Learning outbox delivery timestamp is invalid.");
+    const result = this.database.prepare(`
+      UPDATE learning_capture_outbox
+      SET status = 'delivered', delivered_at = ?, claimed_by = NULL, claimed_at = NULL, error_code = NULL
+      WHERE id = ? AND status = 'pending' AND claimed_by = ?
+    `).run(parsedDeliveredAt, outboxId, parsedToken);
+    if (result.changes !== 1) {
+      throw new OperationalStoreError("Learning outbox claim is stale.", "STALE_REVISION");
+    }
+  }
+
+  releaseOutboxForRetry(outboxId: string, claimToken: string, errorCode: string): void {
+    this.transitionClaimedOutbox(outboxId, claimToken, {
+      status: "pending",
+      errorCode,
+    });
+  }
+
+  deadLetterOutbox(outboxId: string, claimToken: string, errorCode: string): void {
+    this.transitionClaimedOutbox(outboxId, claimToken, {
+      status: "dead-letter",
+      errorCode,
+    });
+  }
+
+  private transitionClaimedOutbox(
+    outboxId: string,
+    claimToken: string,
+    transition: { readonly status: "pending" | "dead-letter"; readonly errorCode: string },
+  ): void {
+    this.assertActive();
+    this.assertMutationOpen();
+    const parsedToken = parseWith(OutboxClaimTokenSchema, claimToken, "Learning outbox claim token is invalid.");
+    const parsedErrorCode = parseWith(OutboxErrorCodeSchema, transition.errorCode, "Learning outbox error code is invalid.");
+    const result = this.database.prepare(`
+      UPDATE learning_capture_outbox
+      SET status = ?, error_code = ?, claimed_by = NULL, claimed_at = NULL
+      WHERE id = ? AND status = 'pending' AND claimed_by = ?
+    `).run(transition.status, parsedErrorCode, outboxId, parsedToken);
+    if (result.changes !== 1) {
+      throw new OperationalStoreError("Learning outbox claim is stale.", "STALE_REVISION");
+    }
+  }
+
   readTicket(ticketId: TicketId): Ticket {
     this.assertActive();
     const parsedTicketId = parseWith(TicketIdSchema, ticketId, "Ticket ID is invalid.");
@@ -716,6 +862,7 @@ export class OperationalUnitOfWork {
   assertReadyToCommit(): void {
     this.assertActive();
     this.assertMessageEventBindings();
+    this.assertLearningOutboxBindings();
     if (this.reservedSequences.size > 0) {
       throw new OperationalStoreError(
         "Every allocated event sequence must be appended before commit.",
@@ -795,6 +942,23 @@ export class OperationalUnitOfWork {
         throw new OperationalStoreError(
           "Every conversation message must bind to its transaction-local canonical event.",
           "PERSISTENCE_ERROR",
+        );
+      }
+    }
+  }
+
+  private assertLearningOutboxBindings(): void {
+    const eventsById = new Map(this.appendedEventWrites.map((event) => [event.id, event] as const));
+    for (const row of this.outboxWrites) {
+      const event = eventsById.get(row.operationalEventId);
+      if (
+        event === undefined
+        || event.ticket_id !== row.envelope.ticketId
+        || !outboxEventTypeMatchesAction(row.envelope.eventType, event.action)
+      ) {
+        throw new OperationalStoreError(
+          "Every learning outbox row must bind to its transaction-local eligible operational event.",
+          "IDEMPOTENCY_CONFLICT",
         );
       }
     }
@@ -1351,6 +1515,46 @@ function parseStoredJson<T>(
     throw new OperationalStoreError(message, "PERSISTENCE_ERROR", { cause: parsed.error });
   }
   return parsed.data;
+}
+
+function parseOutboxRow(row: OutboxRow): OperationalOutboxRow {
+  return parseWith(
+    OperationalOutboxRowSchema,
+    {
+      id: row.id,
+      operationalEventId: row.operational_event_id,
+      deliveryKey: row.delivery_key,
+      envelope: parseStoredJson(
+        row.envelope_json,
+        LearningCaptureEnvelopeSchema,
+        "Learning capture envelope data is corrupt.",
+      ),
+      status: row.status,
+      attempts: row.attempts,
+      createdAt: row.created_at,
+      ...(row.claimed_by === null ? {} : { claimedBy: row.claimed_by }),
+      ...(row.claimed_at === null ? {} : { claimedAt: row.claimed_at }),
+      ...(row.delivered_at === null ? {} : { deliveredAt: row.delivered_at }),
+      ...(row.error_code === null ? {} : { errorCode: row.error_code }),
+    },
+    "Learning capture outbox data is corrupt.",
+  );
+}
+
+function outboxEventTypeMatchesAction(
+  eventType: OperationalOutboxRow["envelope"]["eventType"],
+  action: OperationalEvent["action"],
+): boolean {
+  switch (eventType) {
+    case "diagnosis-recorded":
+      return action === "diagnosis-completed" || action === "diagnostic-escalated";
+    case "diagnosis-approved":
+      return action === "diagnosis-reviewed";
+    case "fix-available":
+      return action === "fix-available" || action === "platform-mitigation-available";
+    case "outcome-verified":
+      return action === "ticket-updated";
+  }
 }
 
 function compareCommandEventRows(left: CommandEventRow, right: CommandEventRow): number {

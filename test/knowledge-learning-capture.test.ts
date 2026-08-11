@@ -124,16 +124,8 @@ describe("LearningCaptureService", () => {
     await expect(new LearningCaptureService(failing).recordAuditOutcome(diagnosis)).rejects.toMatchObject({ code: "PERSISTENCE_ERROR" });
   });
 
-  it("keeps a successful diagnosis operationally committed when learning capture is unavailable", async () => {
+  it("does not write learning directly or append a best-effort failure audit from TriageService", async () => {
     const audits: AuditEvent[] = [];
-    const unavailable: LearningLedger = {
-      initialize: async () => undefined,
-      append: async () => { throw new LearningLedgerError("offline", "PERSISTENCE_ERROR"); },
-      appendBatch: async () => undefined,
-      snapshot: async () => [],
-      list: async () => [],
-      has: async () => false,
-    };
     const service = new TriageService({
       tickets: {
         async get() { return { id: "TKT-1001", revision: 0, status: "in-progress", updatedAt: "2026-08-07T10:00:00.000Z" } as never; },
@@ -147,7 +139,6 @@ describe("LearningCaptureService", () => {
         async list() { return audits; },
       },
       diagnoses: { async save() {}, async remove() {} },
-      learningCapture: new LearningCaptureService(unavailable),
       now: () => new Date("2026-08-07T10:00:00.000Z"),
       uuid: (() => { let index = 0; return () => `${String(++index).padStart(8, "0")}-1111-4111-8111-111111111111`; })(),
     });
@@ -169,7 +160,6 @@ describe("LearningCaptureService", () => {
       },
       knowledgeArticleIds: ["event-tracking-debugging"],
     })).resolves.toMatchObject({ action: "diagnosis-completed", result: "success" });
-    expect(audits.map((event) => event.action)).toEqual(["diagnosis-completed", "learning-capture-failed"]);
-    expect(audits[1]).toMatchObject({ result: "rejected", rejectionReason: "Learning ledger capture failed." });
+    expect(audits.map((event) => event.action)).toEqual(["diagnosis-completed"]);
   });
 });

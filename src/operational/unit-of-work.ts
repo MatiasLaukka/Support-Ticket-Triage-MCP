@@ -905,6 +905,12 @@ export class OperationalUnitOfWork {
     return parseStoredJson(row.payload_json, TicketSchema, "Operational ticket data is corrupt.");
   }
 
+  readTicketIds(): TicketId[] {
+    this.assertActive();
+    return (this.database.prepare("SELECT id FROM tickets ORDER BY id ASC").all() as Array<{ id: string }>)
+      .map(({ id }) => parseWith(TicketIdSchema, id, "Operational ticket ID is corrupt."));
+  }
+
   readRecommendation(id: string): TriageRecommendation | undefined {
     this.assertActive();
     const row = this.database.prepare("SELECT payload_json FROM recommendations WHERE id = ?")

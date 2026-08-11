@@ -66,6 +66,12 @@ async function main(): Promise<void> {
   const port = approvalDeskPort(process.env);
   const deps = await createRuntimeDependencies();
   const server = createApprovalDeskHttpServer(deps);
+  server.once("close", () => deps.close());
+  for (const signal of ["SIGINT", "SIGTERM"] as const) {
+    process.once(signal, () => server.close(() => {
+      process.exitCode = 0;
+    }));
+  }
 
   await new Promise<void>((resolveListen, rejectListen) => {
     server.once("error", rejectListen);

@@ -2,6 +2,9 @@ import { spawn } from "node:child_process";
 import { lstat, mkdir, readdir, readFile, rm } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
+import { TicketSchema, type Ticket } from "../src/domain.js";
+import { importOperationalData, type OperationalImportAggregate } from "../src/operational/import.js";
+import { OperationalSqliteStore } from "../src/operational/sqlite-store.js";
 
 const EXPECTED_PACKAGE_NAME = "support-ticket-triage-mcp";
 const DEFAULT_HOST = "127.0.0.1";
@@ -46,6 +49,59 @@ export async function resetRuntimeDirectory(root: string): Promise<void> {
   );
 }
 
+export async function seedDemoOperationalDatabase(root: string): Promise<void> {
+  const tickets = TicketSchema.array().parse(JSON.parse(
+    await readFile(resolve(root, "data", "seed", "tickets.json"), "utf8"),
+  ));
+  const store = OperationalSqliteStore.open(
+    resolve(root, "data", "runtime", "operational.sqlite"),
+  );
+  try {
+    store.initialize();
+    const result = importOperationalData({
+      store,
+      aggregates: tickets.map(demoImportAggregate),
+    });
+    if (result.state !== "imported" || result.invalid.length > 0 || result.conflicts.length > 0) {
+      throw new Error(`Demo operational import failed: ${JSON.stringify(result)}`);
+    }
+  } finally {
+    store.close();
+  }
+}
+
+function demoImportAggregate(ticket: Ticket, index: number): OperationalImportAggregate {
+  const suffix = String(index + 1).padStart(12, "0");
+  const operationalEventId = `93000000-0000-4000-8000-${suffix}`;
+  return {
+    sourceId: `demo-seed-${ticket.id}`,
+    provenance: "legacy",
+    ticket,
+    events: [{
+      provenance: "legacy",
+      id: operationalEventId,
+      ticketId: ticket.id,
+      occurredAt: ticket.updatedAt,
+      actor: "demo-import",
+      action: "ticket-updated",
+      commandId: `94000000-0000-4000-8000-${suffix}`,
+      facts: { reasonCode: "legacy-import", revision: ticket.revision, status: ticket.status },
+    }],
+    ticketRevisions: [{
+      ticketId: ticket.id,
+      revision: ticket.revision,
+      ticket,
+      operationalEventId,
+      createdAt: ticket.updatedAt,
+    }],
+    messages: [],
+    recommendations: [],
+    recommendationRevisions: [],
+    diagnoses: [],
+    traces: [],
+  };
+}
+
 export function buildDemoWalkthrough(url: string): string {
   return [
     "Approval Desk demo ready:",
@@ -65,6 +121,7 @@ export function buildDemoWalkthrough(url: string): string {
 async function main(root: string): Promise<void> {
   await verifyDemoRepository(root);
   await resetRuntimeDirectory(root);
+  await seedDemoOperationalDatabase(root);
 
   const child = spawn(process.execPath, ["dist/src/approval-desk.js"], {
     cwd: root,

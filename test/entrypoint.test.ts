@@ -7,6 +7,9 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { afterEach, describe, expect, it } from "vitest";
+import { TicketSchema } from "../src/domain.js";
+import { importOperationalData } from "../src/operational/import.js";
+import { OperationalSqliteStore } from "../src/operational/sqlite-store.js";
 
 const PROCESS_TIMEOUT_MS = 10_000;
 const PROCESS_SHUTDOWN_TIMEOUT_MS = 2_000;
@@ -116,6 +119,7 @@ describe("compiled stdio entrypoint", () => {
   it("initializes MCP, exposes discovery surfaces, serves a ticket, and closes", async () => {
     const dataRoot = await mkdtemp(join(tmpdir(), "triage-entrypoint-"));
     temporaryRoots.push(dataRoot);
+    await importSeedTicket(resolve(dataRoot, "operational.sqlite"));
     const transport = new StdioClientTransport({
       command: process.execPath,
       args: ["dist/src/index.js"],
@@ -171,9 +175,8 @@ describe("compiled stdio entrypoint", () => {
       expect(JSON.parse(textOf(toolResult))).toMatchObject({
         ticket: { id: "TKT-1001" },
       });
-      await expect(
-        stat(resolve(dataRoot, "tickets.json")),
-      ).resolves.toBeDefined();
+      await expect(stat(resolve(dataRoot, "operational.sqlite"))).resolves.toBeDefined();
+      await expect(stat(resolve(dataRoot, "tickets.json"))).rejects.toMatchObject({ code: "ENOENT" });
       expect(stderr).toBe("");
     } catch (error) {
       throw new Error(
@@ -232,17 +235,14 @@ describe("compiled stdio entrypoint", () => {
     INTEGRATION_TEST_TIMEOUT_MS,
   );
 
-  it("exposes safe DomainError startup messages", async () => {
+  it("does not read or recreate the legacy ticket repository after cutover", async () => {
     const result = await runStartupProcess({
       TRIAGE_SEED_FILE: resolve("missing-entrypoint-seed.json"),
     });
 
-    expect(result.code).not.toBe(0);
+    expect(result.code).toBe(0);
     expect(result.stdout).toBe("");
-    expect(result.stderr).toContain(
-      "Support ticket triage server failed to start.",
-    );
-    expect(result.stderr).toContain("Repository could not be initialized.");
+    expect(result.stderr).toBe("");
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("redacts unexpected startup error details", async () => {
@@ -281,6 +281,31 @@ describe("compiled stdio entrypoint", () => {
     expect(result.stderr).not.toContain("at ");
   }, INTEGRATION_TEST_TIMEOUT_MS);
 });
+
+async function importSeedTicket(databasePath: string): Promise<void> {
+  const tickets = TicketSchema.array().parse(JSON.parse(
+    await readFile(resolve("data", "seed", "tickets.json"), "utf8"),
+  ));
+  const ticket = tickets.find(({ id }) => id === "TKT-1001")!;
+  const store = OperationalSqliteStore.open(databasePath);
+  store.initialize();
+  importOperationalData({
+    store,
+    aggregates: [{
+      sourceId: "entrypoint-TKT-1001",
+      provenance: "legacy",
+      ticket,
+      events: [],
+      ticketRevisions: [],
+      messages: [],
+      recommendations: [],
+      recommendationRevisions: [],
+      diagnoses: [],
+      traces: [],
+    }],
+  });
+  store.close();
+}
 
 describe("Codex MCP configuration", () => {
   it("contains the exact enabled stdio server configuration", async () => {

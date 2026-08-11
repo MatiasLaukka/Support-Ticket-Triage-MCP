@@ -56,6 +56,7 @@ export async function runKnowledgeEvolutionShowcase(
   options: KnowledgeEvolutionShowcaseOptions,
 ): Promise<KnowledgeEvolutionShowcaseReport> {
   const deps = await createRuntimeDependencies({
+    legacyFixtureRepositories: true,
     cwd: options.root,
     env: {
       TRIAGE_DATA_ROOT: options.dataRoot,

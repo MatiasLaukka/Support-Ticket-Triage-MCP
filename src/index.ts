@@ -17,6 +17,21 @@ function safeErrorDetail(error: unknown): string {
 async function main(): Promise<void> {
   const deps = await createRuntimeDependencies();
   const server = createTriageServer(deps);
+  let closed = false;
+  const closeRuntime = (): void => {
+    if (closed) return;
+    closed = true;
+    deps.close();
+  };
+  process.once("exit", closeRuntime);
+  for (const signal of ["SIGINT", "SIGTERM"] as const) {
+    process.once(signal, () => {
+      void server.close().finally(() => {
+        closeRuntime();
+        process.exitCode = 0;
+      });
+    });
+  }
   await server.connect(new StdioServerTransport());
 }
 

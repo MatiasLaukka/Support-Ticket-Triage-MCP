@@ -75,17 +75,22 @@ These are useful later, but should stay behind the same approval boundary:
   deterministic future-ticket reuse showcase. The operational plane remains
   authoritative and the JSON/in-memory adapters remain available for tests and
   replay.
-- **Full operational SQLite migration:** move tickets, conversations,
-  recommendations, operational audit history, and replay snapshots behind
-  repository contracts while preserving stable IDs, timestamps, version pins,
-  and historical meaning. This is intentionally separate from the first
-  learning-ledger slice.
+- **Full operational SQLite migration (implemented):** tickets, conversations,
+  recommendation/diagnosis revisions, causal events, safe decision traces,
+  persistent command replay, explicit import states, and the learning outbox
+  now share one transactional operational boundary. HTTP, MCP, and the browser
+  carry stable command IDs, and the Decision Timeline survives restart.
 - Zendesk or Jira read adapter for imported tickets;
 - provider-specific field mapping and revision checks;
 - durable recommendation store outside local JSON files;
 - real identity and reviewer attribution;
 - webhook verification and idempotency for external updates;
 - separate evaluation set for customer-response quality.
+
+The next persistence work is operational hardening rather than another state
+store: backup/restore drills, deployment packaging, readiness reporting, and
+external-provider reconciliation should consume the existing operational and
+learning interfaces without bypassing domain authority.
 
 ## Keep Out Of Scope For The Demo
 

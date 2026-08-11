@@ -642,6 +642,7 @@ describe("governed diagnosis review lifecycle", () => {
     let closeLedger: (() => void) | undefined;
     try {
       const deps = await createRuntimeDependencies({
+        legacyFixtureRepositories: true,
         env: {
           TRIAGE_DATA_ROOT: dataRoot,
           TRIAGE_SEED_FILE: resolve("data/seed/tickets.json"),

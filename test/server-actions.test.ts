@@ -47,8 +47,14 @@ const commandBoundTools = new Set([
   "submit_triage_recommendation",
   "add_customer_reply",
   "evaluate_ticket",
+  "record_diagnosis",
+  "record_platform_mitigation",
+  "review_diagnosis",
+  "apply_diagnosis_fix",
+  "mark_fix_available",
   "approve_triage_recommendation",
   "mark_response_done",
+  "close_ticket",
   "reject_triage_recommendation",
 ]);
 type SubmitToolInput = Omit<SubmitRecommendationInput, "submittedAt">;
@@ -935,6 +941,9 @@ describe("createTriageServer action protocol", () => {
       "record_diagnosis",
       "review_diagnosis",
     ]);
+    for (const action of operatorActions) {
+      expect(action.inputSchema.required).toContain("commandId");
+    }
     expect(
       operatorActions.find(({ name }) => name === "add_customer_reply")
         ?.annotations,
@@ -986,6 +995,7 @@ describe("createTriageServer action protocol", () => {
     )!;
     expect(reviewDiagnosis.inputSchema.required).toEqual(
       expect.arrayContaining([
+        "commandId",
         "decision",
         "diagnosisId",
         "ticketId",
@@ -1002,6 +1012,7 @@ describe("createTriageServer action protocol", () => {
     )!;
     expect(applyDiagnosisFix.inputSchema.required).toEqual(
       expect.arrayContaining([
+        "commandId",
         "diagnosisId",
         "sourceTicketId",
         "impactSet",

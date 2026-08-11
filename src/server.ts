@@ -247,12 +247,14 @@ const MarkResponseDoneInputSchema = ApprovalInputSchema.refine(
 );
 const WorkflowActionInputSchema = z
   .object({
+    commandId: CommandIdSchema,
     ticketId: TicketIdSchema,
     actor: NonBlankStringSchema.default("approval-desk"),
   })
   .strict();
 const PlatformMitigationInputSchema = z
   .object({
+    commandId: CommandIdSchema,
     ticketId: TicketIdSchema,
     eventId: z.string().trim().min(1),
     actor: NonBlankStringSchema.default("approval-desk"),
@@ -261,9 +263,10 @@ const PlatformMitigationInputSchema = z
   .strict();
 const ReviewDiagnosisToolInputSchema = DiagnosisReviewDraftSchema.omit({
   reviewedAt: true,
-});
+}).extend({ commandId: CommandIdSchema });
 const ApplyDiagnosisFixToolInputSchema = z
   .object({
+    commandId: CommandIdSchema,
     diagnosisId: DiagnosisIdSchema,
     sourceTicketId: TicketIdSchema,
     impactSet: DiagnosisImpactSetSchema,
@@ -422,10 +425,10 @@ const TicketWorkflowOutputSchema = z
   .strict();
 
 export interface TriageServerDependencies {
-  tickets: TicketRepository;
+  tickets: Pick<TicketRepository, "list" | "get" | "snapshot">;
   knowledge: KnowledgeRepository;
-  recommendations: RecommendationRepository;
-  audits: AuditRepository;
+  recommendations: Pick<RecommendationRepository, "get" | "list">;
+  audits: Pick<AuditRepository, "list" | "listPage">;
   service: TriageService;
   now: () => Date;
   minutesPerAcceptedRecommendation?: number;
@@ -916,10 +919,11 @@ async function reviewDiagnosis(
   deps: TriageServerDependencies,
   input: z.infer<typeof ReviewDiagnosisToolInputSchema>,
 ): Promise<z.infer<typeof DiagnosisReviewActionOutputSchema>> {
+  const { commandId, ...reviewInput } = input;
   const auditEvent = await deps.service.reviewDiagnosis({
-    ...input,
+    ...reviewInput,
     reviewedAt: deps.now().toISOString(),
-  });
+  }, { commandId });
   const [ticket, audits] = await Promise.all([
     deps.tickets.get(input.ticketId),
     deps.audits.list(input.ticketId),
@@ -934,10 +938,11 @@ async function applyDiagnosisFix(
   deps: TriageServerDependencies,
   input: z.infer<typeof ApplyDiagnosisFixToolInputSchema>,
 ): Promise<z.infer<typeof DiagnosisFixActionOutputSchema>> {
+  const { commandId, ...fixInput } = input;
   const auditEvents = await deps.service.applyDiagnosisFix({
-    ...input,
+    ...fixInput,
     fixedAt: deps.now().toISOString(),
-  });
+  }, { commandId });
   return DiagnosisFixActionOutputSchema.parse({ auditEvents });
 }
 
@@ -1055,9 +1060,10 @@ async function recordDiagnosis(
   deps: TriageServerDependencies,
   input: z.infer<typeof WorkflowActionInputSchema>,
 ): Promise<AuditEvent> {
+  const { commandId, ...actionInput } = input;
   const [ticket, audits, recommendations] = await Promise.all([
-    deps.tickets.get(input.ticketId),
-    deps.audits.list(input.ticketId),
+    deps.tickets.get(actionInput.ticketId),
+    deps.audits.list(actionInput.ticketId),
     deps.recommendations.list(),
   ]);
   const latest = summarizeRecommendationsForTicket(
@@ -1072,8 +1078,8 @@ async function recordDiagnosis(
     );
   }
   return deps.service.recordDiagnosis({
-    ticketId: input.ticketId,
-    actor: input.actor,
+    ticketId: actionInput.ticketId,
+    actor: actionInput.actor,
     diagnosedAt: deps.now().toISOString(),
     diagnosis: diagnosisContextForTicket(ticket, latest, audits),
     knowledgeArticleIds:
@@ -1085,16 +1091,17 @@ async function recordDiagnosis(
       ticketRevision: ticket.revision,
       customerReplyWatermark: customerReplyWatermarkFromAudits(audits),
     },
-  });
+  }, { commandId });
 }
 
 async function markFixAvailable(
   deps: TriageServerDependencies,
   input: z.infer<typeof WorkflowActionInputSchema>,
 ): Promise<AuditEvent> {
+  const { commandId, ...actionInput } = input;
   const [ticket, audits, recommendations] = await Promise.all([
-    deps.tickets.get(input.ticketId),
-    deps.audits.list(input.ticketId),
+    deps.tickets.get(actionInput.ticketId),
+    deps.audits.list(actionInput.ticketId),
     deps.recommendations.list(),
   ]);
   const persistedDiagnosticContext = selectPersistedDiagnosticWorkflowContext(
@@ -1106,33 +1113,35 @@ async function markFixAvailable(
     audits,
   ).latest;
   return deps.service.recordFix({
-    ticketId: input.ticketId,
-    actor: input.actor,
+    ticketId: actionInput.ticketId,
+    actor: actionInput.actor,
     fixedAt: deps.now().toISOString(),
     fix: fixContextForTicket(persistedDiagnosticContext.diagnosis?.event),
     knowledgeArticleIds: latest?.knowledgeArticleIds ?? [],
-  });
+  }, { commandId });
 }
 
 async function recordPlatformMitigation(
   deps: TriageServerDependencies,
   input: z.infer<typeof PlatformMitigationInputSchema>,
 ): Promise<AuditEvent> {
+  const { commandId, ...mitigationInput } = input;
   return deps.service.recordPlatformMitigation({
-    ...input,
+    ...mitigationInput,
     recordedAt: deps.now().toISOString(),
-  });
+  }, { commandId });
 }
 
 async function closeTicket(
   deps: TriageServerDependencies,
   input: z.infer<typeof WorkflowActionInputSchema>,
 ): Promise<z.infer<typeof CloseTicketOutputSchema>> {
+  const { commandId, ...closeInput } = input;
   return deps.service.closeTicket({
-    ticketId: input.ticketId,
-    actor: input.actor,
+    ticketId: closeInput.ticketId,
+    actor: closeInput.actor,
     closedAt: deps.now().toISOString(),
-  });
+  }, { commandId });
 }
 
 async function maybeAddAutomaticCustomerReplyAfterSent(input: {

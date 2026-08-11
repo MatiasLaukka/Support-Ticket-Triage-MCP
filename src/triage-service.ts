@@ -4098,7 +4098,7 @@ function operationalExpectedResolution(
   return action === "recommendation-canceled" ? "approved" : "pending";
 }
 
-function operationalConversationAuditsForEventIds(
+export function operationalConversationAuditsForEventIds(
   snapshot: OperationalWorkflowSnapshot,
   eventIds: readonly string[],
 ): AuditEvent[] {
@@ -4171,6 +4171,15 @@ function operationalConversationAuditsForEventIds(
         : {}),
     })];
   });
+}
+
+export function operationalAuditEventsFromSnapshot(
+  snapshot: OperationalWorkflowSnapshot,
+): AuditEvent[] {
+  return operationalConversationAuditsForEventIds(
+    snapshot,
+    snapshot.events.map(({ id }) => id),
+  );
 }
 
 function operationalExpectedResolutionForAnyLifecycle(

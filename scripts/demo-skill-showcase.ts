@@ -167,6 +167,7 @@ export async function runSkillShowcase(
 
   let clockTick = 0;
   const deps = await createRuntimeDependencies({
+    legacyFixtureRepositories: true,
     cwd: options.root,
     now: () => new Date(SHOWCASE_START + clockTick++ * 1_000),
     env: {
@@ -481,8 +482,14 @@ async function callTool(
     "submit_triage_recommendation",
     "add_customer_reply",
     "evaluate_ticket",
+    "record_diagnosis",
+    "record_platform_mitigation",
+    "review_diagnosis",
+    "apply_diagnosis_fix",
+    "mark_fix_available",
     "approve_triage_recommendation",
     "mark_response_done",
+    "close_ticket",
     "reject_triage_recommendation",
   ]);
   const argumentsWithCommand = commandBound.has(name)

@@ -385,6 +385,7 @@ describe("durable operational learning outbox", () => {
     appendRows(harness.store, [envelope!]);
     const dataRoot = join(harness.root, "runtime-data");
     const deps = await createRuntimeDependencies({
+      legacyFixtureRepositories: true,
       operationalStore: harness.store,
       env: {
         TRIAGE_DATA_ROOT: dataRoot,

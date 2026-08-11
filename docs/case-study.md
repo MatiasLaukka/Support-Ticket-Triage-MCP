@@ -81,6 +81,27 @@ recommendations and versions are never rewritten. A stale object remains
 queryable with decayed recurrence weight, but never bypasses evidence gates.
 This is a human-governed learning loop, not autonomous model retraining.
 
+The operational plane is now durable SQLite rather than a collection of
+mutable JSON/JSONL files. A domain command writes its projection/revision,
+causal event, safe trace, immutable replay result, and any learning-outbox
+intent in one transaction. `BEGIN IMMEDIATE` serializes local writers while
+the domain revision and watermark checks reject stale work. A command retry
+after process restart returns its original semantic envelope instead of
+rebuilding a result from newer state.
+
+Migration is explicit and observable: `empty` and `import-in-progress` allow
+inspection/import only; `imported` and `native` allow normal mutations. Legacy
+append order becomes ticket-local causal sequence order, and timestamps remain
+descriptive. The read-only Decision Timeline starts from that event spine and
+joins messages, recommendations, diagnoses, revisions, and safe traces through
+their committed event IDs. Customer bodies stay in Conversation Context.
+
+Operational success does not depend on advisory learning availability. The
+same transaction records a frozen outbox envelope, then a separate worker
+delivers it to `learning.sqlite` under a stable delivery key. Retryable failure
+leaves it pending; non-retryable failure is dead-lettered; neither outcome
+invalidates the already committed support workflow.
+
 ## Demo Scenario
 
 The fastest browser demo uses `TKT-1010`, a deliberately vague ticket that
@@ -146,6 +167,19 @@ outcome, later successful reuse, a failed reuse signal, stale decay, and a
 byte-for-byte unchanged pre-promotion recommendation. The demo is intentionally
 bounded: it proves governed knowledge evolution and reusable evidence, not
 autonomous retraining or automatic production policy changes.
+
+## Operational restart showcase
+
+```powershell
+npm run demo:operational-persistence
+```
+
+This controlled run imports a typed legacy aggregate containing evaluation,
+approval, diagnosis, fix, verification, and closure milestones, inspects its
+safe causal Decision Timeline, closes both SQLite handles, and proves an
+identical reload. It reports advisory learning separately so the portfolio
+demonstrates the authority boundary rather than implying that learned context
+is ticket truth.
 
 ## Safety Properties
 

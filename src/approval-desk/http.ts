@@ -753,7 +753,7 @@ async function createRecommendation(
     ...input,
     submittedAt: deps.now().toISOString(),
     evaluatedCustomerReplyWatermark: customerReplyWatermarkFromAudits(audits),
-  }, commandContextFromRequest(request));
+  }, commandContextFromRequest(request, deps));
   return { recommendation };
 }
 
@@ -768,7 +768,7 @@ async function addCustomerReply(
       ...body,
       ticketId,
       receivedAt: deps.now().toISOString(),
-    }, commandContextFromRequest(request)),
+    }, commandContextFromRequest(request, deps)),
   };
 }
 
@@ -807,7 +807,7 @@ async function recordDiagnosis(
         ticketRevision: ticket.revision,
         customerReplyWatermark: customerReplyWatermarkFromAudits(audits),
       },
-    }),
+    }, commandContextFromRequest(request, deps)),
   };
 }
 
@@ -830,7 +830,7 @@ async function recordPlatformMitigation(
       ...body,
       ticketId,
       recordedAt: deps.now().toISOString(),
-    }),
+    }, commandContextFromRequest(request, deps)),
   };
 }
 
@@ -860,7 +860,7 @@ async function reviewDiagnosis(
     ticketId,
     diagnosisId,
     reviewedAt: deps.now().toISOString(),
-  });
+  }, commandContextFromRequest(request, deps));
   const [ticket, audits] = await Promise.all([
     deps.tickets.get(ticketId),
     deps.audits.list(ticketId),
@@ -884,7 +884,7 @@ async function applyDiagnosisFix(
     impactSet: body.impactSet,
     actor: body.actor,
     fixedAt: deps.now().toISOString(),
-  });
+  }, commandContextFromRequest(request, deps));
   return DiagnosisFixActionOutputSchema.parse({ auditEvents });
 }
 
@@ -915,7 +915,7 @@ async function recordFix(
       fixedAt: deps.now().toISOString(),
       fix: fixContextForTicket(persistedDiagnosticContext.diagnosis?.event),
       knowledgeArticleIds: latest?.knowledgeArticleIds ?? [],
-    }),
+    }, commandContextFromRequest(request, deps)),
   };
 }
 
@@ -929,7 +929,7 @@ async function closeTicket(
     ticketId,
     actor: body.actor,
     closedAt: deps.now().toISOString(),
-  });
+  }, commandContextFromRequest(request, deps));
 }
 
 async function getRecommendation(
@@ -950,7 +950,7 @@ async function approveRecommendation(
     ...body,
     recommendationId,
     approvedAt: deps.now().toISOString(),
-  }, commandContextFromRequest(request));
+  }, commandContextFromRequest(request, deps));
 }
 
 async function markRecommendationSent(
@@ -960,7 +960,7 @@ async function markRecommendationSent(
   const recommendationId = RecommendationIdSchema.parse(id);
   const body = MarkSentBodySchema.parse(await readJsonBody(request));
   return serializeMarkSent(recommendationId, async () => {
-    const commandContext = commandContextFromRequest(request);
+    const commandContext = commandContextFromRequest(request, deps);
     const audits = await deps.audits.list(body.ticketId);
     const operationalRecommendation = deps.operationalStore
       ?.readWorkflowSnapshot(body.ticketId).recommendations
@@ -1067,7 +1067,7 @@ async function rejectRecommendation(
       ...body,
       recommendationId,
       rejectedAt: deps.now().toISOString(),
-    }, commandContextFromRequest(request)),
+    }, commandContextFromRequest(request, deps)),
   };
 }
 
@@ -1082,7 +1082,7 @@ async function cancelApproval(
       ...body,
       recommendationId,
       canceledAt: deps.now().toISOString(),
-    }, commandContextFromRequest(request)),
+    }, commandContextFromRequest(request, deps)),
   };
 }
 
@@ -1128,9 +1128,15 @@ function optionalParam(
 
 function commandContextFromRequest(
   request: IncomingMessage,
+  deps: RuntimeDependencies,
 ): { commandId: string } | undefined {
   const value = request.headers["idempotency-key"];
-  if (value === undefined) return undefined;
+  if (value === undefined) {
+    if (deps.operationalStore !== undefined) {
+      throw invalidRequest("Idempotency-Key is required for operational mutations.");
+    }
+    return undefined;
+  }
   if (Array.isArray(value)) {
     throw invalidRequest("Idempotency-Key must contain exactly one command ID.");
   }

@@ -3760,10 +3760,19 @@ export const approvalDeskHtml = `<!doctype html>
       }
 
       async function requestJson(path, init, options) {
-        const response = await fetch(path, {
-          headers: { 'content-type': 'application/json' },
-          ...init
-        });
+        const method = String(init?.method ?? 'GET').toUpperCase();
+        const commandId = method === 'GET' || method === 'HEAD'
+          ? null
+          : crypto.randomUUID();
+        const headers = {
+          'content-type': 'application/json',
+          ...(commandId === null ? {} : { 'Idempotency-Key': commandId }),
+          ...(init?.headers ?? {})
+        };
+        const request = { ...init, headers };
+        // A user action creates this request once; any transport retry reuses
+        // the same immutable Idempotency-Key rather than minting another ID.
+        const response = await fetch(path, request);
         const data = await response.json();
         if (!response.ok) {
           if (options?.writeErrorToResult !== false) {

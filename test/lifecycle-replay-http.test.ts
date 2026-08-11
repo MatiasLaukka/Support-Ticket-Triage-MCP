@@ -179,6 +179,7 @@ async function startFixture(options: {
     await writeFile(controlledReportPath, JSON.stringify(options.controlledReport), "utf8");
   }
   const deps = await createRuntimeDependencies({
+    legacyFixtureRepositories: true,
     cwd: resolve(),
     env: {
       TRIAGE_DATA_ROOT: join(root, "runtime"),

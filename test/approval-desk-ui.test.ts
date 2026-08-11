@@ -916,6 +916,12 @@ describe("approvalDeskHtml", () => {
       body: expect.stringContaining("Confirm account owner"),
       source: "manual",
     });
+    const replyHeaders = replyRequest?.init?.headers as Record<string, string>;
+    expect(replyHeaders["Idempotency-Key"]).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+    );
+    expect(app.requests.filter((request) => request.path.endsWith("/customer-replies")))
+      .toHaveLength(1);
     expect(app.ticketDetailRequests()).toBeGreaterThanOrEqual(4);
     expect(app.queueRequests()).toBeGreaterThanOrEqual(3);
     expect(app.evidenceRequests()).toBeGreaterThanOrEqual(3);

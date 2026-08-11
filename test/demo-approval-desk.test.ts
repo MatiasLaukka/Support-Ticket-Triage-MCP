@@ -5,8 +5,10 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   buildDemoWalkthrough,
   resetRuntimeDirectory,
+  seedDemoOperationalDatabase,
   verifyDemoRepository,
 } from "../scripts/demo-approval-desk.js";
+import { OperationalSqliteStore } from "../src/operational/sqlite-store.js";
 
 const temporaryRoots: string[] = [];
 
@@ -69,6 +71,32 @@ describe("Approval Desk demo runner helpers", () => {
 
     const runtimeStat = await stat(runtime);
     expect(runtimeStat.isDirectory()).toBe(true);
+  });
+
+  it("imports the controlled seed into operational SQLite without legacy writes", async () => {
+    const root = await mkdtemp(join(tmpdir(), "approval-desk-operational-seed-"));
+    temporaryRoots.push(root);
+    await writeFile(
+      resolve(root, "package.json"),
+      JSON.stringify({ name: "support-ticket-triage-mcp" }),
+    );
+    await mkdir(resolve(root, "data", "seed"), { recursive: true });
+    await writeFile(
+      resolve(root, "data", "seed", "tickets.json"),
+      await readFile(resolve(process.cwd(), "data", "seed", "tickets.json")),
+    );
+    const runtime = resolve(root, "data", "runtime");
+    await resetRuntimeDirectory(root);
+    await seedDemoOperationalDatabase(root);
+    const store = OperationalSqliteStore.open(resolve(runtime, "operational.sqlite"));
+    try {
+      store.initialize();
+      expect(store.readImportState()).toBe("imported");
+      expect(store.listWorkflowSnapshots()).toHaveLength(30);
+    } finally {
+      store.close();
+    }
+    await expect(readFile(resolve(runtime, "tickets.json"))).rejects.toThrow();
   });
 
   it("refuses to reset when the runtime path is not a directory", async () => {

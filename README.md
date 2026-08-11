@@ -67,8 +67,9 @@ and cannot decide.
 - Submission rejects a stale source revision. Approval rechecks the
   recommendation source revision against the current expected ticket revision.
   Both approval and rejection reject an already-resolved recommendation.
-- Successful submission, approval, and rejection create append-style JSONL
-  audit events. The local operator can still edit local files, so this is not a
+- Successful commands commit their projection, revision, causal event, safe
+  trace, replay result, and learning-outbox intent atomically in operational
+  SQLite. The local operator can still edit local files, so this is not a
   tamper-evident ledger.
 
 See [SECURITY.md](SECURITY.md) for the full threat model.
@@ -84,9 +85,7 @@ flowchart LR
     Reads["Read tools and resources"]
     Service["TriageService"]
     Policy["Policy, similarity, metrics"]
-    Tickets["Runtime tickets.json"]
-    Recommendations["Recommendation JSON files"]
-    Audit["Audit events.jsonl"]
+    Operational["Operational SQLite<br/>projections, events, traces, replay, outbox"]
     Knowledge["Markdown knowledge articles"]
     Seed["Synthetic seed fixtures"]
 
@@ -95,16 +94,13 @@ flowchart LR
     Codex <--> MCP
     MCP --> Reads
     MCP --> Service
-    Reads --> Tickets
+    Reads --> Operational
     Reads --> Knowledge
-    Reads --> Recommendations
-    Reads --> Audit
+    Reads --> Operational
     Reads --> Policy
     Service --> Policy
-    Service --> Tickets
-    Service --> Recommendations
-    Service --> Audit
-    Seed --> Tickets
+    Service --> Operational
+    Seed -->|explicit typed import| Operational
 ```
 
 ## Demo In 60 Seconds
@@ -368,8 +364,57 @@ The stdio entry point is `dist/src/index.js`. Its defaults are:
 | `TRIAGE_KNOWLEDGE_CANDIDATE_PROVIDER` | unset (deterministic discovery only); use `controlled` for the local advisory demo |
 | `TRIAGE_KNOWLEDGE_CANDIDATE_MODEL` | unset (inherits `OPENAI_MODEL`, then `gpt-5.6-luna`) |
 | `TRIAGE_KNOWLEDGE_CANDIDATE_TIMEOUT_MS` | `20000` |
+| `OPERATIONAL_DB_PATH` | `data/runtime/operational.sqlite` |
+| `TRIAGE_LEARNING_LEDGER_PATH` | `data/runtime/knowledge-evolution/learning.sqlite` |
 
 All relative paths are resolved from the process working directory.
+
+### Operational persistence and cutover
+
+Mutable runtime truth now lives in one operational SQLite database. Tickets,
+conversation messages, recommendation revisions, diagnoses, causal events,
+decision traces, idempotency results, and learning-delivery intents commit in
+explicit synchronous transactions. Each ticket receives its own contiguous
+event sequence, so the Decision Timeline follows causal order even when clocks
+or imported timestamps disagree. Static ticket fixtures and the Markdown
+knowledge catalog remain file-backed inputs; they are not runtime write
+fallbacks.
+
+Every new operational database starts as `empty`. It permits inspection and
+import but rejects live mutations until one of these explicit cutovers:
+
+```powershell
+# Start a genuinely new deployment only when no legacy tickets.json exists.
+$env:OPERATIONAL_DB_PATH = "data/runtime/operational.sqlite"
+npm run initialize:operational-native
+
+# Or import a validated aggregate manifest supplied as JSON on stdin/file.
+$env:OPERATIONAL_DB_PATH = "data/runtime/operational.sqlite"
+$env:OPERATIONAL_IMPORT_FILE = "data/import/operational-aggregates.json"
+npm run import:operational-data
+```
+
+`import-in-progress` stays mutation-blocked until every discovered aggregate is
+imported or durably resolved. `imported` and `native` enable normal runtime
+commands. Startup fails closed for newer or structurally corrupt schemas and
+does not overwrite them. HTTP mutations require `Idempotency-Key`, MCP mutation
+tools require `commandId`, and the Approval Desk creates one UUID per user
+action so a transport retry reuses the same semantic command.
+
+The learning database is deliberately separate and advisory. An operational
+commit writes an immutable outbox envelope; learning delivery may retry or
+dead-letter without rolling back ticket truth. Stable delivery keys prevent a
+crash after learning-ledger commit from duplicating an event.
+
+Run the disposable import/restart/timeline demonstration with:
+
+```powershell
+npm run demo:operational-persistence
+```
+
+It reports the imported lifecycle milestones, causal sequences, current
+projection, separate learning-event count, and byte-identical reload after
+both SQLite handles are closed and reopened.
 
 Knowledge candidate drafting is explicitly opt-in. Set
 `TRIAGE_KNOWLEDGE_CANDIDATE_PROVIDER=openai` and provide `OPENAI_API_KEY` to
@@ -536,9 +581,10 @@ foreach ($target in $resetTargets) {
 ```
 
 All repository, package, path, JSON, reparse-point, and enumeration checks
-finish before the deletion loop starts. The next server start initializes
-`data/runtime/tickets.json` from the synthetic seed without overwriting an
-existing runtime file.
+finish before the deletion loop starts. The demo runner then performs an
+explicit typed import from the synthetic seed into
+`data/runtime/operational.sqlite`; normal server startup never recreates legacy
+ticket or audit files.
 
 ## Use From Codex Desktop
 
@@ -565,8 +611,9 @@ classification and escalation tables are in
 ## Use The Local Approval Desk
 
 The Approval Desk is a local browser UI for the human decision layer. It uses
-the same synthetic fixtures, local repositories, and `TriageService` rules as
-the MCP server.
+the same operational SQLite database and `TriageService` rules as the MCP
+server. The repeatable demo imports synthetic fixtures through the controlled
+import boundary before starting the application.
 
 ```powershell
 npm ci
@@ -1143,10 +1190,10 @@ npm run demo:learning-ledger
 
 The output demonstrates candidate creation, explicit human promotion, a
 verified outcome, successful and failed reuse signals, stale decay, and
-historical immutability. The first SQLite slice intentionally does not migrate
-the operational ticket, conversation, recommendation, or audit stores; those
-remain local JSON/JSONL adapters until a later migration with equivalent
-repository contracts.
+historical immutability. The learning ledger remains a separate advisory
+SQLite plane. Operational ticket, conversation, recommendation, diagnosis,
+lifecycle, trace, replay, and outbox state now lives in authoritative
+operational SQLite.
 
 #### Evidence provenance and policy boundaries
 
@@ -1284,16 +1331,16 @@ webhook payloads, provider comments, and imported macros remain untrusted.
   miss paraphrases and produce lexical false positives.
 - Policy is deterministic and intentionally narrow. Human review remains
   necessary for ambiguous facts, conflicting policy, and customer messaging.
-- Operational tickets, conversations, recommendations, and their audit data
-  still use local JSON/JSONL repositories. Knowledge candidates, immutable
-  versions, knowledge audits, and learning events use the SQLite learning
-  ledger, which is designed for one local process rather than distributed
-  writers.
-- Locks are in-process. Ticket update, recommendation resolution, and audit
-  append include compensation paths, but they are not cross-process ACID
-  transactions.
-- Local users with filesystem access can edit or delete tickets,
-  recommendations, knowledge, and audits.
+- Operational tickets, conversations, recommendations, diagnoses, events, and
+  traces use transactional SQLite. The separate SQLite learning ledger owns
+  advisory knowledge candidates, immutable versions, audits, and reuse events.
+  Neither database is designed as a distributed multi-region system.
+- SQLite `BEGIN IMMEDIATE`, optimistic revision checks, persistent command
+  results, and unique causal sequences provide cross-process local correctness;
+  they do not replace external-provider reconciliation or distributed locks.
+- Local users with filesystem access can still edit or delete the SQLite files,
+  fixture inputs, and knowledge catalog; filesystem access remains a trust
+  boundary.
 - Linked-path checks reject symbolic links and multi-link files. Node pathname
   APIs cannot fully prevent a hostile concurrent Windows parent-junction swap.
 - Directory `fsync` is best effort because it is not supported consistently

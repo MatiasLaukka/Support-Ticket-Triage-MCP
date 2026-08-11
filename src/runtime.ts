@@ -18,7 +18,12 @@ import {
   type OperationalLearningOutboxStore,
 } from "./operational/learning-outbox.js";
 import { createRuntimeOperationalStore } from "./operational/import.js";
-import type { OperationalSqliteStore } from "./operational/sqlite-store.js";
+import { OperationalSqliteStore } from "./operational/sqlite-store.js";
+import {
+  OperationalAuditRepository,
+  OperationalRecommendationRepository,
+  OperationalTicketRepository,
+} from "./operational/runtime-repositories.js";
 import { DEFAULT_MINUTES_PER_ACCEPTED_RECOMMENDATION } from "./metrics.js";
 
 const STARTUP_PATH_MESSAGES = {
@@ -27,6 +32,7 @@ const STARTUP_PATH_MESSAGES = {
   TRIAGE_KNOWLEDGE_ROOT: "TRIAGE_KNOWLEDGE_ROOT must not be blank.",
   TRIAGE_KNOWLEDGE_APPROVERS: "TRIAGE_KNOWLEDGE_APPROVERS must contain at least one actor.",
   TRIAGE_LEARNING_LEDGER_PATH: "TRIAGE_LEARNING_LEDGER_PATH must not be blank.",
+  OPERATIONAL_DB_PATH: "OPERATIONAL_DB_PATH must not be blank.",
 } as const;
 
 export class StartupConfigError extends Error {
@@ -44,6 +50,8 @@ export interface RuntimeOptions {
   now?: () => Date;
   knowledgeCandidateDraftProvider?: CandidateDraftProvider;
   operationalStore?: OperationalCommandStore;
+  /** Explicit compatibility mode for focused legacy repository fixtures only. */
+  legacyFixtureRepositories?: boolean;
 }
 
 export interface RuntimePaths {
@@ -52,14 +60,15 @@ export interface RuntimePaths {
   knowledgeRoot: string;
   recommendationsRoot: string;
   auditFile: string;
+  operationalDatabase: string;
   knowledgeEvolution: { diagnosesRoot: string; candidatesRoot: string; approvedRoot: string; auditFile: string; learningLedgerFile: string };
 }
 
 export interface RuntimeDependencies {
-  tickets: TicketRepository;
+  tickets: TicketRepository | OperationalTicketRepository;
   knowledge: KnowledgeRepository;
-  recommendations: RecommendationRepository;
-  audits: AuditRepository;
+  recommendations: RecommendationRepository | OperationalRecommendationRepository;
+  audits: AuditRepository | OperationalAuditRepository;
   knowledgeEvolution: { diagnoses: DiagnosisRepository; objects: SqliteKnowledgeEvolutionStore; audits: SqliteKnowledgeEvolutionStore; ledger: SqliteLearningLedger; service: KnowledgeEvolutionService };
   service: TriageService;
   operationalStore?: OperationalCommandStore;
@@ -67,6 +76,7 @@ export interface RuntimeDependencies {
   now: () => Date;
   minutesPerAcceptedRecommendation: number;
   paths: RuntimePaths;
+  close(): void;
 }
 
 export function environmentPath(
@@ -148,6 +158,12 @@ export async function createRuntimeDependencies(
   );
   const recommendationsRoot = resolve(dataRoot, "recommendations");
   const auditFile = resolve(dataRoot, "audit", "events.jsonl");
+  const operationalDatabase = environmentPath(
+    "OPERATIONAL_DB_PATH",
+    resolve(dataRoot, "operational.sqlite"),
+    env,
+    cwd,
+  );
   const knowledgeEvolutionPaths = {
     diagnosesRoot: resolve(dataRoot, "knowledge-evolution", "diagnoses"),
     candidatesRoot: resolve(dataRoot, "knowledge-evolution", "candidates"),
@@ -161,27 +177,69 @@ export async function createRuntimeDependencies(
   const knowledgeCandidateDraftProvider = options.knowledgeCandidateDraftProvider ??
     createKnowledgeCandidateDraftProviderFromEnv(env);
 
-  const tickets = new TicketRepository(dataRoot, seedFile);
-  await tickets.initialize();
+  let runtimeOperationalStore: OperationalCommandStore | undefined = options.operationalStore;
+  let sqliteOperationalStore = options.operationalStore instanceof OperationalSqliteStore
+    ? options.operationalStore
+    : undefined;
+  if (runtimeOperationalStore === undefined && options.legacyFixtureRepositories !== true) {
+    sqliteOperationalStore = OperationalSqliteStore.open(operationalDatabase);
+    try {
+      sqliteOperationalStore.initialize();
+    } catch (error) {
+      sqliteOperationalStore.close();
+      throw error;
+    }
+    runtimeOperationalStore = sqliteOperationalStore;
+  }
+  const useOperationalRepositories = sqliteOperationalStore !== undefined
+    && options.legacyFixtureRepositories !== true;
+  const tickets = useOperationalRepositories
+    ? new OperationalTicketRepository(sqliteOperationalStore!)
+    : new TicketRepository(dataRoot, seedFile);
+  if (tickets instanceof TicketRepository) await tickets.initialize();
   const knowledge = new KnowledgeRepository(knowledgeRoot);
-  const recommendations = new RecommendationRepository(recommendationsRoot);
-  const audits = new AuditRepository(auditFile);
+  const recommendations = useOperationalRepositories
+    ? new OperationalRecommendationRepository(sqliteOperationalStore!)
+    : new RecommendationRepository(recommendationsRoot);
+  const audits = useOperationalRepositories
+    ? new OperationalAuditRepository(sqliteOperationalStore!)
+    : new AuditRepository(auditFile);
   const diagnoses = new DiagnosisRepository(knowledgeEvolutionPaths.diagnosesRoot);
-  const ledger = new SqliteLearningLedger(knowledgeEvolutionPaths.learningLedgerFile);
-  await ledger.initialize();
+  let ledger: SqliteLearningLedger;
+  try {
+    ledger = new SqliteLearningLedger(knowledgeEvolutionPaths.learningLedgerFile);
+    await ledger.initialize();
+  } catch (error) {
+    sqliteOperationalStore?.close();
+    throw error;
+  }
   const store = new SqliteKnowledgeEvolutionStore(ledger.getDatabase(), {
     reactivationAuthorizer: (actorId) => approvers.has(actorId),
   });
-  await store.initialize();
+  try {
+    await store.initialize();
+  } catch (error) {
+    ledger.close();
+    sqliteOperationalStore?.close();
+    throw error;
+  }
   const learningCapture = new LearningCaptureService(ledger);
-  const learningOutbox = isOperationalLearningOutboxStore(options.operationalStore)
+  const learningOutbox = isOperationalLearningOutboxStore(runtimeOperationalStore)
     ? new LearningOutboxWorker({
-        store: options.operationalStore,
+        store: runtimeOperationalStore,
         delivery: learningCapture,
         now,
       })
     : undefined;
-  if (learningOutbox !== undefined) await learningOutbox.drainPending();
+  if (learningOutbox !== undefined) {
+    try {
+      await learningOutbox.drainPending();
+    } catch (error) {
+      ledger.close();
+      sqliteOperationalStore?.close();
+      throw error;
+    }
+  }
   const knowledgeEvolution = {
     diagnoses,
     objects: store,
@@ -201,9 +259,9 @@ export async function createRuntimeDependencies(
       now,
     }),
   };
-  const serviceOperationalStore = isImportStateAwareOperationalStore(options.operationalStore)
-    ? createRuntimeOperationalStore(options.operationalStore)
-    : options.operationalStore;
+  const serviceOperationalStore = isImportStateAwareOperationalStore(runtimeOperationalStore)
+    ? createRuntimeOperationalStore(runtimeOperationalStore)
+    : runtimeOperationalStore;
   const service = new TriageService({
     tickets,
     recommendations,
@@ -220,7 +278,7 @@ export async function createRuntimeDependencies(
     audits,
     knowledgeEvolution,
     service,
-    ...(options.operationalStore === undefined ? {} : { operationalStore: options.operationalStore }),
+    ...(runtimeOperationalStore === undefined ? {} : { operationalStore: runtimeOperationalStore }),
     ...(learningOutbox === undefined ? {} : { learningOutbox }),
     now,
     minutesPerAcceptedRecommendation,
@@ -230,7 +288,12 @@ export async function createRuntimeDependencies(
       knowledgeRoot,
       recommendationsRoot,
       auditFile,
+      operationalDatabase,
       knowledgeEvolution: knowledgeEvolutionPaths,
+    },
+    close() {
+      sqliteOperationalStore?.close();
+      ledger.close();
     },
   };
 }

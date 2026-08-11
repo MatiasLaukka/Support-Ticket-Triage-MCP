@@ -652,7 +652,7 @@ describe("createApprovalDeskHttpServer", () => {
     try {
       const mcp = await client.callTool({
         name: "review_diagnosis",
-        arguments: reviewInput,
+        arguments: { commandId: "95000000-0000-4000-8000-000000000001", ...reviewInput },
       });
 
       expect(http.status).toBe(409);
@@ -714,7 +714,7 @@ describe("createApprovalDeskHttpServer", () => {
     try {
       const mcp = await client.callTool({
         name: "review_diagnosis",
-        arguments: reviewInput,
+        arguments: { commandId: "95000000-0000-4000-8000-000000000002", ...reviewInput },
       });
 
       expect(http.status).toBe(400);
@@ -761,6 +761,7 @@ describe("createApprovalDeskHttpServer", () => {
       const mcp = await client.callTool({
         name: "apply_diagnosis_fix",
         arguments: {
+          commandId: "95000000-0000-4000-8000-000000000003",
           diagnosisId: original.id,
           sourceTicketId: "TKT-1001",
           actor: "casey",
@@ -813,6 +814,7 @@ describe("createApprovalDeskHttpServer", () => {
       const mcp = await client.callTool({
         name: "apply_diagnosis_fix",
         arguments: {
+          commandId: "95000000-0000-4000-8000-000000000004",
           diagnosisId: original.id,
           sourceTicketId: "TKT-1001",
           actor: "casey",
@@ -2791,7 +2793,7 @@ describe("createApprovalDeskHttpServer", () => {
       ticketId: "TKT-1001",
       actor: "matias-reviewer",
       closedAt: now.toISOString(),
-    });
+    }, undefined);
     expect(response.status).toBe(400);
     expect(response.body.error.message).toBe(
       "Evaluate the latest customer reply before closing the ticket.",
@@ -4210,6 +4212,7 @@ async function startFixture(
   const dataRoot = await mkdtemp(join(tmpdir(), "approval-desk-http-"));
   temporaryRoots.push(dataRoot);
   const deps = await createRuntimeDependencies({
+    legacyFixtureRepositories: true,
     env: {
       TRIAGE_DATA_ROOT: dataRoot,
       TRIAGE_SEED_FILE: resolve("data/seed/tickets.json"),

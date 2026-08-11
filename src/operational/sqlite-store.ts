@@ -186,6 +186,13 @@ export class OperationalSqliteStore {
     return this.readWorkflowSnapshot(ticketId);
   }
 
+  listWorkflowSnapshots(): OperationalWorkflowSnapshot[] {
+    this.assertInitialized();
+    const read = this.database.transaction(() => this.withReader((reader) =>
+      reader.readTicketIds().map((ticketId) => reader.readWorkflowSnapshot(ticketId))));
+    return read();
+  }
+
   readOutbox(id: string): OperationalOutboxRow | undefined {
     this.assertInitialized();
     return this.withReader((reader) => reader.readOutbox(id));

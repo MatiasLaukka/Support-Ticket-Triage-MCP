@@ -63,6 +63,7 @@ describe("runtime configuration", () => {
     const fixedNow = new Date("2026-06-26T12:00:00.000Z");
 
     const deps = await createRuntimeDependencies({
+      legacyFixtureRepositories: true,
       env: {
         TRIAGE_DATA_ROOT: dataRoot,
         TRIAGE_SEED_FILE: resolve("data", "seed", "tickets.json"),
@@ -97,6 +98,7 @@ describe("runtime configuration", () => {
     temporaryRoots.push(dataRoot);
     const customLedger = join(dataRoot, "custom", "learning.sqlite");
     const deps = await createRuntimeDependencies({
+      legacyFixtureRepositories: true,
       env: {
         TRIAGE_DATA_ROOT: dataRoot,
         TRIAGE_SEED_FILE: resolve("data", "seed", "tickets.json"),
@@ -113,6 +115,7 @@ describe("runtime configuration", () => {
     const dataRoot = await mkdtemp(join(tmpdir(), "triage-runtime-diagnosis-"));
     temporaryRoots.push(dataRoot);
     const deps = await createRuntimeDependencies({
+      legacyFixtureRepositories: true,
       env: { TRIAGE_DATA_ROOT: dataRoot, TRIAGE_SEED_FILE: resolve("data", "seed", "tickets.json"), TRIAGE_KNOWLEDGE_ROOT: resolve("data", "knowledge") },
     });
     openLedgers.push(deps.knowledgeEvolution.ledger);
@@ -197,6 +200,7 @@ describe("runtime configuration", () => {
     const dataRoot = await mkdtemp(join(tmpdir(), "triage-runtime-candidate-provider-"));
     temporaryRoots.push(dataRoot);
     const deps = await createRuntimeDependencies({
+      legacyFixtureRepositories: true,
       env: {
         TRIAGE_DATA_ROOT: dataRoot,
         TRIAGE_SEED_FILE: resolve("data", "seed", "tickets.json"),

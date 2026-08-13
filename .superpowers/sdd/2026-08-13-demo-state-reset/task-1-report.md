@@ -115,14 +115,72 @@ exit code 0
 ## Commits
 
 - `80bea23` — `feat: add operational demo state reset`
+- `1e6fc6d` — `fix: harden operational reset coordination`
 
 ## Concerns / handoff
 
-- Task 1 intentionally exposes `acquireDemoStateUsageLease()` but does not wire
-  it into `createRuntimeDependencies()`; the approved plan assigns acquisition
-  before resource opening and `runtime.close()` release to Task 2.
 - Backup deletion is best-effort after final-path verification. A denied cleanup
   can retain a sanitized, sibling backup artifact; it cannot cause the verified
   replacement or original data to be deleted through a partial rollback.
 - The approved plan file was already untracked in the worktree and was not
   modified or included in the implementation commit.
+
+## Review-fix verification
+
+The first Task 1 review identified two high-severity gaps:
+
+1. `createRuntimeDependencies()` did not yet acquire the shared production
+   usage lease before opening operational SQLite, learning SQLite, or mutable
+   diagnosis state.
+2. A failure after one live database member had moved to backup could lose the
+   moved-entry inventory if immediate restoration also failed, producing an
+   inaccurate “original restored” error while a backup remained.
+
+Additional RED command:
+
+```text
+npx vitest run test/demo-reset.test.ts test/demo-reset-recovery.test.ts
+```
+
+Observed RED result:
+
+```text
+Test Files 2 failed (2)
+Tests 2 failed | 12 passed (14)
+
+- runtime startup resolved and opened operational/learning state while the
+  exclusive reset lease was held;
+- partial backup failure returned REPLACEMENT_FAILED with “original database
+  was restored” instead of ROLLBACK_FAILED naming the retained backup.
+```
+
+Review fix:
+
+- Runtime now acquires the shared usage lease immediately after non-mutating
+  configuration resolution and before any operational SQLite, learning SQLite,
+  or diagnosis repository construction. Startup failure and `runtime.close()`
+  release it.
+- Backup moves now append each successful rename to the prepared operation’s
+  durable in-memory inventory. The single outer rollback owns restoration and
+  reports any retained recovery basename if restoration cannot complete.
+
+Focused GREEN after the review fix:
+
+```text
+npx vitest run test/demo-reset.test.ts test/demo-reset-recovery.test.ts test/runtime.test.ts
+Test Files 3 passed (3)
+Tests 24 passed (24)
+```
+
+Fresh full verification after the review fix:
+
+```text
+npm test
+Test Files 86 passed (86)
+Tests 1496 passed (1496)
+exit code 0
+```
+
+Review-fix commit:
+
+- `1e6fc6d` — `fix: harden operational reset coordination`

@@ -1,6 +1,7 @@
 import Database from "better-sqlite3";
 import { createHash } from "node:crypto";
 import {
+  existsSync,
   mkdtempSync,
   readFileSync,
   readdirSync,
@@ -28,6 +29,7 @@ import {
 import type { LearningCaptureEnvelope } from "../src/operational/domain.js";
 import { canonicalRequestHash } from "../src/operational/idempotency.js";
 import { OperationalSqliteStore } from "../src/operational/sqlite-store.js";
+import { createRuntimeDependencies } from "../src/runtime.js";
 
 const roots: string[] = [];
 const children: ChildProcess[] = [];
@@ -161,6 +163,49 @@ describe("operational demo reset", () => {
     } finally {
       prepared.rollback();
     }
+  });
+
+  it("blocks real runtime startup before it opens mutable state while reset is prepared", async () => {
+    const harness = dirtyHarness();
+    const prepared = prepareOperationalDemoReset(harness.input);
+    const learningDatabase = join(harness.root, "knowledge-evolution", "learning.sqlite");
+    try {
+      await expect(createRuntimeDependencies({
+        cwd: harness.root,
+        env: {
+          TRIAGE_DATA_ROOT: harness.root,
+          TRIAGE_SEED_FILE: harness.seedFile,
+          TRIAGE_KNOWLEDGE_ROOT: resolve("data", "knowledge"),
+          OPERATIONAL_DB_PATH: harness.databasePath,
+        },
+      })).rejects.toThrow(/reset.*active/i);
+      expect(existsSync(learningDatabase)).toBe(false);
+      expect(existsSync(join(harness.root, "knowledge-evolution", "diagnoses"))).toBe(false);
+    } finally {
+      prepared.rollback();
+    }
+  });
+
+  it("holds the shared usage lease for the real runtime lifetime", async () => {
+    const harness = dirtyHarness();
+    const runtime = await createRuntimeDependencies({
+      cwd: harness.root,
+      env: {
+        TRIAGE_DATA_ROOT: harness.root,
+        TRIAGE_SEED_FILE: harness.seedFile,
+        TRIAGE_KNOWLEDGE_ROOT: resolve("data", "knowledge"),
+        OPERATIONAL_DB_PATH: harness.databasePath,
+      },
+    });
+    try {
+      expect(() => resetOperationalDemoState(harness.input)).toThrow(
+        /operational demo state is active/i,
+      );
+    } finally {
+      runtime.close();
+    }
+
+    expect(() => resetOperationalDemoState(harness.input)).not.toThrow();
   });
 
   it("does not replace the live database until commit and rollback removes the prepared file", () => {

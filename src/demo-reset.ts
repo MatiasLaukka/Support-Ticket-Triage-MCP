@@ -185,7 +185,8 @@ class PreparedOperationalDemoResetImpl implements PreparedOperationalDemoReset {
     try {
       this.verify();
       checkpointAndClose(this.paths.database);
-      this.backupEntries = moveLiveDatabaseToBackup(this.paths);
+      this.backupEntries = [];
+      moveLiveDatabaseToBackup(this.paths, this.backupEntries);
       renameSync(this.paths.temporary, this.paths.database);
       this.replacementInstalled = true;
       for (const suffix of SQLITE_SIDECAR_SUFFIXES) {
@@ -380,7 +381,7 @@ function checkpointAndClose(path: string): void {
   }
 }
 
-function moveLiveDatabaseToBackup(paths: ResetPaths): BackupEntry[] {
+function moveLiveDatabaseToBackup(paths: ResetPaths, moved: BackupEntry[]): void {
   const entries = databaseSet(paths.database)
     .map((live, index) => ({
       live,
@@ -389,18 +390,9 @@ function moveLiveDatabaseToBackup(paths: ResetPaths): BackupEntry[] {
         : `${paths.backup}${SQLITE_SIDECAR_SUFFIXES[index - 1]}`,
     }))
     .filter(({ live }) => existsSync(live));
-  const moved: BackupEntry[] = [];
-  try {
-    for (const entry of entries) {
-      renameSync(entry.live, entry.backup);
-      moved.push(entry);
-    }
-    return moved;
-  } catch (error) {
-    for (const entry of [...moved].reverse()) {
-      if (existsSync(entry.backup)) renameSync(entry.backup, entry.live);
-    }
-    throw error;
+  for (const entry of entries) {
+    renameSync(entry.live, entry.backup);
+    moved.push(entry);
   }
 }
 

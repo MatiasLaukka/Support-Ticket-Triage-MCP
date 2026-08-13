@@ -26,6 +26,7 @@ import {
 } from "./operational/runtime-repositories.js";
 import { DEFAULT_MINUTES_PER_ACCEPTED_RECOMMENDATION } from "./metrics.js";
 import { DomainError } from "./errors.js";
+import { acquireDemoStateUsageLease } from "./demo-state-lease.js";
 
 const STARTUP_PATH_MESSAGES = {
   TRIAGE_DATA_ROOT: "TRIAGE_DATA_ROOT must not be blank.",
@@ -190,10 +191,13 @@ export async function createRuntimeDependencies(
   const knowledgeCandidateDraftProvider = options.knowledgeCandidateDraftProvider ??
     createKnowledgeCandidateDraftProviderFromEnv(env);
 
+  const usageLease = acquireDemoStateUsageLease(dataRoot);
   let runtimeOperationalStore: OperationalCommandStore | undefined = options.operationalStore;
   let sqliteOperationalStore = options.operationalStore instanceof OperationalSqliteStore
     ? options.operationalStore
     : undefined;
+  let ledger: SqliteLearningLedger | undefined;
+  try {
   if (runtimeOperationalStore === undefined && options.legacyFixtureRepositories !== true) {
     sqliteOperationalStore = OperationalSqliteStore.open(operationalDatabase);
     try {
@@ -218,7 +222,6 @@ export async function createRuntimeDependencies(
     ? new OperationalAuditRepository(sqliteOperationalStore!)
     : new AuditRepository(auditFile);
   const diagnoses = new DiagnosisRepository(knowledgeEvolutionPaths.diagnosesRoot);
-  let ledger: SqliteLearningLedger | undefined;
   let store: SqliteKnowledgeEvolutionStore | undefined;
   let learningAvailability: LearningAvailability = { status: "available" };
   try {
@@ -315,8 +318,15 @@ export async function createRuntimeDependencies(
     close() {
       sqliteOperationalStore?.close();
       ledger?.close();
+      usageLease.release();
     },
   };
+  } catch (error) {
+    sqliteOperationalStore?.close();
+    ledger?.close();
+    usageLease.release();
+    throw error;
+  }
 }
 
 function unavailableKnowledgeEvolution(

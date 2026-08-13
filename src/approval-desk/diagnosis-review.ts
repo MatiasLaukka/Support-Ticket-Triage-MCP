@@ -13,6 +13,11 @@ import {
 } from "../domain.js";
 import { DiagnosisContextSchema } from "../triage-service.js";
 import { compareIsoInstants } from "../iso-instant.js";
+import { DomainError } from "../errors.js";
+import {
+  OperationalDiagnosisRecordSchema,
+  type OperationalWorkflowSnapshot,
+} from "../operational/domain.js";
 import {
   auditCausalPositions,
   compareAuditCausalOrder,
@@ -326,10 +331,18 @@ export function latestStrictDiagnosisReviewRecord(
 export function diagnosisReviewViews(input: {
   ticket: Pick<Ticket, "id" | "revision">;
   audits: readonly AuditEvent[];
+  originalDiagnoses?: readonly OperationalWorkflowSnapshot["diagnoses"][number][];
 }): DiagnosisReviewView[] {
-  const positions = auditCausalPositions(input.audits);
+  const authoritativeAudits = input.originalDiagnoses === undefined
+    ? input.audits
+    : operationalDiagnosisAudits({
+        ticket: input.ticket,
+        audits: input.audits,
+        originalDiagnoses: input.originalDiagnoses,
+      });
+  const positions = auditCausalPositions(authoritativeAudits);
   const latestConversationWatermark = conversationWatermarkFromAudits(
-    input.audits,
+    authoritativeAudits,
   );
 
   return positions
@@ -344,7 +357,7 @@ export function diagnosisReviewViews(input: {
       );
       const reviews = positions
         .flatMap((position) => {
-          const record = strictDiagnosisReviewRecord(input.audits, position);
+          const record = strictDiagnosisReviewRecord(authoritativeAudits, position);
           return record?.review.diagnosisId === originalDiagnosis.id
             ? [record]
             : [];
@@ -365,7 +378,7 @@ export function diagnosisReviewViews(input: {
         CustomerReplyWatermarkSchema.safeParse(
           originalDiagnosis.after.sourceConversationWatermark,
         ).data ?? conversationWatermarkAt(
-          input.audits,
+          authoritativeAudits,
           originalPosition.index,
         );
       const freshness = isDiagnosisStale({
@@ -396,6 +409,66 @@ export function diagnosisReviewViews(input: {
         sourceConversationWatermark,
       });
     });
+}
+
+function operationalDiagnosisAudits(input: {
+  ticket: Pick<Ticket, "id" | "revision">;
+  audits: readonly AuditEvent[];
+  originalDiagnoses: readonly OperationalWorkflowSnapshot["diagnoses"][number][];
+}): readonly AuditEvent[] {
+  try {
+    const records = input.originalDiagnoses.map((record) =>
+      OperationalDiagnosisRecordSchema.parse(record)
+    );
+    const recordsByEventId = new Map(records.map((record) => [
+      record.operationalEventId,
+      record,
+    ]));
+    const milestones = input.audits.filter(
+      (event) =>
+        event.ticketId === input.ticket.id
+        && isDiagnosisLifecycleMilestone(event),
+    );
+
+    if (
+      records.some((record) => record.diagnosis.ticketId !== input.ticket.id)
+      || recordsByEventId.size !== records.length
+      || milestones.length !== records.length
+      || milestones.some((event) => !recordsByEventId.has(event.id))
+    ) {
+      throw operationalDiagnosisIntegrityError();
+    }
+
+    return input.audits.map((event) => {
+      const record = recordsByEventId.get(event.id);
+      if (record === undefined) return event;
+      const original = record.originalAudit;
+      if (
+        event.ticketId !== original.ticketId
+        || event.action !== original.action
+        || event.actor !== original.actor
+        || event.timestamp !== original.timestamp
+      ) {
+        throw operationalDiagnosisIntegrityError();
+      }
+      return original;
+    });
+  } catch (error) {
+    if (error instanceof DomainError) throw error;
+    throw operationalDiagnosisIntegrityError();
+  }
+}
+
+function isDiagnosisLifecycleMilestone(event: AuditEvent): boolean {
+  return event.action === "diagnosis-completed"
+    || event.action === "diagnostic-escalated";
+}
+
+function operationalDiagnosisIntegrityError(): DomainError {
+  return new DomainError(
+    "Operational diagnosis persistence is inconsistent.",
+    "REPOSITORY_ERROR",
+  );
 }
 
 export function customerReplyWatermarksMatch(

@@ -849,12 +849,17 @@ async function getTicketDiagnoses(
   id: string,
 ): Promise<unknown> {
   const ticketId = TicketIdSchema.parse(id);
-  const [ticket, audits] = await Promise.all([
+  const [ticket, audits, originalDiagnoses] = await Promise.all([
     deps.tickets.get(ticketId),
     deps.audits.list(ticketId),
+    deps.operationalDiagnoses?.list(ticketId),
   ]);
   return DiagnosisReviewListOutputSchema.parse({
-    diagnoses: diagnosisReviewViews({ ticket, audits }),
+    diagnoses: diagnosisReviewViews({
+      ticket,
+      audits,
+      ...(originalDiagnoses === undefined ? {} : { originalDiagnoses }),
+    }),
   });
 }
 
@@ -871,13 +876,18 @@ async function reviewDiagnosis(
     diagnosisId,
     reviewedAt: deps.now().toISOString(),
   }, commandContextFromRequest(request, deps));
-  const [ticket, audits] = await Promise.all([
+  const [ticket, audits, originalDiagnoses] = await Promise.all([
     deps.tickets.get(ticketId),
     deps.audits.list(ticketId),
+    deps.operationalDiagnoses?.list(ticketId),
   ]);
   return DiagnosisReviewActionOutputSchema.parse({
     auditEvent,
-    diagnoses: diagnosisReviewViews({ ticket, audits }),
+    diagnoses: diagnosisReviewViews({
+      ticket,
+      audits,
+      ...(originalDiagnoses === undefined ? {} : { originalDiagnoses }),
+    }),
   });
 }
 

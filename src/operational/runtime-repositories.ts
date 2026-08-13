@@ -12,6 +12,7 @@ import type { PaginatedTickets, TicketFilter } from "../ticket-repository.js";
 import { operationalAuditEventsFromSnapshot } from "../triage-service.js";
 import { OperationalSqliteStore } from "./sqlite-store.js";
 import { OperationalStoreError } from "./unit-of-work.js";
+import type { OperationalWorkflowSnapshot } from "./domain.js";
 
 const DEFAULT_PAGE_LIMIT = 20;
 const MAX_PAGE_LIMIT = 50;
@@ -81,11 +82,30 @@ export class OperationalAuditRepository {
   constructor(private readonly store: OperationalSqliteStore) {}
 
   async list(ticketId?: TicketId): Promise<AuditEvent[]> {
-    const snapshots = ticketId === undefined
-      ? this.store.listWorkflowSnapshots()
-      : [this.store.readWorkflowSnapshot(TicketIdSchema.parse(ticketId))];
-    return snapshots.flatMap(operationalAuditEventsFromSnapshot)
-      .map((event) => AuditEventSchema.parse(event));
+    try {
+      const snapshots = ticketId === undefined
+        ? this.store.listWorkflowSnapshots()
+        : [this.store.readWorkflowSnapshot(TicketIdSchema.parse(ticketId))];
+      return this.store.transaction((unit) => snapshots.flatMap((snapshot) =>
+        snapshot.events.flatMap((event) => {
+          const lifecycleAudit = unit.readCommandResult(event.commandId)
+            ?.lifecycleAuditEvents?.find((candidate) => candidate.id === event.id);
+          return lifecycleAudit === undefined
+              || event.action === "diagnosis-completed"
+              || event.action === "diagnostic-escalated"
+            ? operationalAuditEventsFromSnapshot({
+                ...snapshot,
+                events: [event],
+              })
+            : [AuditEventSchema.parse(lifecycleAudit)];
+        })
+      ));
+    } catch (error) {
+      throw mapReadError(
+        error,
+        ticketId === undefined ? undefined : `Ticket ${ticketId} was not found.`,
+      );
+    }
   }
 
   async listPage(input: AuditPageInput): Promise<AuditPage> {
@@ -99,9 +119,36 @@ export class OperationalAuditRepository {
   async appendBatch(): Promise<never> { throw mutationBoundary(); }
 }
 
-function mapReadError(error: unknown, notFoundMessage: string, notFoundCode: "TICKET_NOT_FOUND"): Error {
+export class OperationalDiagnosisRepository {
+  constructor(private readonly store: OperationalSqliteStore) {}
+
+  async list(
+    ticketId?: TicketId,
+  ): Promise<OperationalWorkflowSnapshot["diagnoses"]> {
+    try {
+      const snapshots = ticketId === undefined
+        ? this.store.listWorkflowSnapshots()
+        : [this.store.readWorkflowSnapshot(TicketIdSchema.parse(ticketId))];
+
+      return snapshots
+        .flatMap(({ diagnoses }) => diagnoses)
+        .map((record) => structuredClone(record));
+    } catch (error) {
+      throw mapReadError(
+        error,
+        ticketId === undefined ? undefined : `Ticket ${ticketId} was not found.`,
+      );
+    }
+  }
+}
+
+function mapReadError(
+  error: unknown,
+  notFoundMessage?: string,
+  notFoundCode: "TICKET_NOT_FOUND" = "TICKET_NOT_FOUND",
+): Error {
   if (error instanceof OperationalStoreError) {
-    return error.code === "NOT_FOUND"
+    return error.code === "NOT_FOUND" && notFoundMessage !== undefined
       ? new DomainError(notFoundMessage, notFoundCode)
       : new DomainError("Operational persistence is unavailable.", "REPOSITORY_ERROR");
   }

@@ -453,6 +453,22 @@ describe("createApprovalDeskHttpServer", () => {
     await expect(deps.audits.list("TKT-1001")).resolves.toEqual(before);
   });
 
+  it("returns a stable repository error when an operational milestone has no canonical diagnosis child", async () => {
+    const { deps, json } = await startFixture();
+    await recordCurrentDiagnosis(deps, "TKT-1001");
+    (deps as any).operationalDiagnoses = { list: async () => [] };
+
+    const response = await json("/api/tickets/TKT-1001/diagnoses");
+
+    expect(response.status).toBe(503);
+    expect(response.body).toEqual({
+      error: {
+        code: "REPOSITORY_ERROR",
+        message: "Operational diagnosis persistence is inconsistent.",
+      },
+    });
+  });
+
   it("records a diagnosis review through HTTP and returns the updated causal view", async () => {
     const { deps, json } = await startFixture();
     const original = await recordCurrentDiagnosis(deps, "TKT-1001");

@@ -2316,12 +2316,32 @@ export class TriageService {
         )) {
           throw stale("Diagnosis review conversation snapshot is stale.");
         }
-        const original = audits.find(
+        const originalRecord = snapshot.diagnoses.find(
+          (record) =>
+            record.operationalEventId === review.diagnosisId
+            && record.diagnosis.ticketId === review.ticketId,
+        );
+        const milestone = snapshot.events.find(
           (event) =>
             event.id === review.diagnosisId
             && event.ticketId === review.ticketId
             && (event.action === "diagnosis-completed" || event.action === "diagnostic-escalated"),
         );
+        if (
+          originalRecord === undefined
+          || milestone === undefined
+          || originalRecord.originalAudit.id !== milestone.id
+          || originalRecord.originalAudit.ticketId !== milestone.ticketId
+          || originalRecord.originalAudit.action !== milestone.action
+          || originalRecord.originalAudit.actor !== milestone.actor
+          || originalRecord.originalAudit.timestamp !== milestone.occurredAt
+        ) {
+          throw new DomainError(
+            "Operational diagnosis persistence is inconsistent.",
+            "REPOSITORY_ERROR",
+          );
+        }
+        const original = originalRecord.originalAudit;
         const originalDiagnosis = DiagnosisContextSchema.safeParse(original?.after.diagnosis);
         if (original === undefined || !originalDiagnosis.success) {
           throw invalidDiagnosisReview("Diagnosis review must reference an original diagnosis audit.");

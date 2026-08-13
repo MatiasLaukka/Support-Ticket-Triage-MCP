@@ -375,7 +375,379 @@ describe("operational diagnosis persistence", () => {
       runtime.close();
     }
   });
+
+  it("continues the governed diagnosis lifecycle across runtime restarts", async () => {
+    const root = await mkdtemp(join(tmpdir(), "operational-diagnosis-lifecycle-"));
+    roots.push(root);
+    const operationalDatabase = join(root, "operational.sqlite");
+    const env = {
+      TRIAGE_DATA_ROOT: root,
+      TRIAGE_SEED_FILE: resolve("data", "seed", "tickets.json"),
+      TRIAGE_KNOWLEDGE_ROOT: resolve("data", "knowledge"),
+      TRIAGE_LEARNING_LEDGER_PATH: join(root, "knowledge-evolution", "learning.sqlite"),
+      OPERATIONAL_DB_PATH: operationalDatabase,
+    };
+    resetOperationalDemoState({
+      operationalDatabase,
+      seedFile: env.TRIAGE_SEED_FILE,
+      dataRoot: root,
+    });
+
+    let currentTime = Date.parse("2026-08-13T10:00:00.000Z");
+    const now = () => new Date(currentTime);
+    let runtime = await createRuntimeDependencies({ env, now });
+    let server = createApprovalDeskHttpServer(runtime);
+    let baseUrl = await listen(server);
+
+    try {
+      const initialEvaluation = await requestJson(
+        baseUrl,
+        `/api/tickets/${ticketId}/recommendations`,
+        {
+          method: "POST",
+          headers: commandHeaders(101),
+          body: JSON.stringify({
+            actor: "approval-desk",
+            aiPreference: "deterministic",
+          }),
+        },
+        201,
+      );
+      expect(initialEvaluation.recommendation.missingEvidence.length).toBeGreaterThan(0);
+
+      currentTime += 60_000;
+      await approveAndSend(
+        baseUrl,
+        initialEvaluation.recommendation,
+        102,
+        103,
+      );
+
+      currentTime += 60_000;
+      await requestJson(baseUrl, `/api/tickets/${ticketId}/customer-replies`, {
+        method: "POST",
+        headers: commandHeaders(104),
+        body: JSON.stringify({
+          actor: "Jamie Lee",
+          source: "manual",
+          body:
+            "The campaign name is Summer Flash Sale. The failure timestamp was 2026-08-13 09:55 UTC. I use Chrome, and the page is still blank in a private window after signing out and back in. Microsoft Edge is also blank, another admin sees the same result, and the browser console shows ChunkLoadError. The affected scope appears to be 12 profiles in the latest export.",
+        }),
+      }, 201);
+
+      currentTime += 60_000;
+      const evidenceEvaluation = await requestJson(
+        baseUrl,
+        `/api/tickets/${ticketId}/recommendations`,
+        {
+          method: "POST",
+          headers: commandHeaders(105),
+          body: JSON.stringify({
+            actor: "approval-desk",
+            aiPreference: "deterministic",
+          }),
+        },
+        201,
+      );
+      expect(evidenceEvaluation.recommendation.missingEvidence).toEqual([]);
+
+      currentTime += 60_000;
+      await approveAndSend(
+        baseUrl,
+        evidenceEvaluation.recommendation,
+        106,
+        107,
+      );
+
+      currentTime += 60_000;
+      const recorded = await requestJson(
+        baseUrl,
+        `/api/tickets/${ticketId}/diagnosis`,
+        {
+          method: "POST",
+          headers: commandHeaders(108),
+          body: JSON.stringify({ actor: "product-support" }),
+        },
+        201,
+      );
+      const diagnosisId = recorded.auditEvent.id;
+      const originalDiagnosis = recorded.auditEvent.after.diagnosis;
+      expect(originalDiagnosis).toMatchObject({
+        status: "completed",
+        causeType: "performance",
+        owner: "engineering",
+      });
+
+      const beforeRestart = await requestJson(
+        baseUrl,
+        `/api/tickets/${ticketId}/diagnoses`,
+        undefined,
+        200,
+      );
+      expectCanonicalDiagnosis(
+        runtime,
+        beforeRestart,
+        diagnosisId,
+        originalDiagnosis,
+      );
+
+      await closeServer(server);
+      runtime.close();
+      runtime = await createRuntimeDependencies({ env, now });
+      server = createApprovalDeskHttpServer(runtime);
+      baseUrl = await listen(server);
+
+      const afterRestart = await requestJson(
+        baseUrl,
+        `/api/tickets/${ticketId}/diagnoses`,
+        undefined,
+        200,
+      );
+      const reviewableView = expectCanonicalDiagnosis(
+        runtime,
+        afterRestart,
+        diagnosisId,
+        originalDiagnosis,
+      );
+      const editedDiagnosis = {
+        ...originalDiagnosis,
+        recommendedNextAction:
+          "Apply the governed performance correction and verify a fresh export.",
+      };
+
+      currentTime += 60_000;
+      const approved = await requestJson(
+        baseUrl,
+        `/api/tickets/${ticketId}/diagnoses/${diagnosisId}/review`,
+        {
+          method: "POST",
+          headers: commandHeaders(109),
+          body: JSON.stringify({
+            decision: "approve",
+            sourceTicketRevision: reviewableView.sourceTicketRevision,
+            sourceConversationWatermark: reviewableView.sourceConversationWatermark,
+            editedDiagnosis,
+            actor: "restart-reviewer",
+          }),
+        },
+        201,
+      );
+      expect(diagnosisView(approved, diagnosisId)).toMatchObject({
+        latestReview: { decision: "approve", editedDiagnosis },
+        stale: false,
+      });
+      const afterApprovalRevision = (await runtime.tickets.get(ticketId)).revision;
+
+      currentTime += 60_000;
+      const continuedEvaluation = await requestJson(
+        baseUrl,
+        `/api/tickets/${ticketId}/recommendations`,
+        {
+          method: "POST",
+          headers: commandHeaders(110),
+          body: JSON.stringify({
+            actor: "approval-desk",
+            aiPreference: "deterministic",
+          }),
+        },
+        201,
+      );
+      expect(continuedEvaluation.recommendation).toMatchObject({
+        ticketId,
+        sourceRevision: afterApprovalRevision,
+      });
+
+      currentTime += 60_000;
+      const newerReply = await requestJson(
+        baseUrl,
+        `/api/tickets/${ticketId}/customer-replies`,
+        {
+          method: "POST",
+          headers: commandHeaders(111),
+          body: JSON.stringify({
+            actor: "Jamie Lee",
+            source: "manual",
+            body:
+              "The editor is still blank after the reviewed diagnosis, so please revalidate it against this new evidence.",
+          }),
+        },
+        201,
+      );
+      const staleBeforeRestart = await requestJson(
+        baseUrl,
+        `/api/tickets/${ticketId}/diagnoses`,
+        undefined,
+        200,
+      );
+      expect(diagnosisView(staleBeforeRestart, diagnosisId)).toMatchObject({
+        latestReview: { decision: "approve", editedDiagnosis },
+        stale: true,
+        staleReasons: expect.arrayContaining(["newer-customer-reply"]),
+      });
+
+      await closeServer(server);
+      runtime.close();
+      runtime = await createRuntimeDependencies({ env, now });
+      server = createApprovalDeskHttpServer(runtime);
+      baseUrl = await listen(server);
+
+      const staleAfterRestart = await requestJson(
+        baseUrl,
+        `/api/tickets/${ticketId}/diagnoses`,
+        undefined,
+        200,
+      );
+      expectCanonicalDiagnosis(
+        runtime,
+        staleAfterRestart,
+        diagnosisId,
+        originalDiagnosis,
+      );
+      expect(diagnosisView(staleAfterRestart, diagnosisId)).toMatchObject({
+        latestReview: { decision: "approve", editedDiagnosis },
+        stale: true,
+        staleReasons: expect.arrayContaining(["newer-customer-reply"]),
+      });
+
+      const currentTicket = await runtime.tickets.get(ticketId);
+      const replyWatermark = {
+        state: "reply",
+        id: newerReply.auditEvent.id,
+        timestamp: newerReply.auditEvent.timestamp,
+      };
+      currentTime += 60_000;
+      const revalidated = await requestJson(
+        baseUrl,
+        `/api/tickets/${ticketId}/diagnoses/${diagnosisId}/review`,
+        {
+          method: "POST",
+          headers: commandHeaders(112),
+          body: JSON.stringify({
+            decision: "revalidate",
+            sourceTicketRevision: currentTicket.revision,
+            sourceConversationWatermark: replyWatermark,
+            editedDiagnosis,
+            actor: "restart-reviewer",
+            rationale: "The newer customer reply still supports the reviewed diagnosis.",
+          }),
+        },
+        201,
+      );
+      expect(diagnosisView(revalidated, diagnosisId)).toMatchObject({
+        latestReview: { decision: "revalidate", editedDiagnosis },
+        stale: false,
+        staleReasons: [],
+      });
+
+      currentTime += 60_000;
+      const resumedEvaluation = await requestJson(
+        baseUrl,
+        `/api/tickets/${ticketId}/recommendations`,
+        {
+          method: "POST",
+          headers: commandHeaders(113),
+          body: JSON.stringify({
+            actor: "approval-desk",
+            aiPreference: "deterministic",
+          }),
+        },
+        201,
+      );
+      expect(resumedEvaluation.recommendation).toMatchObject({ ticketId });
+
+      await closeServer(server);
+      runtime.close();
+      runtime = await createRuntimeDependencies({ env, now });
+      server = createApprovalDeskHttpServer(runtime);
+      baseUrl = await listen(server);
+
+      const revalidatedAfterRestart = await requestJson(
+        baseUrl,
+        `/api/tickets/${ticketId}/diagnoses`,
+        undefined,
+        200,
+      );
+      expectCanonicalDiagnosis(
+        runtime,
+        revalidatedAfterRestart,
+        diagnosisId,
+        originalDiagnosis,
+      );
+      expect(diagnosisView(revalidatedAfterRestart, diagnosisId)).toMatchObject({
+        latestReview: { decision: "revalidate", editedDiagnosis },
+        stale: false,
+        staleReasons: [],
+      });
+    } finally {
+      await closeServer(server);
+      runtime.close();
+    }
+  });
 });
+
+async function approveAndSend(
+  baseUrl: string,
+  recommendation: any,
+  approvalSequence: number,
+  sentSequence: number,
+): Promise<void> {
+  await requestJson(baseUrl, `/api/recommendations/${recommendation.id}/approve`, {
+    method: "POST",
+    headers: commandHeaders(approvalSequence),
+    body: JSON.stringify({
+      ticketId,
+      expectedRevision: recommendation.sourceRevision,
+      approvedFields: ["category", "priority", "team", "customerResponse"],
+      editedCustomerResponse: recommendation.draftCustomerResponse,
+      actor: "restart-reviewer",
+      confirm: true,
+    }),
+  }, 200);
+  await requestJson(baseUrl, `/api/recommendations/${recommendation.id}/mark-sent`, {
+    method: "POST",
+    headers: commandHeaders(sentSequence),
+    body: JSON.stringify({
+      ticketId,
+      actor: "restart-reviewer",
+      automaticReplyEnabled: false,
+    }),
+  }, 200);
+}
+
+function expectCanonicalDiagnosis(
+  runtime: RuntimeDependencies,
+  responseBody: any,
+  diagnosisId: string,
+  originalDiagnosis: any,
+): any {
+  const snapshot = operationalStore(runtime).readWorkflowSnapshot(ticketId);
+  const milestone = snapshot.events.find((event) => event.id === diagnosisId);
+  const canonicalChild = snapshot.diagnoses.find(
+    (record) => record.operationalEventId === diagnosisId,
+  );
+  expect(milestone).toMatchObject({
+    id: diagnosisId,
+    ticketId,
+    action: "diagnosis-completed",
+  });
+  expect(canonicalChild).toMatchObject({
+    diagnosis: { ticketId },
+    operationalEventId: diagnosisId,
+    originalAudit: {
+      id: diagnosisId,
+      ticketId,
+      after: { diagnosis: originalDiagnosis },
+    },
+  });
+  expect(canonicalChild?.operationalEventId).toBe(milestone?.id);
+  const view = diagnosisView(responseBody, diagnosisId);
+  expect(view.originalDiagnosis).toMatchObject({
+    id: diagnosisId,
+    ticketId,
+    after: { diagnosis: originalDiagnosis },
+  });
+  return view;
+}
 
 function commandHeaders(sequence: number): Record<string, string> {
   return {

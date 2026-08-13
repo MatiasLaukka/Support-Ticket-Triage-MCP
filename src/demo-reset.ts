@@ -1188,14 +1188,17 @@ function isLearningDatabase(path: string): boolean {
       (database.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as Array<{ name: string }>)
         .map(({ name }) => name),
     );
+    if ((tables.has("learning_events") && tables.has("learning_deliveries"))
+      || (tables.has("knowledge_candidates") && tables.has("knowledge_versions"))) {
+      return true;
+    }
     if (tables.has("schema_meta")) {
       const marker = database.prepare(
         "SELECT value FROM schema_meta WHERE key = 'learning-ledger'",
       ).get() as { value?: string } | undefined;
       if (marker?.value === "1") return true;
     }
-    return (tables.has("learning_events") && tables.has("learning_deliveries"))
-      || (tables.has("knowledge_candidates") && tables.has("knowledge_versions"));
+    return false;
   } catch {
     return false;
   } finally {

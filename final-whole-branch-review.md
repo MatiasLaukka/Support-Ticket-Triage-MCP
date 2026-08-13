@@ -1,5 +1,124 @@
 # Final whole-branch review: demo state reset
 
+## Residual schema-guard fix addendum — 2026-08-13
+
+**READY FOR INDEPENDENT RE-REVIEW**
+
+The malformed-`schema_meta` destructive-target gap from the independent
+re-review below is fixed. `isLearningDatabase()` now evaluates both recognized
+table signatures before attempting the optional metadata-marker query, so a
+metadata query error cannot suppress an already-detected learning-ledger or
+knowledge-evolution schema.
+
+Regression coverage uses real SQLite databases for both recognized pairs:
+
+- `learning_events` + `learning_deliveries`;
+- `knowledge_candidates` + `knowledge_versions`.
+
+Each database also has a malformed `schema_meta (unrelated TEXT)` table. The
+tests prove operational reset returns the existing stable learning-ledger
+refusal, preserves the database byte-for-byte, and creates no reset artifacts.
+A separate control proves that a legitimate operational database with the same
+unrelated malformed metadata remains resettable, preserving the operational
+contract rather than turning every metadata error into a rejection.
+
+TDD evidence:
+
+```text
+npx vitest run test/demo-reset.test.ts --reporter=dot
+Test Files 1 failed (1)
+Tests 2 failed | 39 passed (41)
+Both new signature cases failed because reset did not throw.
+
+After the narrow ordering fix:
+Test Files 1 passed (1)
+Tests 41 passed (41)
+```
+
+Fresh final verification:
+
+```text
+npx vitest run test/demo-reset.test.ts test/demo-reset-cli.test.ts test/demo-reset-docs.test.ts test/demo-reset-recovery.test.ts test/runtime.test.ts --reporter=dot
+Test Files 5 passed (5)
+Tests 73 passed (73)
+
+npm test -- --reporter=dot
+Test Files 88 passed (88)
+Tests 1545 passed (1545)
+exit code 0
+
+npm run verify:portfolio
+exit code 0
+```
+
+The `CHANGES REQUIRED` verdict immediately below records the pre-fix
+independent re-review and is retained as evidence; this addendum supersedes its
+single residual finding pending independent confirmation.
+
+## Independent re-review of `aa6b497` — 2026-08-13
+
+### Verdict
+
+**CHANGES REQUIRED**
+
+The original canonical-target isolation defect is fixed for initialized
+learning ledgers and for the covered canonical equality, sidecar, reset
+temporary, reset backup, and parent/child overlap cases. The external-path
+opt-in does not bypass that initialized-ledger guard. Distinct contained custom
+database paths and the external read-only seed behavior also remain green.
+
+One Important destructive-target detection gap remains.
+
+### Important: a marker-query error bypasses the knowledge-schema fallback
+
+`isLearningDatabase()` gathers the table names, then queries `schema_meta`
+before evaluating the learning/knowledge table signatures. The marker query and
+the signature fallback share one outer `try`/`catch`. If a database contains a
+`schema_meta` table whose columns do not match the expected `key`/`value`
+shape, the query throws and the catch returns `false`; the function never
+checks the already-discovered `knowledge_candidates` + `knowledge_versions` or
+`learning_events` + `learning_deliveries` signatures.
+
+I reproduced this against the built `aa6b497` branch with an in-root SQLite
+database containing:
+
+```sql
+CREATE TABLE schema_meta (unrelated TEXT);
+CREATE TABLE knowledge_candidates (id TEXT);
+CREATE TABLE knowledge_versions (id TEXT);
+```
+
+`resetOperationalDemoState()` returned successfully and replaced those tables
+with the operational schema. This remains destructive even without the
+external-path opt-in and contradicts the fix's stated protection for a detected
+knowledge-evolution table signature.
+
+Required fix:
+
+- Keep marker lookup failure from suppressing the independent table-signature
+  checks (or otherwise fail safely once a recognized learning/knowledge
+  signature is present).
+- Add a regression with the conflicting/malformed `schema_meta` shape and a
+  recognized knowledge-evolution or learning-ledger table pair. Assert refusal
+  leaves the database unchanged and creates no reset artifacts.
+
+### Fresh re-review evidence
+
+```text
+npx vitest run test/demo-reset.test.ts test/demo-reset-cli.test.ts test/demo-reset-docs.test.ts test/demo-reset-recovery.test.ts test/runtime.test.ts --reporter=dot
+Test Files 5 passed (5)
+Tests 70 passed (70)
+```
+
+```text
+npm run build
+exit code 0
+
+Adversarial built-code probe
+outcome: RESET_SUCCEEDED
+post-reset schema: operational tables (the knowledge-evolution tables were replaced)
+```
+
 ## Fix implementation addendum — 2026-08-13
 
 The Important destructive-target isolation finding below has been addressed and

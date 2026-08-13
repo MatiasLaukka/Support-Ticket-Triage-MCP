@@ -1,5 +1,22 @@
 # Final reset isolation fix report
 
+## Residual malformed-metadata follow-up
+
+The independent re-review found that a malformed `schema_meta` table could
+throw before the known learning/knowledge table-pair fallback executed. The
+guard now evaluates both recognized table signatures first and only queries the
+optional marker when neither signature is present.
+
+Real-SQLite regressions cover malformed metadata with both
+`learning_events` + `learning_deliveries` and `knowledge_candidates` +
+`knowledge_versions`. Both targets are refused with the existing stable error,
+remain byte-for-byte unchanged, and leave no reset artifacts. A legitimate
+operational database carrying unrelated malformed `schema_meta` remains valid.
+
+The regressions were observed RED (2 expected failures) before the production
+change and GREEN afterward. Fresh final verification passed 73 focused reset
+tests, 1545 full-suite tests, and `npm run verify:portfolio`.
+
 ## Finding reproduced
 
 The original production behavior accepted a real initialized

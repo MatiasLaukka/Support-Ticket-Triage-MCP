@@ -174,6 +174,43 @@ describe("operational demo reset", () => {
     expect(resetArtifacts(harness.learningDatabase)).toEqual([]);
   });
 
+  it.each([
+    ["learning-ledger", "learning_events", "learning_deliveries"],
+    ["knowledge-evolution", "knowledge_candidates", "knowledge_versions"],
+  ])(
+    "refuses a %s table signature when schema metadata is malformed",
+    (_label, firstTable, secondTable) => {
+      const harness = dirtyHarness();
+      const target = join(harness.root, `${firstTable}.sqlite`);
+      const database = new Database(target);
+      database.exec(`
+        CREATE TABLE schema_meta (unrelated TEXT);
+        CREATE TABLE ${firstTable} (id TEXT);
+        CREATE TABLE ${secondTable} (id TEXT);
+      `);
+      database.close();
+      const before = readFileSync(target);
+
+      expect(() => resetOperationalDemoState({
+        ...harness.input,
+        operationalDatabase: target,
+      })).toThrow("A learning ledger cannot be used as an operational reset target.");
+
+      expect(readFileSync(target)).toEqual(before);
+      expect(resetArtifacts(target)).toEqual([]);
+    },
+  );
+
+  it("allows a legitimate operational database with unrelated malformed schema metadata", () => {
+    const harness = dirtyHarness();
+    const database = new Database(harness.databasePath);
+    database.exec("CREATE TABLE schema_meta (unrelated TEXT)");
+    database.close();
+
+    expect(() => resetOperationalDemoState(harness.input)).not.toThrow();
+    assertPristineBaseline(harness.databasePath, harness.seedTickets);
+  });
+
   it("refuses reset while another process owns a shared usage lease", async () => {
     const harness = dirtyHarness();
     const originalHash = fileHash(harness.databasePath);

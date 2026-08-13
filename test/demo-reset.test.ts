@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import {
   existsSync,
   mkdtempSync,
+  mkdirSync,
   readFileSync,
   readdirSync,
   rmSync,
@@ -21,9 +22,17 @@ import {
   type Ticket,
 } from "../src/domain.js";
 import { CompletedDiagnosisSchema } from "../src/knowledge-evolution/domain.js";
+import type { KnowledgeCandidate } from "../src/knowledge-evolution/domain.js";
+import type { KnowledgeAuditEvent } from "../src/knowledge-evolution/knowledge-audit-repository.js";
+import type { LearningEvent } from "../src/knowledge-evolution/learning-ledger.js";
+import { DiagnosisRepository } from "../src/knowledge-evolution/diagnosis-repository.js";
+import { SqliteLearningLedger } from "../src/knowledge-evolution/sqlite-learning-ledger.js";
+import { SqliteKnowledgeEvolutionStore } from "../src/knowledge-evolution/sqlite-knowledge-evolution-store.js";
 import {
   acquireDemoStateUsageLease,
+  prepareLearningDemoReset,
   prepareOperationalDemoReset,
+  resetLearningDemoState,
   resetOperationalDemoState,
 } from "../src/demo-reset.js";
 import type { LearningCaptureEnvelope } from "../src/operational/domain.js";
@@ -274,6 +283,198 @@ describe("operational demo reset", () => {
   });
 });
 
+describe("learning demo reset", () => {
+  it("resets only mutable learning state and preserves operational and static knowledge state", async () => {
+    const harness = await dirtyLearningHarness();
+    const operationalBefore = readSnapshots(harness.databasePath);
+    const staticKnowledgeBefore = readFileSync(harness.staticKnowledgeFile, "utf8");
+
+    const summary = await resetLearningDemoState(harness.learningInput);
+
+    expect(summary).toEqual({ databasePath: resolve(harness.learningDatabase) });
+    await assertPristineLearningBaseline(harness);
+    expect(readSnapshots(harness.databasePath)).toEqual(operationalBefore);
+    expect(readFileSync(harness.staticKnowledgeFile, "utf8")).toBe(staticKnowledgeBefore);
+  });
+
+  it("refuses while a real runtime owns the shared lease before touching learning resources", async () => {
+    const harness = await dirtyLearningHarness();
+    const runtime = await createResetRuntime(harness);
+    try {
+      const before = learningResourceSnapshot(harness);
+
+      await expect(resetLearningDemoState(harness.learningInput)).rejects.toThrow(
+        /operational demo state is active/i,
+      );
+      expect(learningResourceSnapshot(harness)).toEqual(before);
+    } finally {
+      runtime.close();
+    }
+  });
+
+  it("prepares fresh learning resources without replacing live state and rollback removes them", async () => {
+    const harness = await dirtyLearningHarness();
+    const before = learningResourceSnapshot(harness);
+    const prepared = await prepareLearningDemoReset(harness.learningInput);
+
+    expect(learningResourceSnapshot(harness)).toEqual(before);
+    await prepared.verify();
+    await prepared.rollback();
+
+    expect(learningResourceSnapshot(harness)).toEqual(before);
+    expect(learningResetArtifacts(harness)).toEqual([]);
+  });
+
+  it("keeps SQLite sidecars in the rollback set and removes them from the reset baseline", async () => {
+    const harness = await dirtyLearningHarness();
+    writeFileSync(`${harness.learningDatabase}-journal`, "legacy journal");
+    writeFileSync(`${harness.learningDatabase}-wal`, "legacy wal");
+    writeFileSync(`${harness.learningDatabase}-shm`, "legacy shm");
+    const sidecarsBefore = ["-journal", "-wal", "-shm"].map((suffix) =>
+      readFileSync(`${harness.learningDatabase}${suffix}`, "utf8")
+    );
+    const prepared = await prepareLearningDemoReset(harness.learningInput);
+
+    await prepared.rollback();
+    expect(["-journal", "-wal", "-shm"].map((suffix) =>
+      readFileSync(`${harness.learningDatabase}${suffix}`, "utf8")
+    )).toEqual(sidecarsBefore);
+
+    await resetLearningDemoState(harness.learningInput);
+    for (const suffix of ["-journal", "-wal", "-shm"]) {
+      expect(existsSync(`${harness.learningDatabase}${suffix}`)).toBe(false);
+    }
+  });
+
+  it("is idempotent", async () => {
+    const harness = await dirtyLearningHarness();
+
+    const first = await resetLearningDemoState(harness.learningInput);
+    const firstState = learningResourceSnapshot(harness);
+    const second = await resetLearningDemoState(harness.learningInput);
+
+    expect(second).toEqual(first);
+    expect(learningResourceSnapshot(harness)).toEqual(firstState);
+    await assertPristineLearningBaseline(harness);
+  });
+
+  it("refuses an external ledger and a linked mutable path before changing prior state", async () => {
+    const harness = await dirtyLearningHarness();
+    const outside = temporaryRoot("learning-reset-outside-");
+    const externalLedger = join(outside, "learning.sqlite");
+    writeFileSync(externalLedger, "do-not-touch");
+
+    await expect(resetLearningDemoState({
+      ...harness.learningInput,
+      learningLedgerFile: externalLedger,
+    })).rejects.toThrow(/outside.*data root/i);
+    expect(readFileSync(externalLedger, "utf8")).toBe("do-not-touch");
+
+    rmSync(harness.diagnosesRoot, { recursive: true, force: true });
+    const externalDiagnoses = join(outside, "diagnoses");
+    mkdirSync(externalDiagnoses, { recursive: true });
+    writeFileSync(join(externalDiagnoses, "keep.txt"), "do-not-touch");
+    symlinkSync(
+      externalDiagnoses,
+      harness.diagnosesRoot,
+      process.platform === "win32" ? "junction" : "dir",
+    );
+
+    await expect(resetLearningDemoState(harness.learningInput)).rejects.toThrow(
+      /mutable learning path.*outside/i,
+    );
+    expect(readFileSync(join(externalDiagnoses, "keep.txt"), "utf8")).toBe("do-not-touch");
+  });
+
+  it("never treats static knowledge as a learning ledger even with external-path opt-in", async () => {
+    const harness = await dirtyLearningHarness();
+    const staticBefore = readFileSync(harness.staticKnowledgeFile, "utf8");
+
+    await expect(resetLearningDemoState({
+      ...harness.learningInput,
+      learningLedgerFile: harness.staticKnowledgeFile,
+      allowExternalLedgerPath: true,
+    })).rejects.toThrow(/static knowledge/i);
+    expect(readFileSync(harness.staticKnowledgeFile, "utf8")).toBe(staticBefore);
+  });
+
+  it("never treats an operational SQLite database as a learning ledger", async () => {
+    const harness = await dirtyLearningHarness({ databaseName: "custom-workflow.db" });
+    const operationalBefore = learningResourceSnapshot(harness);
+    const snapshotsBefore = readSnapshots(harness.databasePath);
+
+    await expect(resetLearningDemoState({
+      ...harness.learningInput,
+      learningLedgerFile: harness.databasePath,
+      allowExternalLedgerPath: true,
+    })).rejects.toThrow(/operational database/i);
+    expect(readSnapshots(harness.databasePath)).toEqual(snapshotsBefore);
+    expect(learningResourceSnapshot(harness)).toEqual(operationalBefore);
+  });
+
+  it("allows only one concurrent commit to replace a prepared learning reset", async () => {
+    const harness = await dirtyLearningHarness();
+    const prepared = await prepareLearningDemoReset(harness.learningInput);
+
+    const results = await Promise.allSettled([prepared.commit(), prepared.commit()]);
+
+    expect(results.filter(({ status }) => status === "fulfilled")).toHaveLength(1);
+    expect(results.filter(({ status }) => status === "rejected")).toHaveLength(1);
+    await assertPristineLearningBaseline(harness);
+  });
+
+  it.each(["commit", "rollback"] as const)(
+    "keeps %s out while prepared learning verification is active",
+    async (operation) => {
+      const harness = await dirtyLearningHarness();
+      const prepared = await prepareLearningDemoReset(harness.learningInput);
+
+      const verify = prepared.verify();
+      const competing = operation === "commit" ? prepared.commit() : prepared.rollback();
+
+      await expect(competing).rejects.toThrow(/current state|verification.*active/i);
+      await expect(verify).resolves.toBeUndefined();
+      await prepared.rollback();
+      expect(learningResetArtifacts(harness)).toEqual([]);
+    },
+  );
+
+  it("restores moved database members when a later backup member cannot move", async () => {
+    const harness = await dirtyLearningHarness();
+    writeFileSync(`${harness.learningDatabase}-shm`, "legacy shm");
+    const operationalBefore = readSnapshots(harness.databasePath);
+    const learningBefore = learningResourceSnapshot(harness);
+    const prepared = await prepareLearningDemoReset(harness.learningInput);
+    const temporaryDatabase = learningResetArtifacts(harness)
+      .find((path) => path.includes("learning.sqlite.reset-") && path.endsWith(".tmp"));
+    expect(temporaryDatabase).toBeDefined();
+    const backupDatabase = temporaryDatabase!
+      .replace(/\.reset-([^.]+)\.tmp$/, ".reset-backup-$1");
+    mkdirSync(`${backupDatabase}-shm`);
+
+    await expect(prepared.commit()).rejects.toThrow(/replace learning demo state/i);
+    expect(readSnapshots(harness.databasePath)).toEqual(operationalBefore);
+    expect(learningResourceSnapshot(harness)).toEqual(learningBefore);
+    await prepared.rollback();
+  });
+
+  it("restores prior learning and leaves operational state untouched when replacement fails", async () => {
+    const harness = await dirtyLearningHarness();
+    const operationalBefore = readSnapshots(harness.databasePath);
+    const learningBefore = learningResourceSnapshot(harness);
+    const prepared = await prepareLearningDemoReset(harness.learningInput);
+    const temporaryDatabase = learningResetArtifacts(harness)
+      .find((path) => path.includes("learning.sqlite.reset-") && path.endsWith(".tmp"));
+    expect(temporaryDatabase).toBeDefined();
+    rmSync(temporaryDatabase!, { force: true });
+
+    await expect(prepared.commit()).rejects.toThrow(/replace learning demo state/i);
+    expect(readSnapshots(harness.databasePath)).toEqual(operationalBefore);
+    expect(learningResourceSnapshot(harness)).toEqual(learningBefore);
+    await prepared.rollback();
+  });
+});
+
 async function createResetRuntime(
   harness: ReturnType<typeof dirtyHarness>,
 ): Promise<RuntimeDependencies> {
@@ -333,6 +534,7 @@ function assertPristineApprovalDeskWorkflow(
 function dirtyHarness(options: {
   readonly reverseSeed?: boolean;
   readonly seedOutsideDataRoot?: boolean;
+  readonly databaseName?: string;
 } = {}) {
   const root = temporaryRoot("demo-reset-");
   const sourceSeed = resolve("data", "seed", "tickets.json");
@@ -347,7 +549,7 @@ function dirtyHarness(options: {
     : root;
   const seedFile = join(seedRoot, "tickets.json");
   writeFileSync(seedFile, JSON.stringify(seedTickets));
-  const databasePath = join(root, "operational.sqlite");
+  const databasePath = join(root, options.databaseName ?? "operational.sqlite");
   const store = OperationalSqliteStore.open(databasePath);
   store.initialize();
   store.transaction((unit) => {
@@ -363,6 +565,190 @@ function dirtyHarness(options: {
     databasePath,
     input: { operationalDatabase: databasePath, seedFile, dataRoot: root },
   };
+}
+
+async function dirtyLearningHarness(options: Parameters<typeof dirtyHarness>[0] = {}) {
+  const operational = dirtyHarness(options);
+  const knowledgeEvolutionRoot = join(operational.root, "knowledge-evolution");
+  const learningDatabase = join(knowledgeEvolutionRoot, "learning.sqlite");
+  const diagnosesRoot = join(knowledgeEvolutionRoot, "diagnoses");
+  const candidatesRoot = join(knowledgeEvolutionRoot, "candidates");
+  const approvedRoot = join(knowledgeEvolutionRoot, "approved");
+  const auditRoot = join(knowledgeEvolutionRoot, "audit");
+  const ledger = new SqliteLearningLedger(learningDatabase);
+  await ledger.initialize();
+  const store = new SqliteKnowledgeEvolutionStore(ledger.getDatabase());
+  try {
+    await store.initialize();
+    await ledger.append(dirtyLearningEvent);
+    await store.saveCandidate(dirtyKnowledgeCandidate);
+    await store.append(dirtyKnowledgeAudit);
+  } finally {
+    ledger.close();
+  }
+  await new DiagnosisRepository(diagnosesRoot).save(dirtyCompletedDiagnosis);
+  for (const [root, name] of [
+    [candidatesRoot, "legacy-candidate.json"],
+    [approvedRoot, "legacy-approved.json"],
+    [auditRoot, "events.jsonl"],
+  ] as const) {
+    mkdirSync(root, { recursive: true });
+    writeFileSync(join(root, name), "legacy mutable state");
+  }
+  const staticKnowledgeRoot = join(operational.root, "data", "knowledge");
+  const staticKnowledgeFile = join(staticKnowledgeRoot, "static-article.md");
+  mkdirSync(staticKnowledgeRoot, { recursive: true });
+  writeFileSync(staticKnowledgeFile, "# Static knowledge\n\nNever reset this article.\n");
+  return {
+    ...operational,
+    knowledgeEvolutionRoot,
+    learningDatabase,
+    diagnosesRoot,
+    candidatesRoot,
+    approvedRoot,
+    auditRoot,
+    staticKnowledgeFile,
+    learningInput: {
+      dataRoot: operational.root,
+      learningLedgerFile: learningDatabase,
+    },
+  };
+}
+
+const dirtyCompletedDiagnosis = CompletedDiagnosisSchema.parse({
+  id: "diagnosis-learning-reset",
+  ticketId: "TKT-1001",
+  problem: "The deployment retained an old credential.",
+  symptoms: ["Requests return 401 after credential rotation."],
+  evidenceUsed: ["The active and deployed credential versions differ."],
+  evidenceReferences: [{
+    id: "request-id",
+    labelAtDiagnosis: "Request ID",
+    source: "operator",
+  }],
+  ownerTeam: "api-platform",
+  fixSteps: ["Refresh the deployed credential."],
+  verificationSteps: ["Confirm a new request succeeds."],
+  completedAt: "2026-08-12T10:04:00.000Z",
+});
+
+const dirtyKnowledgeCandidate: KnowledgeCandidate = {
+  id: "known-cause-learning-reset",
+  kind: "known-cause",
+  name: "Stale deployment credential",
+  summary: "A deployment can retain a rotated credential.",
+  triggerPatterns: ["Requests return 401 after credential rotation."],
+  evidencePolicy: { mode: "required", evidenceIds: ["request-id"] },
+  timeConstraints: ["Applies after credential rotation."],
+  diagnosticSteps: ["Compare deployed and active credential versions."],
+  fixSteps: ["Refresh the deployed credential."],
+  verificationSteps: ["Confirm a new request succeeds."],
+  customerSafeExplanation: "We found a configuration mismatch and are refreshing it.",
+  operatorRationale: "The completed diagnosis identifies an old deployed credential.",
+  owner: "api-platform",
+  version: 1,
+  status: "candidate",
+  supportingDiagnosisIds: [dirtyCompletedDiagnosis.id],
+  supportingTicketIds: [dirtyCompletedDiagnosis.ticketId],
+  provenance: { source: "completed-diagnoses", recordedAt: "2026-08-12T10:05:00.000Z" },
+  deterministicScores: { confidence: 0.9, support: 1 },
+  deterministicReasons: ["A completed diagnosis supports the candidate."],
+  contradictions: [],
+  validationStatus: "valid",
+  evidencePolicyMetadata: { derivedEvidenceIds: ["request-id"], operatorAddedEvidenceIds: [] },
+  objectId: "known-cause-learning-reset",
+  sourceVersion: 1,
+};
+
+const dirtyLearningEvent: LearningEvent = {
+  id: "81111111-1111-4111-8111-111111111111",
+  occurredAt: "2026-08-12T10:04:00.000Z",
+  actor: "support-lead",
+  correlationId: "82222222-2222-4222-8222-222222222222",
+  ticketId: dirtyCompletedDiagnosis.ticketId,
+  diagnosisId: dirtyCompletedDiagnosis.id,
+  eventType: "diagnosis-approved",
+  payload: {
+    evidenceIds: ["request-id"],
+    knowledgeArticleIds: [],
+    provenance: "Operator-reviewed diagnosis record.",
+  },
+};
+
+const dirtyKnowledgeAudit: KnowledgeAuditEvent = {
+  id: "audit-learning-reset",
+  candidateId: dirtyKnowledgeCandidate.id,
+  action: "candidate-reviewed",
+  actor: "support-lead",
+  timestamp: "2026-08-12T10:06:00.000Z",
+  supportIds: [dirtyCompletedDiagnosis.id],
+  reviewedFields: ["summary"],
+  result: "approved-for-review",
+};
+
+async function assertPristineLearningBaseline(
+  harness: Awaited<ReturnType<typeof dirtyLearningHarness>>,
+): Promise<void> {
+  const ledger = new SqliteLearningLedger(harness.learningDatabase);
+  await ledger.initialize();
+  const store = new SqliteKnowledgeEvolutionStore(ledger.getDatabase());
+  await store.initialize();
+  try {
+    await expect(ledger.snapshot()).resolves.toEqual([]);
+    await expect(store.listCandidates()).resolves.toEqual([]);
+    await expect(store.listApproved()).resolves.toEqual([]);
+    await expect(store.listVersionsAsOf("9999-12-31T23:59:59.999Z")).resolves.toEqual([]);
+    await expect(store.listHeadMappings()).resolves.toEqual(new Map());
+    await expect(store.list()).resolves.toEqual([]);
+  } finally {
+    ledger.close();
+  }
+  await expect(new DiagnosisRepository(harness.diagnosesRoot).list()).resolves.toEqual([]);
+  expect(directoryManifest(harness.candidatesRoot)).toEqual([]);
+  expect(directoryManifest(harness.approvedRoot)).toEqual([]);
+  expect(directoryManifest(harness.auditRoot)).toEqual([]);
+}
+
+function learningResourceSnapshot(
+  harness: Awaited<ReturnType<typeof dirtyLearningHarness>>,
+): unknown {
+  return {
+    database: fileHash(harness.learningDatabase),
+    sidecars: ["-journal", "-wal", "-shm"].map((suffix) => ({
+      suffix,
+      hash: existsSync(`${harness.learningDatabase}${suffix}`)
+        ? fileHash(`${harness.learningDatabase}${suffix}`)
+        : undefined,
+    })),
+    diagnoses: directoryManifest(harness.diagnosesRoot),
+    candidates: directoryManifest(harness.candidatesRoot),
+    approved: directoryManifest(harness.approvedRoot),
+    audit: directoryManifest(harness.auditRoot),
+  };
+}
+
+function directoryManifest(root: string): Array<{ path: string; hash: string }> {
+  if (!existsSync(root)) return [];
+  const manifest: Array<{ path: string; hash: string }> = [];
+  const visit = (directory: string, prefix: string): void => {
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      const path = join(directory, entry.name);
+      const relativePath = prefix === "" ? entry.name : `${prefix}/${entry.name}`;
+      if (entry.isDirectory()) visit(path, relativePath);
+      else manifest.push({ path: relativePath, hash: fileHash(path) });
+    }
+  };
+  visit(root, "");
+  return manifest.sort((left, right) => left.path.localeCompare(right.path));
+}
+
+function learningResetArtifacts(
+  harness: Awaited<ReturnType<typeof dirtyLearningHarness>>,
+): string[] {
+  return readdirSync(harness.knowledgeEvolutionRoot)
+    .filter((name) => name.includes(".reset-"))
+    .map((name) => join(harness.knowledgeEvolutionRoot, name))
+    .sort();
 }
 
 function addDirtyOperationalState(store: OperationalSqliteStore, ticket: Ticket): void {

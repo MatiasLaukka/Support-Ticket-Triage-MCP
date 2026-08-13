@@ -21,6 +21,7 @@ import { createRuntimeOperationalStore } from "./operational/import.js";
 import { OperationalSqliteStore } from "./operational/sqlite-store.js";
 import {
   OperationalAuditRepository,
+  OperationalDiagnosisRepository,
   OperationalRecommendationRepository,
   OperationalTicketRepository,
 } from "./operational/runtime-repositories.js";
@@ -74,6 +75,7 @@ export interface RuntimeDependencies {
   knowledge: KnowledgeRepository;
   recommendations: RecommendationRepository | OperationalRecommendationRepository;
   audits: AuditRepository | OperationalAuditRepository;
+  operationalDiagnoses?: OperationalDiagnosisRepository;
   knowledgeEvolution: { diagnoses: DiagnosisRepository; objects: SqliteKnowledgeEvolutionStore; audits: SqliteKnowledgeEvolutionStore; ledger: SqliteLearningLedger; service: KnowledgeEvolutionService };
   service: TriageService;
   operationalStore?: OperationalCommandStore;
@@ -224,6 +226,9 @@ export async function createRuntimeDependencies(
   const audits = useOperationalRepositories
     ? new OperationalAuditRepository(sqliteOperationalStore!)
     : new AuditRepository(auditFile);
+  const operationalDiagnoses = useOperationalRepositories
+    ? new OperationalDiagnosisRepository(sqliteOperationalStore!)
+    : undefined;
   const diagnoses = new DiagnosisRepository(knowledgeEvolutionPaths.diagnosesRoot);
   let store: SqliteKnowledgeEvolutionStore | undefined;
   let learningAvailability: LearningAvailability = { status: "available" };
@@ -302,6 +307,7 @@ export async function createRuntimeDependencies(
     knowledge,
     recommendations,
     audits,
+    ...(operationalDiagnoses === undefined ? {} : { operationalDiagnoses }),
     knowledgeEvolution,
     service,
     ...(runtimeOperationalStore === undefined ? {} : { operationalStore: runtimeOperationalStore }),

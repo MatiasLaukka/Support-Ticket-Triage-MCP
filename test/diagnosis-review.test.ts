@@ -6,10 +6,15 @@ import {
   DiagnosisImpactSetSchema,
   DiagnosisReviewDecisionSchema,
   DiagnosisReviewSnapshotSchema,
+  diagnosisReviewViews,
   isDiagnosisStale,
   latestDiagnosisReview,
 } from "../src/approval-desk/diagnosis-review.js";
 import { selectPersistedDiagnosticWorkflowContext } from "../src/approval-desk/diagnostic-workflow.js";
+import {
+  OperationalDiagnosisRecordSchema,
+  type OperationalWorkflowSnapshot,
+} from "../src/operational/domain.js";
 
 const diagnosis = {
   status: "completed" as const,
@@ -59,6 +64,76 @@ function reviewAudit(overrides: Record<string, unknown> = {}) {
 }
 
 describe("diagnosis review contracts", () => {
+  it("uses the operational child original while preserving causally valid review events", () => {
+    const original = originalDiagnosisAudit();
+    const record = operationalDiagnosisRecord(original);
+    const milestone = AuditEventSchema.parse({
+      ...original,
+      after: { diagnosisOutcome: "confirmed", sourceRevision: 2 },
+      rationale: "Operational diagnosis-completed event.",
+      knowledgeArticleIds: [],
+    });
+    const approved = AuditEventSchema.parse({
+      ...reviewAudit({ rationale: "The persisted evidence supports this diagnosis." }),
+      before: { diagnosisId: original.id },
+    });
+
+    const [view] = diagnosisReviewViews({
+      ticket: { id: "TKT-1001", revision: 2 },
+      audits: [milestone, approved],
+      originalDiagnoses: [record],
+    });
+
+    expect(view?.originalDiagnosis).toEqual(original);
+    expect(view?.reviews).toEqual([
+      expect.objectContaining({ decision: "approve", diagnosisId: original.id }),
+    ]);
+    expect(view?.latestReview).toMatchObject({ decision: "approve" });
+  });
+
+  it("fails closed when an operational diagnosis milestone has no canonical child", () => {
+    const original = originalDiagnosisAudit();
+    const milestone = AuditEventSchema.parse({
+      ...original,
+      after: { diagnosisOutcome: "confirmed", sourceRevision: 2 },
+      rationale: "Operational diagnosis-completed event.",
+      knowledgeArticleIds: [],
+    });
+
+    expect(() => diagnosisReviewViews({
+      ticket: { id: "TKT-1001", revision: 2 },
+      audits: [milestone],
+      originalDiagnoses: [],
+    })).toThrow(expect.objectContaining({
+      code: "REPOSITORY_ERROR",
+      message: "Operational diagnosis persistence is inconsistent.",
+    }));
+  });
+
+  it("fails closed when an operational diagnosis child has no lifecycle milestone", () => {
+    const original = originalDiagnosisAudit();
+
+    expect(() => diagnosisReviewViews({
+      ticket: { id: "TKT-1001", revision: 2 },
+      audits: [],
+      originalDiagnoses: [operationalDiagnosisRecord(original)],
+    })).toThrow(expect.objectContaining({
+      code: "REPOSITORY_ERROR",
+      message: "Operational diagnosis persistence is inconsistent.",
+    }));
+  });
+
+  it("retains audit-only diagnosis fixtures when operational children are absent", () => {
+    const original = originalDiagnosisAudit();
+
+    expect(diagnosisReviewViews({
+      ticket: { id: "TKT-1001", revision: 2 },
+      audits: [original],
+    })).toEqual([
+      expect.objectContaining({ originalDiagnosis: original }),
+    ]);
+  });
+
   it("keeps a rejected diagnosis as exclusion context without treating it as authoritative", () => {
     const original = AuditEventSchema.parse({
       id: "22222222-2222-4222-8222-222222222222",
@@ -475,3 +550,42 @@ describe("diagnosis review contracts", () => {
     );
   });
 });
+
+function originalDiagnosisAudit() {
+  return AuditEventSchema.parse({
+    id: "22222222-2222-4222-8222-222222222222",
+    timestamp: "2026-06-10T10:00:00.000Z",
+    actor: "support-agent",
+    action: "diagnosis-completed",
+    ticketId: "TKT-1001",
+    before: {},
+    after: {
+      diagnosis,
+      sourceTicketRevision: 2,
+      sourceConversationWatermark,
+    },
+    rationale: "Diagnosis completed from trusted support context.",
+    knowledgeArticleIds: ["integration-troubleshooting"],
+    result: "success",
+  });
+}
+
+function operationalDiagnosisRecord(
+  originalAudit: ReturnType<typeof originalDiagnosisAudit>,
+): OperationalWorkflowSnapshot["diagnoses"][number] {
+  return OperationalDiagnosisRecordSchema.parse({
+    diagnosis: {
+      id: `diagnosis-${originalAudit.id}`,
+      ticketId: originalAudit.ticketId,
+      problem: diagnosis.customerSafeSummary,
+      symptoms: ["Checkout events are missing."],
+      evidenceUsed: diagnosis.evidenceUsed,
+      ownerTeam: "api-platform",
+      fixSteps: [diagnosis.recommendedNextAction],
+      verificationSteps: ["Confirm checkout events appear after the fix."],
+      completedAt: originalAudit.timestamp,
+    },
+    originalAudit,
+    operationalEventId: originalAudit.id,
+  });
+}

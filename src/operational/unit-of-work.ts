@@ -4,6 +4,7 @@ import {
   TicketIdSchema,
   TicketSchema,
   TriageRecommendationSchema,
+  type AuditEvent,
   type Ticket,
   type TicketId,
   type TriageRecommendation,
@@ -119,6 +120,9 @@ interface LocalEventChildRow extends SemanticReferenceRow {
 interface LocalMessageWriteRow extends LocalEventChildRow {
   kind: ConversationMessage["kind"];
 }
+interface LocalDiagnosisWriteRow extends LocalEventChildRow {
+  original_audit: AuditEvent;
+}
 interface LocalTicketRevisionRow {
   ticket_id: string;
   revision: number;
@@ -160,6 +164,7 @@ export interface RecommendationRevisionWrite {
 
 export interface OperationalDiagnosisWrite {
   readonly diagnosis: CompletedDiagnosis;
+  readonly originalAudit: AuditEvent;
   readonly operationalEventId: string;
 }
 
@@ -176,7 +181,7 @@ export class OperationalUnitOfWork {
   private readonly messageWrites: LocalMessageWriteRow[] = [];
   private readonly recommendationAggregateWrites: string[] = [];
   private readonly recommendationRevisionWrites: LocalEventChildRow[] = [];
-  private readonly diagnosisWrites: LocalEventChildRow[] = [];
+  private readonly diagnosisWrites: LocalDiagnosisWriteRow[] = [];
   private readonly traceWrites: LocalEventChildRow[] = [];
   private readonly outboxWrites: OperationalOutboxRow[] = [];
   private readonly reservedSequences = new Map<string, number[]>();
@@ -696,6 +701,7 @@ export class OperationalUnitOfWork {
       id: parsed.diagnosis.id,
       ticket_id: parsed.diagnosis.ticketId,
       operational_event_id: parsed.operationalEventId,
+      original_audit: parsed.originalAudit,
     });
   }
 
@@ -1030,6 +1036,7 @@ export class OperationalUnitOfWork {
   assertReadyToCommit(): void {
     this.assertActive();
     this.assertMessageEventBindings();
+    this.assertDiagnosisEventBindings();
     this.assertLearningOutboxBindings();
     if (this.reservedSequences.size > 0) {
       throw new OperationalStoreError(
@@ -1126,6 +1133,28 @@ export class OperationalUnitOfWork {
       ) {
         throw new OperationalStoreError(
           "Every learning outbox row must bind to its transaction-local eligible operational event.",
+          "IDEMPOTENCY_CONFLICT",
+        );
+      }
+    }
+  }
+
+  private assertDiagnosisEventBindings(): void {
+    const eventsById = new Map(this.appendedEventWrites.map((event) => [event.id, event] as const));
+    for (const diagnosis of this.diagnosisWrites) {
+      const event = eventsById.get(diagnosis.operational_event_id);
+      const audit = diagnosis.original_audit;
+      if (
+        event === undefined
+        || event.ticket_id !== diagnosis.ticket_id
+        || audit.id !== event.id
+        || audit.ticketId !== event.ticket_id
+        || audit.action !== event.action
+        || audit.actor !== event.actor
+        || audit.timestamp !== event.occurred_at
+      ) {
+        throw new OperationalStoreError(
+          "Every operational diagnosis must bind its original audit to the same transaction-local causal event.",
           "IDEMPOTENCY_CONFLICT",
         );
       }

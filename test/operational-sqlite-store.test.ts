@@ -1,7 +1,9 @@
 import Database from "better-sqlite3";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
+import { Worker } from "node:worker_threads";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   OperationalSqliteStore,
@@ -59,10 +61,13 @@ describe("OperationalSqliteStore migrations and transaction boundary", () => {
     inspector.close();
 
     expect(tableNames).toEqual([...requiredTables].sort());
-    expect(migrations).toEqual([{ version: 1, name: "initial-operational-schema" }]);
+    expect(migrations).toEqual([
+      { version: 1, name: "initial-operational-schema" },
+      { version: 2, name: "immutable-diagnosis-review-payload" },
+    ]);
     expect(metadata).toEqual([
       { key: "import_state", value: "empty" },
-      { key: "schema_version", value: "1" },
+      { key: "schema_version", value: "2" },
     ]);
 
     expect(() => store.transaction((unit) => {
@@ -112,6 +117,178 @@ describe("OperationalSqliteStore migrations and transaction boundary", () => {
     expect(corruptInspector.prepare("SELECT value FROM preserve_me").get())
       .toEqual({ value: "untouched" });
     corruptInspector.close();
+  });
+
+  it("fails migration explicitly when legacy diagnosis rows cannot gain an original audit losslessly", () => {
+    const path = temporaryDatabasePath();
+    const initialized = OperationalSqliteStore.open(path);
+    initialized.initialize();
+    initialized.transaction((unit) => {
+      unit.insertTicket(ticket());
+      unit.allocateEventSequences("TKT-0001", 1);
+      unit.appendEvent({
+        id: "11111111-1111-4111-8111-111111111111",
+        ticketId: "TKT-0001",
+        sequence: 1,
+        occurredAt: "2026-08-10T10:02:00.000Z",
+        actor: "support-lead",
+        action: "diagnosis-completed",
+        commandId: "33333333-3333-4333-8333-333333333333",
+        facts: { diagnosisOutcome: "completed" },
+      });
+    });
+    initialized.close();
+
+    const legacy = new Database(path);
+    legacy.prepare("DELETE FROM schema_migrations WHERE version > 1").run();
+    legacy.prepare("UPDATE operational_metadata SET value = '1' WHERE key = 'schema_version'").run();
+    const oldRecord = {
+      diagnosis: {
+        id: "diagnosis-11111111-1111-4111-8111-111111111111",
+        ticketId: "TKT-0001",
+        problem: "Credential rotation left requests unauthorized.",
+        symptoms: ["Requests return 401."],
+        evidenceUsed: ["Request req-123 returned 401."],
+        evidenceReferences: [],
+        ownerTeam: "api-platform",
+        fixSteps: ["Refresh the deployment credential."],
+        verificationSteps: ["Confirm a new request succeeds."],
+        completedAt: "2026-08-10T10:02:00.000Z",
+      },
+      operationalEventId: "11111111-1111-4111-8111-111111111111",
+    };
+    legacy.prepare(`
+      INSERT INTO diagnoses(id, ticket_id, operational_event_id, completed_at, payload_json)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(
+      oldRecord.diagnosis.id,
+      oldRecord.diagnosis.ticketId,
+      oldRecord.operationalEventId,
+      oldRecord.diagnosis.completedAt,
+      JSON.stringify(oldRecord),
+    );
+    legacy.close();
+
+    const reopened = OperationalSqliteStore.open(path);
+    let migrationError: unknown;
+    try {
+      reopened.initialize();
+    } catch (error) {
+      migrationError = error;
+    } finally {
+      reopened.close();
+    }
+    expect(migrationError).toMatchObject({
+      code: "SCHEMA_ERROR",
+      message: expect.stringMatching(/cannot be upgraded losslessly/i),
+    });
+
+    const inspector = new Database(path, { readonly: true });
+    expect(inspector.prepare("SELECT payload_json FROM diagnoses").get())
+      .toEqual({ payload_json: JSON.stringify(oldRecord) });
+    inspector.close();
+  });
+
+  it.each([
+    ["index", "DROP INDEX operational_events_command_idx"],
+    ["trigger", "DROP TRIGGER operational_events_no_update"],
+  ])("validates every legacy schema %s before recording the v2 migration", (_kind, corruption) => {
+    const path = temporaryDatabasePath();
+    const initialized = OperationalSqliteStore.open(path);
+    initialized.initialize();
+    initialized.close();
+
+    const legacy = new Database(path);
+    legacy.prepare("DELETE FROM schema_migrations WHERE version = 2").run();
+    legacy.prepare("UPDATE operational_metadata SET value = '1' WHERE key = 'schema_version'").run();
+    legacy.exec(corruption);
+    legacy.close();
+    const beforeMigrationAttempt = readFileSync(path);
+
+    const reopened = OperationalSqliteStore.open(path);
+    expect(() => reopened.initialize()).toThrow(/corrupt operational schema/i);
+    reopened.close();
+
+    const inspector = new Database(path, { readonly: true });
+    const migrations = inspector.prepare(
+      "SELECT version, name FROM schema_migrations ORDER BY version",
+    ).all();
+    const metadata = inspector.prepare(
+      "SELECT value FROM operational_metadata WHERE key = 'schema_version'",
+    ).get();
+    inspector.close();
+    expect(migrations).toEqual([{ version: 1, name: "initial-operational-schema" }]);
+    expect(metadata).toEqual({ value: "1" });
+    expect(readFileSync(path)).toEqual(beforeMigrationAttempt);
+  });
+
+  it("holds the v1 migration write lock before checking for legacy diagnosis rows", async () => {
+    const path = temporaryDatabasePath();
+    const initialized = OperationalSqliteStore.open(path);
+    initialized.initialize();
+    initialized.transaction((unit) => {
+      unit.insertTicket(ticket());
+      const [sequence] = unit.allocateEventSequences("TKT-0001", 1);
+      unit.appendEvent({
+        id: "11111111-1111-4111-8111-111111111111",
+        ticketId: "TKT-0001",
+        sequence: sequence!,
+        occurredAt: "2026-08-10T10:02:00.000Z",
+        actor: "support-lead",
+        action: "diagnosis-completed",
+        commandId: "33333333-3333-4333-8333-333333333333",
+        facts: { diagnosisOutcome: "completed" },
+      });
+    });
+    initialized.close();
+
+    const legacy = new Database(path);
+    legacy.prepare("DELETE FROM schema_migrations WHERE version = 2").run();
+    legacy.prepare("UPDATE operational_metadata SET value = '1' WHERE key = 'schema_version'").run();
+    legacy.exec("BEGIN IMMEDIATE");
+    legacy.prepare(`
+      INSERT INTO diagnoses(id, ticket_id, operational_event_id, completed_at, payload_json)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(
+      "diagnosis-11111111-1111-4111-8111-111111111111",
+      "TKT-0001",
+      "11111111-1111-4111-8111-111111111111",
+      "2026-08-10T10:02:00.000Z",
+      JSON.stringify({ legacy: "diagnosis-without-original-audit" }),
+    );
+
+    const worker = new Worker(LEGACY_MIGRATION_WORKER, {
+      eval: true,
+      workerData: {
+        databasePath: path,
+        moduleUrl: pathToFileURL(resolve("dist/src/operational/sqlite-store.js")).href,
+      },
+    });
+    try {
+      await workerMessage(worker, "initializing");
+      await new Promise((resolveDelay) => setTimeout(resolveDelay, 250));
+      legacy.exec("COMMIT");
+      const result = await workerMessage(worker, "result") as {
+        status: "initialized" | "rejected";
+        code?: string;
+      };
+      expect(result).toMatchObject({ status: "rejected", code: "SCHEMA_ERROR" });
+    } finally {
+      if (legacy.inTransaction) legacy.exec("ROLLBACK");
+      legacy.close();
+      await worker.terminate();
+    }
+
+    const inspector = new Database(path, { readonly: true });
+    const migrations = inspector.prepare(
+      "SELECT version, name FROM schema_migrations ORDER BY version",
+    ).all();
+    const metadata = inspector.prepare(
+      "SELECT value FROM operational_metadata WHERE key = 'schema_version'",
+    ).get();
+    inspector.close();
+    expect(migrations).toEqual([{ version: 1, name: "initial-operational-schema" }]);
+    expect(metadata).toEqual({ value: "1" });
   });
 
   it("fails closed when required columns, indexes, or append-only triggers are missing without repairing the database", () => {
@@ -250,3 +427,51 @@ function ticket() {
     revision: 0,
   };
 }
+
+function workerMessage(worker: Worker, expectedType: string): Promise<unknown> {
+  return new Promise((resolveMessage, rejectMessage) => {
+    const onMessage = (message: { type?: string }) => {
+      if (message.type !== expectedType) return;
+      cleanup();
+      resolveMessage(message);
+    };
+    const onError = (error: Error) => {
+      cleanup();
+      rejectMessage(error);
+    };
+    const cleanup = () => {
+      worker.off("message", onMessage);
+      worker.off("error", onError);
+    };
+    worker.on("message", onMessage);
+    worker.on("error", onError);
+  });
+}
+
+const LEGACY_MIGRATION_WORKER = String.raw`
+  const { parentPort, workerData } = require("node:worker_threads");
+
+  void (async () => {
+    let store;
+    try {
+      const { OperationalSqliteStore } = await import(workerData.moduleUrl);
+      store = OperationalSqliteStore.open(workerData.databasePath, { busyTimeoutMs: 2000 });
+      parentPort.postMessage({ type: "initializing" });
+      try {
+        store.initialize();
+        parentPort.postMessage({ type: "result", status: "initialized" });
+      } catch (error) {
+        parentPort.postMessage({
+          type: "result",
+          status: "rejected",
+          code: error && typeof error === "object" && "code" in error ? String(error.code) : undefined,
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
+    } catch (error) {
+      parentPort.postMessage({ type: "result", status: "fatal", message: String(error) });
+    } finally {
+      store?.close();
+    }
+  })();
+`;

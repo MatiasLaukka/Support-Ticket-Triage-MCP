@@ -479,7 +479,8 @@ describe("persistent operational command idempotency", () => {
       const [seedSequence] = unit.allocateEventSequences("TKT-0001", 1);
       unit.appendEvent(event("TKT-0001", seedSequence!, eventIds.seed, commandIds.single));
     });
-    const request = { diagnosisId: "diagnosis-001", ticketIds: ["TKT-0001", "TKT-0002"] };
+    const diagnosisId = `diagnosis-${eventIds.firstTicketFirst}`;
+    const request = { diagnosisId, ticketIds: ["TKT-0001", "TKT-0002"] };
     const hash = canonicalRequestHash("apply-diagnosis-fix", request);
     const result = {
       operation: "apply-diagnosis-fix",
@@ -495,14 +496,14 @@ describe("persistent operational command idempotency", () => {
           resultingRevision: 1,
         },
       ],
-      diagnosisId: "diagnosis-001",
+      diagnosisId,
     };
 
     store.transaction((unit) => {
       expect(unit.beginCommand(commandIds.multiTicket, "apply-diagnosis-fix", request)).toBe("new");
       expect(unit.allocateEventSequences("TKT-0001", 2)).toEqual([2, 3]);
       expect(unit.allocateEventSequences("TKT-0002", 2)).toEqual([1, 2]);
-      unit.appendEvent(event("TKT-0001", 2, eventIds.firstTicketFirst, commandIds.multiTicket));
+      unit.appendEvent(event("TKT-0001", 2, eventIds.firstTicketFirst, commandIds.multiTicket, "diagnosis-completed"));
       unit.appendEvent(event("TKT-0002", 1, eventIds.secondTicketFirst, commandIds.multiTicket));
       unit.appendEvent(event("TKT-0001", 3, eventIds.firstTicketSecond, commandIds.multiTicket));
       unit.appendEvent(event("TKT-0002", 2, eventIds.secondTicketSecond, commandIds.multiTicket));
@@ -525,7 +526,8 @@ describe("persistent operational command idempotency", () => {
         createdAt: secondUpdated.updatedAt,
       });
       unit.insertDiagnosis({
-        diagnosis: diagnosisFor("TKT-0001", "diagnosis-001"),
+        diagnosis: diagnosisFor("TKT-0001", eventIds.firstTicketFirst),
+        originalAudit: diagnosisAuditFor("TKT-0001", eventIds.firstTicketFirst),
         operationalEventId: eventIds.firstTicketFirst,
       });
       unit.persistCommandResult(commandIds.multiTicket, hash, result);
@@ -561,7 +563,7 @@ describe("persistent operational command idempotency", () => {
         }],
         messageId,
         recommendationId,
-        diagnosisId: "diagnosis-semantic",
+        diagnosisId: `diagnosis-${eventIds.semanticDiagnosis}`,
       };
 
       store.transaction((unit) => {
@@ -574,7 +576,9 @@ describe("persistent operational command idempotency", () => {
             sequences[index]!,
             id,
             commandIds.semantic,
-            id === eventIds.semanticMessage ? "customer-reply-received" : "ticket-updated",
+            id === eventIds.semanticMessage
+              ? "customer-reply-received"
+              : id === eventIds.semanticDiagnosis ? "diagnosis-completed" : "ticket-updated",
             id === eventIds.semanticMessage ? { messageId } : {},
           ));
         });
@@ -603,7 +607,8 @@ describe("persistent operational command idempotency", () => {
           createdAt: "2026-08-10T10:00:00.000Z",
         });
         unit.insertDiagnosis({
-          diagnosis: diagnosisFor(updated.id, "diagnosis-semantic"),
+          diagnosis: diagnosisFor(updated.id, eventIds.semanticDiagnosis),
+          originalAudit: diagnosisAuditFor(updated.id, eventIds.semanticDiagnosis),
           operationalEventId: eventIds.semanticDiagnosis,
         });
         unit.appendTrace(decisionTrace(updated.id, eventIds.semanticDiagnosis));
@@ -798,7 +803,12 @@ describe("persistent operational command idempotency", () => {
         expect(() => store.transaction((unit) => {
           expect(unit.beginCommand(commandIds.single, "ticket-update", request)).toBe("new");
           const [sequence] = unit.allocateEventSequences("TKT-0001", 1);
-          unit.appendEvent(event("TKT-0001", sequence!, eventIds.single, commandIds.single));
+          unit.appendEvent(event(
+            "TKT-0001",
+            sequence!,
+            eventIds.single,
+            commandIds.single,
+          ));
           const updated = advanceTicket(unit.readTicket("TKT-0001"), "in-progress");
           unit.updateTicket(updated, 0);
           unit.appendTicketRevision({
@@ -959,7 +969,7 @@ describe("persistent operational command idempotency", () => {
           sequence!,
           eventIds.single,
           commandIds.single,
-          kind === "message" ? "customer-reply-received" : "ticket-updated",
+          kind === "message" ? "customer-reply-received" : kind === "diagnosis" ? "diagnosis-completed" : "ticket-updated",
           kind === "message" ? { messageId } : {},
         ));
         writeSemanticReference(unit, kind, "TKT-0001", eventIds.single);
@@ -1007,12 +1017,14 @@ describe("persistent operational command idempotency", () => {
             sequences[0]!,
             eventIds.semanticMessage,
             commandIds.single,
+            kind === "diagnosis" ? "diagnosis-completed" : "ticket-updated",
           ));
           unit.appendEvent(event(
             "TKT-0001",
             sequences[1]!,
             eventIds.semanticRecommendation,
             commandIds.single,
+            kind === "diagnosis" ? "diagnosis-completed" : "ticket-updated",
           ));
           writeSemanticReference(unit, kind, "TKT-0001", eventIds.semanticMessage, "first");
           writeSemanticReference(unit, kind, "TKT-0001", eventIds.semanticRecommendation, "second");
@@ -1145,7 +1157,7 @@ function event(
   sequence: number,
   id: string,
   commandId: string,
-  action: "ticket-updated" | "customer-reply-received" | "customer-response-sent" = "ticket-updated",
+  action: "ticket-updated" | "customer-reply-received" | "customer-response-sent" | "diagnosis-completed" = "ticket-updated",
   facts: Readonly<Record<string, unknown>> = {},
 ) {
   return {
@@ -1198,9 +1210,9 @@ function recommendationFor(value: Ticket, id: string) {
   });
 }
 
-function diagnosisFor(ticketId: TicketId, id: string) {
+function diagnosisFor(ticketId: TicketId, operationalEventId: string) {
   return CompletedDiagnosisSchema.parse({
-    id,
+    id: `diagnosis-${operationalEventId}`,
     ticketId,
     problem: "API requests fail after rotating credentials.",
     symptoms: ["Requests return 401 after rotation."],
@@ -1218,6 +1230,33 @@ function diagnosisFor(ticketId: TicketId, id: string) {
   });
 }
 
+function diagnosisAuditFor(ticketId: TicketId, operationalEventId: string) {
+  return {
+    id: operationalEventId,
+    timestamp: "2026-08-10T10:00:00.000Z",
+    actor: "support-lead",
+    action: "diagnosis-completed" as const,
+    ticketId,
+    before: {},
+    after: {
+      diagnosis: {
+        status: "completed",
+        causeType: "configuration",
+        customerSafeSummary: "API requests fail after rotating credentials.",
+        evidenceUsed: ["Request ID req-123 returned 401."],
+        evidenceReferences: [{ id: "request-id", labelAtDiagnosis: "Request ID", source: "reply", sourceRef: "reply-123" }],
+        confidence: "confirmed",
+        owner: "engineering",
+        recommendedNextAction: "Refresh the deployment credential.",
+        doNotSay: [],
+      },
+    },
+    rationale: "Diagnosis completed from trusted support context.",
+    knowledgeArticleIds: ["api-auth"],
+    result: "success" as const,
+  };
+}
+
 function resultWithReference(
   kind: "message" | "recommendation" | "diagnosis",
   ticketId: "TKT-0001" | "TKT-0002",
@@ -1233,7 +1272,7 @@ function resultWithReference(
   };
   if (kind === "message") return { ...base, messageId };
   if (kind === "recommendation") return { ...base, recommendationId };
-  return { ...base, diagnosisId: "diagnosis-semantic" };
+  return { ...base, diagnosisId: `diagnosis-${operationalEventId}` };
 }
 
 function seedWrongTicketReference(
@@ -1246,7 +1285,7 @@ function seedWrongTicketReference(
     sequence!,
     eventIds.wrongTicket,
     commandIds.compound,
-    kind === "message" ? "customer-reply-received" : "ticket-updated",
+    kind === "message" ? "customer-reply-received" : kind === "diagnosis" ? "diagnosis-completed" : "ticket-updated",
     kind === "message" ? { messageId } : {},
   ));
   if (kind === "message") {
@@ -1271,7 +1310,8 @@ function seedWrongTicketReference(
     return;
   }
   unit.insertDiagnosis({
-    diagnosis: diagnosisFor("TKT-0002", "diagnosis-semantic"),
+    diagnosis: diagnosisFor("TKT-0002", eventIds.wrongTicket),
+    originalAudit: diagnosisAuditFor("TKT-0002", eventIds.wrongTicket),
     operationalEventId: eventIds.wrongTicket,
   });
 }
@@ -1308,10 +1348,8 @@ function writeSemanticReference(
     return;
   }
   unit.insertDiagnosis({
-    diagnosis: diagnosisFor(
-      ticketId,
-      ordinal === "first" ? "diagnosis-semantic" : "diagnosis-semantic-second",
-    ),
+    diagnosis: diagnosisFor(ticketId, operationalEventId),
+    originalAudit: diagnosisAuditFor(ticketId, operationalEventId),
     operationalEventId,
   });
 }

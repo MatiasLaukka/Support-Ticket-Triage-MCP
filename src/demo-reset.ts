@@ -1324,7 +1324,7 @@ function verifyOperationalBaseline(path: string, expectedTickets: readonly Ticke
     ).all() as Array<{ key: string; value: string }>;
     if (!isDeepStrictEqual(metadata, [
       { key: "import_state", value: "native" },
-      { key: "schema_version", value: "1" },
+      { key: "schema_version", value: "2" },
     ])) verificationFailure();
   } finally {
     database.close();

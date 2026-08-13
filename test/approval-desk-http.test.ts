@@ -453,6 +453,22 @@ describe("createApprovalDeskHttpServer", () => {
     await expect(deps.audits.list("TKT-1001")).resolves.toEqual(before);
   });
 
+  it("returns a stable repository error when an operational milestone has no canonical diagnosis child", async () => {
+    const { deps, json } = await startFixture();
+    await recordCurrentDiagnosis(deps, "TKT-1001");
+    (deps as any).operationalDiagnoses = { list: async () => [] };
+
+    const response = await json("/api/tickets/TKT-1001/diagnoses");
+
+    expect(response.status).toBe(503);
+    expect(response.body).toEqual({
+      error: {
+        code: "REPOSITORY_ERROR",
+        message: "Operational diagnosis persistence is inconsistent.",
+      },
+    });
+  });
+
   it("records a diagnosis review through HTTP and returns the updated causal view", async () => {
     const { deps, json } = await startFixture();
     const original = await recordCurrentDiagnosis(deps, "TKT-1001");
@@ -1351,6 +1367,96 @@ describe("createApprovalDeskHttpServer", () => {
       createdAt: now.toISOString(),
     });
     expect((await deps.tickets.get("TKT-1005")).revision).toBe(0);
+  });
+
+  it("rejects a same-ticket overlap before a second provider call or recommendation write", async () => {
+    const firstProviderStarted = deferred();
+    const secondProviderStarted = deferred();
+    const releaseProvider = deferred();
+    let providerInvocations = 0;
+    const { deps, json } = await startFixture({
+      classificationReasoningProvider: {
+        async reason(input) {
+          providerInvocations += 1;
+          if (providerInvocations === 1) firstProviderStarted.resolve();
+          if (providerInvocations === 2) secondProviderStarted.resolve();
+          await releaseProvider.promise;
+          return parityClassificationProvider.reason(input);
+        },
+      },
+    });
+
+    const firstRequest = json("/api/tickets/TKT-1010/recommendations", {
+      method: "POST",
+      body: JSON.stringify({ actor: "approval-desk", aiPreference: "gpt-preferred" }),
+    });
+    await firstProviderStarted.promise;
+    const secondRequest = json("/api/tickets/TKT-1010/recommendations", {
+      method: "POST",
+      body: JSON.stringify({ actor: "approval-desk", aiPreference: "gpt-preferred" }),
+    });
+    const overlap = await Promise.race([
+      secondRequest.then((response) => ({ kind: "response" as const, response })),
+      secondProviderStarted.promise.then(() => ({ kind: "second-provider" as const })),
+    ]);
+
+    releaseProvider.resolve();
+    const [first, second] = await Promise.all([firstRequest, secondRequest]);
+
+    expect(overlap.kind).toBe("response");
+    expect(first.status, JSON.stringify(first.body)).toBe(201);
+    expect(second.status).toBe(409);
+    expect(second.body).toEqual({
+      error: {
+        code: "EVALUATION_IN_PROGRESS",
+        message: "An evaluation is already in progress for this ticket.",
+      },
+    });
+    expect(providerInvocations).toBe(1);
+    expect(await deps.recommendations.list()).toHaveLength(1);
+    expect(
+      (await deps.audits.list("TKT-1010"))
+        .filter(({ action }) => action.startsWith("recommendation-"))
+        .map(({ action }) => action),
+    ).toEqual(["recommendation-submitted"]);
+  });
+
+  it("allows blocking provider evaluations for different tickets to overlap", async () => {
+    const bothProvidersStarted = deferred();
+    const releaseProvider = deferred();
+    const providerTickets: string[] = [];
+    const { json } = await startFixture({
+      classificationReasoningProvider: {
+        async reason(input) {
+          providerTickets.push(input.ticket.id);
+          if (providerTickets.length === 2) bothProvidersStarted.resolve();
+          await releaseProvider.promise;
+          return parityClassificationProvider.reason(input);
+        },
+      },
+    });
+
+    const firstRequest = json("/api/tickets/TKT-1010/recommendations", {
+      method: "POST",
+      body: JSON.stringify({ actor: "approval-desk", aiPreference: "gpt-preferred" }),
+    });
+    const secondRequest = json("/api/tickets/TKT-1008/recommendations", {
+      method: "POST",
+      body: JSON.stringify({ actor: "approval-desk", aiPreference: "gpt-preferred" }),
+    });
+    const overlap = await Promise.race([
+      bothProvidersStarted.promise.then(() => "both-started" as const),
+      secondRequest.then((response) => `second-${response.status}` as const),
+    ]);
+
+    releaseProvider.resolve();
+    const [first, second] = await Promise.all([firstRequest, secondRequest]);
+
+    expect(overlap).toBe("both-started");
+    expect(first.status, JSON.stringify(first.body)).toBe(201);
+    expect(second.status, JSON.stringify(second.body)).toBe(201);
+    expect(providerTickets).toEqual(expect.arrayContaining(["TKT-1010", "TKT-1008"]));
+    expect(providerTickets).toHaveLength(2);
   });
 
   it("matches shared AI evaluation with identical providers and conversation input", async () => {
@@ -4597,4 +4703,15 @@ async function createDiagnosedPlatformDelayTicket(
   });
   expect(update.status).toBe(201);
   return update.body.recommendation;
+}
+
+function deferred(): {
+  promise: Promise<void>;
+  resolve: () => void;
+} {
+  let resolve = (): void => undefined;
+  const promise = new Promise<void>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
 }

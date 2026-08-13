@@ -44,7 +44,9 @@ describe("transactional operational diagnosis and verification lifecycle", () =>
       expect(snapshot.diagnoses[0]).toMatchObject({
         operationalEventId: first.id,
         diagnosis: { ticketId: sourceTicketId },
+        originalAudit: first,
       });
+      expect(snapshot.diagnoses[0]?.originalAudit).toEqual(first);
       expect(snapshot.events.filter((event) => event.commandId === commandId)).toMatchObject([{
         id: first.id,
         action: "diagnosis-completed",
@@ -73,7 +75,7 @@ describe("transactional operational diagnosis and verification lifecycle", () =>
     }
   });
 
-  it("persists an escalated diagnosis event and traces without a diagnosis row or ticket revision", async () => {
+  it("persists an escalated diagnosis with its canonical original audit and no ticket revision", async () => {
     const harness = openHarness();
     try {
       const commandId = command(11);
@@ -83,7 +85,16 @@ describe("transactional operational diagnosis and verification lifecycle", () =>
       }, { commandId });
       const snapshot = harness.store.readWorkflowSnapshot(sourceTicketId);
       expect(escalated.action).toBe("diagnostic-escalated");
-      expect(snapshot.diagnoses).toEqual([]);
+      expect(snapshot.diagnoses).toHaveLength(1);
+      expect(snapshot.diagnoses[0]).toMatchObject({
+        diagnosis: {
+          id: `diagnosis-${escalated.id}`,
+          ticketId: sourceTicketId,
+        },
+        originalAudit: escalated,
+        operationalEventId: escalated.id,
+      });
+      expect(snapshot.diagnoses[0]?.originalAudit).toEqual(escalated);
       expect(snapshot.ticketRevisions).toEqual([]);
       expect(snapshot.traces.at(-1)).toMatchObject({
         operationalEventId: escalated.id,

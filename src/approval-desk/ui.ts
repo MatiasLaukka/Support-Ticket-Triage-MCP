@@ -1549,6 +1549,7 @@ export const approvalDeskHtml = `<!doctype html>
         knowledgeJourneyState: 'idle',
         knowledgeRequestId: 0,
         ticketRequestId: 0,
+        evaluationPendingTicketId: null,
         operatorGuidance: null,
         diagnoses: [],
         diagnosisLoading: false,
@@ -1975,6 +1976,12 @@ export const approvalDeskHtml = `<!doctype html>
         return 'Customer reply captured at ' + String(watermark.timestamp ?? 'an unknown time') + '.';
       }
 
+      function diagnosisEmptyState() {
+        return state.operatorGuidance?.requiredReview?.kind === 'diagnosis'
+          ? '<p class="warning">Diagnosis state could not be loaded.</p>'
+          : '<p class="hint">No recorded diagnoses are available for this ticket yet.</p>';
+      }
+
       function renderDiagnosisPanel() {
         renderDiagnosisSummary();
         if (state.selectedTicket === null) {
@@ -1990,7 +1997,7 @@ export const approvalDeskHtml = `<!doctype html>
         const view = selectedDiagnosisView();
         if (view === null) {
           els.diagnosisActionPanel.hidden = true;
-          els.diagnosisPanel.innerHTML = '<p class="hint">No recorded diagnoses are available for this ticket yet.</p>';
+          els.diagnosisPanel.innerHTML = diagnosisEmptyState();
           return;
         }
         els.diagnosisActionPanel.hidden = false;
@@ -2088,7 +2095,7 @@ export const approvalDeskHtml = `<!doctype html>
         }
         const view = selectedDiagnosisView();
         if (view === null) {
-          els.diagnosisSummaryPanel.innerHTML = '<p class="hint">No recorded diagnoses are available for this ticket yet.</p>';
+          els.diagnosisSummaryPanel.innerHTML = diagnosisEmptyState();
           return;
         }
         const current = diagnosisContextForView(view) ?? {};
@@ -2210,6 +2217,14 @@ export const approvalDeskHtml = `<!doctype html>
         return ticketWorkflowState(state.selectedTicket ?? {}) === 'customer-replied'
           ? 'Evaluate again'
           : 'Evaluate ticket';
+      }
+
+      function isEvaluationPendingForTicket(ticketId) {
+        return ticketId !== undefined && state.evaluationPendingTicketId === ticketId;
+      }
+
+      function isEvaluationPendingForSelectedTicket() {
+        return isEvaluationPendingForTicket(state.selectedTicket?.id);
       }
 
       function canCreateRecommendation() {
@@ -2508,7 +2523,7 @@ export const approvalDeskHtml = `<!doctype html>
         els.discoverKnowledgeButton.disabled = state.selectedTicket === null || state.knowledgeDiscoveryPending;
         els.knowledgeDiscoveryStatus.textContent = state.knowledgeDiscoveryStatus;
         renderKnowledgeJourney();
-        if (customerReplyReady || latestUnevaluatedWorkflowEvent() !== null) {
+        if (!isEvaluationPendingForSelectedTicket() && (customerReplyReady || latestUnevaluatedWorkflowEvent() !== null)) {
           els.createUpdatedRecommendation.textContent = createUpdatedRecommendationLabel();
         }
         renderDiagnosisActionVisibility();
@@ -2978,6 +2993,7 @@ export const approvalDeskHtml = `<!doctype html>
 
       function updateControls() {
         const hasRecommendation = state.recommendation !== null;
+        const evaluationPending = isEvaluationPendingForSelectedTicket();
         const approvedWorkflow = isApprovedWorkflow();
         const actorPresent = els.actor.value.trim().length > 0;
         const fields = selectedFields();
@@ -3003,11 +3019,11 @@ export const approvalDeskHtml = `<!doctype html>
         els.diagnoseButton.disabled = !(actorPresent && shouldShowDiagnoseAction());
         els.fixButton.disabled = !(actorPresent && shouldShowFixAction());
         els.closeTicketButton.disabled = !(actorPresent && shouldShowCloseTicketAction());
-        els.createRecommendation.disabled = !canCreateRecommendation();
-        els.createUpdatedRecommendation.disabled = !shouldShowCreateUpdatedRecommendation();
-        els.createRecommendation.textContent = 'Evaluate';
+        els.createRecommendation.disabled = evaluationPending || !canCreateRecommendation();
+        els.createUpdatedRecommendation.disabled = evaluationPending || !shouldShowCreateUpdatedRecommendation();
+        els.createRecommendation.textContent = evaluationPending ? 'Evaluating…' : 'Evaluate';
         els.createRecommendation.title = createRecommendationLabel();
-        els.createUpdatedRecommendation.textContent = createUpdatedRecommendationLabel();
+        els.createUpdatedRecommendation.textContent = evaluationPending ? 'Evaluating…' : createUpdatedRecommendationLabel();
         els.createUpdatedRecommendation.title = createRecommendationLabel();
         els.replyComposer.hidden = !manualRepliesEnabled;
         els.addCustomerReply.disabled = !manualRepliesEnabled || state.selectedTicket === null;
@@ -3105,7 +3121,7 @@ export const approvalDeskHtml = `<!doctype html>
           .join('');
       }
 
-      async function selectTicket(id) {
+      async function selectTicket(id, options) {
         const previousTicketId = state.selectedTicket?.id;
         const newSelection = previousTicketId !== id;
         const switchingTickets = previousTicketId !== undefined && previousTicketId !== id;
@@ -3155,13 +3171,13 @@ export const approvalDeskHtml = `<!doctype html>
           return;
         }
         if (state.ticketRequestId !== ticketRequestId) {
-          return;
+          return undefined;
         }
         state.selectedTicket = data.recommendationSummary === undefined
           ? data.ticket
           : { ...data.ticket, recommendationSummary: data.recommendationSummary };
         state.operatorGuidance = data.operatorGuidance ?? null;
-        void loadDiagnoses(id, ticketRequestId).catch(function (error) {
+        const diagnosisLoad = loadDiagnoses(id, ticketRequestId).catch(function (error) {
           if (isCurrentTicketRequest(id, ticketRequestId)) {
             state.diagnosisLoading = false;
             els.diagnosisPanel.innerHTML = '<p class="warning">Diagnosis review could not be loaded: ' +
@@ -3191,6 +3207,10 @@ export const approvalDeskHtml = `<!doctype html>
         renderConversationContext();
         renderRecommendation();
         setResult(data);
+        if (options?.waitForDiagnoses === true) {
+          await diagnosisLoad;
+        }
+        return ticketRequestId;
       }
 
       async function loadKnowledgeCandidate(ticketId, knowledgeRequestId, includeGpt) {
@@ -3323,6 +3343,12 @@ export const approvalDeskHtml = `<!doctype html>
         if (state.selectedTicket === null) {
           return;
         }
+        const ticketId = state.selectedTicket.id;
+        let ticketRequestId = state.ticketRequestId;
+        const actor = els.actor.value.trim() || 'approval-desk';
+        if (isEvaluationPendingForTicket(ticketId)) {
+          return;
+        }
         if (hasRequiredReviewGate()) {
           focusRequiredReview();
           return;
@@ -3331,40 +3357,80 @@ export const approvalDeskHtml = `<!doctype html>
           setResult({ error: 'Mark the approved response as sent before creating a new recommendation for this ticket.' });
           return;
         }
-        if (state.recommendation?.resolution === 'pending' && !hasCustomerReplyAfterCurrentRecommendation()) {
+        const replacePendingRecommendation =
+          state.recommendation?.resolution === 'pending' &&
+          !hasCustomerReplyAfterCurrentRecommendation();
+        const recommendationToReplace = replacePendingRecommendation ? state.recommendation : null;
+        if (replacePendingRecommendation) {
           const confirmed = confirm('This ticket already has a pending recommendation. Create a new one and mark the old one superseded?');
           if (!confirmed) {
             return;
           }
-          await rejectCurrentRecommendation('Superseded by a new recommendation from the Approval Desk.');
-          state.recommendation = null;
-          state.stage = 'empty';
         }
+        state.evaluationPendingTicketId = ticketId;
         els.recommendationPanel.innerHTML = renderRecommendationLoadingCard();
-        els.createRecommendation.disabled = true;
+        updateControls();
         try {
-          const data = await requestJson('/api/tickets/' + encodeURIComponent(state.selectedTicket.id) + '/recommendations', {
+          const data = await requestJson('/api/tickets/' + encodeURIComponent(ticketId) + '/recommendations', {
             method: 'POST',
             body: JSON.stringify({
-              actor: els.actor.value.trim() || 'approval-desk',
+              actor,
               responseStyle: els.draftStyle.value
             })
-          });
+          }, { writeErrorToResult: false });
+          if (!isCurrentTicketRequest(ticketId, ticketRequestId)) {
+            return;
+          }
           state.recommendation = data.recommendation;
           state.stage = 'draft';
           state.consumedCustomerReplyTimestamp = latestCustomerReplyTimestamp();
           markSelectedTicketWorkflow(data.recommendation, 'draft-ready');
           renderRecommendation();
           setResult(data);
-          if (state.selectedTicket?.id !== undefined) {
-            await selectTicket(state.selectedTicket.id);
+          const reconciledRequestId = await selectTicket(ticketId, { waitForDiagnoses: true });
+          if (reconciledRequestId === undefined || !isCurrentTicketRequest(ticketId, reconciledRequestId)) {
+            return;
+          }
+          ticketRequestId = reconciledRequestId;
+          if (
+            recommendationToReplace !== null &&
+            isRecommendationStillPending(recommendationToReplace.id)
+          ) {
+            await rejectRecommendationById(
+              recommendationToReplace.id,
+              ticketId,
+              actor,
+              'Superseded by a new recommendation from the Approval Desk.'
+            );
+            if (!isCurrentTicketRequest(ticketId, ticketRequestId)) {
+              return;
+            }
+            const replacementRequestId = await selectTicket(ticketId, { waitForDiagnoses: true });
+            if (replacementRequestId === undefined || !isCurrentTicketRequest(ticketId, replacementRequestId)) {
+              return;
+            }
+            ticketRequestId = replacementRequestId;
           }
           await refreshEvidenceBestEffort();
         } catch (error) {
-          renderRecommendationError(error);
-          setResult({ error: error instanceof Error ? error.message : 'Recommendation failed.' });
+          if (!isCurrentTicketRequest(ticketId, ticketRequestId)) {
+            return;
+          }
+          if (isEvaluationConflict(error)) {
+            renderRecommendation(true);
+            setResult({
+              error: error instanceof Error ? error.message : 'An evaluation is already in progress for this ticket.',
+              code: error?.code ?? 'EVALUATION_IN_PROGRESS'
+            });
+          } else {
+            renderRecommendationError(error);
+            setResult({ error: error instanceof Error ? error.message : 'Recommendation failed.' });
+          }
         } finally {
-          els.createRecommendation.disabled = false;
+          if (state.evaluationPendingTicketId === ticketId) {
+            state.evaluationPendingTicketId = null;
+          }
+          updateControls();
         }
       }
 
@@ -3422,11 +3488,20 @@ export const approvalDeskHtml = `<!doctype html>
         if (state.recommendation === null || state.selectedTicket === null) {
           throw new Error('No recommendation selected.');
         }
-        return requestJson('/api/recommendations/' + encodeURIComponent(state.recommendation.id) + '/reject', {
+        return rejectRecommendationById(
+          state.recommendation.id,
+          state.selectedTicket.id,
+          els.actor.value.trim(),
+          feedback
+        );
+      }
+
+      async function rejectRecommendationById(recommendationId, ticketId, actor, feedback) {
+        return requestJson('/api/recommendations/' + encodeURIComponent(recommendationId) + '/reject', {
           method: 'POST',
           body: JSON.stringify({
-            ticketId: state.selectedTicket.id,
-            actor: els.actor.value.trim(),
+            ticketId,
+            actor,
             feedback
           })
         });
@@ -3778,9 +3853,23 @@ export const approvalDeskHtml = `<!doctype html>
           if (options?.writeErrorToResult !== false) {
             setResult(data);
           }
-          throw new Error(data.error?.message ?? 'Request failed.');
+          const error = new Error(data.error?.message ?? 'Request failed.');
+          error.code = data.error?.code;
+          error.status = response.status;
+          throw error;
         }
         return data;
+      }
+
+      function isRecommendationStillPending(recommendationId) {
+        return (state.recommendation?.id === recommendationId && state.recommendation.resolution === 'pending') ||
+          state.recommendationHistory.some(function (recommendation) {
+            return recommendation.id === recommendationId && recommendation.resolution === 'pending';
+          });
+      }
+
+      function isEvaluationConflict(error) {
+        return error?.status === 409 || error?.code === 'EVALUATION_IN_PROGRESS';
       }
 
       function card(label, value) {

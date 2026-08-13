@@ -21,7 +21,9 @@ import {
 
 export { OperationalStoreError } from "./unit-of-work.js";
 
-const CURRENT_SCHEMA_VERSION = 1;
+const CURRENT_SCHEMA_VERSION = 2;
+const INITIAL_SCHEMA_VERSION = 1;
+const DIAGNOSIS_REVIEW_PAYLOAD_MIGRATION = "immutable-diagnosis-review-payload";
 const DEFAULT_BUSY_TIMEOUT_MS = 250;
 const REQUIRED_TABLES = [
   "schema_migrations",
@@ -247,9 +249,11 @@ export class OperationalSqliteStore {
       this.database.exec("BEGIN IMMEDIATE");
       this.database.exec(INITIAL_SCHEMA_SQL);
       const appliedAt = new Date().toISOString();
-      this.database.prepare(
+      const insertMigration = this.database.prepare(
         "INSERT INTO schema_migrations(version, name, applied_at) VALUES (?, ?, ?)",
-      ).run(CURRENT_SCHEMA_VERSION, "initial-operational-schema", appliedAt);
+      );
+      insertMigration.run(INITIAL_SCHEMA_VERSION, "initial-operational-schema", appliedAt);
+      insertMigration.run(CURRENT_SCHEMA_VERSION, DIAGNOSIS_REVIEW_PAYLOAD_MIGRATION, appliedAt);
       this.database.prepare(
         "INSERT INTO operational_metadata(key, value) VALUES (?, ?), (?, ?)",
       ).run("schema_version", String(CURRENT_SCHEMA_VERSION), "import_state", "empty");
@@ -295,9 +299,19 @@ export class OperationalSqliteStore {
       );
     }
     if (
-      migrations.length !== 1
-      || migrations[0]?.version !== CURRENT_SCHEMA_VERSION
+      migrations.length === 1
+      && migrations[0]?.version === INITIAL_SCHEMA_VERSION
+      && migrations[0]?.name === "initial-operational-schema"
+    ) {
+      this.applyDiagnosisReviewPayloadMigration();
+      return;
+    }
+    if (
+      migrations.length !== 2
+      || migrations[0]?.version !== INITIAL_SCHEMA_VERSION
       || migrations[0]?.name !== "initial-operational-schema"
+      || migrations[1]?.version !== CURRENT_SCHEMA_VERSION
+      || migrations[1]?.name !== DIAGNOSIS_REVIEW_PAYLOAD_MIGRATION
     ) {
       throw new OperationalStoreError(
         "Corrupt operational schema: migration history is incomplete or inconsistent.",
@@ -306,21 +320,59 @@ export class OperationalSqliteStore {
     }
   }
 
+  private applyDiagnosisReviewPayloadMigration(): void {
+    try {
+      this.database.exec("BEGIN IMMEDIATE");
+      this.validateLegacySchemaBeforeMigration();
+      const diagnosisCount = (this.database.prepare(
+        "SELECT COUNT(*) AS count FROM diagnoses",
+      ).get() as { count: number }).count;
+      if (diagnosisCount > 0) {
+        throw new OperationalStoreError(
+          "Operational diagnosis rows cannot be upgraded losslessly because their original review audits were not stored.",
+          "SCHEMA_ERROR",
+        );
+      }
+      const appliedAt = new Date().toISOString();
+      this.database.prepare(
+        "INSERT INTO schema_migrations(version, name, applied_at) VALUES (?, ?, ?)",
+      ).run(CURRENT_SCHEMA_VERSION, DIAGNOSIS_REVIEW_PAYLOAD_MIGRATION, appliedAt);
+      this.database.prepare(
+        "UPDATE operational_metadata SET value = ? WHERE key = 'schema_version'",
+      ).run(String(CURRENT_SCHEMA_VERSION));
+      this.database.exec("COMMIT");
+    } catch (error) {
+      if (this.database.inTransaction) {
+        try { this.database.exec("ROLLBACK"); } catch { /* preserve the migration error */ }
+      }
+      if (error instanceof OperationalStoreError) throw error;
+      throw new OperationalStoreError(
+        "Operational diagnosis review payload migration failed.",
+        "SCHEMA_ERROR",
+        { cause: error },
+      );
+    }
+  }
+
+  private validateLegacySchemaBeforeMigration(): void {
+    this.validatePhysicalSchema();
+    const metadata = this.database.prepare(
+      "SELECT key, value FROM operational_metadata WHERE key IN ('schema_version', 'import_state')",
+    ).all() as MetadataRow[];
+    const metadataMap = new Map(metadata.map(({ key, value }) => [key, value]));
+    if (
+      metadataMap.get("schema_version") !== String(INITIAL_SCHEMA_VERSION)
+      || !["empty", "import-in-progress", "imported", "native"].includes(metadataMap.get("import_state") ?? "")
+    ) {
+      throw new OperationalStoreError(
+        "Corrupt operational schema: legacy schema metadata is inconsistent.",
+        "SCHEMA_ERROR",
+      );
+    }
+  }
+
   private validateCurrentSchema(): void {
-    const tables = this.tableNames();
-    const missingTables = REQUIRED_TABLES.filter((table) => !tables.has(table));
-    if (missingTables.length > 0) {
-      throw new OperationalStoreError(
-        `Corrupt operational schema: required tables are missing (${missingTables.join(", ")}).`,
-        "SCHEMA_ERROR",
-      );
-    }
-    if (this.schemaSignature() !== expectedSchemaSignature()) {
-      throw new OperationalStoreError(
-        "Corrupt operational schema: tables, columns, constraints, indexes, or triggers differ from the current schema.",
-        "SCHEMA_ERROR",
-      );
-    }
+    this.validatePhysicalSchema();
     const migrations = this.database.prepare(
       "SELECT version, name FROM schema_migrations ORDER BY version ASC",
     ).all() as MigrationRow[];
@@ -335,6 +387,23 @@ export class OperationalSqliteStore {
     ) {
       throw new OperationalStoreError(
         "Corrupt operational schema: schema metadata is inconsistent.",
+        "SCHEMA_ERROR",
+      );
+    }
+  }
+
+  private validatePhysicalSchema(): void {
+    const tables = this.tableNames();
+    const missingTables = REQUIRED_TABLES.filter((table) => !tables.has(table));
+    if (missingTables.length > 0) {
+      throw new OperationalStoreError(
+        `Corrupt operational schema: required tables are missing (${missingTables.join(", ")}).`,
+        "SCHEMA_ERROR",
+      );
+    }
+    if (this.schemaSignature() !== expectedSchemaSignature()) {
+      throw new OperationalStoreError(
+        "Corrupt operational schema: tables, columns, constraints, indexes, or triggers differ from the current schema.",
         "SCHEMA_ERROR",
       );
     }

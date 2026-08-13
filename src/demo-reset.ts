@@ -1,5 +1,5 @@
 import Database from "better-sqlite3";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   existsSync,
   mkdirSync,
@@ -116,6 +116,14 @@ export interface PreparedLearningDemoReset {
   rollback(): Promise<void>;
 }
 
+export interface DemoResetInput
+  extends OperationalDemoResetInput, LearningDemoResetInput {}
+
+export interface DemoResetSummary {
+  readonly operational: OperationalDemoResetSummary;
+  readonly learning: LearningDemoResetSummary;
+}
+
 interface LearningDirectoryPaths {
   readonly name: typeof MUTABLE_LEARNING_DIRECTORY_NAMES[number];
   readonly live: string;
@@ -128,20 +136,26 @@ interface LearningResetPaths extends ResetPaths {
   readonly allowExternalLedgerPath: boolean;
 }
 
+type LearningDirectoryManifest = ReadonlyMap<
+  typeof MUTABLE_LEARNING_DIRECTORY_NAMES[number],
+  readonly string[] | undefined
+>;
+
 export function prepareOperationalDemoReset(
   input: OperationalDemoResetInput,
 ): PreparedOperationalDemoReset {
   const seedTickets = loadCanonicalSeedTickets(input.seedFile);
   const paths = resolveResetPaths(input);
-  let lease: DemoStateUsageLease;
-  try {
-    lease = acquireDemoStateResetLease(paths.dataRoot);
-  } catch (error) {
-    if (error instanceof DemoStateLeaseError && error.code === "ACTIVE_RUNTIME") {
-      throw new DemoResetError(error.message, "ACTIVE_STATE", { cause: error });
-    }
-    throw error;
-  }
+  const lease = acquireResetLease(paths.dataRoot);
+  return prepareOperationalWithLease(paths, seedTickets, lease, true);
+}
+
+function prepareOperationalWithLease(
+  paths: ResetPaths,
+  seedTickets: readonly Ticket[],
+  lease: DemoStateUsageLease,
+  ownsLease: boolean,
+): PreparedOperationalDemoResetImpl {
   try {
     removeDatabaseSet(paths.temporary);
     const fresh = OperationalSqliteStore.open(paths.temporary);
@@ -155,10 +169,10 @@ export function prepareOperationalDemoReset(
       fresh.close();
     }
     verifyOperationalBaseline(paths.temporary, seedTickets);
-    return new PreparedOperationalDemoResetImpl(paths, seedTickets, lease);
+    return new PreparedOperationalDemoResetImpl(paths, seedTickets, lease, ownsLease);
   } catch (error) {
     removeDatabaseSet(paths.temporary);
-    lease.release();
+    if (ownsLease) lease.release();
     if (error instanceof DemoResetError) throw error;
     throw new DemoResetError(
       "Operational demo state could not be prepared.",
@@ -190,15 +204,15 @@ export async function prepareLearningDemoReset(
   input: LearningDemoResetInput,
 ): Promise<PreparedLearningDemoReset> {
   const paths = resolveLearningResetPaths(input);
-  let lease: DemoStateUsageLease;
-  try {
-    lease = acquireDemoStateResetLease(paths.dataRoot);
-  } catch (error) {
-    if (error instanceof DemoStateLeaseError && error.code === "ACTIVE_RUNTIME") {
-      throw new DemoResetError(error.message, "ACTIVE_STATE", { cause: error });
-    }
-    throw error;
-  }
+  const lease = acquireResetLease(paths.dataRoot);
+  return prepareLearningWithLease(paths, lease, true);
+}
+
+async function prepareLearningWithLease(
+  paths: LearningResetPaths,
+  lease: DemoStateUsageLease,
+  ownsLease: boolean,
+): Promise<PreparedLearningDemoResetImpl> {
   try {
     if (isOperationalDatabase(paths.database)) {
       throw new DemoResetError(
@@ -219,12 +233,12 @@ export async function prepareLearningDemoReset(
       mkdirSync(directory.temporary, { recursive: true });
     }
     await verifyLearningBaseline(paths.temporary, paths.mutableDirectories, "temporary");
-    return new PreparedLearningDemoResetImpl(paths, lease);
+    return new PreparedLearningDemoResetImpl(paths, lease, ownsLease);
   } catch (error) {
     try {
       removeLearningPreparedResources(paths);
     } finally {
-      lease.release();
+      if (ownsLease) lease.release();
     }
     if (error instanceof DemoResetError) throw error;
     throw new DemoResetError(
@@ -253,22 +267,139 @@ export async function resetLearningDemoState(
   }
 }
 
+export async function resetDemoState(input: DemoResetInput): Promise<DemoResetSummary> {
+  const seedTickets = loadCanonicalSeedTickets(input.seedFile);
+  const operationalPaths = resolveResetPaths(input);
+  const learningPaths = resolveLearningResetPaths(input);
+  if (operationalPaths.dataRoot !== learningPaths.dataRoot) {
+    throw new DemoResetError(
+      "Combined demo reset requires one canonical data root.",
+      "PATH_SAFETY",
+    );
+  }
+  const lease = acquireResetLease(operationalPaths.dataRoot);
+  let operational: PreparedOperationalDemoResetImpl | undefined;
+  let learning: PreparedLearningDemoResetImpl | undefined;
+  let failedSide: "operational" | "learning" = "operational";
+  try {
+    operational = prepareOperationalWithLease(
+      operationalPaths,
+      seedTickets,
+      lease,
+      false,
+    );
+    failedSide = "learning";
+    learning = await prepareLearningWithLease(learningPaths, lease, false);
+
+    failedSide = "operational";
+    operational.verify();
+    failedSide = "learning";
+    await learning.verify();
+
+    failedSide = "operational";
+    operational.commitForCombined();
+    failedSide = "learning";
+    await learning.commitForCombined();
+
+    failedSide = "operational";
+    operational.verify();
+    failedSide = "learning";
+    await learning.verify();
+
+    operational.finalizeCombined();
+    learning.finalizeCombined();
+    return Object.freeze({
+      operational: operational.summary,
+      learning: learning.summary,
+    });
+  } catch (error) {
+    const rollbackFailures: Error[] = [];
+    if (learning !== undefined) {
+      try {
+        await learning.rollbackCombined();
+      } catch (rollbackError) {
+        rollbackFailures.push(asError(rollbackError));
+      }
+    }
+    if (operational !== undefined) {
+      try {
+        operational.rollbackCombined();
+      } catch (rollbackError) {
+        rollbackFailures.push(asError(rollbackError));
+      }
+    }
+    if (rollbackFailures.length > 0) {
+      const retained = [
+        ...(operational?.retainedBackupNames() ?? []),
+        ...(learning?.retainedBackupNames() ?? []),
+      ];
+      const recovery = retained.length === 0
+        ? "Recovery backups may remain beside the reset targets."
+        : `Recovery backups retained: ${retained.join(", ")}.`;
+      throw new DemoResetError(
+        `Combined demo state reset failed on the ${failedSide} side and rollback could not complete. ${recovery}`,
+        "ROLLBACK_FAILED",
+        { cause: new AggregateError([asError(error), ...rollbackFailures]) },
+      );
+    }
+    throw combinedSideError(failedSide, error);
+  } finally {
+    lease.release();
+  }
+}
+
+function acquireResetLease(dataRoot: string): DemoStateUsageLease {
+  try {
+    return acquireDemoStateResetLease(dataRoot);
+  } catch (error) {
+    if (error instanceof DemoStateLeaseError && error.code === "ACTIVE_RUNTIME") {
+      throw new DemoResetError(error.message, "ACTIVE_STATE", { cause: error });
+    }
+    throw error;
+  }
+}
+
+function combinedSideError(
+  side: "operational" | "learning",
+  error: unknown,
+): DemoResetError {
+  const code = error instanceof DemoResetError ? error.code : "REPLACEMENT_FAILED";
+  return new DemoResetError(
+    `Combined demo state reset failed on the ${side} side; both original states were restored.`,
+    code,
+    { cause: asError(error) },
+  );
+}
+
+function asError(error: unknown): Error {
+  return error instanceof Error ? error : new Error(String(error));
+}
+
 class PreparedLearningDemoResetImpl implements PreparedLearningDemoReset {
   readonly summary: LearningDemoResetSummary;
-  private state: "prepared" | "verifying" | "committing" | "committed" | "rolled-back" | "failed" = "prepared";
+  private state: "prepared" | "verifying" | "committing" | "committed-pending-finalization" | "committed" | "rolled-back" | "failed" = "prepared";
   private backupEntries: BackupEntry[] = [];
   private installedLivePaths: string[] = [];
   private leaseReleased = false;
+  private readonly originalDatabaseExisted: boolean;
+  private readonly originalDirectoryManifest: LearningDirectoryManifest;
 
   constructor(
     private readonly paths: LearningResetPaths,
     private readonly lease: DemoStateUsageLease,
+    private readonly ownsLease: boolean,
   ) {
+    this.originalDatabaseExisted = existsSync(paths.database);
+    this.originalDirectoryManifest = readLearningDirectoryManifest(paths);
     this.summary = Object.freeze({ databasePath: paths.database });
   }
 
   async verify(): Promise<void> {
-    if (this.state !== "prepared" && this.state !== "committed") {
+    if (
+      this.state !== "prepared"
+      && this.state !== "committed-pending-finalization"
+      && this.state !== "committed"
+    ) {
       throw new DemoResetError(
         "Prepared learning demo state is no longer available.",
         "VERIFICATION_FAILED",
@@ -278,9 +409,9 @@ class PreparedLearningDemoResetImpl implements PreparedLearningDemoReset {
     this.state = "verifying";
     try {
       await verifyLearningBaseline(
-        priorState === "committed" ? this.paths.database : this.paths.temporary,
+        priorState === "prepared" ? this.paths.temporary : this.paths.database,
         this.paths.mutableDirectories,
-        priorState === "committed" ? "live" : "temporary",
+        priorState === "prepared" ? "temporary" : "live",
       );
     } finally {
       if (this.state === "verifying") this.state = priorState;
@@ -288,6 +419,14 @@ class PreparedLearningDemoResetImpl implements PreparedLearningDemoReset {
   }
 
   async commit(): Promise<void> {
+    await this.commitReplacement(false);
+  }
+
+  async commitForCombined(): Promise<void> {
+    await this.commitReplacement(true);
+  }
+
+  private async commitReplacement(deferFinalization: boolean): Promise<void> {
     if (this.state !== "prepared") {
       throw new DemoResetError(
         "Prepared learning demo state cannot be committed in its current state.",
@@ -315,10 +454,11 @@ class PreparedLearningDemoResetImpl implements PreparedLearningDemoReset {
         this.paths.mutableDirectories,
         "live",
       );
-      removeLearningBackupEntriesBestEffort(this.paths, this.backupEntries);
-      this.backupEntries = [];
-      this.installedLivePaths = [];
-      this.state = "committed";
+      if (deferFinalization) {
+        this.state = "committed-pending-finalization";
+      } else {
+        this.finalizeReplacement();
+      }
     } catch (error) {
       const rollbackFailure = this.restoreOriginalAfterFailure();
       this.state = "failed";
@@ -330,8 +470,25 @@ class PreparedLearningDemoResetImpl implements PreparedLearningDemoReset {
       );
     } finally {
       removeLearningPreparedResourcesBestEffort(this.paths);
-      this.releaseLease();
+      if (!deferFinalization) this.releaseLease();
     }
+  }
+
+  finalizeCombined(): void {
+    if (this.state !== "committed-pending-finalization") {
+      throw new DemoResetError(
+        "Prepared learning demo state cannot be finalized in its current state.",
+        "REPLACEMENT_FAILED",
+      );
+    }
+    this.finalizeReplacement();
+  }
+
+  private finalizeReplacement(): void {
+    removeLearningBackupEntriesBestEffort(this.paths, this.backupEntries);
+    this.backupEntries = [];
+    this.installedLivePaths = [];
+    this.state = "committed";
   }
 
   async rollback(): Promise<void> {
@@ -352,6 +509,43 @@ class PreparedLearningDemoResetImpl implements PreparedLearningDemoReset {
     } finally {
       this.releaseLease();
     }
+  }
+
+  async rollbackCombined(): Promise<void> {
+    if (this.state === "rolled-back") return;
+    if (this.state === "committing" || this.state === "verifying") {
+      throw new DemoResetError(
+        "Prepared learning demo state cannot be rolled back while verification or commit is active.",
+        "REPLACEMENT_FAILED",
+      );
+    }
+    if (
+      this.state === "committed-pending-finalization"
+      || this.backupEntries.length > 0
+      || this.installedLivePaths.length > 0
+    ) {
+      const failure = this.restoreOriginalAfterFailure();
+      if (failure !== undefined) throw failure;
+      await verifyLearningStateReadable(
+        this.paths,
+        this.originalDatabaseExisted,
+        this.originalDirectoryManifest,
+      );
+    } else if (this.state === "failed") {
+      await verifyLearningStateReadable(
+        this.paths,
+        this.originalDatabaseExisted,
+        this.originalDirectoryManifest,
+      );
+    }
+    removeLearningPreparedResources(this.paths);
+    this.state = "rolled-back";
+  }
+
+  retainedBackupNames(): readonly string[] {
+    return this.backupEntries
+      .filter(({ backup }) => existsSync(backup))
+      .map(({ backup }) => basename(backup));
   }
 
   private restoreOriginalAfterFailure(): DemoResetError | undefined {
@@ -387,7 +581,7 @@ class PreparedLearningDemoResetImpl implements PreparedLearningDemoReset {
   }
 
   private releaseLease(): void {
-    if (this.leaseReleased) return;
+    if (!this.ownsLease || this.leaseReleased) return;
     this.lease.release();
     this.leaseReleased = true;
   }
@@ -395,16 +589,19 @@ class PreparedLearningDemoResetImpl implements PreparedLearningDemoReset {
 
 class PreparedOperationalDemoResetImpl implements PreparedOperationalDemoReset {
   readonly summary: OperationalDemoResetSummary;
-  private state: "prepared" | "committed" | "rolled-back" | "failed" = "prepared";
+  private state: "prepared" | "committed-pending-finalization" | "committed" | "rolled-back" | "failed" = "prepared";
   private backupEntries: BackupEntry[] = [];
   private replacementInstalled = false;
   private leaseReleased = false;
+  private readonly originalDatabaseExisted: boolean;
 
   constructor(
     private readonly paths: ResetPaths,
     private readonly seedTickets: readonly Ticket[],
     private readonly lease: DemoStateUsageLease,
+    private readonly ownsLease: boolean,
   ) {
+    this.originalDatabaseExisted = existsSync(paths.database);
     this.summary = Object.freeze({
       ticketCount: seedTickets.length,
       ticketIds: Object.freeze(seedTickets.map(({ id }) => id)),
@@ -420,12 +617,22 @@ class PreparedOperationalDemoResetImpl implements PreparedOperationalDemoReset {
       );
     }
     verifyOperationalBaseline(
-      this.state === "committed" ? this.paths.database : this.paths.temporary,
+      this.state === "committed" || this.state === "committed-pending-finalization"
+        ? this.paths.database
+        : this.paths.temporary,
       this.seedTickets,
     );
   }
 
   commit(): void {
+    this.commitReplacement(false);
+  }
+
+  commitForCombined(): void {
+    this.commitReplacement(true);
+  }
+
+  private commitReplacement(deferFinalization: boolean): void {
     if (this.state !== "prepared") {
       throw new DemoResetError(
         "Prepared operational demo state cannot be committed in its current state.",
@@ -443,9 +650,11 @@ class PreparedOperationalDemoResetImpl implements PreparedOperationalDemoReset {
         rmSync(`${this.paths.database}${suffix}`, { force: true });
       }
       verifyOperationalBaseline(this.paths.database, this.seedTickets);
-      removeBackupEntriesBestEffort(this.backupEntries);
-      this.backupEntries = [];
-      this.state = "committed";
+      if (deferFinalization) {
+        this.state = "committed-pending-finalization";
+      } else {
+        this.finalizeReplacement();
+      }
     } catch (error) {
       const rollbackFailure = this.restoreOriginalAfterFailure();
       this.state = "failed";
@@ -457,8 +666,25 @@ class PreparedOperationalDemoResetImpl implements PreparedOperationalDemoReset {
       );
     } finally {
       removeDatabaseSet(this.paths.temporary);
-      this.releaseLease();
+      if (!deferFinalization) this.releaseLease();
     }
+  }
+
+  finalizeCombined(): void {
+    if (this.state !== "committed-pending-finalization") {
+      throw new DemoResetError(
+        "Prepared operational demo state cannot be finalized in its current state.",
+        "REPLACEMENT_FAILED",
+      );
+    }
+    this.finalizeReplacement();
+  }
+
+  private finalizeReplacement(): void {
+    removeBackupEntriesBestEffort(this.backupEntries);
+    this.backupEntries = [];
+    this.replacementInstalled = false;
+    this.state = "committed";
   }
 
   rollback(): void {
@@ -473,6 +699,29 @@ class PreparedOperationalDemoResetImpl implements PreparedOperationalDemoReset {
     } finally {
       this.releaseLease();
     }
+  }
+
+  rollbackCombined(): void {
+    if (this.state === "rolled-back") return;
+    if (
+      this.state === "committed-pending-finalization"
+      || this.backupEntries.length > 0
+      || this.replacementInstalled
+    ) {
+      const failure = this.restoreOriginalAfterFailure();
+      if (failure !== undefined) throw failure;
+      if (this.originalDatabaseExisted) verifyOperationalStateReadable(this.paths.database);
+    } else if (this.state === "failed" && this.originalDatabaseExisted) {
+      verifyOperationalStateReadable(this.paths.database);
+    }
+    removeDatabaseSet(this.paths.temporary);
+    this.state = "rolled-back";
+  }
+
+  retainedBackupNames(): readonly string[] {
+    return this.backupEntries
+      .filter(({ backup }) => existsSync(backup))
+      .map(({ backup }) => basename(backup));
   }
 
   private restoreOriginalAfterFailure(): DemoResetError | undefined {
@@ -500,7 +749,7 @@ class PreparedOperationalDemoResetImpl implements PreparedOperationalDemoReset {
   }
 
   private releaseLease(): void {
-    if (this.leaseReleased) return;
+    if (!this.ownsLease || this.leaseReleased) return;
     this.lease.release();
     this.leaseReleased = true;
   }
@@ -661,6 +910,73 @@ async function verifyLearningBaseline(
       { cause: error },
     );
   }
+}
+
+async function verifyLearningStateReadable(
+  paths: LearningResetPaths,
+  databaseExisted: boolean,
+  expectedDirectoryManifest: LearningDirectoryManifest,
+): Promise<void> {
+  let ledger: SqliteLearningLedger | undefined;
+  try {
+    if (databaseExisted) {
+      ledger = new SqliteLearningLedger(paths.database);
+      await ledger.initialize();
+      const store = new SqliteKnowledgeEvolutionStore(ledger.getDatabase());
+      await store.initialize();
+      await Promise.all([
+        ledger.snapshot(),
+        store.listCandidates(),
+        store.listApproved(),
+        store.listVersionsAsOf("9999-12-31T23:59:59.999Z"),
+        store.listHeadMappings(),
+        store.list(),
+      ]);
+    } else if (existsSync(paths.database)) {
+      throw new Error("A learning database appeared while restoring an absent original.");
+    }
+    const actualDirectoryManifest = readLearningDirectoryManifest(paths);
+    if (!isDeepStrictEqual(actualDirectoryManifest, expectedDirectoryManifest)) {
+      throw new Error("A restored mutable learning directory differs from its original state.");
+    }
+  } catch (error) {
+    throw new DemoResetError(
+      "The restored learning demo state could not be reopened and verified.",
+      "ROLLBACK_FAILED",
+      { cause: error },
+    );
+  } finally {
+    ledger?.close();
+  }
+}
+
+function readLearningDirectoryManifest(paths: LearningResetPaths): LearningDirectoryManifest {
+  return new Map(paths.mutableDirectories.map((directory) => {
+    assertLearningDirectoryPathSafe(paths, directory.live);
+    if (!existsSync(directory.live)) return [directory.name, undefined] as const;
+    const entries: string[] = [];
+    const visit = (root: string, prefix: string): void => {
+      for (const entry of readdirSync(root, { withFileTypes: true })
+        .sort((left, right) => left.name.localeCompare(right.name))) {
+        const relativePath = prefix === "" ? entry.name : `${prefix}/${entry.name}`;
+        const path = resolve(root, entry.name);
+        if (entry.isDirectory()) {
+          entries.push(`directory:${relativePath}`);
+          visit(path, relativePath);
+        } else if (entry.isFile()) {
+          const hash = createHash("sha256").update(readFileSync(path)).digest("hex");
+          entries.push(`file:${relativePath}:${hash}`);
+        } else {
+          throw new DemoResetError(
+            "A mutable learning directory contains an unsupported linked path.",
+            "ROLLBACK_FAILED",
+          );
+        }
+      }
+    };
+    visit(directory.live, "");
+    return [directory.name, Object.freeze(entries)] as const;
+  }));
 }
 
 function learningVerificationFailure(): never {
@@ -926,6 +1242,23 @@ function verifyOperationalBaseline(path: string, expectedTickets: readonly Ticke
     ])) verificationFailure();
   } finally {
     database.close();
+  }
+}
+
+function verifyOperationalStateReadable(path: string): void {
+  const store = OperationalSqliteStore.open(path);
+  try {
+    store.initialize();
+    store.readImportState();
+    store.listWorkflowSnapshots();
+  } catch (error) {
+    throw new DemoResetError(
+      "The restored operational demo state could not be reopened.",
+      "ROLLBACK_FAILED",
+      { cause: error },
+    );
+  } finally {
+    store.close();
   }
 }
 

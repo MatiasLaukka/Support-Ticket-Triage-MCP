@@ -32,6 +32,7 @@ import {
   acquireDemoStateUsageLease,
   prepareLearningDemoReset,
   prepareOperationalDemoReset,
+  resetDemoState,
   resetLearningDemoState,
   resetOperationalDemoState,
 } from "../src/demo-reset.js";
@@ -475,6 +476,91 @@ describe("learning demo reset", () => {
   });
 });
 
+describe("combined demo reset", () => {
+  it("resets both dirty sides by ticket ID while preserving static knowledge", async () => {
+    const harness = await dirtyLearningHarness({ reverseSeed: true });
+    const staticKnowledgeBefore = readFileSync(harness.staticKnowledgeFile, "utf8");
+
+    const summary = await resetDemoState({
+      ...harness.input,
+      ...harness.learningInput,
+    });
+
+    expect(summary).toEqual({
+      operational: {
+        ticketCount: harness.seedTickets.length,
+        ticketIds: harness.seedTickets.map(({ id }) => id),
+        databasePath: resolve(harness.databasePath),
+      },
+      learning: { databasePath: resolve(harness.learningDatabase) },
+    });
+    assertPristineBaseline(harness.databasePath, harness.seedTickets);
+    await assertPristineLearningBaseline(harness);
+    expect(readFileSync(harness.staticKnowledgeFile, "utf8")).toBe(staticKnowledgeBefore);
+    expect(resetArtifacts(harness.databasePath)).toEqual([]);
+    expect(learningResetArtifacts(harness)).toEqual([]);
+  });
+
+  it("holds one exclusive lease while both sides prepare, commit, verify, and clean up", async () => {
+    const harness = await dirtyLearningHarness();
+
+    const reset = resetDemoState({
+      ...harness.input,
+      ...harness.learningInput,
+    });
+
+    expect(() => acquireDemoStateUsageLease(harness.root)).toThrow(/reset.*active/i);
+    await expect(reset).resolves.toBeDefined();
+    const usage = acquireDemoStateUsageLease(harness.root);
+    usage.release();
+  });
+
+  it("restores both originals when the learning commit fails after operational commit", async () => {
+    const harness = await dirtyLearningHarness();
+    const operationalBefore = readSnapshots(harness.databasePath);
+    const learningBefore = await readLearningLogicalState(harness);
+    const reset = resetDemoState({
+      ...harness.input,
+      ...harness.learningInput,
+    });
+    const blockedBackup = await blockLearningDatabaseBackup(harness);
+    expect(readSnapshots(harness.databasePath)).toEqual(operationalBefore);
+
+    await expect(reset).rejects.toThrow(/learning side/i);
+    expect(readSnapshots(harness.databasePath)).toEqual(operationalBefore);
+    await expect(readLearningLogicalState(harness)).resolves.toEqual(learningBefore);
+    expect(existsSync(blockedBackup)).toBe(true);
+    expect(resetArtifacts(harness.databasePath)).toEqual([]);
+    const usage = acquireDemoStateUsageLease(harness.root);
+    usage.release();
+  });
+
+  it("retains sanitized operational recovery backups when cross-side rollback fails", async () => {
+    const harness = await dirtyLearningHarness();
+    const learningBefore = await readLearningLogicalState(harness);
+    const reset = resetDemoState({
+      ...harness.input,
+      ...harness.learningInput,
+    });
+    await blockLearningDatabaseBackup(harness);
+    await waitForCondition(() => operationalStateIsPristine(harness));
+    rmSync(harness.databasePath, { force: true });
+    mkdirSync(harness.databasePath);
+
+    const error = await reset.catch((caught: unknown) => caught);
+
+    expect(error).toMatchObject({ code: "ROLLBACK_FAILED" });
+    expect(String((error as Error).message)).toMatch(/learning side.*rollback.*could not complete/i);
+    expect(String((error as Error).message)).not.toContain(harness.root);
+    expect(resetArtifacts(harness.databasePath).some((path) =>
+      path.includes(".reset-backup-") && existsSync(path)
+    )).toBe(true);
+    await expect(readLearningLogicalState(harness)).resolves.toEqual(learningBefore);
+    const usage = acquireDemoStateUsageLease(harness.root);
+    usage.release();
+  });
+});
+
 async function createResetRuntime(
   harness: ReturnType<typeof dirtyHarness>,
 ): Promise<RuntimeDependencies> {
@@ -727,6 +813,31 @@ function learningResourceSnapshot(
   };
 }
 
+async function readLearningLogicalState(
+  harness: Awaited<ReturnType<typeof dirtyLearningHarness>>,
+): Promise<unknown> {
+  const ledger = new SqliteLearningLedger(harness.learningDatabase);
+  await ledger.initialize();
+  const store = new SqliteKnowledgeEvolutionStore(ledger.getDatabase());
+  try {
+    await store.initialize();
+    return {
+      events: await ledger.snapshot(),
+      candidates: await store.listCandidates(),
+      approved: await store.listApproved(),
+      versions: await store.listVersionsAsOf("9999-12-31T23:59:59.999Z"),
+      heads: [...(await store.listHeadMappings()).entries()],
+      audits: await store.list(),
+      diagnoses: await new DiagnosisRepository(harness.diagnosesRoot).list(),
+      legacyCandidates: directoryManifest(harness.candidatesRoot),
+      legacyApproved: directoryManifest(harness.approvedRoot),
+      legacyAudits: directoryManifest(harness.auditRoot),
+    };
+  } finally {
+    ledger.close();
+  }
+}
+
 function directoryManifest(root: string): Array<{ path: string; hash: string }> {
   if (!existsSync(root)) return [];
   const manifest: Array<{ path: string; hash: string }> = [];
@@ -749,6 +860,46 @@ function learningResetArtifacts(
     .filter((name) => name.includes(".reset-"))
     .map((name) => join(harness.knowledgeEvolutionRoot, name))
     .sort();
+}
+
+async function blockLearningDatabaseBackup(
+  harness: Awaited<ReturnType<typeof dirtyLearningHarness>>,
+): Promise<string> {
+  let temporaryDatabase: string | undefined;
+  await waitForCondition(() => {
+    temporaryDatabase = learningResetArtifacts(harness)
+      .find((path) => path.includes("learning.sqlite.reset-") && path.endsWith(".tmp"));
+    return temporaryDatabase !== undefined;
+  });
+  const backupDatabase = temporaryDatabase!
+    .replace(/\.reset-([^.]+)\.tmp$/, ".reset-backup-$1");
+  mkdirSync(backupDatabase);
+  return backupDatabase;
+}
+
+function operationalStateIsPristine(
+  harness: Awaited<ReturnType<typeof dirtyLearningHarness>>,
+): boolean {
+  try {
+    return readSnapshots(harness.databasePath).every((snapshot) =>
+      snapshot.ticketRevisions.length === 0
+      && snapshot.recommendations.length === 0
+      && snapshot.messages.length === 0
+      && snapshot.diagnoses.length === 0
+      && snapshot.events.length === 0
+      && snapshot.traces.length === 0
+    );
+  } catch {
+    return false;
+  }
+}
+
+async function waitForCondition(predicate: () => boolean): Promise<void> {
+  const deadline = Date.now() + 5_000;
+  while (!predicate()) {
+    if (Date.now() >= deadline) throw new Error("Timed out waiting for reset state transition.");
+    await new Promise<void>((resolveWait) => setTimeout(resolveWait, 0));
+  }
 }
 
 function addDirtyOperationalState(store: OperationalSqliteStore, ticket: Ticket): void {

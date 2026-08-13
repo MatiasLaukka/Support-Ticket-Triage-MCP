@@ -7,7 +7,9 @@ than feature sprawl.
 
 1. Keep screenshots current when the Approval Desk UI changes.
 2. Add a short GIF using `docs/capture-guide.md`.
-3. Keep `npm run demo:showcase` as the main public entry point.
+3. Keep `npm run reset:demo` followed by `npm run approval-desk` as the main
+   public entry point so reset, persistence, and restart behavior remain
+   explicit.
 4. Add a short architecture video or walkthrough script only if it stays
    synthetic and repeatable.
 

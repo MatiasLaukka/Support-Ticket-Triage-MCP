@@ -16,75 +16,29 @@ guaranteed transcript.
 
 ## Prepare
 
-From the repository root, stop any running copy of the MCP server and run:
+From the repository root, stop any running Approval Desk or MCP process, then
+run:
 
 ```powershell
 $ErrorActionPreference = 'Stop'
 
 npm ci
 if ($LASTEXITCODE -ne 0) {
-  throw "npm ci failed; refusing to reset runtime data."
+  throw "npm ci failed; refusing to continue."
 }
 
 npm run build
 if ($LASTEXITCODE -ne 0) {
-  throw "npm run build failed; refusing to reset runtime data."
+  throw "npm run build failed; refusing to continue."
 }
-
-$repoRoot = (Resolve-Path -LiteralPath '.' -ErrorAction Stop).ProviderPath
-$packagePath = Join-Path -Path $repoRoot -ChildPath 'package.json'
-if (-not (Test-Path -LiteralPath $packagePath -PathType Leaf)) {
-  throw "Refusing reset: package.json was not found at $packagePath"
-}
-
-$package = Get-Content -LiteralPath $packagePath -Raw -ErrorAction Stop |
-  ConvertFrom-Json -ErrorAction Stop
-if ($package.name -ne 'support-ticket-triage-mcp') {
-  throw "Refusing reset: unexpected package name '$($package.name)'."
-}
-
-$dataRoot = Join-Path -Path $repoRoot -ChildPath 'data'
-$dataItem = Get-Item -LiteralPath $dataRoot -Force -ErrorAction Stop
-if (($dataItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
-  throw "Refusing reset: data directory is a reparse point."
-}
-
-$expectedRuntimeRoot = [System.IO.Path]::GetFullPath(
-  (Join-Path -Path $repoRoot -ChildPath 'data\runtime')
-)
-$runtimeItem = Get-Item -LiteralPath $expectedRuntimeRoot -Force -ErrorAction Stop
-if (($runtimeItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
-  throw "Refusing reset: runtime directory is a reparse point."
-}
-$runtimeRoot = $runtimeItem.FullName
-if (-not [string]::Equals(
-    [System.IO.Path]::GetFullPath($runtimeRoot).TrimEnd([char[]]"\/"),
-    $expectedRuntimeRoot.TrimEnd([char[]]"\/"),
-    [System.StringComparison]::OrdinalIgnoreCase
-  )) {
-  throw "Refusing reset: runtime directory resolved outside the verified repository."
-}
-
-$runtimeChildren = @(
-  Get-ChildItem -LiteralPath $runtimeRoot -Force -ErrorAction Stop
-)
-$resetTargets = @(
-  $runtimeChildren | Where-Object Name -ne '.gitkeep'
-)
-
-foreach ($target in $resetTargets) {
-  if (($target.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
-    throw "Refusing reset: runtime child is a reparse point: $($target.FullName)"
-  }
-}
-
-foreach ($target in $resetTargets) {
-  Remove-Item -LiteralPath $target.FullName -Recurse -Force -ErrorAction Stop
-}
+npm run reset:demo
 ```
 
-The script completes repository identity, JSON, path, reparse-point, and
-enumeration checks before entering the deletion loop.
+The reset refuses if a runtime usage lease is active. It validates and prepares
+fresh operational and learning state before replacing either side, keeps
+backups through final verification, and rolls back a completed first-side swap
+if the second side fails. It never edits the read-only seed file or static
+`data/knowledge` catalog.
 
 Open the repository root in Codex desktop and start a new thread. The project
 configuration in `.codex/config.toml` starts `node dist/src/index.js`.
@@ -179,7 +133,7 @@ Expected checkpoints:
 Run:
 
 ```powershell
-npm run demo:showcase
+npm run approval-desk
 ```
 
 Expected checkpoints:

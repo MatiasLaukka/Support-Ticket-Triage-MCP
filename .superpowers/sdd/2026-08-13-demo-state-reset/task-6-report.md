@@ -73,3 +73,51 @@ expected LF-to-CRLF working-copy notices.
 - No real development demo state was reset or Approval Desk process started;
   that manual operation belongs to Task 7.
 - The pre-existing untracked approved-plan file was preserved and not staged.
+
+## Review fix
+
+The Task 6 review found three active public runbooks that still invoked the
+legacy `demo:approval-desk` command. That runner clears the runtime directory
+before startup, so it could erase lifecycle-replay state and bypass the new
+guarded reset workflow.
+
+RED:
+
+```text
+npx vitest run test/demo-reset-docs.test.ts --reporter=dot
+Test Files 1 failed (1)
+Tests 2 failed (2)
+```
+
+The regression failed because the README and lifecycle-replay guide still
+contained `npm run demo:approval-desk`, while the video runbook had no explicit
+`reset:demo` followed by `approval-desk` sequence.
+
+Fix:
+
+- The README lifecycle viewer and `docs/lifecycle-replay.md` now start the
+  non-resetting `npm run approval-desk` command so generated evaluation reports
+  remain available to the viewer.
+- `docs/video-script.md` now runs `npm run reset:demo` and then
+  `npm run approval-desk`, making the destructive step explicit and guarded.
+- Added `test/demo-reset-docs.test.ts` to reject both legacy implicit-reset
+  commands in the three public runbooks and require the video reset/start order.
+
+Fresh review-fix verification:
+
+```text
+npx vitest run test/demo-reset.test.ts test/demo-reset-cli.test.ts test/demo-reset-docs.test.ts test/demo-reset-recovery.test.ts test/runtime.test.ts --reporter=dot
+Test Files 5 passed (5)
+Tests 61 passed (61)
+```
+
+```text
+npm test -- --reporter=dot
+Test Files 88 passed (88)
+Tests 1533 passed (1533)
+```
+
+```text
+npm run verify:portfolio
+exit code 0
+```

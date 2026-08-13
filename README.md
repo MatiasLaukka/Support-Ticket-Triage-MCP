@@ -1303,7 +1303,7 @@ start the local browser server:
 
 ```powershell
 npm run evaluate:ai-comparison -- --live   # optional; controlled output also works
-npm run demo:approval-desk
+npm run approval-desk
 ```
 
 Open `/lifecycle-replay` on the printed local URL. The page groups snapshots by

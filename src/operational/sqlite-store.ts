@@ -303,7 +303,6 @@ export class OperationalSqliteStore {
       && migrations[0]?.version === INITIAL_SCHEMA_VERSION
       && migrations[0]?.name === "initial-operational-schema"
     ) {
-      this.validateLegacySchemaBeforeMigration();
       this.applyDiagnosisReviewPayloadMigration();
       return;
     }
@@ -322,17 +321,18 @@ export class OperationalSqliteStore {
   }
 
   private applyDiagnosisReviewPayloadMigration(): void {
-    const diagnosisCount = (this.database.prepare(
-      "SELECT COUNT(*) AS count FROM diagnoses",
-    ).get() as { count: number }).count;
-    if (diagnosisCount > 0) {
-      throw new OperationalStoreError(
-        "Operational diagnosis rows cannot be upgraded losslessly because their original review audits were not stored.",
-        "SCHEMA_ERROR",
-      );
-    }
     try {
       this.database.exec("BEGIN IMMEDIATE");
+      this.validateLegacySchemaBeforeMigration();
+      const diagnosisCount = (this.database.prepare(
+        "SELECT COUNT(*) AS count FROM diagnoses",
+      ).get() as { count: number }).count;
+      if (diagnosisCount > 0) {
+        throw new OperationalStoreError(
+          "Operational diagnosis rows cannot be upgraded losslessly because their original review audits were not stored.",
+          "SCHEMA_ERROR",
+        );
+      }
       const appliedAt = new Date().toISOString();
       this.database.prepare(
         "INSERT INTO schema_migrations(version, name, applied_at) VALUES (?, ?, ?)",
@@ -345,6 +345,7 @@ export class OperationalSqliteStore {
       if (this.database.inTransaction) {
         try { this.database.exec("ROLLBACK"); } catch { /* preserve the migration error */ }
       }
+      if (error instanceof OperationalStoreError) throw error;
       throw new OperationalStoreError(
         "Operational diagnosis review payload migration failed.",
         "SCHEMA_ERROR",

@@ -1,5 +1,62 @@
 # Final whole-branch review: demo state reset
 
+## Independent final re-review of `350d37b` — 2026-08-13
+
+### Verdict
+
+**APPROVED**
+
+No actionable findings remain. The residual malformed-`schema_meta` gap is
+fixed without broadening the guard beyond the two project-defined learning
+schema signatures.
+
+`isLearningDatabase()` now evaluates the complete `learning_events` +
+`learning_deliveries` and `knowledge_candidates` + `knowledge_versions` table
+pairs before querying the optional metadata marker. A malformed metadata table
+therefore cannot suppress a recognized learning schema. The new real-SQLite
+regressions prove both signatures are refused before reset mutation, preserve
+the target byte-for-byte, and leave no reset artifacts. The operational control
+proves that an otherwise legitimate native operational database with an
+unrelated malformed `schema_meta` table remains resettable; malformed metadata
+alone is not treated as a learning ledger.
+
+The patch is confined to this ordering correction and its regressions. Review
+of the surrounding guard confirms it still executes before lease acquisition
+and preparation, including for the independent operational API and combined
+reset path. The prior canonical target-family isolation, overlap, external-path,
+rollback, runtime lease, CLI, documentation, and portfolio findings remain
+resolved and covered by the fresh focused and full suites.
+
+Fresh independent verification at `350d37b`:
+
+```text
+npx vitest run test/demo-reset.test.ts test/demo-reset-cli.test.ts test/demo-reset-docs.test.ts test/demo-reset-recovery.test.ts test/runtime.test.ts --reporter=dot
+Test Files 5 passed (5)
+Tests 73 passed (73)
+
+npm test -- --reporter=dot
+Build: passed
+Typecheck: passed
+Test Files 88 passed (88)
+Tests 1545 passed (1545)
+exit code 0
+
+npm run verify:portfolio
+Test Files 88 passed (88)
+Tests 1545 passed (1545)
+Diagnostic evaluation: passed
+Lifecycle replay: 11/11 scenarios passed
+Knowledge holdout: 8/8 fixed cases passed
+Knowledge evolution, operational persistence, and metrics demos: passed
+exit code 0
+
+git diff --check 778f34c..350d37b
+exit code 0
+```
+
+The only worktree item outside the reviewed commits remains the pre-existing
+untracked approved plan under `docs/superpowers/plans/`.
+
 ## Residual schema-guard fix addendum — 2026-08-13
 
 **READY FOR INDEPENDENT RE-REVIEW**

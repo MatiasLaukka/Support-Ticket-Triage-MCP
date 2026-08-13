@@ -8,7 +8,8 @@ assistance, but the recorded workflow below uses local deterministic rules.
 
 ## Before Recording
 
-From PowerShell, start with a clean environment:
+Stop any running Approval Desk or MCP process. From PowerShell, start with a
+clean environment:
 
 ```powershell
 cd "D:\Documents\Support Ticket Triage MCP"
@@ -16,7 +17,8 @@ Remove-Item Env:OPENAI_API_KEY -ErrorAction SilentlyContinue
 Remove-Item Env:APPROVAL_DRAFT_PROVIDER -ErrorAction SilentlyContinue
 Remove-Item Env:TRIAGE_KNOWLEDGE_CANDIDATE_PROVIDER -ErrorAction SilentlyContinue
 npm run build
-npm run demo:approval-desk
+npm run reset:demo
+npm run approval-desk
 ```
 
 The server prints a local URL. Use synthetic tickets only and keep the browser

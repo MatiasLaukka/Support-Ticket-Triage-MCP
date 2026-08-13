@@ -12,8 +12,15 @@ npm ci
 npm run build
 Remove-Item Env:OPENAI_API_KEY -ErrorAction SilentlyContinue
 Remove-Item Env:APPROVAL_DRAFT_PROVIDER -ErrorAction SilentlyContinue
-npm run demo:showcase
+npm run reset:demo
+npm run approval-desk
 ```
+
+Stop any running Approval Desk or MCP process before `reset:demo`; the reset
+correctly refuses while its runtime usage lease is active. For a persistence
+take, stop the Desk with `Ctrl+C`, restart `npm run approval-desk` without a
+reset, capture the persisted action, stop it again, and only then restore with
+`npm run reset:demo`.
 
 The optional OpenAI mode is useful for a separate experiment, but the primary
 portfolio recording should use deterministic local rules so every viewer can

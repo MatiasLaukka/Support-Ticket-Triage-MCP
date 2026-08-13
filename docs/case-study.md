@@ -115,8 +115,10 @@ The fastest browser demo uses `TKT-1010`, a deliberately vague ticket that
 becomes classifiable after a customer reply. `TKT-1001` remains a strong
 alternate incident demo for EU Checkout Started event delays.
 
-1. The user runs `npm run demo:showcase`.
-2. The Approval Desk resets local runtime state and opens a local URL.
+1. The user stops any active runtime, runs `npm run reset:demo`, then starts
+   `npm run approval-desk`.
+2. The coordinated reset verifies pristine operational and learning baselines;
+   the Approval Desk opens a local URL without implicitly resetting either.
 3. The reviewer selects `TKT-1010`, adds a customer reply describing the blank
    campaign editor, and creates an updated recommendation.
 4. The system re-evaluates the full conversation, recalculates evidence

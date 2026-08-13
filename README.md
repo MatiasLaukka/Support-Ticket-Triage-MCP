@@ -108,7 +108,8 @@ flowchart LR
 ```powershell
 npm ci
 npm run build
-npm run demo:showcase
+npm run reset:demo
+npm run approval-desk
 ```
 
 Open the printed local URL. A good portfolio walkthrough is:
@@ -530,69 +531,75 @@ normal. Diagnostics are written to standard error.
 
 ### Reset The Local Demo State
 
-Stop the MCP server before resetting. This preserves `data/runtime/.gitkeep`
-and removes ignored runtime tickets, recommendations, and audits:
+Reset is an explicit destructive administration action. **Stop the Approval
+Desk and every MCP/runtime process with `Ctrl+C` before running any reset
+command.** A runtime holds a shared usage lease before opening mutable state;
+reset must acquire the exclusive lease and refuses while that runtime is
+active. This closes the stop/reset startup race instead of relying on SQLite
+locks or rename failures.
+
+Choose the narrowest target:
 
 ```powershell
-$ErrorActionPreference = 'Stop'
+# Restore tickets only; preserve accumulated learning.
+npm run reset:operational-demo
 
-$repoRoot = (Resolve-Path -LiteralPath '.' -ErrorAction Stop).ProviderPath
-$packagePath = Join-Path -Path $repoRoot -ChildPath 'package.json'
-if (-not (Test-Path -LiteralPath $packagePath -PathType Leaf)) {
-  throw "Refusing reset: package.json was not found at $packagePath"
-}
+# Reset learned knowledge only; preserve tickets and workflow history.
+npm run reset:learning-demo
 
-$package = Get-Content -LiteralPath $packagePath -Raw -ErrorAction Stop |
-  ConvertFrom-Json -ErrorAction Stop
-if ($package.name -ne 'support-ticket-triage-mcp') {
-  throw "Refusing reset: unexpected package name '$($package.name)'."
-}
-
-$dataRoot = Join-Path -Path $repoRoot -ChildPath 'data'
-$dataItem = Get-Item -LiteralPath $dataRoot -Force -ErrorAction Stop
-if (($dataItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
-  throw "Refusing reset: data directory is a reparse point."
-}
-
-$expectedRuntimeRoot = [System.IO.Path]::GetFullPath(
-  (Join-Path -Path $repoRoot -ChildPath 'data\runtime')
-)
-$runtimeItem = Get-Item -LiteralPath $expectedRuntimeRoot -Force -ErrorAction Stop
-if (($runtimeItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
-  throw "Refusing reset: runtime directory is a reparse point."
-}
-$runtimeRoot = $runtimeItem.FullName
-if (-not [string]::Equals(
-    [System.IO.Path]::GetFullPath($runtimeRoot).TrimEnd([char[]]"\/"),
-    $expectedRuntimeRoot.TrimEnd([char[]]"\/"),
-    [System.StringComparison]::OrdinalIgnoreCase
-  )) {
-  throw "Refusing reset: runtime directory resolved outside the verified repository."
-}
-
-$runtimeChildren = @(
-  Get-ChildItem -LiteralPath $runtimeRoot -Force -ErrorAction Stop
-)
-$resetTargets = @(
-  $runtimeChildren | Where-Object Name -ne '.gitkeep'
-)
-
-foreach ($target in $resetTargets) {
-  if (($target.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
-    throw "Refusing reset: runtime child is a reparse point: $($target.FullName)"
-  }
-}
-
-foreach ($target in $resetTargets) {
-  Remove-Item -LiteralPath $target.FullName -Recurse -Force -ErrorAction Stop
-}
+# Restore both planes to the pristine demo baseline.
+npm run reset:demo
 ```
 
-All repository, package, path, JSON, reparse-point, and enumeration checks
-finish before the deletion loop starts. The demo runner then performs an
-explicit typed import from the synthetic seed into
-`data/runtime/operational.sqlite`; normal server startup never recreates legacy
-ticket or audit files.
+`reset:operational-demo` validates the complete `TRIAGE_SEED_FILE`, creates a
+fresh native operational database containing every seed ticket by ID, and
+verifies that recommendations, conversations, diagnoses, events, traces,
+idempotency records, and the learning outbox are empty. It is especially useful
+for knowledge-reuse tests: the tickets become fresh while the accumulated
+learning ledger and mutable learning repositories deliberately remain intact.
+
+`reset:learning-demo` recreates the learning SQLite database and only the
+whitelisted mutable `knowledge-evolution` directories (`diagnoses`,
+`candidates`, `approved`, and `audit`). It does not modify operational SQLite
+or the static `data/knowledge` catalog. `reset:demo` is the coordinated
+all-or-rollback operation: it prepares and verifies both replacements before
+replacing either side, retains backups through final-path verification, and
+restores an already replaced side if the other commit fails.
+
+All reset targets, temporary files, backups, SQLite sidecars, and mutable
+learning paths are canonicalized and contained under `TRIAGE_DATA_ROOT` by
+default. `TRIAGE_SEED_FILE` is read-only input, so it may be outside the data
+root and is never deleted or rewritten. Custom operational or learning SQLite
+paths outside the data root are refused unless the operator deliberately sets
+`ALLOW_DEMO_RESET_OUTSIDE_DATA_ROOT=true`; that opt-in does not relax the
+mutable learning-directory whitelist or protect fewer backup/rollback paths.
+
+Preparation builds fresh state rather than deleting rows from a live database.
+The reset validates the prepared state, moves the old database and SQLite
+sidecars to sibling backups, installs and reopens the replacement, verifies the
+final path, and only then removes backups. If rollback cannot finish, recovery
+backups are retained and reported by sanitized basename instead of being
+silently discarded.
+
+The normal persistence walkthrough is:
+
+```powershell
+npm run reset:demo
+npm run approval-desk
+# Perform the workflow, then press Ctrl+C.
+npm run approval-desk  # restart without resetting; the action persists
+# Press Ctrl+C when finished.
+npm run reset:demo
+```
+
+Automated evidence for exact ticket restoration, target isolation, pristine
+timelines, runtime/reset lease refusal, invalid-seed safety, sidecar recovery,
+cross-side rollback, and restart persistence is exercised with:
+
+```powershell
+npx vitest run test/demo-reset.test.ts test/demo-reset-cli.test.ts test/demo-reset-recovery.test.ts test/runtime.test.ts
+npm run verify:portfolio
+```
 
 ## Use From Codex Desktop
 
@@ -634,12 +641,14 @@ For a repeatable walkthrough, run:
 ```powershell
 npm ci
 npm run build
-npm run demo:showcase
+npm run reset:demo
+npm run approval-desk
 ```
 
-`demo:showcase` is an alias for the local Approval Desk demo runner. It resets
-local runtime data, starts the Approval Desk, and prints the local URL plus a
-suggested presentation path. The Automation Evidence dashboard shows open
+`reset:demo` establishes the verified pristine operational and learning
+baseline; `approval-desk` then starts without resetting it. This separation is
+what makes the stop/restart persistence walkthrough meaningful. The Automation
+Evidence dashboard shows open
 tickets, recommendation counts, estimated minutes saved, audit events, safety
 blocks, and active guardrails.
 
@@ -684,7 +693,8 @@ $env:OPENAI_API_KEY = 'sk-...'
 $env:APPROVAL_DRAFT_PROVIDER = 'openai'
 $env:OPENAI_MODEL = 'gpt-5.6-luna'
 $env:APPROVAL_RESPONSE_STYLE = 'balanced'
-npm run demo:showcase
+npm run reset:demo
+npm run approval-desk
 ```
 
 `OPENAI_MODEL` is optional; the app defaults to `gpt-5.6-luna`. The draft
@@ -1293,7 +1303,7 @@ start the local browser server:
 
 ```powershell
 npm run evaluate:ai-comparison -- --live   # optional; controlled output also works
-npm run demo:approval-desk
+npm run approval-desk
 ```
 
 Open `/lifecycle-replay` on the printed local URL. The page groups snapshots by

@@ -3,16 +3,27 @@
 This page gives a short, repeatable story for reviewers who want to understand
 what the demo proves before running it.
 
-## One-Command Demo
+## Resettable Browser Demo
 
 ```powershell
 npm ci
 npm run build
-npm run demo:showcase
+npm run reset:demo
+npm run approval-desk
 ```
 
-The command resets local runtime data, starts the browser Approval Desk, and
-prints a local URL.
+The reset command establishes a verified pristine baseline, and the second
+command starts the browser Approval Desk and prints a local URL. Stop the Desk
+with `Ctrl+C` before resetting. Restart `npm run approval-desk` without a reset
+to demonstrate persistence; run `npm run reset:demo` after stopping it to
+return both operational and learning state to baseline.
+
+For a knowledge-reuse comparison, `npm run reset:operational-demo` restores
+fresh seed tickets while deliberately preserving accumulated learning.
+`npm run reset:learning-demo` does the inverse: it clears only whitelisted
+mutable learning state while preserving operational history and static
+knowledge. The combined reset prepares and verifies both sides before either
+replacement and retains rollback backups until both final paths verify.
 
 ## Deterministic Queue Metrics Showcase
 

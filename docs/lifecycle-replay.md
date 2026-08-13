@@ -8,7 +8,7 @@ Approval Desk rather than becoming a second workflow engine.
 
 ```powershell
 npm run evaluate:ai-comparison
-npm run demo:approval-desk
+npm run approval-desk
 ```
 
 Use `npm run evaluate:ai-comparison -- --live` instead when an authenticated

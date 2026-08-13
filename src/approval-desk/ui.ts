@@ -1975,6 +1975,12 @@ export const approvalDeskHtml = `<!doctype html>
         return 'Customer reply captured at ' + String(watermark.timestamp ?? 'an unknown time') + '.';
       }
 
+      function diagnosisEmptyState() {
+        return state.operatorGuidance?.requiredReview?.kind === 'diagnosis'
+          ? '<p class="warning">Diagnosis state could not be loaded.</p>'
+          : '<p class="hint">No recorded diagnoses are available for this ticket yet.</p>';
+      }
+
       function renderDiagnosisPanel() {
         renderDiagnosisSummary();
         if (state.selectedTicket === null) {
@@ -1990,7 +1996,7 @@ export const approvalDeskHtml = `<!doctype html>
         const view = selectedDiagnosisView();
         if (view === null) {
           els.diagnosisActionPanel.hidden = true;
-          els.diagnosisPanel.innerHTML = '<p class="hint">No recorded diagnoses are available for this ticket yet.</p>';
+          els.diagnosisPanel.innerHTML = diagnosisEmptyState();
           return;
         }
         els.diagnosisActionPanel.hidden = false;
@@ -2088,7 +2094,7 @@ export const approvalDeskHtml = `<!doctype html>
         }
         const view = selectedDiagnosisView();
         if (view === null) {
-          els.diagnosisSummaryPanel.innerHTML = '<p class="hint">No recorded diagnoses are available for this ticket yet.</p>';
+          els.diagnosisSummaryPanel.innerHTML = diagnosisEmptyState();
           return;
         }
         const current = diagnosisContextForView(view) ?? {};

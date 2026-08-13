@@ -196,6 +196,68 @@ describe("approvalDeskHtml", () => {
     );
   });
 
+  it("restores the diagnosis review Action Bar from the canonical diagnosis view", async () => {
+    const app = await startApprovalDeskApp({
+      ticketDetail: {
+        operatorGuidance: {
+          stage: "diagnosis-review",
+          nextAction: "review-diagnosis",
+          requiredReview: {
+            kind: "diagnosis",
+            id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+            reason: "Review the canonical diagnosis before continuing support actions.",
+          },
+        },
+      },
+      diagnoses: [fixtureDiagnosisView()],
+    });
+
+    await app.selectFirstTicket();
+
+    expect(app.el("diagnosisActionPanel").hidden).toBe(false);
+    expect(app.el("diagnosisPanel").innerHTML).toContain("Approve diagnosis");
+    expect(app.el("diagnosisPanel").innerHTML).toContain("Revalidate");
+    expect(app.el("diagnosisPanel").innerHTML).toContain("Reject diagnosis");
+    expect(app.el("diagnosisSummaryPanel").innerHTML).toContain(
+      "Checkout event processing is delayed.",
+    );
+    expect(app.el("diagnosisSummaryPanel").innerHTML).not.toContain("<textarea");
+    expect(app.el("diagnosisSummaryPanel").innerHTML).not.toContain("Approve diagnosis");
+  });
+
+  it("shows an explicit diagnosis state mismatch when required review has no canonical view", async () => {
+    const app = await startApprovalDeskApp({
+      ticketDetail: {
+        operatorGuidance: {
+          stage: "diagnosis-review",
+          nextAction: "review-diagnosis",
+          requiredReview: {
+            kind: "diagnosis",
+            id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+            reason: "Review the canonical diagnosis before continuing support actions.",
+          },
+        },
+      },
+      diagnoses: [],
+    });
+
+    await app.selectFirstTicket();
+
+    expect(app.el("diagnosisActionPanel").hidden).toBe(true);
+    expect(app.el("diagnosisPanel").innerHTML).toContain(
+      "Diagnosis state could not be loaded.",
+    );
+    expect(app.el("diagnosisSummaryPanel").innerHTML).toContain(
+      "Diagnosis state could not be loaded.",
+    );
+    expect(app.el("diagnosisPanel").innerHTML).not.toContain(
+      "No recorded diagnoses are available for this ticket yet.",
+    );
+    expect(app.el("diagnosisSummaryPanel").innerHTML).not.toContain(
+      "No recorded diagnoses are available for this ticket yet.",
+    );
+  });
+
   it("submits only explicitly selected diagnosis-fix impacts and renders a per-ticket result", async () => {
     const app = await startApprovalDeskApp({
       diagnoses: [fixtureDiagnosisView()],

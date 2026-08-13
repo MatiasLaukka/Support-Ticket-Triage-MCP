@@ -37,6 +37,7 @@ import {
   type ClassificationReasoningProvider,
 } from "./classification-reasoning-provider.js";
 import { evaluateTicketWithAi } from "./ai-evaluation.js";
+import { TicketEvaluationGuard } from "./evaluation-guard.js";
 import { buildAutomationEvidenceReport } from "./evidence-report.js";
 import { approvalDeskHtml } from "./ui.js";
 import { lifecycleReplayHtml } from "./lifecycle-replay-ui.js";
@@ -258,8 +259,9 @@ export function createApprovalDeskHttpServer(
   deps: RuntimeDependencies,
   options: ApprovalDeskHttpOptions = {},
 ) {
+  const evaluationGuard = new TicketEvaluationGuard();
   return createServer((request, response) => {
-    void routeRequest(request, response, deps, options);
+    void routeRequest(request, response, deps, options, evaluationGuard);
   });
 }
 
@@ -268,6 +270,7 @@ async function routeRequest(
   response: ServerResponse,
   deps: RuntimeDependencies,
   options: ApprovalDeskHttpOptions,
+  evaluationGuard: TicketEvaluationGuard,
 ): Promise<void> {
   try {
     const url = new URL(request.url ?? "/", "http://approval-desk.local");
@@ -288,7 +291,7 @@ async function routeRequest(
       return;
     }
 
-    const result = await route.handle({ deps, options, request, url });
+    const result = await route.handle({ deps, options, request, url, evaluationGuard });
     json(response, route.status, result);
   } catch (error) {
     handleError(response, error);
@@ -492,6 +495,7 @@ interface RouteContext {
   options: ApprovalDeskHttpOptions;
   request: IncomingMessage;
   url: URL;
+  evaluationGuard: TicketEvaluationGuard;
 }
 
 async function discoverKnowledgeCandidates(
@@ -701,70 +705,72 @@ async function getTicketDetail(
 }
 
 async function createRecommendation(
-  { deps, options, request }: RouteContext,
+  { deps, options, request, evaluationGuard }: RouteContext,
   id: string,
 ): Promise<unknown> {
   const ticketId = TicketIdSchema.parse(id);
   const body = SubmitBodySchema.parse(await readJsonBody(request));
-  const reusableKnowledge = deps.learningAvailability.status === "unavailable"
-    ? unavailableReusableKnowledge()
-    : await deps.knowledgeEvolution.service.listReusableApproved({
-        asOf: deps.now().toISOString(),
-      });
-  const [ticket, audits, allKnowledgeArticles] = await Promise.all([
-    deps.tickets.get(ticketId),
-    deps.audits.list(ticketId),
-    deps.knowledge.list(),
-  ]);
-  const persistedCustomerReplies = customerRepliesFromAudits(ticketId, audits);
-  const previousSupportResponse = latestSupportResponseFromAudits(
-    ticketId,
-    audits,
-  );
-  const persistedDiagnosticContext = selectPersistedDiagnosticWorkflowContext(
-    audits,
-  );
-  const customerReplies = [...persistedCustomerReplies, ...body.customerReplies.map((reply) => ({
-    ...reply,
-    ticketId,
-  }))];
-  const outcomes =
-    options.expectedOutcomesPath === undefined
-      ? undefined
-      : await loadExpectedOutcomes(options.expectedOutcomesPath);
-  const outcome = outcomes?.get(ticket.id);
-  const input = await evaluateTicketWithAi({
-    ticket,
-    outcome,
-    actor: body.actor,
-    allKnowledgeArticles,
-    reusableKnowledge,
-    customerReplies,
-    previousSupportResponse,
-    diagnosisContext: persistedDiagnosticContext.diagnosis?.context,
-    rejectedDiagnosis: persistedDiagnosticContext.rejectedDiagnosis?.context,
-    fixContext: persistedDiagnosticContext.fix?.context,
-    aiPreference: body.aiPreference,
-    responseStyle: body.responseStyle,
-    classificationProvider:
-      options.classificationReasoningProvider ??
-      createClassificationReasoningProviderFromEnv(process.env, {
-        preferOpenAi: body.aiPreference === "gpt-preferred" ||
-          process.env.APPROVAL_DRAFT_PROVIDER === "openai",
-      }),
-    draftProvider:
-      options.draftProvider ??
-      createCustomerResponseDraftProviderFromEnv(process.env, {
-        responseStyle: body.responseStyle,
-        preferOpenAi: body.aiPreference === "gpt-preferred",
-      }),
+  return evaluationGuard.run(ticketId, async () => {
+    const reusableKnowledge = deps.learningAvailability.status === "unavailable"
+      ? unavailableReusableKnowledge()
+      : await deps.knowledgeEvolution.service.listReusableApproved({
+          asOf: deps.now().toISOString(),
+        });
+    const [ticket, audits, allKnowledgeArticles] = await Promise.all([
+      deps.tickets.get(ticketId),
+      deps.audits.list(ticketId),
+      deps.knowledge.list(),
+    ]);
+    const persistedCustomerReplies = customerRepliesFromAudits(ticketId, audits);
+    const previousSupportResponse = latestSupportResponseFromAudits(
+      ticketId,
+      audits,
+    );
+    const persistedDiagnosticContext = selectPersistedDiagnosticWorkflowContext(
+      audits,
+    );
+    const customerReplies = [...persistedCustomerReplies, ...body.customerReplies.map((reply) => ({
+      ...reply,
+      ticketId,
+    }))];
+    const outcomes =
+      options.expectedOutcomesPath === undefined
+        ? undefined
+        : await loadExpectedOutcomes(options.expectedOutcomesPath);
+    const outcome = outcomes?.get(ticket.id);
+    const input = await evaluateTicketWithAi({
+      ticket,
+      outcome,
+      actor: body.actor,
+      allKnowledgeArticles,
+      reusableKnowledge,
+      customerReplies,
+      previousSupportResponse,
+      diagnosisContext: persistedDiagnosticContext.diagnosis?.context,
+      rejectedDiagnosis: persistedDiagnosticContext.rejectedDiagnosis?.context,
+      fixContext: persistedDiagnosticContext.fix?.context,
+      aiPreference: body.aiPreference,
+      responseStyle: body.responseStyle,
+      classificationProvider:
+        options.classificationReasoningProvider ??
+        createClassificationReasoningProviderFromEnv(process.env, {
+          preferOpenAi: body.aiPreference === "gpt-preferred" ||
+            process.env.APPROVAL_DRAFT_PROVIDER === "openai",
+        }),
+      draftProvider:
+        options.draftProvider ??
+        createCustomerResponseDraftProviderFromEnv(process.env, {
+          responseStyle: body.responseStyle,
+          preferOpenAi: body.aiPreference === "gpt-preferred",
+        }),
+    });
+    const { recommendation } = await deps.service.submitEvaluation({
+      ...input,
+      submittedAt: deps.now().toISOString(),
+      evaluatedCustomerReplyWatermark: customerReplyWatermarkFromAudits(audits),
+    }, commandContextFromRequest(request, deps));
+    return { recommendation };
   });
-  const { recommendation } = await deps.service.submitEvaluation({
-    ...input,
-    submittedAt: deps.now().toISOString(),
-    evaluatedCustomerReplyWatermark: customerReplyWatermarkFromAudits(audits),
-  }, commandContextFromRequest(request, deps));
-  return { recommendation };
 }
 
 async function addCustomerReply(
@@ -1284,6 +1290,7 @@ function handleError(response: ServerResponse, error: unknown): void {
 function domainStatus(error: DomainError): number {
   switch (error.code) {
     case "STALE_APPROVAL":
+    case "EVALUATION_IN_PROGRESS":
       return 409;
     case "TICKET_NOT_FOUND":
     case "RECOMMENDATION_NOT_FOUND":

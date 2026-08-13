@@ -79,7 +79,7 @@ describe("causal Decision Timeline", () => {
       });
       expect(timeline[2]).toMatchObject({
         category: "diagnosis",
-        references: { diagnosisId: "diagnosis-7701" },
+        references: { diagnosisId: `diagnosis-${eventIds[2]}` },
         evidenceIds: ["request-id"],
       });
       expect(timeline[3]).toMatchObject({
@@ -368,7 +368,7 @@ function seededTimelineStore(): { store: OperationalSqliteStore } {
     resolution: "approved",
   });
   const diagnosis = CompletedDiagnosisSchema.parse({
-    id: "diagnosis-7701",
+    id: `diagnosis-${eventIds[2]}`,
     ticketId,
     problem: "HIDDEN_REASONING_SENTINEL diagnosis detail.",
     symptoms: ["Requests fail."],
@@ -436,7 +436,22 @@ function seededTimelineStore(): { store: OperationalSqliteStore } {
       diagnosisOutcome: "completed",
       knowledgeArticleIds: ["api-auth"],
     }));
-    unit.insertDiagnosis({ diagnosis, operationalEventId: eventIds[2] });
+    unit.insertDiagnosis({
+      diagnosis,
+      operationalEventId: eventIds[2],
+      originalAudit: {
+        id: eventIds[2],
+        timestamp: "2026-08-11T10:00:00.000Z",
+        actor: "diagnostic-engine",
+        action: "diagnosis-completed",
+        ticketId,
+        before: {},
+        after: { diagnosis: diagnosisContext() },
+        rationale: "Diagnosis completed from trusted support context.",
+        knowledgeArticleIds: ["api-auth"],
+        result: "success",
+      },
+    });
     unit.appendTrace({
       id: "77400000-0000-4000-8000-000000000003",
       operationalEventId: eventIds[2],
@@ -461,6 +476,20 @@ function seededTimelineStore(): { store: OperationalSqliteStore } {
     });
   });
   return { store };
+}
+
+function diagnosisContext() {
+  return {
+    status: "completed" as const,
+    causeType: "configuration" as const,
+    customerSafeSummary: "Credential rotation caused request failures.",
+    evidenceUsed: ["Request ID was reviewed."],
+    evidenceReferences: [{ id: "request-id", labelAtDiagnosis: "Request ID", source: "operator" as const }],
+    confidence: "confirmed" as const,
+    owner: "engineering" as const,
+    recommendedNextAction: "Rotate the credential.",
+    doNotSay: [],
+  };
 }
 
 function event(

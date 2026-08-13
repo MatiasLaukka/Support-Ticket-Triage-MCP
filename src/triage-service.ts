@@ -2135,7 +2135,11 @@ export class TriageService {
           ? undefined
           : completedDiagnosisFrom(auditEvent, diagnosis);
         if (completedDiagnosis !== undefined) {
-          unit.insertDiagnosis({ diagnosis: completedDiagnosis, operationalEventId: eventId });
+          unit.insertDiagnosis({
+            diagnosis: completedDiagnosis,
+            originalAudit: auditEvent,
+            operationalEventId: eventId,
+          });
         }
         unit.appendTrace({
           id: this.uuid(),

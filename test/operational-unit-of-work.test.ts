@@ -65,7 +65,7 @@ describe("OperationalUnitOfWork", () => {
     const canonicalTicket = ticket("TKT-0001");
     const recommendation = recommendationFor(canonicalTicket);
     const diagnosis = CompletedDiagnosisSchema.parse({
-      id: "diagnosis-001",
+      id: `diagnosis-${eventIds[2]}`,
       ticketId: canonicalTicket.id,
       problem: "API requests fail after rotating credentials.",
       symptoms: ["Requests return 401 after rotation."],
@@ -104,7 +104,11 @@ describe("OperationalUnitOfWork", () => {
         operationalEventId: eventIds[1],
         createdAt: "2026-08-10T10:01:00.000Z",
       });
-      unit.insertDiagnosis({ diagnosis, operationalEventId: eventIds[2] });
+      unit.insertDiagnosis({
+        diagnosis,
+        operationalEventId: eventIds[2],
+        originalAudit: diagnosisAudit(canonicalTicket.id, eventIds[2]),
+      });
       unit.appendTrace({
         id: "66666666-6666-4666-8666-666666666666",
         operationalEventId: eventIds[1],
@@ -369,6 +373,33 @@ function recommendationFor(value: Ticket) {
     resolution: "pending",
     createdAt: "2026-08-10T10:01:00.000Z",
   });
+}
+
+function diagnosisAudit(ticketId: string, id: string) {
+  return {
+    id,
+    timestamp: "2026-08-10T10:02:00.000Z",
+    actor: "support-lead",
+    action: "diagnosis-completed" as const,
+    ticketId,
+    before: {},
+    after: {
+      diagnosis: {
+        status: "completed",
+        causeType: "configuration",
+        customerSafeSummary: "API requests fail after rotating credentials.",
+        evidenceUsed: ["Request ID req-123 returned 401."],
+        evidenceReferences: [{ id: "request-id", labelAtDiagnosis: "Request ID", source: "reply", sourceRef: "reply-123" }],
+        confidence: "confirmed",
+        owner: "engineering",
+        recommendedNextAction: "Refresh the deployment credential.",
+        doNotSay: [],
+      },
+    },
+    rationale: "Diagnosis completed from trusted support context.",
+    knowledgeArticleIds: ["api-auth"],
+    result: "success" as const,
+  };
 }
 
 function event(

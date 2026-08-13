@@ -21,7 +21,9 @@ import {
 
 export { OperationalStoreError } from "./unit-of-work.js";
 
-const CURRENT_SCHEMA_VERSION = 1;
+const CURRENT_SCHEMA_VERSION = 2;
+const INITIAL_SCHEMA_VERSION = 1;
+const DIAGNOSIS_REVIEW_PAYLOAD_MIGRATION = "immutable-diagnosis-review-payload";
 const DEFAULT_BUSY_TIMEOUT_MS = 250;
 const REQUIRED_TABLES = [
   "schema_migrations",
@@ -247,9 +249,11 @@ export class OperationalSqliteStore {
       this.database.exec("BEGIN IMMEDIATE");
       this.database.exec(INITIAL_SCHEMA_SQL);
       const appliedAt = new Date().toISOString();
-      this.database.prepare(
+      const insertMigration = this.database.prepare(
         "INSERT INTO schema_migrations(version, name, applied_at) VALUES (?, ?, ?)",
-      ).run(CURRENT_SCHEMA_VERSION, "initial-operational-schema", appliedAt);
+      );
+      insertMigration.run(INITIAL_SCHEMA_VERSION, "initial-operational-schema", appliedAt);
+      insertMigration.run(CURRENT_SCHEMA_VERSION, DIAGNOSIS_REVIEW_PAYLOAD_MIGRATION, appliedAt);
       this.database.prepare(
         "INSERT INTO operational_metadata(key, value) VALUES (?, ?), (?, ?)",
       ).run("schema_version", String(CURRENT_SCHEMA_VERSION), "import_state", "empty");
@@ -295,13 +299,55 @@ export class OperationalSqliteStore {
       );
     }
     if (
-      migrations.length !== 1
-      || migrations[0]?.version !== CURRENT_SCHEMA_VERSION
+      migrations.length === 1
+      && migrations[0]?.version === INITIAL_SCHEMA_VERSION
+      && migrations[0]?.name === "initial-operational-schema"
+    ) {
+      this.applyDiagnosisReviewPayloadMigration();
+      return;
+    }
+    if (
+      migrations.length !== 2
+      || migrations[0]?.version !== INITIAL_SCHEMA_VERSION
       || migrations[0]?.name !== "initial-operational-schema"
+      || migrations[1]?.version !== CURRENT_SCHEMA_VERSION
+      || migrations[1]?.name !== DIAGNOSIS_REVIEW_PAYLOAD_MIGRATION
     ) {
       throw new OperationalStoreError(
         "Corrupt operational schema: migration history is incomplete or inconsistent.",
         "SCHEMA_ERROR",
+      );
+    }
+  }
+
+  private applyDiagnosisReviewPayloadMigration(): void {
+    const diagnosisCount = (this.database.prepare(
+      "SELECT COUNT(*) AS count FROM diagnoses",
+    ).get() as { count: number }).count;
+    if (diagnosisCount > 0) {
+      throw new OperationalStoreError(
+        "Operational diagnosis rows cannot be upgraded losslessly because their original review audits were not stored.",
+        "SCHEMA_ERROR",
+      );
+    }
+    try {
+      this.database.exec("BEGIN IMMEDIATE");
+      const appliedAt = new Date().toISOString();
+      this.database.prepare(
+        "INSERT INTO schema_migrations(version, name, applied_at) VALUES (?, ?, ?)",
+      ).run(CURRENT_SCHEMA_VERSION, DIAGNOSIS_REVIEW_PAYLOAD_MIGRATION, appliedAt);
+      this.database.prepare(
+        "UPDATE operational_metadata SET value = ? WHERE key = 'schema_version'",
+      ).run(String(CURRENT_SCHEMA_VERSION));
+      this.database.exec("COMMIT");
+    } catch (error) {
+      if (this.database.inTransaction) {
+        try { this.database.exec("ROLLBACK"); } catch { /* preserve the migration error */ }
+      }
+      throw new OperationalStoreError(
+        "Operational diagnosis review payload migration failed.",
+        "SCHEMA_ERROR",
+        { cause: error },
       );
     }
   }

@@ -44,7 +44,9 @@ describe("transactional operational diagnosis and verification lifecycle", () =>
       expect(snapshot.diagnoses[0]).toMatchObject({
         operationalEventId: first.id,
         diagnosis: { ticketId: sourceTicketId },
+        originalAudit: first,
       });
+      expect(snapshot.diagnoses[0]?.originalAudit).toEqual(first);
       expect(snapshot.events.filter((event) => event.commandId === commandId)).toMatchObject([{
         id: first.id,
         action: "diagnosis-completed",

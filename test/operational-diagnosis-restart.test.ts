@@ -106,7 +106,13 @@ describe("operational diagnosis persistence", () => {
       expect(beforeRestartSnapshot.diagnoses[0]).toMatchObject({
         diagnosis: { ticketId },
         operationalEventId: diagnosisId,
+        originalAudit: {
+          id: diagnosisId,
+          ticketId,
+          after: { diagnosis: originalDiagnosis },
+        },
       });
+      expect(beforeRestartSnapshot.diagnoses[0]?.originalAudit).toEqual(recorded.auditEvent);
       const beforeRestart = await requestJson(
         baseUrl,
         `/api/tickets/${ticketId}/diagnoses`,
@@ -132,7 +138,13 @@ describe("operational diagnosis persistence", () => {
       expect(afterRestartSnapshot.diagnoses[0]).toMatchObject({
         diagnosis: { ticketId },
         operationalEventId: diagnosisId,
+        originalAudit: {
+          id: diagnosisId,
+          ticketId,
+          after: { diagnosis: originalDiagnosis },
+        },
       });
+      expect(afterRestartSnapshot.diagnoses[0]?.originalAudit).toEqual(recorded.auditEvent);
       const afterRestart = await requestJson(
         baseUrl,
         `/api/tickets/${ticketId}/diagnoses`,

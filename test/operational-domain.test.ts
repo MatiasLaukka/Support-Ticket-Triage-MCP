@@ -7,6 +7,7 @@ import {
   DecisionTimelineEntrySchema,
   ImportStateSchema,
   LearningCaptureEnvelopeSchema,
+  OperationalDiagnosisRecordSchema,
   OperationalEventSchema,
   OperationalOutboxRowSchema,
   OperationalResultReferenceSchema,
@@ -37,6 +38,56 @@ const ticket = {
 };
 
 describe("operational persistence domain", () => {
+  it("accepts an operational diagnosis only when its immutable audit identity and payload are canonical", () => {
+    expect(OperationalDiagnosisRecordSchema.safeParse(operationalDiagnosisRecord()).success)
+      .toBe(true);
+  });
+
+  it.each([
+    ["completed diagnosis identity", (record: ReturnType<typeof operationalDiagnosisRecord>) => ({
+      ...record,
+      diagnosis: { ...record.diagnosis, id: "diagnosis-12111111-1111-4111-8111-111111111111" },
+    })],
+    ["audit/event link", (record: ReturnType<typeof operationalDiagnosisRecord>) => ({
+      ...record,
+      operationalEventId: secondEventId,
+    })],
+    ["ticket identity", (record: ReturnType<typeof operationalDiagnosisRecord>) => ({
+      ...record,
+      originalAudit: { ...record.originalAudit, ticketId: "TKT-0002" },
+    })],
+    ["diagnosis action", (record: ReturnType<typeof operationalDiagnosisRecord>) => ({
+      ...record,
+      originalAudit: { ...record.originalAudit, action: "ticket-updated" },
+    })],
+    ["diagnosis result", (record: ReturnType<typeof operationalDiagnosisRecord>) => ({
+      ...record,
+      originalAudit: {
+        ...record.originalAudit,
+        result: "rejected",
+        rejectionReason: "Diagnosis was not committed.",
+      },
+    })],
+    ["diagnosis timestamp", (record: ReturnType<typeof operationalDiagnosisRecord>) => ({
+      ...record,
+      originalAudit: { ...record.originalAudit, timestamp: "2026-08-10T10:03:00.000Z" },
+    })],
+    ["original diagnosis payload", (record: ReturnType<typeof operationalDiagnosisRecord>) => ({
+      ...record,
+      originalAudit: { ...record.originalAudit, after: {} },
+    })],
+    ["malformed original diagnosis payload", (record: ReturnType<typeof operationalDiagnosisRecord>) => ({
+      ...record,
+      originalAudit: {
+        ...record.originalAudit,
+        after: { diagnosis: { ...diagnosisContext(), evidenceUsed: [] } },
+      },
+    })],
+  ])("rejects a diagnosis with a mismatched %s", (_name, mutate) => {
+    expect(OperationalDiagnosisRecordSchema.safeParse(mutate(operationalDiagnosisRecord())).success)
+      .toBe(false);
+  });
+
   it("rejects malformed identifiers and non-positive causal sequences", () => {
     expect(CommandIdSchema.safeParse("not-a-command").success).toBe(false);
     expect(OperationalEventSchema.safeParse({
@@ -241,6 +292,40 @@ describe("operational persistence domain", () => {
     expect(OperationalWorkflowSnapshotSchema.safeParse({ ...snapshot, events: [event, { ...event, sequence: 1 }] }).success).toBe(false);
   });
 
+  it("requires a persisted diagnosis audit to match its causal event actor and timestamp", () => {
+    const diagnosis = operationalDiagnosisRecord();
+    const event = {
+      id: eventId,
+      ticketId: "TKT-0001",
+      sequence: 1,
+      occurredAt: diagnosis.originalAudit.timestamp,
+      actor: diagnosis.originalAudit.actor,
+      action: diagnosis.originalAudit.action,
+      commandId,
+      facts: { diagnosisOutcome: "completed" },
+    };
+    const snapshot = {
+      ticket,
+      ticketRevisions: [],
+      recommendations: [],
+      recommendationRevisions: [],
+      messages: [],
+      diagnoses: [diagnosis],
+      events: [event],
+      traces: [],
+      customerReplyWatermark: { state: "none" },
+    };
+    expect(OperationalWorkflowSnapshotSchema.safeParse(snapshot).success).toBe(true);
+    expect(OperationalWorkflowSnapshotSchema.safeParse({
+      ...snapshot,
+      events: [{ ...event, actor: "different-actor" }],
+    }).success).toBe(false);
+    expect(OperationalWorkflowSnapshotSchema.safeParse({
+      ...snapshot,
+      events: [{ ...event, occurredAt: "2026-08-10T10:03:00.000Z" }],
+    }).success).toBe(false);
+  });
+
   it("requires the workflow watermark to name the latest customer message by event sequence", () => {
     const latestMessageId = "23222222-2222-4222-8222-222222222222";
     const events = [
@@ -311,3 +396,57 @@ describe("operational persistence domain", () => {
     ]) expect(OperationalWorkflowSnapshotSchema.safeParse(invalid).success).toBe(false);
   });
 });
+
+function operationalDiagnosisRecord() {
+  return {
+    diagnosis: {
+      id: `diagnosis-${eventId}`,
+      ticketId: "TKT-0001",
+      problem: "Credential rotation left requests unauthorized.",
+      symptoms: ["configuration", "Request req-123 returned 401."],
+      evidenceUsed: ["Request req-123 returned 401."],
+      evidenceReferences: [{
+        id: "request-id",
+        labelAtDiagnosis: "Request ID",
+        source: "reply",
+        sourceRef: "reply-123",
+      }],
+      ownerTeam: "api-platform",
+      fixSteps: ["Apply the completed diagnosis next action through the governed support workflow."],
+      verificationSteps: ["Confirm the customer-safe outcome after the governed next action."],
+      completedAt: "2026-08-10T10:02:00.000Z",
+    },
+    originalAudit: {
+      id: eventId,
+      timestamp: "2026-08-10T10:02:00.000Z",
+      actor: "support-lead",
+      action: "diagnosis-completed",
+      ticketId: "TKT-0001",
+      before: {},
+      after: { diagnosis: diagnosisContext() },
+      rationale: "Diagnosis completed from trusted support context.",
+      knowledgeArticleIds: ["api-authentication"],
+      result: "success",
+    },
+    operationalEventId: eventId,
+  };
+}
+
+function diagnosisContext() {
+  return {
+    status: "completed" as const,
+    causeType: "configuration" as const,
+    customerSafeSummary: "Credential rotation left requests unauthorized.",
+    evidenceUsed: ["Request req-123 returned 401."],
+    evidenceReferences: [{
+      id: "request-id",
+      labelAtDiagnosis: "Request ID",
+      source: "reply" as const,
+      sourceRef: "reply-123",
+    }],
+    confidence: "confirmed" as const,
+    owner: "engineering" as const,
+    recommendedNextAction: "Refresh the deployment credential.",
+    doNotSay: ["The platform lost customer data."],
+  };
+}

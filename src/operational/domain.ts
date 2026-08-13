@@ -4,6 +4,7 @@ import {
   AuditActionSchema,
   AuditEventSchema,
   CategorySchema,
+  DiagnosisEvidenceReferenceSchema,
   IsoTimestampSchema,
   KnowledgeReferenceSchema,
   KnownEventIdSchema,
@@ -14,6 +15,7 @@ import {
   TriageRecommendationSchema,
 } from "../domain.js";
 import { CompletedDiagnosisSchema } from "../knowledge-evolution/domain.js";
+import { DiagnosticStateSnapshotSchema } from "../approval-desk/diagnostic-state.js";
 
 const NonBlankStringSchema = z.string().trim().min(1);
 const IdentifierSchema = z.string().trim().min(1).max(160)
@@ -212,10 +214,82 @@ export const RecommendationRevisionSchema = z.object({
   createdAt: IsoTimestampSchema,
 }).strict().readonly();
 
+const OperationalDiagnosisContextSchema = z.object({
+  status: z.literal("completed"),
+  causeType: z.enum([
+    "configuration",
+    "platform-delay",
+    "customer-data",
+    "integration",
+    "security",
+    "performance",
+  ]),
+  customerSafeSummary: NonBlankStringSchema,
+  evidenceUsed: z.array(NonBlankStringSchema).min(1),
+  evidenceReferences: z.array(DiagnosisEvidenceReferenceSchema).default([]),
+  confidence: z.enum(["likely", "confirmed"]),
+  owner: z.enum(["support", "engineering", "customer", "integration-partner"]),
+  recommendedNextAction: NonBlankStringSchema,
+  doNotSay: z.array(NonBlankStringSchema),
+  knownEventId: KnownEventIdSchema.optional(),
+  knownEventMatchReasons: z.array(NonBlankStringSchema).optional(),
+  diagnosticState: DiagnosticStateSnapshotSchema.optional(),
+}).strict();
+
 export const OperationalDiagnosisRecordSchema = z.object({
   diagnosis: CompletedDiagnosisSchema,
+  originalAudit: AuditEventSchema,
   operationalEventId: OperationalEventIdSchema,
-}).strict().readonly();
+}).strict().superRefine((record, context) => {
+  if (record.diagnosis.id !== `diagnosis-${record.originalAudit.id}`) {
+    context.addIssue({
+      code: "custom",
+      path: ["diagnosis", "id"],
+      message: "Operational completed diagnosis identity must derive exactly from its original audit identity.",
+    });
+  }
+  if (record.originalAudit.id !== record.operationalEventId) {
+    context.addIssue({
+      code: "custom",
+      path: ["operationalEventId"],
+      message: "Operational diagnosis must link to its original audit event.",
+    });
+  }
+  if (record.originalAudit.ticketId !== record.diagnosis.ticketId) {
+    context.addIssue({
+      code: "custom",
+      path: ["originalAudit", "ticketId"],
+      message: "Operational diagnosis and original audit must belong to the same ticket.",
+    });
+  }
+  if (
+    record.originalAudit.action !== "diagnosis-completed"
+    && record.originalAudit.action !== "diagnostic-escalated"
+  ) {
+    context.addIssue({
+      code: "custom",
+      path: ["originalAudit", "action"],
+      message: "Original diagnosis audit must record diagnosis completion or diagnostic escalation.",
+    });
+  }
+  if (record.originalAudit.timestamp !== record.diagnosis.completedAt) {
+    context.addIssue({
+      code: "custom",
+      path: ["originalAudit", "timestamp"],
+      message: "Original diagnosis audit timestamp must match the completed diagnosis timestamp.",
+    });
+  }
+  const originalDiagnosis = OperationalDiagnosisContextSchema.safeParse(
+    record.originalAudit.after.diagnosis,
+  );
+  if (!originalDiagnosis.success) {
+    context.addIssue({
+      code: "custom",
+      path: ["originalAudit", "after", "diagnosis"],
+      message: "Original diagnosis audit must contain a validated diagnosis context.",
+    });
+  }
+}).readonly();
 
 /** A diagnosis event has a revision exactly when its committed Ticket changed. */
 export const DiagnosisCompletionSchema = z.object({
@@ -555,6 +629,25 @@ export const OperationalWorkflowSnapshotSchema = z.object({
       context.addIssue({ code: "custom", path: ["eventReferences", index], message: "Snapshot child records must reference a snapshot operational event." });
     }
   });
+  for (const [index, diagnosis] of snapshot.diagnoses.entries()) {
+    const event = snapshot.events.find(
+      (candidate) => candidate.id === diagnosis.operationalEventId,
+    );
+    if (
+      event === undefined
+      || diagnosis.originalAudit.id !== event.id
+      || diagnosis.originalAudit.ticketId !== event.ticketId
+      || diagnosis.originalAudit.action !== event.action
+      || diagnosis.originalAudit.actor !== event.actor
+      || diagnosis.originalAudit.timestamp !== event.occurredAt
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["diagnoses", index, "originalAudit"],
+        message: "Every diagnosis original audit must match its canonical operational event.",
+      });
+    }
+  }
   for (const [index, event] of snapshot.events.entries()) {
     const expectedKind = conversationMessageKindForOperationalAction(event.action);
     if (expectedKind === undefined) continue;

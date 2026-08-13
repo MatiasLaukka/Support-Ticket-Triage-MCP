@@ -59,10 +59,13 @@ describe("OperationalSqliteStore migrations and transaction boundary", () => {
     inspector.close();
 
     expect(tableNames).toEqual([...requiredTables].sort());
-    expect(migrations).toEqual([{ version: 1, name: "initial-operational-schema" }]);
+    expect(migrations).toEqual([
+      { version: 1, name: "initial-operational-schema" },
+      { version: 2, name: "immutable-diagnosis-review-payload" },
+    ]);
     expect(metadata).toEqual([
       { key: "import_state", value: "empty" },
-      { key: "schema_version", value: "1" },
+      { key: "schema_version", value: "2" },
     ]);
 
     expect(() => store.transaction((unit) => {
@@ -112,6 +115,76 @@ describe("OperationalSqliteStore migrations and transaction boundary", () => {
     expect(corruptInspector.prepare("SELECT value FROM preserve_me").get())
       .toEqual({ value: "untouched" });
     corruptInspector.close();
+  });
+
+  it("fails migration explicitly when legacy diagnosis rows cannot gain an original audit losslessly", () => {
+    const path = temporaryDatabasePath();
+    const initialized = OperationalSqliteStore.open(path);
+    initialized.initialize();
+    initialized.transaction((unit) => {
+      unit.insertTicket(ticket());
+      unit.allocateEventSequences("TKT-0001", 1);
+      unit.appendEvent({
+        id: "11111111-1111-4111-8111-111111111111",
+        ticketId: "TKT-0001",
+        sequence: 1,
+        occurredAt: "2026-08-10T10:02:00.000Z",
+        actor: "support-lead",
+        action: "diagnosis-completed",
+        commandId: "33333333-3333-4333-8333-333333333333",
+        facts: { diagnosisOutcome: "completed" },
+      });
+    });
+    initialized.close();
+
+    const legacy = new Database(path);
+    legacy.prepare("DELETE FROM schema_migrations WHERE version > 1").run();
+    legacy.prepare("UPDATE operational_metadata SET value = '1' WHERE key = 'schema_version'").run();
+    const oldRecord = {
+      diagnosis: {
+        id: "diagnosis-11111111-1111-4111-8111-111111111111",
+        ticketId: "TKT-0001",
+        problem: "Credential rotation left requests unauthorized.",
+        symptoms: ["Requests return 401."],
+        evidenceUsed: ["Request req-123 returned 401."],
+        evidenceReferences: [],
+        ownerTeam: "api-platform",
+        fixSteps: ["Refresh the deployment credential."],
+        verificationSteps: ["Confirm a new request succeeds."],
+        completedAt: "2026-08-10T10:02:00.000Z",
+      },
+      operationalEventId: "11111111-1111-4111-8111-111111111111",
+    };
+    legacy.prepare(`
+      INSERT INTO diagnoses(id, ticket_id, operational_event_id, completed_at, payload_json)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(
+      oldRecord.diagnosis.id,
+      oldRecord.diagnosis.ticketId,
+      oldRecord.operationalEventId,
+      oldRecord.diagnosis.completedAt,
+      JSON.stringify(oldRecord),
+    );
+    legacy.close();
+
+    const reopened = OperationalSqliteStore.open(path);
+    let migrationError: unknown;
+    try {
+      reopened.initialize();
+    } catch (error) {
+      migrationError = error;
+    } finally {
+      reopened.close();
+    }
+    expect(migrationError).toMatchObject({
+      code: "SCHEMA_ERROR",
+      message: expect.stringMatching(/cannot be upgraded losslessly/i),
+    });
+
+    const inspector = new Database(path, { readonly: true });
+    expect(inspector.prepare("SELECT payload_json FROM diagnoses").get())
+      .toEqual({ payload_json: JSON.stringify(oldRecord) });
+    inspector.close();
   });
 
   it("fails closed when required columns, indexes, or append-only triggers are missing without repairing the database", () => {

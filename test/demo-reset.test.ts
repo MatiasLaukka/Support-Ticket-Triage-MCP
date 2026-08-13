@@ -1114,8 +1114,32 @@ function addDirtyOperationalState(store: OperationalSqliteStore, ticket: Ticket)
     });
     unit.insertDiagnosis({
       operationalEventId: ids.diagnosisEvent,
+      originalAudit: {
+        id: ids.diagnosisEvent,
+        timestamp: "2026-08-12T10:02:30.000Z",
+        actor: "operator",
+        action: "diagnosis-completed",
+        ticketId: ticket.id,
+        before: {},
+        after: {
+          diagnosis: {
+            status: "completed",
+            causeType: "performance",
+            customerSafeSummary: "The request remains unavailable after retry.",
+            evidenceUsed: ["The request identifier was reviewed."],
+            evidenceReferences: [{ id: "request-id", labelAtDiagnosis: "Request ID", source: "operator" }],
+            confidence: "confirmed",
+            owner: "engineering",
+            recommendedNextAction: "Apply the governed service correction.",
+            doNotSay: [],
+          },
+        },
+        rationale: "Diagnosis completed from trusted support context.",
+        knowledgeArticleIds: [],
+        result: "success",
+      },
       diagnosis: CompletedDiagnosisSchema.parse({
-        id: "diagnosis-demo-reset",
+        id: `diagnosis-${ids.diagnosisEvent}`,
         ticketId: ticket.id,
         problem: "The request remains unavailable after retry.",
         symptoms: ["The request returns an error."],

@@ -14,6 +14,7 @@ import { TicketSchema } from "../src/domain.js";
 import { acquireDemoStateResetLease } from "../src/demo-state-lease.js";
 import { acquireDemoStateUsageLease } from "../src/demo-reset.js";
 import { mainDemoResetCli } from "../src/demo-reset-cli.js";
+import { SqliteLearningLedger } from "../src/knowledge-evolution/sqlite-learning-ledger.js";
 import { OperationalSqliteStore } from "../src/operational/sqlite-store.js";
 
 const roots: string[] = [];
@@ -130,6 +131,64 @@ describe("demo reset CLI", () => {
     expect(readOperationalState(operationalDatabase).importState).toBe("native");
   });
 
+  it("refuses an empty canonical alias between configured operational and learning targets", async () => {
+    const root = temporaryRoot("demo-reset-cli-alias-");
+    const dataRoot = join(root, "runtime");
+    const seedFile = join(root, "seed", "tickets.json");
+    const sharedDatabase = join(dataRoot, "custom", "shared.sqlite");
+    mkdirSync(dirname(seedFile), { recursive: true });
+    writeFileSync(seedFile, JSON.stringify(canonicalTickets));
+
+    const result = await invokeCli({
+      args: ["operational"],
+      env: {
+        TRIAGE_DATA_ROOT: dataRoot,
+        TRIAGE_SEED_FILE: seedFile,
+        OPERATIONAL_DB_PATH: sharedDatabase,
+        TRIAGE_LEARNING_LEDGER_PATH: sharedDatabase,
+      },
+    });
+
+    expect(result).toEqual({
+      exitCode: 1,
+      stdout: "",
+      stderr: "The operational and learning reset targets overlap.\n",
+    });
+    expect(existsSync(sharedDatabase)).toBe(false);
+  });
+
+  it("refuses a populated learning ledger as the operational target with external opt-in", async () => {
+    const root = temporaryRoot("demo-reset-cli-learning-target-");
+    const dataRoot = join(root, "runtime");
+    const externalRoot = temporaryRoot("demo-reset-cli-learning-target-external-");
+    const seedFile = join(root, "seed", "tickets.json");
+    const learningDatabase = join(externalRoot, "custom-learning.db");
+    mkdirSync(dirname(seedFile), { recursive: true });
+    writeFileSync(seedFile, JSON.stringify(canonicalTickets));
+    const ledger = new SqliteLearningLedger(learningDatabase);
+    await ledger.initialize();
+    ledger.close();
+    const before = fileHash(learningDatabase);
+
+    const result = await invokeCli({
+      args: ["operational"],
+      env: {
+        TRIAGE_DATA_ROOT: dataRoot,
+        TRIAGE_SEED_FILE: seedFile,
+        OPERATIONAL_DB_PATH: learningDatabase,
+        TRIAGE_LEARNING_LEDGER_PATH: join(dataRoot, "knowledge-evolution", "learning.sqlite"),
+        ALLOW_DEMO_RESET_OUTSIDE_DATA_ROOT: "true",
+      },
+    });
+
+    expect(result).toEqual({
+      exitCode: 1,
+      stdout: "",
+      stderr: "A learning ledger cannot be used as an operational reset target.\n",
+    });
+    expect(fileHash(learningDatabase)).toBe(before);
+  });
+
   it("runs the atomic combined reset and reports both target results", async () => {
     const root = temporaryRoot("demo-reset-cli-all-");
     const dataRoot = join(root, "runtime");
@@ -161,6 +220,32 @@ describe("demo reset CLI", () => {
     expect(readOperationalState(operationalDatabase).importState).toBe("native");
     expect(existsSync(learningLedgerFile)).toBe(true);
     expect(existsSync(learningMarker)).toBe(false);
+  });
+
+  it("allows distinct custom database paths contained by the data root", async () => {
+    const root = temporaryRoot("demo-reset-cli-custom-contained-");
+    const dataRoot = join(root, "runtime");
+    const seedFile = join(root, "seed", "tickets.json");
+    const operationalDatabase = join(dataRoot, "custom", "workflow.db");
+    const learningLedgerFile = join(dataRoot, "custom", "learning.db");
+    mkdirSync(dirname(seedFile), { recursive: true });
+    writeFileSync(seedFile, JSON.stringify(canonicalTickets));
+    initializeOperationalState(operationalDatabase, "imported");
+
+    const result = await invokeCli({
+      args: ["all"],
+      env: {
+        TRIAGE_DATA_ROOT: dataRoot,
+        TRIAGE_SEED_FILE: seedFile,
+        OPERATIONAL_DB_PATH: operationalDatabase,
+        TRIAGE_LEARNING_LEDGER_PATH: learningLedgerFile,
+      },
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(readOperationalState(operationalDatabase).tickets).toEqual(canonicalTickets);
+    expect(existsSync(learningLedgerFile)).toBe(true);
   });
 
   it.each([

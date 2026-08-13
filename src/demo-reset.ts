@@ -124,6 +124,15 @@ export interface DemoResetSummary {
   readonly learning: LearningDemoResetSummary;
 }
 
+export function assertDemoResetTargetsIsolated(input: {
+  readonly operationalDatabase: string;
+  readonly learningLedgerFile: string;
+}): void {
+  const operationalTargets = databaseFamily(input.operationalDatabase);
+  const learningTargets = databaseFamily(input.learningLedgerFile);
+  assertTargetSetsDoNotOverlap(operationalTargets, learningTargets);
+}
+
 interface LearningDirectoryPaths {
   readonly name: typeof MUTABLE_LEARNING_DIRECTORY_NAMES[number];
   readonly live: string;
@@ -146,6 +155,7 @@ export function prepareOperationalDemoReset(
 ): PreparedOperationalDemoReset {
   const seedTickets = loadCanonicalSeedTickets(input.seedFile);
   const paths = resolveResetPaths(input);
+  assertOperationalTargetIsNotLearningDatabase(paths.database);
   const lease = acquireResetLease(paths.dataRoot);
   return prepareOperationalWithLease(paths, seedTickets, lease, true);
 }
@@ -271,6 +281,11 @@ export async function resetDemoState(input: DemoResetInput): Promise<DemoResetSu
   const seedTickets = loadCanonicalSeedTickets(input.seedFile);
   const operationalPaths = resolveResetPaths(input);
   const learningPaths = resolveLearningResetPaths(input);
+  assertTargetSetsDoNotOverlap(
+    resetDatabaseSet(operationalPaths),
+    resetDatabaseSet(learningPaths),
+  );
+  assertOperationalTargetIsNotLearningDatabase(operationalPaths.database);
   if (operationalPaths.dataRoot !== learningPaths.dataRoot) {
     throw new DemoResetError(
       "Combined demo reset requires one canonical data root.",
@@ -1118,6 +1133,74 @@ function assertLearningDirectoryPathSafe(paths: LearningResetPaths, target: stri
 
 function pathsOverlap(left: string, right: string): boolean {
   return isContainedPath(left, right) || isContainedPath(right, left);
+}
+
+function assertOperationalTargetIsNotLearningDatabase(path: string): void {
+  if (!isLearningDatabase(path)) return;
+  throw new DemoResetError(
+    "A learning ledger cannot be used as an operational reset target.",
+    "PATH_SAFETY",
+  );
+}
+
+function assertTargetSetsDoNotOverlap(
+  operationalTargets: readonly string[],
+  learningTargets: readonly string[],
+): void {
+  if (!operationalTargets.some((operational) =>
+    learningTargets.some((learning) => pathsOverlap(operational, learning)))) return;
+  throw new DemoResetError(
+    "The operational and learning reset targets overlap.",
+    "PATH_SAFETY",
+  );
+}
+
+function resetDatabaseSet(paths: ResetPaths): readonly string[] {
+  return [paths.database, paths.temporary, paths.backup]
+    .flatMap((path) => databaseFamily(path));
+}
+
+function databaseFamily(path: string): readonly string[] {
+  const canonical = canonicalizeNearestExisting(path);
+  const owner = resetArtifactOwner(canonical);
+  return [...new Set([canonical, owner].flatMap((member) =>
+    databaseSet(member).map((target) => canonicalizeNearestExisting(target))))];
+}
+
+function resetArtifactOwner(path: string): string {
+  const withoutSidecar = SQLITE_SIDECAR_SUFFIXES.reduce(
+    (candidate, suffix) => candidate.endsWith(suffix)
+      ? candidate.slice(0, -suffix.length)
+      : candidate,
+    path,
+  );
+  const temporary = /^(.*)\.reset-[^\\/]+\.tmp$/i.exec(withoutSidecar);
+  const backup = /^(.*)\.reset-backup-[^\\/]+$/i.exec(withoutSidecar);
+  return canonicalizeNearestExisting(temporary?.[1] ?? backup?.[1] ?? withoutSidecar);
+}
+
+function isLearningDatabase(path: string): boolean {
+  if (!existsSync(path)) return false;
+  let database: Database.Database | undefined;
+  try {
+    database = new Database(path, { readonly: true, fileMustExist: true });
+    const tables = new Set(
+      (database.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as Array<{ name: string }>)
+        .map(({ name }) => name),
+    );
+    if (tables.has("schema_meta")) {
+      const marker = database.prepare(
+        "SELECT value FROM schema_meta WHERE key = 'learning-ledger'",
+      ).get() as { value?: string } | undefined;
+      if (marker?.value === "1") return true;
+    }
+    return (tables.has("learning_events") && tables.has("learning_deliveries"))
+      || (tables.has("knowledge_candidates") && tables.has("knowledge_versions"));
+  } catch {
+    return false;
+  } finally {
+    database?.close();
+  }
 }
 
 function isOperationalDatabase(path: string): boolean {

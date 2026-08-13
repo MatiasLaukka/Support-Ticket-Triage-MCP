@@ -154,6 +154,26 @@ describe("operational demo reset", () => {
       .toBe("do-not-touch");
   });
 
+  it("refuses a learning ledger as the operational target without changing either state", async () => {
+    const harness = await dirtyLearningHarness();
+    const operationalBefore = readSnapshots(harness.databasePath);
+    const learningBefore = learningResourceSnapshot(harness);
+
+    expect(() => resetOperationalDemoState({
+      ...harness.input,
+      operationalDatabase: harness.learningDatabase,
+      allowExternalDatabasePath: true,
+    })).toThrow(/learning ledger/i);
+
+    expect(readSnapshots(harness.databasePath)).toEqual(operationalBefore);
+    expect(learningResourceSnapshot(harness)).toEqual(learningBefore);
+    await expect(readLearningLogicalState(harness)).resolves.toMatchObject({
+      events: [dirtyLearningEvent],
+      candidates: [dirtyKnowledgeCandidate],
+    });
+    expect(resetArtifacts(harness.learningDatabase)).toEqual([]);
+  });
+
   it("refuses reset while another process owns a shared usage lease", async () => {
     const harness = dirtyHarness();
     const originalHash = fileHash(harness.databasePath);
@@ -477,6 +497,29 @@ describe("learning demo reset", () => {
 });
 
 describe("combined demo reset", () => {
+  it.each([
+    ["the same canonical database", (harness: Awaited<ReturnType<typeof dirtyLearningHarness>>) => harness.learningDatabase],
+    ["a learning SQLite sidecar", (harness: Awaited<ReturnType<typeof dirtyLearningHarness>>) => `${harness.learningDatabase}-wal`],
+    ["a learning temporary database", (harness: Awaited<ReturnType<typeof dirtyLearningHarness>>) => `${harness.learningDatabase}.reset-fixed.tmp`],
+    ["a learning backup database", (harness: Awaited<ReturnType<typeof dirtyLearningHarness>>) => `${harness.learningDatabase}.reset-backup-fixed`],
+    ["a parent of the learning database", (harness: Awaited<ReturnType<typeof dirtyLearningHarness>>) => harness.knowledgeEvolutionRoot],
+  ])("refuses operational target overlap with %s before changing either side", async (_label, operationalTarget) => {
+    const harness = await dirtyLearningHarness();
+    const operationalBefore = readSnapshots(harness.databasePath);
+    const learningBefore = learningResourceSnapshot(harness);
+
+    await expect(resetDemoState({
+      ...harness.input,
+      ...harness.learningInput,
+      operationalDatabase: operationalTarget(harness),
+      allowExternalDatabasePath: true,
+      allowExternalLedgerPath: true,
+    })).rejects.toThrow(/operational.*learning.*overlap/i);
+
+    expect(readSnapshots(harness.databasePath)).toEqual(operationalBefore);
+    expect(learningResourceSnapshot(harness)).toEqual(learningBefore);
+  });
+
   it("resets both dirty sides by ticket ID while preserving static knowledge", async () => {
     const harness = await dirtyLearningHarness({ reverseSeed: true });
     const staticKnowledgeBefore = readFileSync(harness.staticKnowledgeFile, "utf8");

@@ -2,6 +2,7 @@ import process from "node:process";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
+  assertDemoResetTargetsIsolated,
   DemoResetError,
   resetDemoState,
   resetLearningDemoState,
@@ -43,12 +44,24 @@ export async function mainDemoResetCli(
   try {
     const dataRoot = environmentPath("TRIAGE_DATA_ROOT", "data/runtime", env, cwd);
     const allowExternalPath = env.ALLOW_DEMO_RESET_OUTSIDE_DATA_ROOT === "true";
+    const operationalTarget = operationalDatabase(env, cwd, dataRoot);
+    const learningTarget = target === "operational"
+      ? configuredOrDefaultPath(
+          resolve(dataRoot, "knowledge-evolution", "learning.sqlite"),
+          env,
+          cwd,
+        )
+      : learningLedgerFile(env, cwd, dataRoot);
+    assertDemoResetTargetsIsolated({
+      operationalDatabase: operationalTarget,
+      learningLedgerFile: learningTarget,
+    });
 
     if (target === "operational") {
       const summary = resetOperationalDemoState({
         dataRoot,
         seedFile: operationalSeedFile(env, cwd),
-        operationalDatabase: operationalDatabase(env, cwd, dataRoot),
+        operationalDatabase: operationalTarget,
         allowExternalDatabasePath: allowExternalPath,
       });
       writeStdout(
@@ -60,7 +73,7 @@ export async function mainDemoResetCli(
     if (target === "learning") {
       await resetLearningDemoState({
         dataRoot,
-        learningLedgerFile: learningLedgerFile(env, cwd, dataRoot),
+        learningLedgerFile: learningTarget,
         allowExternalLedgerPath: allowExternalPath,
       });
       writeStdout("Learning demo state reset: clean.\n");
@@ -70,8 +83,8 @@ export async function mainDemoResetCli(
     const summary = await resetDemoState({
       dataRoot,
       seedFile: operationalSeedFile(env, cwd),
-      operationalDatabase: operationalDatabase(env, cwd, dataRoot),
-      learningLedgerFile: learningLedgerFile(env, cwd, dataRoot),
+      operationalDatabase: operationalTarget,
+      learningLedgerFile: learningTarget,
       allowExternalDatabasePath: allowExternalPath,
       allowExternalLedgerPath: allowExternalPath,
     });
@@ -121,6 +134,17 @@ function learningLedgerFile(
     env,
     cwd,
   );
+}
+
+function configuredOrDefaultPath(
+  fallback: string,
+  env: RuntimeEnvironment,
+  cwd: string,
+): string {
+  const configured = env.TRIAGE_LEARNING_LEDGER_PATH;
+  return typeof configured === "string" && configured.trim() !== ""
+    ? environmentPath("TRIAGE_LEARNING_LEDGER_PATH", fallback, env, cwd)
+    : resolve(cwd, fallback);
 }
 
 function safeErrorMessage(error: unknown): string {

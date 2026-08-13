@@ -1601,6 +1601,102 @@ describe("approvalDeskHtml", () => {
     );
   });
 
+  it("keeps both evaluation controls single-flight while an updated evaluation is deferred", async () => {
+    const app = await startApprovalDeskApp({
+      deferRecommendation: true,
+      ticketDetailRecommendation: {
+        ...fixtureRecommendation,
+        resolution: "approved",
+      },
+      ticketDetail: {
+        recommendationSummary: {
+          workflowState: "customer-replied",
+          latestRecommendationId: fixtureRecommendation.id,
+          latestResolution: "approved",
+          hasSentResponse: true,
+          hasCustomerReply: true,
+        },
+        conversationTimeline: [
+          {
+            kind: "support-response-sent",
+            timestamp: "2026-06-10T09:04:00.000Z",
+            actor: "approval-desk",
+            recommendationId: fixtureRecommendation.id,
+            body: "Earlier sent response.",
+          },
+          {
+            kind: "customer-reply",
+            timestamp: "2026-06-10T09:05:00.000Z",
+            actor: "Avery Brooks",
+            body: "I sent the remaining evidence.",
+          },
+        ],
+      },
+    });
+    await app.selectFirstTicket();
+
+    app.createUpdatedRecommendationWithoutSettling();
+    await app.wait(1);
+
+    expect(app.el("createRecommendation").disabled).toBe(true);
+    expect(app.el("createRecommendation").textContent).toBe("Evaluating…");
+    expect(app.el("createUpdatedRecommendation").disabled).toBe(true);
+    expect(app.el("createUpdatedRecommendation").textContent).toBe("Evaluating…");
+
+    app.releaseRecommendation();
+    await app.wait(30);
+
+    expect(app.el("createRecommendation").disabled).toBe(false);
+    expect(app.el("createRecommendation").textContent).toBe("Evaluate");
+  });
+
+  it("preserves the local recommendation and releases controls after a 409 evaluation conflict", async () => {
+    const app = await startApprovalDeskApp({
+      recommendationFailure: {
+        status: 409,
+        code: "EVALUATION_IN_PROGRESS",
+        message: "An evaluation is already in progress for this ticket.",
+      },
+      ticketDetailRecommendation: fixtureRecommendation,
+      ticketDetail: {
+        recommendationSummary: {
+          workflowState: "customer-replied",
+          latestRecommendationId: fixtureRecommendation.id,
+          latestResolution: "pending",
+          hasPendingRecommendation: true,
+          hasCustomerReply: true,
+        },
+        conversationTimeline: [
+          {
+            kind: "customer-reply",
+            timestamp: "2026-06-10T09:05:00.000Z",
+            actor: "Avery Brooks",
+            body: "I sent the remaining evidence.",
+          },
+        ],
+      },
+    });
+    await app.selectFirstTicket();
+
+    await app.createUpdatedRecommendation();
+
+    expect(app.el("recommendationPanel").innerHTML).toContain(
+      fixtureRecommendation.draftCustomerResponse,
+    );
+    expect(app.el("recommendationPanel").innerHTML).not.toContain(
+      "Recommendation failed",
+    );
+    expect(app.el("createUpdatedRecommendation").disabled).toBe(false);
+    expect(app.el("createUpdatedRecommendation").textContent).toBe("Evaluate");
+    expect(
+      app.requests.some((request) => request.path.endsWith("/reject")),
+    ).toBe(false);
+    expect(app.parsedResult()).toMatchObject({
+      error: "An evaluation is already in progress for this ticket.",
+      code: "EVALUATION_IN_PROGRESS",
+    });
+  });
+
   it("lets the backend supersede pending drafts after newer customer replies", async () => {
     const app = await startApprovalDeskApp({
       ticketDetailRecommendation: {
@@ -2443,6 +2539,55 @@ describe("approvalDeskHtml", () => {
     });
   });
 
+  it("keeps the initial evaluation control pending through diagnosis reconciliation", async () => {
+    const app = await startApprovalDeskApp({
+      deferRecommendation: true,
+      deferReconciliationDiagnosis: true,
+    });
+    await app.selectFirstTicket();
+
+    app.createRecommendationWithoutSettling();
+    await app.wait(1);
+
+    expect(app.el("createRecommendation").disabled).toBe(true);
+    expect(app.el("createRecommendation").textContent).toBe("Evaluating…");
+
+    app.releaseRecommendation();
+    await app.wait(10);
+
+    expect(app.el("createRecommendation").disabled).toBe(true);
+    expect(app.el("createRecommendation").textContent).toBe("Evaluating…");
+
+    app.releaseReconciliationDiagnosis();
+    await app.wait(30);
+
+    expect(app.el("createRecommendation").disabled).toBe(false);
+    expect(app.el("createRecommendation").textContent).toBe("Evaluate");
+  });
+
+  it("does not let a deferred evaluation overwrite a newly selected ticket", async () => {
+    const app = await startApprovalDeskApp({
+      deferRecommendation: true,
+      tickets: [
+        fixtureTicket,
+        { ...fixtureTicket, id: "TKT-1002", subject: "Second ticket" },
+      ],
+    });
+    await app.selectTicket("TKT-1001");
+
+    app.createRecommendationWithoutSettling();
+    await app.wait(1);
+    await app.selectTicket("TKT-1002");
+    app.releaseRecommendation();
+    await app.wait(30);
+
+    expect(app.el("ticketPanel").innerHTML).toContain("Second ticket");
+    expect(app.el("recommendationPanel").innerHTML).not.toContain(
+      fixtureRecommendation.draftCustomerResponse,
+    );
+    expect(app.ticketDetailRequestsFor("TKT-1002")).toBe(1);
+  });
+
   it("renders separated queue lines and recommendation setup in the ticket panel", async () => {
     const app = await startApprovalDeskApp();
 
@@ -2545,6 +2690,7 @@ describe("approvalDeskHtml", () => {
     await app.createRecommendation();
 
     expect(app.el("createRecommendation").disabled).toBe(false);
+    expect(app.el("createRecommendation").textContent).toBe("Evaluate");
     expect(app.parsedResult()).toMatchObject({
       error: "Draft provider unavailable.",
     });
@@ -3248,8 +3394,15 @@ type DiagnosisMutationPlan = {
 };
 
 async function startApprovalDeskApp(options: {
+  deferRecommendation?: boolean;
+  deferReconciliationDiagnosis?: boolean;
   failEvidenceAfter?: number;
   failRecommendation?: boolean;
+  recommendationFailure?: {
+    status: number;
+    code?: string;
+    message: string;
+  };
   confirmResult?: boolean;
   markSentAutomaticReply?: string;
   recommendation?: FixtureRecommendation;
@@ -3290,6 +3443,8 @@ async function startApprovalDeskApp(options: {
   const metrics = { pendingRecommendations: 0, queueDepth: 1 };
   const diagnosisReviewRequestCounts = new Map<string, number>();
   const diagnosisFixRequestCounts = new Map<string, number>();
+  const recommendationGate = deferred<void>();
+  const reconciliationDiagnosisGate = deferred<void>();
   let createdRecommendation: FixtureRecommendation | undefined;
   const conversationTimeline = [
     ...(options.ticketDetail?.conversationTimeline ?? []),
@@ -3342,6 +3497,12 @@ async function startApprovalDeskApp(options: {
     const diagnosisList = /^\/api\/tickets\/(TKT-\d{4})\/diagnoses$/.exec(path);
     if (diagnosisList !== null) {
       const ticketId = diagnosisList[1]!;
+      if (
+        options.deferReconciliationDiagnosis === true &&
+        createdRecommendation !== undefined
+      ) {
+        await reconciliationDiagnosisGate.promise;
+      }
       await settle(options.diagnosisDelayTicks?.[ticketId] ?? 0);
       if (options.diagnosisFailures?.includes(ticketId) === true) {
         return jsonResponse({ error: { message: "Diagnosis review is unavailable." } }, 503);
@@ -3479,8 +3640,22 @@ async function startApprovalDeskApp(options: {
       });
     }
     if (path === `/api/tickets/${selectedFixtureTicket.id}/recommendations`) {
+      if (options.deferRecommendation === true) {
+        await recommendationGate.promise;
+      }
       if (options.recommendationDelayTicks !== undefined) {
         await settle(options.recommendationDelayTicks);
+      }
+      if (options.recommendationFailure !== undefined) {
+        return jsonResponse(
+          {
+            error: {
+              code: options.recommendationFailure.code,
+              message: options.recommendationFailure.message,
+            },
+          },
+          options.recommendationFailure.status,
+        );
       }
       if (options.failRecommendation === true) {
         return jsonResponse(
@@ -3563,6 +3738,9 @@ async function startApprovalDeskApp(options: {
     ticketDetailRequests: () =>
       requests.filter((request) => request.path === `/api/tickets/${selectedFixtureTicket.id}`)
         .length,
+    ticketDetailRequestsFor: (ticketId: string) =>
+      requests.filter((request) => request.path === `/api/tickets/${ticketId}`)
+        .length,
     field: (value: string) =>
       elements.fieldChoices.children.find((field) => field.value === value)!,
     approveField: (value: string) => {
@@ -3605,20 +3783,24 @@ async function startApprovalDeskApp(options: {
     wait: settle,
     createRecommendation: async () => {
       elements.createRecommendation.dispatch("click");
-      await settle();
+      await settle(30);
     },
     createUpdatedRecommendation: async () => {
       elements.createUpdatedRecommendation.dispatch("click");
-      await settle();
+      await settle(30);
+    },
+    createUpdatedRecommendationWithoutSettling: () => {
+      elements.createUpdatedRecommendation.dispatch("click");
     },
     click: async (id: string) => {
       elements[id]!.dispatch("click");
       await settle(10);
     },
-    createRecommendationWithoutSettling: async () => {
+    createRecommendationWithoutSettling: () => {
       elements.createRecommendation.dispatch("click");
-      await settle(0);
     },
+    releaseRecommendation: () => recommendationGate.resolve(),
+    releaseReconciliationDiagnosis: () => reconciliationDiagnosisGate.resolve(),
     refreshQueue: async () => {
       elements.refreshQueue.dispatch("click");
       await settle();
@@ -3913,8 +4095,17 @@ function extractScript(html: string): string {
 function jsonResponse(body: unknown, status = 200): Response {
   return {
     ok: status >= 200 && status < 300,
+    status,
     json: async () => body,
   } as Response;
+}
+
+function deferred<T>() {
+  let resolve!: (value?: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise as (value?: T | PromiseLike<T>) => void;
+  });
+  return { promise, resolve };
 }
 
 async function settle(ticks = 10): Promise<void> {

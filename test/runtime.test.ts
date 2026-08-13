@@ -1,7 +1,8 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createRuntimeDependencies,
   createKnowledgeCandidateDraftProviderFromEnv,
@@ -13,6 +14,8 @@ import { diagnosisContextForTicket } from "../src/approval-desk/diagnostic-workf
 import { OpenAiKnowledgeCandidateDraftProvider, UnavailableOpenAiKnowledgeCandidateDraftProvider } from "../src/knowledge-evolution/openai-candidate-draft-provider.js";
 import { createControlledKnowledgeCandidateDraftProvider } from "../src/approval-desk/controlled-evaluation-providers.js";
 import { DEFAULT_MINUTES_PER_ACCEPTED_RECOMMENDATION } from "../src/metrics.js";
+import { acquireDemoStateResetLease } from "../src/demo-state-lease.js";
+import { OperationalSqliteStore } from "../src/operational/sqlite-store.js";
 
 const temporaryRoots: string[] = [];
 const openLedgers: Array<{ close: () => void }> = [];
@@ -90,6 +93,96 @@ describe("runtime configuration", () => {
     await expect(deps.knowledgeEvolution.objects.listCandidates()).resolves.toEqual([]);
     expect(deps.knowledgeEvolution.service).toBeDefined();
     await expect(deps.knowledgeEvolution.ledger.list()).resolves.toEqual([]);
+  });
+
+  it("releases its usage lease when closing a runtime resource fails", async () => {
+    const dataRoot = await mkdtemp(join(tmpdir(), "triage-runtime-close-failure-"));
+    temporaryRoots.push(dataRoot);
+    const deps = await createRuntimeDependencies({
+      env: {
+        TRIAGE_DATA_ROOT: dataRoot,
+        TRIAGE_SEED_FILE: resolve("data", "seed", "tickets.json"),
+        TRIAGE_KNOWLEDGE_ROOT: resolve("data", "knowledge"),
+      },
+    });
+    const store = deps.operationalStore;
+    expect(store).toBeInstanceOf(OperationalSqliteStore);
+    const closeSpy = vi.spyOn(store as OperationalSqliteStore, "close")
+      .mockImplementationOnce(() => {
+        throw new Error("injected operational close failure");
+      });
+    let resetLease: ReturnType<typeof acquireDemoStateResetLease> | undefined;
+
+    try {
+      expect(() => deps.close()).toThrow("injected operational close failure");
+      expect(() => {
+        resetLease = acquireDemoStateResetLease(dataRoot);
+      }).not.toThrow();
+    } finally {
+      resetLease?.release();
+      deps.close();
+      closeSpy.mockRestore();
+    }
+  });
+
+  it("releases its usage lease when startup fails after acquisition", async () => {
+    const dataRoot = await mkdtemp(join(tmpdir(), "triage-runtime-startup-failure-"));
+    temporaryRoots.push(dataRoot);
+    const seedFile = join(dataRoot, "invalid-tickets.json");
+    await writeFile(seedFile, "not valid JSON", "utf8");
+
+    await expect(createRuntimeDependencies({
+      legacyFixtureRepositories: true,
+      env: {
+        TRIAGE_DATA_ROOT: dataRoot,
+        TRIAGE_SEED_FILE: seedFile,
+        TRIAGE_KNOWLEDGE_ROOT: resolve("data", "knowledge"),
+      },
+    })).rejects.toThrow();
+
+    const resetLease = acquireDemoStateResetLease(dataRoot);
+    resetLease.release();
+  });
+
+  it("does not open mutable runtime state while reset owns the exclusive lease", async () => {
+    const dataRoot = await mkdtemp(join(tmpdir(), "triage-runtime-reset-race-"));
+    temporaryRoots.push(dataRoot);
+    const operationalDatabase = join(dataRoot, "operational.sqlite");
+    const learningDatabase = join(
+      dataRoot,
+      "knowledge-evolution",
+      "learning.sqlite",
+    );
+    const diagnosesRoot = join(dataRoot, "knowledge-evolution", "diagnoses");
+    const resetLease = acquireDemoStateResetLease(dataRoot);
+    try {
+      await expect(createRuntimeDependencies({
+        env: {
+          TRIAGE_DATA_ROOT: dataRoot,
+          TRIAGE_SEED_FILE: resolve("data", "seed", "tickets.json"),
+          TRIAGE_KNOWLEDGE_ROOT: resolve("data", "knowledge"),
+        },
+      })).rejects.toThrow(/reset.*active/i);
+      expect(existsSync(operationalDatabase)).toBe(false);
+      expect(existsSync(learningDatabase)).toBe(false);
+      expect(existsSync(diagnosesRoot)).toBe(false);
+    } finally {
+      resetLease.release();
+    }
+
+    const deps = await createRuntimeDependencies({
+      env: {
+        TRIAGE_DATA_ROOT: dataRoot,
+        TRIAGE_SEED_FILE: resolve("data", "seed", "tickets.json"),
+        TRIAGE_KNOWLEDGE_ROOT: resolve("data", "knowledge"),
+      },
+    });
+    try {
+      expect(existsSync(operationalDatabase)).toBe(true);
+      expect(existsSync(learningDatabase)).toBe(true);
+    } finally {
+      deps.close();
+    }
   });
 
   it("rejects a blank learning-ledger path and accepts an explicit override", async () => {

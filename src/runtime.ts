@@ -26,7 +26,10 @@ import {
 } from "./operational/runtime-repositories.js";
 import { DEFAULT_MINUTES_PER_ACCEPTED_RECOMMENDATION } from "./metrics.js";
 import { DomainError } from "./errors.js";
-import { acquireDemoStateUsageLease } from "./demo-state-lease.js";
+import {
+  acquireDemoStateUsageLease,
+  type DemoStateUsageLease,
+} from "./demo-state-lease.js";
 
 const STARTUP_PATH_MESSAGES = {
   TRIAGE_DATA_ROOT: "TRIAGE_DATA_ROOT must not be blank.",
@@ -316,16 +319,42 @@ export async function createRuntimeDependencies(
       knowledgeEvolution: knowledgeEvolutionPaths,
     },
     close() {
-      sqliteOperationalStore?.close();
-      ledger?.close();
-      usageLease.release();
+      closeRuntimeResources({ sqliteOperationalStore, ledger, usageLease });
     },
   };
   } catch (error) {
-    sqliteOperationalStore?.close();
-    ledger?.close();
-    usageLease.release();
+    try {
+      closeRuntimeResources({ sqliteOperationalStore, ledger, usageLease });
+    } catch (cleanupError) {
+      throw new AggregateError(
+        [error, cleanupError],
+        "Runtime startup failed and cleanup could not complete.",
+      );
+    }
     throw error;
+  }
+}
+
+function closeRuntimeResources(input: {
+  readonly sqliteOperationalStore: OperationalSqliteStore | undefined;
+  readonly ledger: SqliteLearningLedger | undefined;
+  readonly usageLease: DemoStateUsageLease;
+}): void {
+  const errors: unknown[] = [];
+  for (const close of [
+    () => input.sqliteOperationalStore?.close(),
+    () => input.ledger?.close(),
+    () => input.usageLease.release(),
+  ]) {
+    try {
+      close();
+    } catch (error) {
+      errors.push(error);
+    }
+  }
+  if (errors.length === 1) throw errors[0];
+  if (errors.length > 1) {
+    throw new AggregateError(errors, "Runtime resources could not be closed cleanly.");
   }
 }
 

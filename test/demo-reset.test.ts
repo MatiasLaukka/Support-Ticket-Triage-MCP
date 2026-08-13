@@ -29,7 +29,12 @@ import {
 import type { LearningCaptureEnvelope } from "../src/operational/domain.js";
 import { canonicalRequestHash } from "../src/operational/idempotency.js";
 import { OperationalSqliteStore } from "../src/operational/sqlite-store.js";
-import { createRuntimeDependencies } from "../src/runtime.js";
+import { readDecisionTimeline } from "../src/operational/timeline.js";
+import {
+  createRuntimeDependencies,
+  type RuntimeDependencies,
+} from "../src/runtime.js";
+import { buildTicketWorkflowReadModel } from "../src/approval-desk/workflow-read-model.js";
 
 const roots: string[] = [];
 const children: ChildProcess[] = [];
@@ -208,6 +213,36 @@ describe("operational demo reset", () => {
     expect(() => resetOperationalDemoState(harness.input)).not.toThrow();
   });
 
+  it("starts the Approval Desk runtime from the reset baseline and preserves it across restart", async () => {
+    const harness = dirtyHarness();
+    resetOperationalDemoState(harness.input);
+
+    const firstRuntime = await createResetRuntime(harness);
+    const expectedTicketIds = harness.seedTickets.map(({ id }) => id).sort();
+    let firstWorkflow: Awaited<ReturnType<typeof readApprovalDeskWorkflow>>;
+    try {
+      expect((await firstRuntime.tickets.snapshot()).map(({ id }) => id).sort())
+        .toEqual(expectedTicketIds);
+      expect(expectedTicketIds).toContain("TKT-1010");
+      firstWorkflow = await readApprovalDeskWorkflow(firstRuntime, "TKT-1010");
+      assertPristineApprovalDeskWorkflow(firstRuntime, firstWorkflow);
+    } finally {
+      firstRuntime.close();
+    }
+
+    const restartedRuntime = await createResetRuntime(harness);
+    try {
+      const restartedWorkflow = await readApprovalDeskWorkflow(
+        restartedRuntime,
+        "TKT-1010",
+      );
+      assertPristineApprovalDeskWorkflow(restartedRuntime, restartedWorkflow);
+      expect(restartedWorkflow).toEqual(firstWorkflow!);
+    } finally {
+      restartedRuntime.close();
+    }
+  });
+
   it("does not replace the live database until commit and rollback removes the prepared file", () => {
     const harness = dirtyHarness();
     const originalHash = fileHash(harness.databasePath);
@@ -238,6 +273,62 @@ describe("operational demo reset", () => {
     prepared.rollback();
   });
 });
+
+async function createResetRuntime(
+  harness: ReturnType<typeof dirtyHarness>,
+): Promise<RuntimeDependencies> {
+  return createRuntimeDependencies({
+    cwd: harness.root,
+    env: {
+      TRIAGE_DATA_ROOT: harness.root,
+      TRIAGE_SEED_FILE: harness.seedFile,
+      TRIAGE_KNOWLEDGE_ROOT: resolve("data", "knowledge"),
+      OPERATIONAL_DB_PATH: harness.databasePath,
+    },
+  });
+}
+
+async function readApprovalDeskWorkflow(
+  runtime: RuntimeDependencies,
+  ticketId: string,
+) {
+  const operationalStore = runtime.operationalStore;
+  expect(operationalStore).toBeDefined();
+  const [ticket, recommendations, audits, decisionTimeline] = await Promise.all([
+    runtime.tickets.get(ticketId),
+    runtime.recommendations.list(),
+    runtime.audits.list(ticketId),
+    readDecisionTimeline(ticketId, operationalStore!),
+  ]);
+  return buildTicketWorkflowReadModel({
+    ticket,
+    recommendations,
+    audits,
+    decisionTimeline,
+  });
+}
+
+function assertPristineApprovalDeskWorkflow(
+  runtime: RuntimeDependencies,
+  workflow: Awaited<ReturnType<typeof readApprovalDeskWorkflow>>,
+): void {
+  expect(workflow.ticket).toMatchObject({
+    id: "TKT-1010",
+    revision: 0,
+    status: "new",
+  });
+  expect(workflow.recommendationHistory).toEqual([]);
+  expect(workflow.latestRecommendation).toBeUndefined();
+  expect(workflow.conversationHistory).toEqual([]);
+  expect(workflow.decisionTimeline).toEqual([]);
+  expect(workflow.operatorGuidance).toMatchObject({
+    stage: "active",
+    nextAction: "evaluate-ticket",
+    unlocksTool: "evaluate_ticket",
+  });
+  expect(runtime.operationalStore!.readWorkflowSnapshot("TKT-1010").diagnoses)
+    .toEqual([]);
+}
 
 function dirtyHarness(options: {
   readonly reverseSeed?: boolean;

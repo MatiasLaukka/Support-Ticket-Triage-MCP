@@ -1697,6 +1697,44 @@ describe("approvalDeskHtml", () => {
     });
   });
 
+  it("does not reject an existing pending recommendation before a deferred 409 conflict", async () => {
+    const app = await startApprovalDeskApp({
+      confirmResult: true,
+      deferRecommendation: true,
+      recommendationFailure: {
+        status: 409,
+        code: "EVALUATION_IN_PROGRESS",
+        message: "An evaluation is already in progress for this ticket.",
+      },
+      ticketDetailRecommendation: fixtureRecommendation,
+    });
+    await app.selectFirstTicket();
+
+    app.createRecommendationWithoutSettling();
+    await app.wait(10);
+
+    expect(app.el("createRecommendation").disabled).toBe(true);
+    expect(app.el("createRecommendation").textContent).toBe("Evaluating…");
+    expect(
+      app.requests.some((request) => request.path.endsWith("/recommendations")),
+    ).toBe(true);
+    expect(
+      app.requests.some((request) => request.path.endsWith("/reject")),
+    ).toBe(false);
+
+    app.releaseRecommendation();
+    await app.wait(30);
+
+    expect(app.el("recommendationPanel").innerHTML).toContain(
+      fixtureRecommendation.draftCustomerResponse,
+    );
+    expect(app.el("createRecommendation").disabled).toBe(false);
+    expect(app.parsedResult()).toMatchObject({
+      error: "An evaluation is already in progress for this ticket.",
+      code: "EVALUATION_IN_PROGRESS",
+    });
+  });
+
   it("lets the backend supersede pending drafts after newer customer replies", async () => {
     const app = await startApprovalDeskApp({
       ticketDetailRecommendation: {
@@ -2660,10 +2698,15 @@ describe("approvalDeskHtml", () => {
     expect(app.el("approvalStage").hidden).toBe(true);
   });
 
-  it("rejects an existing pending recommendation before creating a replacement", async () => {
+  it("creates a replacement through the atomic evaluation without an eager reject", async () => {
     const app = await startApprovalDeskApp({
       ticketDetailRecommendation: fixtureRecommendation,
       confirmResult: true,
+      recommendation: {
+        ...fixtureRecommendation,
+        id: "33333333-3333-4333-8333-333333333333",
+        draftCustomerResponse: "A replacement recommendation from the latest evaluation.",
+      },
     });
     await app.selectFirstTicket();
 
@@ -2672,13 +2715,43 @@ describe("approvalDeskHtml", () => {
     const rejectionRequest = app.requests.find((request) =>
       request.path.endsWith("/reject"),
     );
-    expect(rejectionRequest).toBeDefined();
-    expect(JSON.parse(String(rejectionRequest?.init?.body))).toMatchObject({
-      feedback: "Superseded by a new recommendation from the Approval Desk.",
-    });
+    expect(rejectionRequest).toBeUndefined();
     expect(
       app.requests.some((request) => request.path.endsWith("/recommendations")),
     ).toBe(true);
+    expect(app.el("recommendationPanel").innerHTML).toContain(
+      "A replacement recommendation from the latest evaluation.",
+    );
+  });
+
+  it("rejects the prior recommendation only after a successful evaluation still reports it pending", async () => {
+    const app = await startApprovalDeskApp({
+      ticketDetailRecommendation: fixtureRecommendation,
+      confirmResult: true,
+      recommendation: {
+        ...fixtureRecommendation,
+        id: "33333333-3333-4333-8333-333333333333",
+        draftCustomerResponse: "A replacement recommendation from the latest evaluation.",
+      },
+      ticketDetail: {
+        recommendationHistory: [fixtureRecommendation],
+      },
+    });
+    await app.selectFirstTicket();
+
+    await app.createRecommendation();
+
+    const evaluationIndex = app.requests.findIndex((request) =>
+      request.path.endsWith("/recommendations"),
+    );
+    const rejectionIndex = app.requests.findIndex((request) =>
+      request.path.endsWith("/reject"),
+    );
+    expect(evaluationIndex).toBeGreaterThanOrEqual(0);
+    expect(rejectionIndex).toBeGreaterThan(evaluationIndex);
+    expect(app.el("recommendationPanel").innerHTML).toContain(
+      "A replacement recommendation from the latest evaluation.",
+    );
   });
 
   it("re-enables recommendation creation when generation fails", async () => {

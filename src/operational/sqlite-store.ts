@@ -303,6 +303,7 @@ export class OperationalSqliteStore {
       && migrations[0]?.version === INITIAL_SCHEMA_VERSION
       && migrations[0]?.name === "initial-operational-schema"
     ) {
+      this.validateLegacySchemaBeforeMigration();
       this.applyDiagnosisReviewPayloadMigration();
       return;
     }
@@ -352,21 +353,25 @@ export class OperationalSqliteStore {
     }
   }
 
+  private validateLegacySchemaBeforeMigration(): void {
+    this.validatePhysicalSchema();
+    const metadata = this.database.prepare(
+      "SELECT key, value FROM operational_metadata WHERE key IN ('schema_version', 'import_state')",
+    ).all() as MetadataRow[];
+    const metadataMap = new Map(metadata.map(({ key, value }) => [key, value]));
+    if (
+      metadataMap.get("schema_version") !== String(INITIAL_SCHEMA_VERSION)
+      || !["empty", "import-in-progress", "imported", "native"].includes(metadataMap.get("import_state") ?? "")
+    ) {
+      throw new OperationalStoreError(
+        "Corrupt operational schema: legacy schema metadata is inconsistent.",
+        "SCHEMA_ERROR",
+      );
+    }
+  }
+
   private validateCurrentSchema(): void {
-    const tables = this.tableNames();
-    const missingTables = REQUIRED_TABLES.filter((table) => !tables.has(table));
-    if (missingTables.length > 0) {
-      throw new OperationalStoreError(
-        `Corrupt operational schema: required tables are missing (${missingTables.join(", ")}).`,
-        "SCHEMA_ERROR",
-      );
-    }
-    if (this.schemaSignature() !== expectedSchemaSignature()) {
-      throw new OperationalStoreError(
-        "Corrupt operational schema: tables, columns, constraints, indexes, or triggers differ from the current schema.",
-        "SCHEMA_ERROR",
-      );
-    }
+    this.validatePhysicalSchema();
     const migrations = this.database.prepare(
       "SELECT version, name FROM schema_migrations ORDER BY version ASC",
     ).all() as MigrationRow[];
@@ -381,6 +386,23 @@ export class OperationalSqliteStore {
     ) {
       throw new OperationalStoreError(
         "Corrupt operational schema: schema metadata is inconsistent.",
+        "SCHEMA_ERROR",
+      );
+    }
+  }
+
+  private validatePhysicalSchema(): void {
+    const tables = this.tableNames();
+    const missingTables = REQUIRED_TABLES.filter((table) => !tables.has(table));
+    if (missingTables.length > 0) {
+      throw new OperationalStoreError(
+        `Corrupt operational schema: required tables are missing (${missingTables.join(", ")}).`,
+        "SCHEMA_ERROR",
+      );
+    }
+    if (this.schemaSignature() !== expectedSchemaSignature()) {
+      throw new OperationalStoreError(
+        "Corrupt operational schema: tables, columns, constraints, indexes, or triggers differ from the current schema.",
         "SCHEMA_ERROR",
       );
     }

@@ -1,5 +1,5 @@
 import Database from "better-sqlite3";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -185,6 +185,39 @@ describe("OperationalSqliteStore migrations and transaction boundary", () => {
     expect(inspector.prepare("SELECT payload_json FROM diagnoses").get())
       .toEqual({ payload_json: JSON.stringify(oldRecord) });
     inspector.close();
+  });
+
+  it.each([
+    ["index", "DROP INDEX operational_events_command_idx"],
+    ["trigger", "DROP TRIGGER operational_events_no_update"],
+  ])("validates every legacy schema %s before recording the v2 migration", (_kind, corruption) => {
+    const path = temporaryDatabasePath();
+    const initialized = OperationalSqliteStore.open(path);
+    initialized.initialize();
+    initialized.close();
+
+    const legacy = new Database(path);
+    legacy.prepare("DELETE FROM schema_migrations WHERE version = 2").run();
+    legacy.prepare("UPDATE operational_metadata SET value = '1' WHERE key = 'schema_version'").run();
+    legacy.exec(corruption);
+    legacy.close();
+    const beforeMigrationAttempt = readFileSync(path);
+
+    const reopened = OperationalSqliteStore.open(path);
+    expect(() => reopened.initialize()).toThrow(/corrupt operational schema/i);
+    reopened.close();
+
+    const inspector = new Database(path, { readonly: true });
+    const migrations = inspector.prepare(
+      "SELECT version, name FROM schema_migrations ORDER BY version",
+    ).all();
+    const metadata = inspector.prepare(
+      "SELECT value FROM operational_metadata WHERE key = 'schema_version'",
+    ).get();
+    inspector.close();
+    expect(migrations).toEqual([{ version: 1, name: "initial-operational-schema" }]);
+    expect(metadata).toEqual({ value: "1" });
+    expect(readFileSync(path)).toEqual(beforeMigrationAttempt);
   });
 
   it("fails closed when required columns, indexes, or append-only triggers are missing without repairing the database", () => {

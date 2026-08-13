@@ -2131,16 +2131,12 @@ export class TriageService {
               : { knownEventId: diagnosis.diagnosis.knownEventId }),
           },
         });
-        const completedDiagnosis = escalated
-          ? undefined
-          : completedDiagnosisFrom(auditEvent, diagnosis);
-        if (completedDiagnosis !== undefined) {
-          unit.insertDiagnosis({
-            diagnosis: completedDiagnosis,
-            originalAudit: auditEvent,
-            operationalEventId: eventId,
-          });
-        }
+        const completedDiagnosis = completedDiagnosisFrom(auditEvent, diagnosis);
+        unit.insertDiagnosis({
+          diagnosis: completedDiagnosis,
+          originalAudit: auditEvent,
+          operationalEventId: eventId,
+        });
         unit.appendTrace({
           id: this.uuid(),
           operationalEventId: eventId,
@@ -2183,7 +2179,7 @@ export class TriageService {
             operationalEventIds: [eventId],
             resultingRevision: null,
           }],
-          ...(completedDiagnosis === undefined ? {} : { diagnosisId: completedDiagnosis.id }),
+          diagnosisId: completedDiagnosis.id,
           lifecycleAuditEvents: [auditEvent],
         };
         unit.persistCommandResult(commandContext.commandId, requestHash, result);

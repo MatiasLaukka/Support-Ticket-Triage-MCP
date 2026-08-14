@@ -22,7 +22,7 @@ vi.mock("node:fs", async (importOriginal) => {
         mkdirSync(injected.databasePath);
         throw Object.assign(new Error("injected sidecar backup failure"), { code: "EACCES" });
       }
-      if (injected.failLearningAuditBackup && String(source).endsWith("\\audit")) {
+      if (injected.failLearningAuditBackup && basename(String(source)) === "audit") {
         throw Object.assign(new Error("injected learning audit backup failure"), { code: "EACCES" });
       }
       if (

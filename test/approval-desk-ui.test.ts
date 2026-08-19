@@ -3,6 +3,41 @@ import { describe, expect, it } from "vitest";
 import { approvalDeskHtml } from "../src/approval-desk/ui.js";
 
 describe("approvalDeskHtml", () => {
+  it("keeps Ticket Workflow inside the shell with balanced body markup", () => {
+    const body = approvalDeskHtml.slice(
+      approvalDeskHtml.indexOf("<body>"),
+      approvalDeskHtml.indexOf("    <script>"),
+    );
+    const voidTags = new Set([
+      "area", "base", "br", "col", "embed", "hr", "img", "input",
+      "link", "meta", "param", "source", "track", "wbr",
+    ]);
+    const stack: string[] = [];
+    const mismatches: string[] = [];
+    let workflowAncestors: string[] | undefined;
+    const tagPattern = /<\/?([A-Za-z][A-Za-z0-9-]*)[^>]*>/g;
+
+    for (const match of body.matchAll(tagPattern)) {
+      const token = match[0];
+      const tag = match[1].toLowerCase();
+      if (token.startsWith("</")) {
+        const actual = stack.pop();
+        if (actual !== tag) {
+          mismatches.push(`${tag} after ${actual ?? "nothing"}`);
+        }
+      } else if (!voidTags.has(tag) && !token.endsWith("/>") ) {
+        stack.push(tag);
+        if (tag === "section" && token.includes('aria-label="Ticket workflow"')) {
+          workflowAncestors = [...stack];
+        }
+      }
+    }
+
+    expect(mismatches).toEqual([]);
+    expect(stack).toEqual(["body"]);
+    expect(workflowAncestors).toEqual(["body", "div", "main", "section"]);
+  });
+
   it("contains the browser approval desk controls and safety copy", () => {
     expect(approvalDeskHtml).toContain("Approval Desk");
     expect(approvalDeskHtml).toContain(
@@ -163,7 +198,7 @@ describe("approvalDeskHtml", () => {
 
     await app.selectFirstTicket();
 
-    expect(app.el("diagnosisPanel").innerHTML).toContain("Original diagnosis");
+    expect(app.el("diagnosisPanel").innerHTML).not.toContain("Original diagnosis");
     expect(app.el("diagnosisPanel").innerHTML).toContain("A newer customer reply needs re-evaluation.");
     expect(app.el("diagnosisPanel").innerHTML).toContain("Checkout event processing is delayed.");
     expect(app.el("diagnosisPanel").innerHTML).not.toContain("Do not expose internal diagnostics.");
@@ -215,14 +250,646 @@ describe("approvalDeskHtml", () => {
     await app.selectFirstTicket();
 
     expect(app.el("diagnosisActionPanel").hidden).toBe(false);
-    expect(app.el("diagnosisPanel").innerHTML).toContain("Approve diagnosis");
+    expect(app.el("diagnosisPanel").innerHTML).toContain("Review");
     expect(app.el("diagnosisPanel").innerHTML).toContain("Revalidate");
-    expect(app.el("diagnosisPanel").innerHTML).toContain("Reject diagnosis");
+    expect(app.el("diagnosisPanel").innerHTML).not.toContain("Reject");
     expect(app.el("diagnosisSummaryPanel").innerHTML).toContain(
       "Checkout event processing is delayed.",
     );
     expect(app.el("diagnosisSummaryPanel").innerHTML).not.toContain("<textarea");
     expect(app.el("diagnosisSummaryPanel").innerHTML).not.toContain("Approve diagnosis");
+  });
+
+  it("returns a stale diagnosis to the customer-replied evaluation state", async () => {
+    const app = await startApprovalDeskApp({
+      diagnoses: [fixtureDiagnosisView({ stale: true })],
+      ticketDetailRecommendation: fixtureRecommendation,
+      ticketDetail: {
+        operatorGuidance: {
+          stage: "diagnosis-review",
+          nextAction: "review-diagnosis",
+          requiredReview: {
+            kind: "diagnosis",
+            id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+            reason: "A newer customer reply needs re-evaluation.",
+          },
+        },
+      },
+    });
+
+    await app.selectFirstTicket();
+    await app.openManualReplies();
+    app.el("customerReplyBody").value =
+      "This affects multiple EU stores. The affected store URL is https://eu-a.example.test. One affected customer ID is cus_8821. The event time was 2026-06-10 08:42 UTC. The request ID is req_1001 and the API response was 202 Accepted. The event is still missing from the profile activity timeline.";
+    await app.addCustomerReply();
+
+    expect(app.el("diagnosisActionPanel").hidden).toBe(true);
+    expect(app.el("actionBarTitle").textContent).toBe("Customer replied");
+    expect(app.el("createUpdatedRecommendation").hidden).toBe(false);
+    expect(app.el("createUpdatedRecommendation").textContent).toBe("Evaluate again");
+  });
+
+  it("starts a fresh evaluation cycle from the customer-replied state", async () => {
+    const app = await startApprovalDeskApp({
+      diagnoses: [fixtureDiagnosisView({ stale: true })],
+      ticketDetailRecommendation: fixtureRecommendation,
+      ticketDetail: {
+        operatorGuidance: {
+          stage: "diagnosis-review",
+          nextAction: "review-diagnosis",
+          requiredReview: {
+            kind: "diagnosis",
+            id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+            reason: "A newer customer reply needs re-evaluation.",
+          },
+        },
+      },
+    });
+
+    await app.selectFirstTicket();
+    await app.openManualReplies();
+    app.el("customerReplyBody").value =
+      "This affects multiple EU stores. The affected store URL is https://eu-a.example.test. One affected customer ID is cus_8821. The event time was 2026-06-10 08:42 UTC. The request ID is req_1001 and the API response was 202 Accepted. The event is still missing from the profile activity timeline.";
+    await app.addCustomerReply();
+    await app.createUpdatedRecommendation();
+
+    expect(app.requests.some((request) => request.path === "/api/tickets/TKT-1001/recommendations")).toBe(true);
+    expect(app.el("createUpdatedRecommendation").hidden).toBe(true);
+  });
+
+  it("offers a deterministic confirmation simulation through the real reply route", async () => {
+    const app = await startApprovalDeskApp({
+      diagnoses: [fixtureDiagnosisView({ stale: true })],
+    });
+
+    await app.selectFirstTicket();
+    await app.openManualReplies();
+    await app.click("simulateConfirmationButton");
+
+    const replyRequest = app.requests.find((request) =>
+      request.path.endsWith("/customer-replies"),
+    );
+    expect(replyRequest).toBeDefined();
+    expect(JSON.parse(String(replyRequest?.init?.body))).toMatchObject({
+      source: "demo-confirmation",
+    });
+    expect(JSON.parse(String(replyRequest?.init?.body)).body).toContain(
+      "multiple EU stores",
+    );
+    expect(JSON.parse(String(replyRequest?.init?.body)).body).toContain(
+      "202 Accepted",
+    );
+    expect(JSON.parse(String(replyRequest?.init?.body)).body).toContain(
+      "profile activity timeline",
+    );
+  });
+
+  it("explains the customer or internal confirmation path after a likely diagnosis", async () => {
+    const view = fixtureDiagnosisView({ confidence: "likely" });
+    const app = await startApprovalDeskApp({
+      diagnoses: [{
+        ...view,
+        latestReview: {
+          decision: "approve",
+          diagnosisId: view.originalDiagnosis.id,
+          editedDiagnosis: view.originalDiagnosis.after.diagnosis,
+        },
+      }],
+      ticketDetail: {
+        operatorGuidance: {
+          stage: "diagnosis-recorded",
+          nextAction: "evaluate-ticket",
+          reason: "The likely diagnosis needs confirmation before a fix can be applied.",
+        },
+      },
+    });
+
+    await app.selectFirstTicket();
+    app.openApprovedDiagnosis();
+
+    expect(app.el("diagnosisPanel").innerHTML).toContain(
+      "The likely diagnosis needs confirmation before a fix can be applied.",
+    );
+    expect(app.el("diagnosisPanel").innerHTML).toContain("Evaluate again");
+    expect(app.el("diagnosisPanel").innerHTML).not.toContain("Simulate solution");
+  });
+
+  it("offers an internal solution simulation only after a confirmed diagnosis", async () => {
+    const view = fixtureDiagnosisView({ confidence: "confirmed" });
+    const app = await startApprovalDeskApp({
+      diagnoses: [{
+        ...view,
+        latestReview: {
+          decision: "approve",
+          diagnosisId: view.originalDiagnosis.id,
+          editedDiagnosis: view.originalDiagnosis.after.diagnosis,
+        },
+      }],
+      ticketDetail: {
+        operatorGuidance: {
+          stage: "diagnosis-recorded",
+          nextAction: "evaluate-ticket",
+          reason: "Waiting for an internal platform confirmation before applying the fix.",
+        },
+      },
+    });
+
+    await app.selectFirstTicket();
+    app.openApprovedDiagnosis();
+
+    expect(app.el("diagnosisPanel").innerHTML).toContain("Simulate solution");
+    expect(app.el("diagnosisPanel").innerHTML).toContain(
+      "Waiting for an internal platform confirmation before applying the fix.",
+    );
+  });
+
+  it("moves back to the response workflow after simulating an internal solution", async () => {
+    const view = fixtureDiagnosisView({ confidence: "confirmed" });
+    const app = await startApprovalDeskApp({
+      diagnoses: [{
+        ...view,
+        latestReview: {
+          decision: "approve",
+          diagnosisId: view.originalDiagnosis.id,
+          editedDiagnosis: view.originalDiagnosis.after.diagnosis,
+        },
+      }],
+      ticketDetail: {
+        operatorGuidance: {
+          stage: "diagnosis-recorded",
+          nextAction: "evaluate-ticket",
+          reason: "Waiting for an internal platform confirmation before applying the fix.",
+        },
+      },
+    });
+
+    await app.selectFirstTicket();
+    app.openApprovedDiagnosis();
+    await app.simulateSolution();
+    await app.wait(30);
+
+    expect(app.requests.some((request) => request.path === "/api/tickets/TKT-1001/fix")).toBe(true);
+    expect(app.el("diagnosisActionPanel").hidden).toBe(true);
+    expect(app.el("actionBarTitle").textContent).toBe("Fixed — response ready");
+  });
+
+  it("labels recorded diagnosis choices instead of exposing raw ISO timestamps", async () => {
+    const first = fixtureDiagnosisView({ id: "diagnosis-first" });
+    const second = fixtureDiagnosisView({ id: "diagnosis-second", summary: "A later diagnosis." });
+    second.originalDiagnosis.timestamp = "2026-08-19T20:01:41.123Z";
+    first.originalDiagnosis.timestamp = "2026-08-19T20:06:46.864Z";
+    const app = await startApprovalDeskApp({ diagnoses: [first, second] });
+
+    await app.selectFirstTicket();
+
+    expect(app.el("diagnosisPanel").innerHTML).toContain("Diagnosis 1");
+    expect(app.el("diagnosisPanel").innerHTML).toContain("Diagnosis 2");
+    expect(app.el("diagnosisPanel").innerHTML).not.toContain(
+      "2026-08-19T20:01:41.123Z",
+    );
+  });
+
+  it("keeps diagnosis actions compact while inspection remains a separate phase", async () => {
+    const app = await startApprovalDeskApp({
+      diagnoses: [fixtureDiagnosisView()],
+    });
+
+    await app.selectFirstTicket();
+
+    const panel = app.el("diagnosisPanel");
+    expect(panel.innerHTML).toContain("Review");
+    expect(panel.innerHTML).toContain('data-diagnosis-phase="diagnosis"');
+    expect(panel.innerHTML).toContain('data-diagnosis-section="review-history"');
+    expect(panel.innerHTML).not.toContain('data-diagnosis-phase="inspection"');
+    expect(panel.innerHTML).not.toContain('data-diagnosis-phase="scoped-fix"');
+    expect(panel.innerHTML).toContain("Reviews ·");
+  });
+
+  it("uses the phase panel as the central instruction surface", async () => {
+    const app = await startApprovalDeskApp({ diagnoses: [fixtureDiagnosisView()] });
+
+    await app.selectFirstTicket();
+
+    expect(app.el("actionBarTitle").textContent).toBe("Diagnosis");
+    expect(app.el("actionBarHint").textContent).toBe("");
+    expect(app.el("diagnosisPanel").innerHTML).toContain("Review the diagnosis");
+
+    app.openDiagnosisInspection();
+
+    expect(app.el("actionBarTitle").textContent).toBe("Inspection");
+    expect(app.el("actionBarHint").textContent).toBe("");
+    expect(app.el("diagnosisPanel").innerHTML).toContain("Edit the fields, then approve or reject.");
+  });
+
+  it("returns from inspection to diagnosis and then back to the normal action bar", async () => {
+    const app = await startApprovalDeskApp({ diagnoses: [fixtureDiagnosisView()] });
+
+    await app.selectFirstTicket();
+    app.openDiagnosisInspection();
+    app.backToDiagnosis();
+
+    expect(app.el("diagnosisPanel").innerHTML).toContain('data-diagnosis-phase="diagnosis"');
+
+    app.backToNormalActionBar();
+
+    expect(app.el("diagnosisActionPanel").hidden).toBe(true);
+    expect(app.el("diagnoseButton").hidden).toBe(false);
+    expect(app.el("diagnoseButton").disabled).toBe(false);
+    expect(app.el("actionBarTitle").textContent).toBe("Response ready");
+    expect(app.el("actionBarHint").textContent).toContain("reopen diagnosis");
+
+    const diagnosisRequestsBeforeReopen = app.requests.filter((request) =>
+      request.path === "/api/tickets/TKT-1001/diagnosis",
+    ).length;
+    await app.click("diagnoseButton");
+
+    expect(app.el("diagnosisActionPanel").hidden).toBe(false);
+    expect(app.el("diagnosisPanel").innerHTML).toContain(
+      'data-diagnosis-phase="diagnosis"',
+    );
+    expect(app.el("actionBarTitle").textContent).toBe("Diagnosis");
+    expect(app.requests.filter((request) => request.path === "/api/tickets/TKT-1001/diagnosis")).toHaveLength(
+      diagnosisRequestsBeforeReopen,
+    );
+  });
+
+  it("separates diagnosis, inspection, and scoped fix into compact workflow panels", async () => {
+    const app = await startApprovalDeskApp({
+      diagnoses: [fixtureDiagnosisView()],
+      ticketDetail: {
+        operatorGuidance: { nextAction: "mark-fix-available" },
+      },
+    });
+
+    await app.selectFirstTicket();
+
+    const panel = app.el("diagnosisPanel");
+    expect(panel.innerHTML).toContain('data-diagnosis-phase="diagnosis"');
+    expect(panel.innerHTML).not.toContain("Revalidate");
+    expect(panel.innerHTML).toContain(">Next<");
+    expect(panel.innerHTML).not.toContain('data-diagnosis-phase="inspection"');
+    expect(panel.innerHTML).not.toContain('data-diagnosis-phase="scoped-fix"');
+
+    app.openDiagnosisInspection();
+    expect(panel.innerHTML).toContain('data-diagnosis-phase="inspection"');
+    expect(panel.innerHTML).not.toContain('data-diagnosis-phase="diagnosis"');
+    expect(panel.innerHTML).toContain('data-diagnosis-draft-field="customerSafeSummary"');
+    expect(panel.innerHTML).toContain('data-diagnosis-draft-field="recommendedNextAction"');
+    expect(panel.innerHTML).toContain("Reject");
+    expect(panel.innerHTML).toContain("Approve");
+    expect(panel.innerHTML).not.toContain("<details");
+
+    app.backToDiagnosis();
+    expect(panel.innerHTML).toContain('data-diagnosis-phase="diagnosis"');
+
+    app.openDiagnosisInspection();
+
+    await app.reviewDiagnosis("approve");
+    expect(panel.innerHTML).toContain('data-diagnosis-phase="approved-diagnosis"');
+    expect(panel.innerHTML).not.toContain('data-diagnosis-phase="diagnosis"');
+    expect(panel.innerHTML).not.toContain('data-diagnosis-phase="inspection"');
+    expect(panel.innerHTML).toContain("Edit");
+    expect(panel.innerHTML).toContain("Next");
+    expect(panel.innerHTML).not.toContain('type="checkbox"');
+    expect(panel.innerHTML).not.toContain("<details");
+
+    app.openScopedFix();
+    expect(panel.innerHTML).toContain('data-diagnosis-phase="scoped-fix"');
+    expect(panel.innerHTML).toContain("Back");
+    expect(panel.innerHTML).toContain("Fix");
+  });
+
+  it("labels an evidence-complete diagnosis handoff as waiting for diagnosis", async () => {
+    const app = await startApprovalDeskApp({
+      ticketDetailRecommendation: {
+        ...fixtureRecommendation,
+        missingEvidence: [],
+      },
+      ticketDetail: {
+        recommendationSummary: { workflowState: "active" },
+        operatorGuidance: { nextAction: "record-diagnosis" },
+      },
+    });
+
+    await app.selectFirstTicket();
+
+    expect(app.el("actionBarTitle").textContent).toBe("Waiting for diagnosis");
+  });
+
+  it("keeps knowledge evolution visible as a compact rail without empty-state copy", async () => {
+    const app = await startApprovalDeskApp({ diagnoses: [fixtureDiagnosisView()] });
+
+    await app.selectFirstTicket();
+
+    expect(app.el("knowledgeJourneyBar").hidden).toBe(false);
+    expect(app.el("knowledgeJourneyStatus").textContent).not.toContain("No reusable pattern");
+    expect(approvalDeskHtml).toContain("knowledge-journey-rail");
+    expect(approvalDeskHtml.indexOf('id="knowledgeJourneyBar"')).toBeLessThan(
+      approvalDeskHtml.indexOf('id="patternActionBar"'),
+    );
+  });
+
+  it("does not leave an empty pattern action bar under the workflow bar", async () => {
+    const app = await startApprovalDeskApp({
+      diagnoses: [fixtureDiagnosisView()],
+      ticketDetailRecommendation: { ...fixtureRecommendation, missingEvidence: [] },
+    });
+
+    await app.selectFirstTicket();
+
+    expect(app.el("knowledgeJourneyBar").hidden).toBe(false);
+    expect(app.el("patternActionBar").hidden).toBe(true);
+  });
+
+  it("shows an original theory only when recommendation history proves a changed theory", async () => {
+    const app = await startApprovalDeskApp({
+      diagnoses: [fixtureDiagnosisView()],
+      ticketDetail: {
+        recommendationHistory: [
+          { ...fixtureRecommendation, category: "incident", priority: "P1", team: "incident-response" },
+          { ...fixtureRecommendation, category: "performance", priority: "P3", team: "product" },
+        ],
+      },
+    });
+
+    await app.selectFirstTicket();
+
+    expect(app.el("diagnosisPanel").innerHTML).toContain("Original theory");
+    expect(app.el("diagnosisPanel").innerHTML).toContain("Category: performance");
+    expect(app.el("diagnosisPanel").innerHTML).toContain("Priority: P3");
+    expect(app.el("diagnosisPanel").innerHTML).toContain("Team: product");
+  });
+
+  it("unlocks scoped fixes for an approved human-error diagnosis", async () => {
+    const view = fixtureDiagnosisView();
+    const approvedView = {
+      ...view,
+      latestReview: {
+        decision: "approve",
+        diagnosisId: view.originalDiagnosis.id,
+        editedDiagnosis: {
+          ...view.originalDiagnosis.after.diagnosis,
+          causeType: "human-error",
+        },
+      },
+    };
+    const app = await startApprovalDeskApp({ diagnoses: [approvedView] });
+
+    await app.selectFirstTicket();
+
+    expect(app.el("diagnosisPanel").innerHTML).toContain(
+      'data-diagnosis-phase="approved-diagnosis"',
+    );
+    app.openScopedFix();
+    expect(app.el("diagnosisPanel").innerHTML).toContain(
+      'data-diagnosis-phase="scoped-fix"',
+    );
+  });
+
+  it("makes the source ticket implicit in scoped fix and hides unrelated workflow actions", async () => {
+    const view = fixtureDiagnosisView();
+    const app = await startApprovalDeskApp({
+      diagnoses: [{
+        ...view,
+        latestReview: {
+          decision: "approve",
+          diagnosisId: view.originalDiagnosis.id,
+          editedDiagnosis: view.originalDiagnosis.after.diagnosis,
+        },
+      }],
+      ticketDetail: {
+        operatorGuidance: { nextAction: "mark-fix-available" },
+      },
+    });
+
+    await app.selectFirstTicket();
+
+    expect(app.el("decisionControls").hidden).toBe(false);
+    expect(app.el("fixButton").hidden).toBe(false);
+    expect(app.el("approveButton").hidden).toBe(true);
+    expect(app.el("reviewDraftButton").hidden).toBe(true);
+    app.openScopedFix();
+    expect(app.el("diagnosisPanel").innerHTML).toContain("Source ticket");
+    expect(app.el("diagnosisPanel").innerHTML).not.toContain("Suggested impact candidate");
+    expect(app.el("diagnosisPanel").innerHTML).toContain("Related tickets appear only after governed discovery");
+
+    app.setImpactRationale("The approved diagnosis applies to the source ticket.");
+    await app.applyDiagnosisFix();
+
+    const fixRequest = app.requests.find((request) => request.path.endsWith("/fix"));
+    expect(JSON.parse(String(fixRequest?.init?.body))).toMatchObject({
+      impactSet: {
+        tickets: [{ ticketId: "TKT-1001" }],
+      },
+    });
+  });
+
+  it("returns to Brief mode after a scoped fix is persisted and reconciled", async () => {
+    const view = fixtureDiagnosisView();
+    const app = await startApprovalDeskApp({
+      ticketDetailRecommendation: {
+        ...fixtureRecommendation,
+        resolution: "approved",
+        supportState: "waiting-on-platform-fix",
+        missingEvidence: [],
+      },
+      ticketDetail: {
+        operatorGuidance: { nextAction: "mark-fix-available" },
+        conversationTimeline: [
+          {
+            kind: "support-response-sent",
+            timestamp: "2026-06-10T09:05:00.000Z",
+            actor: "approval-desk",
+            recommendationId: fixtureRecommendation.id,
+            body: "We are checking the issue.",
+          },
+        ],
+        recommendationSummary: {
+          workflowState: "waiting",
+          latestRecommendationId: fixtureRecommendation.id,
+          latestResolution: "approved",
+          hasSentResponse: true,
+          hasCustomerReply: false,
+        },
+      },
+      diagnoses: [{
+        ...view,
+        latestReview: {
+          decision: "approve",
+          diagnosisId: view.originalDiagnosis.id,
+          editedDiagnosis: view.originalDiagnosis.after.diagnosis,
+        },
+      }],
+    });
+
+    await app.selectFirstTicket();
+    app.setImpactRationale("The approved diagnosis applies to the source ticket.");
+    await app.applyDiagnosisFix();
+
+    expect(app.requests.some((request) => request.path.endsWith("/fix"))).toBe(true);
+    expect(app.el("diagnosisPanel").innerHTML).not.toContain('data-diagnosis-phase="scoped-fix"');
+    expect(app.el("actionBarTitle").textContent).toBe("Fixed — response ready");
+    expect(app.el("actionBarHint").textContent).toContain("scoped fix is recorded");
+    expect(app.el("createUpdatedRecommendation").hidden).toBe(false);
+    expect(app.el("createUpdatedRecommendation").disabled).toBe(false);
+    expect(app.el("createUpdatedRecommendation").textContent).toBe("Brief");
+  });
+
+  it("keeps scoped fix visible with actionable feedback when persistence fails", async () => {
+    const view = fixtureDiagnosisView();
+    const app = await startApprovalDeskApp({
+      diagnoses: [{
+        ...view,
+        latestReview: {
+          decision: "approve",
+          diagnosisId: view.originalDiagnosis.id,
+          editedDiagnosis: view.originalDiagnosis.after.diagnosis,
+        },
+      }],
+      ticketDetail: {
+        operatorGuidance: { nextAction: "mark-fix-available" },
+      },
+      diagnosisFixPlans: {
+        "TKT-1001": [{ delayTicks: 1, error: "The fix could not be recorded." }],
+      },
+    });
+
+    await app.selectFirstTicket();
+    app.openScopedFix();
+    app.setImpactRationale("The approved diagnosis applies to the source ticket.");
+    await app.applyDiagnosisFix();
+
+    expect(app.el("diagnosisPanel").innerHTML).toContain('data-diagnosis-phase="scoped-fix"');
+    expect(app.el("diagnosisPanel").innerHTML).toContain("Fix could not be applied");
+    expect(app.el("diagnosisPanel").innerHTML).toContain("The fix could not be recorded.");
+  });
+
+  it("uses a clear source-ticket rationale when Fix is submitted without extra editing", async () => {
+    const view = fixtureDiagnosisView();
+    const app = await startApprovalDeskApp({
+      diagnoses: [{
+        ...view,
+        latestReview: {
+          decision: "approve",
+          diagnosisId: view.originalDiagnosis.id,
+          editedDiagnosis: view.originalDiagnosis.after.diagnosis,
+        },
+      }],
+      ticketDetail: {
+        operatorGuidance: { nextAction: "mark-fix-available" },
+      },
+    });
+
+    await app.selectFirstTicket();
+    app.openScopedFix();
+    await app.applyDiagnosisFix();
+
+    const fixRequest = app.requests.find((request) => request.path.endsWith("/fix"));
+    expect(JSON.parse(String(fixRequest?.init?.body))).toMatchObject({
+      impactSet: {
+        rationale: "The reviewed diagnosis applies to the source ticket.",
+        tickets: [{
+          ticketId: "TKT-1001",
+          reason: "The reviewed diagnosis applies to the source ticket.",
+        }],
+      },
+    });
+    expect(app.el("diagnosisPanel").innerHTML).not.toContain('data-diagnosis-phase="scoped-fix"');
+  });
+
+  it("opens a manual reply composer from the advanced settings row", async () => {
+    const app = await startApprovalDeskApp();
+    await app.selectFirstTicket();
+    await app.createRecommendation();
+    await app.approve();
+
+    expect(approvalDeskHtml).toContain("Customer Replies");
+    expect(approvalDeskHtml).toContain(">Manual</button>");
+    expect(app.el("replyComposer").hidden).toBe(true);
+    expect(app.el("manualRepliesButton").textContent).toBe("Manual");
+
+    await app.openManualReplies();
+
+    expect(app.el("disableAutomaticReplies").checked).toBe(true);
+    expect(app.el("replyComposer").hidden).toBe(false);
+    expect(app.el("replyComposer").open).toBe(true);
+    expect(app.el("manualRepliesButton").textContent).toBe("Automatic");
+
+    await app.openManualReplies();
+
+    expect(app.el("disableAutomaticReplies").checked).toBe(false);
+    expect(app.el("replyComposer").hidden).toBe(true);
+    expect(app.el("replyComposer").open).toBe(false);
+    expect(app.el("manualRepliesButton").textContent).toBe("Manual");
+  });
+
+  it("gives Inspection a clear human-review explanation", async () => {
+    const app = await startApprovalDeskApp({ diagnoses: [fixtureDiagnosisView()] });
+    await app.selectFirstTicket();
+    app.openDiagnosisInspection();
+
+    expect(app.el("diagnosisPanel").innerHTML).toContain(
+      "The assistant drafted these fields from the available evidence",
+    );
+    expect(app.el("diagnosisPanel").innerHTML).toContain("Approve only after checking the evidence");
+  });
+
+  it("offers re-evaluation after a rejected diagnosis without showing it as approved", async () => {
+    const view = fixtureDiagnosisView();
+    const rejectedReview = {
+      decision: "reject",
+      diagnosisId: view.originalDiagnosis.id,
+      ticketId: "TKT-1001",
+      sourceTicketRevision: 0,
+      sourceConversationWatermark: { state: "none" },
+      editedDiagnosis: view.originalDiagnosis.after.diagnosis,
+      actor: "casey",
+      rationale: "The evidence does not support this diagnosis.",
+      reviewedAt: "2026-06-10T09:05:00.000Z",
+    };
+    const app = await startApprovalDeskApp({
+      diagnoses: [{ ...view, reviews: [rejectedReview], latestReview: rejectedReview }],
+    });
+
+    await app.selectFirstTicket();
+
+    expect(app.el("diagnosisPanel").innerHTML).not.toContain('data-diagnosis-phase="approved-diagnosis"');
+    expect(app.el("diagnosisPanel").innerHTML).toContain("Re-evaluate");
+
+    await app.reopenDiagnosisEvaluation();
+
+    expect(app.el("diagnosisPanel").innerHTML).not.toContain('data-diagnosis-phase="diagnosis"');
+    expect(app.el("diagnoseButton").hidden).toBe(false);
+  });
+
+  it("does not expose a scoped fix until an approved diagnosis is confirmed", async () => {
+    const view = fixtureDiagnosisView({ confidence: "likely" });
+    const review = {
+      decision: "approve",
+      diagnosisId: view.originalDiagnosis.id,
+      editedDiagnosis: view.originalDiagnosis.after.diagnosis,
+    };
+    const app = await startApprovalDeskApp({
+      diagnoses: [{
+        ...view,
+        reviews: [review],
+        latestReview: review,
+      }],
+    });
+
+    await app.selectFirstTicket();
+
+    expect(app.el("diagnosisPanel").innerHTML).toContain(
+      "The likely diagnosis needs more evidence before a fix can be applied.",
+    );
+    expect(app.el("diagnosisPanel").innerHTML).toContain("Evaluate again");
+    expect(app.el("diagnosisPanel").innerHTML).not.toContain('data-action="open-scoped-fix"');
+    expect(app.el("diagnosisPanel").innerHTML).toContain("Reviews · 1");
+    expect(app.el("diagnosisPanel").innerHTML).toContain('data-action="back-to-normal-action-bar"');
+
+    app.backToNormalActionBar();
+    expect(app.el("diagnosisActionPanel").hidden).toBe(true);
+    expect(app.el("diagnoseButton").hidden).toBe(false);
   });
 
   it("shows an explicit diagnosis state mismatch when required review has no canonical view", async () => {
@@ -258,18 +925,33 @@ describe("approvalDeskHtml", () => {
     );
   });
 
-  it("submits only explicitly selected diagnosis-fix impacts and renders a per-ticket result", async () => {
+  it("submits the diagnosed source ticket by default and renders a per-ticket result", async () => {
+    const view = fixtureDiagnosisView();
     const app = await startApprovalDeskApp({
-      diagnoses: [fixtureDiagnosisView()],
+      diagnoses: [{
+        ...view,
+        latestReview: {
+          decision: "approve",
+          diagnosisId: view.originalDiagnosis.id,
+          editedDiagnosis: view.originalDiagnosis.after.diagnosis,
+        },
+      }],
+      ticketDetail: {
+        operatorGuidance: { nextAction: "mark-fix-available" },
+      },
       diagnosisFixAuditEvents: [
         { ticketId: "TKT-1001", action: "fix-available", result: "success" },
       ],
     });
 
     await app.selectFirstTicket();
+    app.openScopedFix();
 
-    expect(app.el("diagnosisPanel").innerHTML).toContain("Suggested impact candidates");
-    expect(app.el("diagnosisPanel").innerHTML).toContain("not selected");
+    expect(app.el("diagnosisPanel").innerHTML).toContain("Source ticket: TKT-1001 (included)");
+    expect(app.el("diagnosisPanel").innerHTML).toContain("diagnosis-fix-diagnosis");
+    expect(app.el("diagnosisPanel").innerHTML).toContain("diagnosis-fix-action");
+    expect(app.el("diagnosisPanel").innerHTML).toContain("diagnosis-fix-rationale-label");
+    expect(app.el("diagnosisPanel").innerHTML).not.toContain("Suggested impact candidate");
     expect(app.requests.some((request) => request.path.endsWith("/fix"))).toBe(false);
 
     app.setImpactRationale("The confirmed diagnosis applies to this selected ticket.");
@@ -277,7 +959,6 @@ describe("approvalDeskHtml", () => {
       "TKT-1001",
       "The source ticket reproduces the reviewed diagnosis.",
     );
-    app.selectImpactTicket("TKT-1001");
     await app.applyDiagnosisFix();
 
     const fixRequest = app.requests.find((request) => request.path.endsWith("/fix"));
@@ -294,8 +975,7 @@ describe("approvalDeskHtml", () => {
         ],
       },
     });
-    expect(app.el("diagnosisPanel").innerHTML).toContain("TKT-1001 · fix-available · success");
-    expect(app.el("diagnosisPanel").innerHTML).toContain("Verification remains governed by the ticket workflow.");
+    expect(app.el("diagnosisActionPanel").hidden).toBe(true);
   });
 
   it("uses one accessible compact queue status indicator, including ready-to-close", async () => {
@@ -343,7 +1023,7 @@ describe("approvalDeskHtml", () => {
 
     expect(app.el("diagnosisPanel").innerHTML).toContain("Checkout event processing is delayed.");
     expect(app.el("diagnosisPanel").innerHTML).not.toContain("Rejected review text must not become current.");
-    expect(app.el("diagnosisPanel").innerHTML).toContain("reject");
+    expect(app.el("diagnosisPanel").innerHTML).toContain("Reviews · 1");
   });
 
   it("clears an earlier diagnosis immediately while a new diagnosis view is slow and fails", async () => {
@@ -467,6 +1147,7 @@ describe("approvalDeskHtml", () => {
     const earlierDiagnosis = fixtureDiagnosisView({ summary: "Earlier review result." });
     const laterDiagnosis = fixtureDiagnosisView({ summary: "Later review result." });
     const app = await startApprovalDeskApp({
+      ticketDetailRecommendation: fixtureRecommendation,
       diagnoses: [fixtureDiagnosisView()],
       diagnosisReviewPlans: {
         "TKT-1001": [
@@ -496,6 +1177,7 @@ describe("approvalDeskHtml", () => {
 
   it("keeps a later scoped-fix result when an earlier same-diagnosis review fails last", async () => {
     const app = await startApprovalDeskApp({
+      ticketDetailRecommendation: fixtureRecommendation,
       diagnoses: [fixtureDiagnosisView()],
       diagnosisReviewPlans: {
         "TKT-1001": [{ delayTicks: 40, error: "Earlier review failed." }],
@@ -512,13 +1194,15 @@ describe("approvalDeskHtml", () => {
 
     await app.selectFirstTicket();
     await app.reviewDiagnosis("approve");
+    app.openScopedFix();
     app.setImpactRationale("The selected ticket is affected.");
     app.setImpactTicketReason("TKT-1001", "The source ticket is affected.");
     app.selectImpactTicket("TKT-1001");
     await app.applyDiagnosisFix();
     await app.wait(50);
 
-    expect(app.el("diagnosisPanel").innerHTML).toContain("Scoped fix results");
+    expect(app.el("diagnosisPanel").innerHTML).not.toContain('data-diagnosis-phase="scoped-fix"');
+    expect(app.el("actionBarTitle").textContent).toBe("Fixed — response ready");
     expect(app.parsedResult()).not.toEqual(expect.objectContaining({ error: "Earlier review failed." }));
   });
 
@@ -535,6 +1219,8 @@ describe("approvalDeskHtml", () => {
     });
     await diagnosisGuided.selectFirstTicket();
     expect(diagnosisGuided.el("diagnoseButton").hidden).toBe(false);
+    expect(diagnosisGuided.el("decisionControls").hidden).toBe(false);
+    expect(diagnosisGuided.el("approveButton").hidden).toBe(true);
 
     const fixGuided = await startApprovalDeskApp({
       ticketDetail: {
@@ -544,6 +1230,8 @@ describe("approvalDeskHtml", () => {
     });
     await fixGuided.selectFirstTicket();
     expect(fixGuided.el("fixButton").hidden).toBe(false);
+    expect(fixGuided.el("decisionControls").hidden).toBe(false);
+    expect(fixGuided.el("approveButton").hidden).toBe(true);
   });
 
   it("shows an evidence-backed knowledge review gate without changing the response workflow", async () => {
@@ -626,6 +1314,9 @@ describe("approvalDeskHtml", () => {
     await app.selectFirstTicket();
 
     expect(app.el("knowledgeJourneyBar").hidden).toBe(false);
+    expect(approvalDeskHtml).toContain(
+      'class="knowledge-journey-bar knowledge-journey-rail"',
+    );
     expect(app.el("knowledgeJourneyStatus").textContent).toContain("Candidate ready for review");
     expect(app.el("knowledgeJourneySteps").innerHTML).toContain("Review diagnosis");
     expect(app.el("knowledgeJourneySteps").innerHTML).toContain("Approve for future evaluations");
@@ -768,7 +1459,7 @@ describe("approvalDeskHtml", () => {
       app.requests.filter(({ path }) => path === "/api/knowledge-candidates"),
     ).toHaveLength(automaticDiscoveries + 1);
     expect(app.el("knowledgeDiscoveryStatus").textContent).toContain(
-      "No reusable knowledge pattern found",
+      "No pattern yet. Complete another similar diagnosis",
     );
   });
 
@@ -1484,7 +2175,7 @@ describe("approvalDeskHtml", () => {
       approvalDeskHtml.indexOf('id="workflowActionBar"'),
     );
     expect(app.el("createUpdatedRecommendation").hidden).toBe(false);
-    expect(app.el("createUpdatedRecommendation").textContent).toBe("Evaluate");
+    expect(app.el("createUpdatedRecommendation").textContent).toBe("Evaluate again");
     expect(app.el("advancedSettings").open).toBe(false);
     expect(app.el("replyComposer").open).toBe(false);
   });
@@ -1498,7 +2189,7 @@ describe("approvalDeskHtml", () => {
 
     expect(app.el("replyControls").hidden).toBe(false);
     expect(app.el("advancedSettings").open).toBe(false);
-    expect(approvalDeskHtml).toContain("Disable automatic customer replies");
+    expect(approvalDeskHtml).toContain("Customer Replies");
     expect(app.el("replyComposer").hidden).toBe(true);
     expect(app.el("addCustomerReply").disabled).toBe(true);
 
@@ -1587,7 +2278,7 @@ describe("approvalDeskHtml", () => {
     expect(repliedApp.el("createUpdatedRecommendation").hidden).toBe(false);
     expect(repliedApp.el("createUpdatedRecommendation").disabled).toBe(false);
     expect(repliedApp.el("createUpdatedRecommendation").textContent).toBe(
-      "Evaluate",
+      "Evaluate again",
     );
 
     await repliedApp.createUpdatedRecommendation();
@@ -1687,7 +2378,7 @@ describe("approvalDeskHtml", () => {
       "Recommendation failed",
     );
     expect(app.el("createUpdatedRecommendation").disabled).toBe(false);
-    expect(app.el("createUpdatedRecommendation").textContent).toBe("Evaluate");
+    expect(app.el("createUpdatedRecommendation").textContent).toBe("Evaluate again");
     expect(
       app.requests.some((request) => request.path.endsWith("/reject")),
     ).toBe(false);
@@ -1866,8 +2557,8 @@ describe("approvalDeskHtml", () => {
         path: "/api/tickets/TKT-1001/diagnosis",
       }),
     );
-    expect(app.el("createUpdatedRecommendation").hidden).toBe(false);
-    expect(app.el("createUpdatedRecommendation").textContent).toBe("Update");
+    expect(app.el("createUpdatedRecommendation").hidden).toBe(true);
+    expect(app.el("diagnoseButton").hidden).toBe(false);
   });
 
   it("shows the diagnosis action when server guidance permits a refreshed diagnosis", async () => {
@@ -2092,6 +2783,23 @@ describe("approvalDeskHtml", () => {
     expect(app.el("recommendationPanel").innerHTML).not.toContain("<button");
   });
 
+  it("labels an evidence-requesting response as Send", async () => {
+    const app = await startApprovalDeskApp({
+      recommendation: {
+        ...fixtureRecommendation,
+        supportState: "needs-information",
+        missingEvidence: [
+          evidenceRequirement("request-id", "Request ID", "the request ID"),
+        ],
+      },
+    });
+
+    await app.selectFirstTicket();
+    await app.createRecommendation();
+
+    expect(app.el("approveButton").textContent).toBe("Send");
+  });
+
   it("marks the task done by approving the evaluated response and sending it", async () => {
     const app = await startApprovalDeskApp();
     await app.selectFirstTicket();
@@ -2152,7 +2860,7 @@ describe("approvalDeskHtml", () => {
       "I sent the remaining evidence.",
     );
     expect(app.el("createUpdatedRecommendation").hidden).toBe(false);
-    expect(app.el("createUpdatedRecommendation").textContent).toBe("Evaluate");
+    expect(app.el("createUpdatedRecommendation").textContent).toBe("Evaluate again");
 
     await app.createUpdatedRecommendation();
 
@@ -2284,16 +2992,16 @@ describe("approvalDeskHtml", () => {
     expect(approvalDeskHtml).toContain('<option value="top-center">Top center</option>');
     expect(approvalDeskHtml).toContain('<option value="top-right">Top right</option>');
     expect(approvalDeskHtml).toContain('<option value="bottom-right">Bottom right</option>');
-    expect(approvalDeskHtml).toContain('class="toggle-setting"');
-    expect(approvalDeskHtml).toContain("Disable automatic customer replies");
-    expect(approvalDeskHtml).toContain(".toggle-setting input[type=\"checkbox\"]");
+    expect(approvalDeskHtml).toContain('id="manualRepliesButton"');
+    expect(approvalDeskHtml).toContain("Customer Replies");
+    expect(approvalDeskHtml).toContain("Enable manual customer replies");
     expect(approvalDeskHtml).toContain(
       ".advanced-settings-content .reply-composer > summary",
     );
     expect(approvalDeskHtml).toContain(
       '<details id="replyComposer" class="reply-composer" hidden>',
     );
-    expect(approvalDeskHtml).toContain(".advanced-settings-content .toggle-setting");
+    expect(approvalDeskHtml).toContain(".manual-replies-button");
     expect(approvalDeskHtml).toContain(
       ".advanced-settings-content .action-bar-position label",
     );
@@ -3407,13 +4115,13 @@ const fixtureConversationTimeline = [
   },
 ];
 
-function fixtureDiagnosisView(options: { stale?: boolean; id?: string; summary?: string } = {}) {
+function fixtureDiagnosisView(options: { stale?: boolean; id?: string; summary?: string; confidence?: "likely" | "confirmed" } = {}) {
   const diagnosis = {
     status: "completed",
     causeType: "platform-delay",
     customerSafeSummary: options.summary ?? "Checkout event processing is delayed.",
     evidenceUsed: ["request trace", "affected timestamp"],
-    confidence: "confirmed",
+    confidence: options.confidence ?? "confirmed",
     owner: "engineering",
     recommendedNextAction: "Apply the reviewed platform fix when it is available.",
     doNotSay: ["Do not expose internal diagnostics."],
@@ -3519,6 +4227,7 @@ async function startApprovalDeskApp(options: {
   const recommendationGate = deferred<void>();
   const reconciliationDiagnosisGate = deferred<void>();
   let createdRecommendation: FixtureRecommendation | undefined;
+  let diagnosisFixPersisted = false;
   const conversationTimeline = [
     ...(options.ticketDetail?.conversationTimeline ?? []),
   ];
@@ -3614,6 +4323,15 @@ async function startApprovalDeskApp(options: {
       }
       if (options.diagnosisFixFailures?.includes(ticketId) === true) {
         return jsonResponse({ error: { message: "Diagnosis fix is unavailable." } }, 503);
+      }
+      if (!diagnosisFixPersisted) {
+        diagnosisFixPersisted = true;
+        conversationTimeline.push({
+          kind: "fix",
+          timestamp: "2026-06-10T09:08:00.000Z",
+          actor: "product-support",
+          summary: "The reviewed fix is ready for customer verification.",
+        });
       }
       return jsonResponse({ auditEvents: plan?.auditEvents ?? options.diagnosisFixAuditEvents ?? [] }, 201);
     }
@@ -3896,6 +4614,43 @@ async function startApprovalDeskApp(options: {
       });
       await settle(10);
     },
+    openDiagnosisInspection: () => {
+      elements.diagnosisPanel.dispatch("click", {
+        target: { dataset: { action: "open-diagnosis-inspection" } },
+      });
+    },
+    openApprovedDiagnosis: () => {
+      elements.diagnosisPanel.dispatch("click", {
+        target: { dataset: { action: "open-approved-diagnosis" } },
+      });
+    },
+    openScopedFix: () => {
+      elements.diagnosisPanel.dispatch("click", {
+        target: { dataset: { action: "open-scoped-fix" } },
+      });
+    },
+    simulateSolution: async () => {
+      elements.diagnosisPanel.dispatch("click", {
+        target: { dataset: { action: "simulate-solution" } },
+      });
+      await settle(10);
+    },
+    reopenDiagnosisEvaluation: async () => {
+      elements.diagnosisPanel.dispatch("click", {
+        target: { dataset: { action: "reopen-diagnosis-evaluation" } },
+      });
+      await settle(30);
+    },
+    backToDiagnosis: () => {
+      elements.diagnosisPanel.dispatch("click", {
+        target: { dataset: { action: "back-to-diagnosis" } },
+      });
+    },
+    backToNormalActionBar: () => {
+      elements.diagnosisPanel.dispatch("click", {
+        target: { dataset: { action: "back-to-normal-action-bar" } },
+      });
+    },
     setDiagnosisReviewRationale: (value: string) => {
       elements.diagnosisPanel.dispatch("input", {
         target: { dataset: { diagnosisReviewRationale: "true" }, value },
@@ -3922,6 +4677,10 @@ async function startApprovalDeskApp(options: {
       });
       await settle(10);
     },
+    openManualReplies: async () => {
+      elements.manualRepliesButton.dispatch("click");
+      await settle(5);
+    },
     reject: async () => {
       elements.rejectButton.dispatch("click");
       await settle();
@@ -3947,6 +4706,7 @@ function createElements(): Record<string, FakeElement> {
       "approveEditedButton",
       "backToRecommendation",
       "addCustomerReply",
+      "simulateConfirmationButton",
       "cancelRejectButton",
       "closeTicketButton",
       "confirmApproval",
@@ -3976,6 +4736,7 @@ function createElements(): Record<string, FakeElement> {
       "guardrailsPanel",
       "activityPanel",
       "markSentButton",
+      "manualRepliesButton",
       "priorityOverride",
       "predictedReply",
       "queueFilters",

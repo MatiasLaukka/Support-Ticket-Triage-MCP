@@ -370,8 +370,61 @@ describe("approvalDeskHtml", () => {
     expect(app.el("diagnosisPanel").innerHTML).toContain(
       "The likely diagnosis needs confirmation before a fix can be applied.",
     );
-    expect(app.el("diagnosisPanel").innerHTML).toContain("Evaluate again");
-    expect(app.el("diagnosisPanel").innerHTML).not.toContain("Simulate solution");
+    expect(app.el("diagnosisPanel").innerHTML).not.toContain(">Evaluate again<");
+    expect(app.el("diagnosisPanel").innerHTML).toContain("Simulate confirmation");
+  });
+
+  it("does not offer a dead evaluation action while a likely diagnosis awaits confirmation", async () => {
+    const view = fixtureDiagnosisView({ confidence: "likely" });
+    const app = await startApprovalDeskApp({
+      diagnoses: [{
+        ...view,
+        latestReview: {
+          decision: "approve",
+          diagnosisId: view.originalDiagnosis.id,
+          editedDiagnosis: view.originalDiagnosis.after.diagnosis,
+        },
+      }],
+      ticketDetail: {
+        operatorGuidance: {
+          stage: "diagnosis-recorded",
+          nextAction: "evaluate-ticket",
+          reason: "The likely diagnosis needs confirmation before a fix can be applied.",
+        },
+      },
+    });
+
+    await app.selectFirstTicket();
+    app.openApprovedDiagnosis();
+
+    expect(app.el("diagnosisPanel").innerHTML).not.toContain(">Evaluate again<");
+    expect(app.el("diagnosisPanel").innerHTML).toContain("Waiting for confirmation");
+    expect(app.el("diagnosisPanel").innerHTML).toContain("Simulate confirmation");
+  });
+
+  it("starts confirmation from the likely-diagnosis screen through the reply route", async () => {
+    const view = fixtureDiagnosisView({ confidence: "likely" });
+    const app = await startApprovalDeskApp({
+      diagnoses: [{
+        ...view,
+        latestReview: {
+          decision: "approve",
+          diagnosisId: view.originalDiagnosis.id,
+          editedDiagnosis: view.originalDiagnosis.after.diagnosis,
+        },
+      }],
+    });
+
+    await app.selectFirstTicket();
+    app.openApprovedDiagnosis();
+    app.el("diagnosisPanel").dispatch("click", {
+      target: { dataset: { action: "simulate-confirmation" } },
+    });
+    await app.wait(20);
+
+    expect(app.requests.some((request) => request.path === "/api/tickets/TKT-1001/customer-replies")).toBe(true);
+    expect(app.el("diagnosisActionPanel").hidden).toBe(true);
+    expect(app.el("actionBarTitle").textContent).toBe("Customer replied");
   });
 
   it("offers an internal solution simulation only after a confirmed diagnosis", async () => {
@@ -882,7 +935,7 @@ describe("approvalDeskHtml", () => {
     expect(app.el("diagnosisPanel").innerHTML).toContain(
       "The likely diagnosis needs more evidence before a fix can be applied.",
     );
-    expect(app.el("diagnosisPanel").innerHTML).toContain("Evaluate again");
+    expect(app.el("diagnosisPanel").innerHTML).toContain("Simulate confirmation");
     expect(app.el("diagnosisPanel").innerHTML).not.toContain('data-action="open-scoped-fix"');
     expect(app.el("diagnosisPanel").innerHTML).toContain("Reviews · 1");
     expect(app.el("diagnosisPanel").innerHTML).toContain('data-action="back-to-normal-action-bar"');

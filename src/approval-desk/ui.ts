@@ -2631,8 +2631,10 @@ export const approvalDeskHtml = `<!doctype html>
         const diagnosisResponsePending = diagnosisNeedsResponseBeforeFix();
         const approvedNextControl = shouldShowFixAction()
           ? '<button type="button" data-action="open-scoped-fix">Next</button>'
-          : current.confidence !== 'confirmed'
+          : canReevaluateCurrentDiagnosis()
             ? '<button type="button" class="secondary" data-action="reopen-diagnosis-evaluation">Evaluate again</button>'
+            : current.confidence !== 'confirmed'
+              ? '<button type="button" class="secondary" data-action="simulate-confirmation">Simulate confirmation</button>'
             : diagnosisResponsePending
               ? '<button type="button" class="secondary" data-action="prepare-diagnosis-response">Prepare response</button>'
               : '<button type="button" class="accent-action" data-action="simulate-solution">Simulate solution</button>';
@@ -2644,7 +2646,7 @@ export const approvalDeskHtml = `<!doctype html>
                 '<p>' + escapeHtml(current.customerSafeSummary ?? 'No approved diagnosis summary is available.') + '</p>' +
               '</div>' +
               '<div class="diagnosis-phase-actions"><button type="button" class="secondary" data-action="back-to-normal-action-bar">Back</button><button type="button" class="secondary" data-action="open-diagnosis-inspection">Edit</button>' +
-                (shouldShowFixAction() ? '' : '<span class="diagnosis-fix-waiting" role="status">' + escapeHtml(diagnosisBlockerText(current)) + '</span>') +
+                (shouldShowFixAction() ? '' : '<span class="diagnosis-fix-waiting" role="status">' + escapeHtml(current.confidence !== 'confirmed' && !canReevaluateCurrentDiagnosis() ? 'Waiting for confirmation. ' : '') + escapeHtml(diagnosisBlockerText(current)) + '</span>') +
                 approvedNextControl +
                 history + '</div>' +
             '</section>'
@@ -3275,16 +3277,16 @@ export const approvalDeskHtml = `<!doctype html>
         if (state.diagnosisUiPhase === 'normal' && latestTimelineItem('fix') !== null) {
           return 'Fixed — response ready';
         }
+        if (state.diagnosisUiPhase === 'normal' &&
+          (canReevaluateCurrentDiagnosis() || hasCustomerReplyAfterCurrentRecommendation())) {
+          return 'Customer replied';
+        }
         if (state.diagnosisUiPhase === 'normal' && selectedDiagnosisView() !== null &&
           latestUnevaluatedWorkflowEvent() === null && !shouldShowCreateUpdatedRecommendation()) {
           return 'Response ready';
         }
         if (state.recommendation === null) {
           return 'Evaluate ticket';
-        }
-        if (state.diagnosisUiPhase === 'normal' &&
-          (canReevaluateCurrentDiagnosis() || hasCustomerReplyAfterCurrentRecommendation())) {
-          return 'Customer replied';
         }
         if (state.operatorGuidance?.requiredReview?.kind === 'diagnosis' ||
           state.operatorGuidance?.nextAction === 'record-diagnosis') {
@@ -5510,6 +5512,9 @@ export const approvalDeskHtml = `<!doctype html>
         }
         if (action === 'simulate-solution') {
           void recordFix().catch(function (error) { setResult({ error: error.message }); });
+        }
+        if (action === 'simulate-confirmation') {
+          void simulateConfirmationReply().catch(function (error) { setResult({ error: error.message }); });
         }
         if (action === 'apply-diagnosis-fix') {
           void applySelectedDiagnosisFix().catch(function (error) { setResult({ error: error.message }); });

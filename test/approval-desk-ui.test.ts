@@ -317,6 +317,31 @@ describe("approvalDeskHtml", () => {
     expect(app.el("createUpdatedRecommendation").hidden).toBe(true);
   });
 
+  it("returns to the diagnosis phase after re-evaluating a stale diagnosis", async () => {
+    const app = await startApprovalDeskApp({
+      diagnoses: [fixtureDiagnosisView({ stale: true })],
+      ticketDetailRecommendation: fixtureRecommendation,
+      ticketDetail: {
+        operatorGuidance: {
+          stage: "diagnosis-review",
+          nextAction: "review-diagnosis",
+          requiredReview: {
+            kind: "diagnosis",
+            id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+            reason: "A newer customer reply needs re-evaluation.",
+          },
+        },
+      },
+    });
+
+    await app.selectFirstTicket();
+    await app.reopenDiagnosisEvaluation();
+
+    expect(app.requests.some((request) => request.path === "/api/tickets/TKT-1001/recommendations")).toBe(true);
+    expect(app.el("diagnosisPanel").innerHTML).toContain('data-diagnosis-phase="diagnosis"');
+    expect(app.el("actionBarTitle").textContent).toBe("Diagnosis");
+  });
+
   it("offers a deterministic confirmation simulation through the real reply route", async () => {
     const app = await startApprovalDeskApp({
       diagnoses: [fixtureDiagnosisView({ stale: true })],
@@ -911,8 +936,8 @@ describe("approvalDeskHtml", () => {
 
     await app.reopenDiagnosisEvaluation();
 
-    expect(app.el("diagnosisPanel").innerHTML).not.toContain('data-diagnosis-phase="diagnosis"');
-    expect(app.el("diagnoseButton").hidden).toBe(false);
+    expect(app.el("diagnosisPanel").innerHTML).toContain('data-diagnosis-phase="diagnosis"');
+    expect(app.el("diagnoseButton").hidden).toBe(true);
   });
 
   it("does not expose a scoped fix until an approved diagnosis is confirmed", async () => {

@@ -4069,6 +4069,10 @@ export const approvalDeskHtml = `<!doctype html>
           if (!isCurrentTicketRequest(ticketId, ticketRequestId)) {
             return;
           }
+          // A completed re-evaluation starts a fresh diagnosis review cycle.
+          // Clear the prior phase/selection so the newly loaded diagnosis is
+          // rendered instead of leaving the operator in the normal response bar.
+          resetDiagnosisInteraction();
           state.recommendation = data.recommendation;
           state.stage = 'draft';
           state.consumedCustomerReplyTimestamp = latestCustomerReplyTimestamp();

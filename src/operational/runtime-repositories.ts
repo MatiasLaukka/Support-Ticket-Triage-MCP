@@ -102,7 +102,10 @@ export class OperationalAuditRepository {
               || event.action === "diagnostic-escalated"
             ? diagnosisAudit === undefined ? [] : [diagnosisAudit]
             : lifecycleAudit === undefined
-              ? fallbackAudits.filter(({ id }) => id === event.id)
+              ? operationalAuditEventsFromSnapshot({
+                  ...snapshot,
+                  events: [event],
+                })
               : [AuditEventSchema.parse(lifecycleAudit)];
         });
       }));

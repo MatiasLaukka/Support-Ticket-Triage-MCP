@@ -26,6 +26,7 @@ import {
 } from "./workflow-causal-context.js";
 import { buildOperatorGuidance } from "./workflow-guidance.js";
 import { buildTicketLifecycleView } from "./lifecycle.js";
+import { operationalDiagnosisAudits } from "./diagnosis-review.js";
 import { operationalAuditEventsFromSnapshot } from "../triage-service.js";
 
 export type RecommendationWorkflowState =
@@ -86,9 +87,14 @@ export function buildTicketWorkflowReadModel(input: {
  */
 export function buildTicketWorkflowReadModelFromSnapshot(
   snapshot: OperationalWorkflowSnapshot,
+  authoritativeAudits?: readonly AuditEvent[],
 ) {
   const recommendation = summarizeRecommendationsForSnapshot(snapshot);
-  const audits = operationalAuditEventsFromSnapshot(snapshot);
+  const audits = operationalDiagnosisAudits({
+    ticket: snapshot.ticket,
+    audits: authoritativeAudits ?? operationalAuditEventsFromSnapshot(snapshot),
+    originalDiagnoses: snapshot.diagnoses,
+  });
   const workflow = {
     ticket: snapshot.ticket,
     recommendations: snapshot.recommendations,

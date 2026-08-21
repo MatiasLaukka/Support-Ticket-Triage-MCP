@@ -10,6 +10,7 @@ import { DomainError } from "../errors.js";
 import type { AuditPage, AuditPageInput } from "../audit-repository.js";
 import type { PaginatedTickets, TicketFilter } from "../ticket-repository.js";
 import { operationalAuditEventsFromSnapshot } from "../triage-service.js";
+import { operationalDiagnosisAudits } from "../approval-desk/diagnosis-review.js";
 import { OperationalSqliteStore } from "./sqlite-store.js";
 import { OperationalStoreError } from "./unit-of-work.js";
 import type { OperationalWorkflowSnapshot } from "./domain.js";
@@ -86,20 +87,25 @@ export class OperationalAuditRepository {
       const snapshots = ticketId === undefined
         ? this.store.listWorkflowSnapshots()
         : [this.store.readWorkflowSnapshot(TicketIdSchema.parse(ticketId))];
-      return this.store.transaction((unit) => snapshots.flatMap((snapshot) =>
-        snapshot.events.flatMap((event) => {
+      return this.store.transaction((unit) => snapshots.flatMap((snapshot) => {
+        const fallbackAudits = operationalAuditEventsFromSnapshot(snapshot);
+        const authoritativeDiagnosisAudits = operationalDiagnosisAudits({
+          ticket: snapshot.ticket,
+          audits: fallbackAudits,
+          originalDiagnoses: snapshot.diagnoses,
+        });
+        return snapshot.events.flatMap((event) => {
+          const diagnosisAudit = authoritativeDiagnosisAudits.find(({ id }) => id === event.id);
           const lifecycleAudit = unit.readCommandResult(event.commandId)
             ?.lifecycleAuditEvents?.find((candidate) => candidate.id === event.id);
-          return lifecycleAudit === undefined
-              || event.action === "diagnosis-completed"
+          return event.action === "diagnosis-completed"
               || event.action === "diagnostic-escalated"
-            ? operationalAuditEventsFromSnapshot({
-                ...snapshot,
-                events: [event],
-              })
-            : [AuditEventSchema.parse(lifecycleAudit)];
-        })
-      ));
+            ? diagnosisAudit === undefined ? [] : [diagnosisAudit]
+            : lifecycleAudit === undefined
+              ? fallbackAudits.filter(({ id }) => id === event.id)
+              : [AuditEventSchema.parse(lifecycleAudit)];
+        });
+      }));
     } catch (error) {
       throw mapReadError(
         error,

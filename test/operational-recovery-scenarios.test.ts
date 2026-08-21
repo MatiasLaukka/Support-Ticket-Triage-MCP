@@ -1,6 +1,10 @@
 import { rm } from "node:fs/promises";
 import { afterEach, describe, expect, it } from "vitest";
 import { latestAuthoritativeDiagnosis } from "../src/approval-desk/workflow-guidance.js";
+import {
+  buildTicketWorkflowReadModel,
+  buildTicketWorkflowReadModelFromSnapshot,
+} from "../src/approval-desk/workflow-read-model.js";
 import { createRecoveryFixture, recoveryTicketId } from "./recovery-fixture.js";
 
 const roots: string[] = [];
@@ -27,6 +31,12 @@ describe("operational recovery scenarios", () => {
     });
     expect(latestAuthoritativeDiagnosis(recoveryTicketId, [fixture.diagnosis, fixture.review, fix, ineffective]))
       .toMatchObject({ diagnosisId: fixture.diagnosis.id });
+    expect(await currentLifecycle(fixture)).toMatchObject({
+      phase: "evaluation-needed",
+      primaryAction: { kind: "evaluate-ticket", reasonCodes: ["fix-ineffective"] },
+      diagnosis: { state: "approved", diagnosisId: fixture.diagnosis.id },
+      fix: { state: "ineffective", diagnosisStillAuthoritative: true },
+    });
     await expect(fixture.runtime.service.recordFixIneffective(
       { ...input, sourceTicketRevision: fixture.ticket.revision + 1 },
       { commandId: uuid(4) },
@@ -55,6 +65,12 @@ describe("operational recovery scenarios", () => {
       recoveryTicketId,
       [fixture.diagnosis, fixture.review, fix, ineffective, invalidated],
     )).toBeUndefined();
+    expect(await currentLifecycle(fixture)).toMatchObject({
+      phase: "evaluation-needed",
+      primaryAction: { kind: "evaluate-ticket", reasonCodes: ["diagnosis-invalidated", "fix-ineffective"] },
+      diagnosis: { state: "invalidated", diagnosisId: fixture.diagnosis.id },
+      fix: { state: "ineffective", diagnosisStillAuthoritative: false },
+    });
   });
 
   it("preserves multiple distinct ineffective fix attempts for one authoritative diagnosis", async () => {
@@ -100,6 +116,11 @@ describe("operational recovery scenarios", () => {
 
     expect(replacement).toMatchObject({ action: "diagnosis-completed" });
     expect(replacement.id).not.toBe(fixture.diagnosis.id);
+    expect(await currentLifecycle(fixture)).toMatchObject({
+      phase: "diagnosis-review",
+      primaryAction: { kind: "review-diagnosis" },
+      diagnosis: { state: "recorded", diagnosisId: replacement.id },
+    });
     expect((await fixture.runtime.audits.list(recoveryTicketId)).map(({ action }) => action)).toEqual([
       "diagnosis-completed", "diagnosis-reviewed", "diagnosis-invalidated", "diagnosis-completed",
     ]);
@@ -218,6 +239,21 @@ async function recordReplacementDiagnosis(
     },
     knowledgeArticleIds: [],
   }, { commandId });
+}
+
+async function currentLifecycle(fixture: Awaited<ReturnType<typeof createRecoveryFixture>>) {
+  const [ticket, audits, recommendations] = await Promise.all([
+    fixture.runtime.tickets.get(recoveryTicketId),
+    fixture.runtime.audits.list(recoveryTicketId),
+    fixture.runtime.recommendations.list(),
+  ]);
+  const repositoryLifecycle = buildTicketWorkflowReadModel({ ticket, audits, recommendations }).lifecycle;
+  const snapshotLifecycle = buildTicketWorkflowReadModelFromSnapshot(
+    fixture.runtime.operationalStore!.readWorkflowSnapshot(recoveryTicketId),
+    audits,
+  ).lifecycle;
+  expect(snapshotLifecycle).toEqual(repositoryLifecycle);
+  return repositoryLifecycle;
 }
 
 function uuid(value: number): string {

@@ -1312,6 +1312,27 @@ describe("approvalDeskHtml", () => {
     expect(fixGuided.el("approveButton").hidden).toBe(true);
   });
 
+  it("uses lifecycle action descriptors instead of contradictory legacy guidance", async () => {
+    const app = await startApprovalDeskApp({
+      ticketDetail: {
+        operatorGuidance: { nextAction: "mark-fix-available" },
+        lifecycle: fixtureLifecycle({
+          phase: "diagnosis-ready",
+          primaryAction: "record-diagnosis",
+          actions: [
+            lifecycleAction("record-diagnosis", "primary"),
+            lifecycleAction("record-fix-available", "blocked", ["diagnosis-not-approved"]),
+          ],
+        }),
+      },
+    });
+
+    await app.selectFirstTicket();
+
+    expect(app.el("diagnoseButton").hidden).toBe(false);
+    expect(app.el("fixButton").hidden).toBe(true);
+  });
+
   it("shows an evidence-backed knowledge review gate without changing the response workflow", async () => {
     const app = await startApprovalDeskApp({
       knowledgeCandidate: {
@@ -4252,6 +4273,43 @@ type DiagnosisMutationPlan = {
   auditEvents?: Array<Record<string, unknown>>;
 };
 
+function lifecycleAction(
+  kind: string,
+  availability: "primary" | "available" | "blocked" | "completed" = "available",
+  reasonCodes: string[] = [],
+) {
+  return { kind, availability, reasonCodes };
+}
+
+function fixtureLifecycle(options: {
+  phase?: string;
+  primaryAction?: string;
+  actions?: Array<Record<string, unknown>>;
+  knowledge?: Record<string, unknown>;
+} = {}) {
+  const primaryAction = lifecycleAction(options.primaryAction ?? "evaluate-ticket", "primary");
+  return {
+    phase: options.phase ?? "evaluation-needed",
+    primaryAction,
+    actions: options.actions ?? [primaryAction],
+    current: {
+      ticketRevision: 0,
+      conversationWatermark: { state: "none" },
+    },
+    diagnosticInvestigation: {
+      state: "not-started",
+      hypotheses: [],
+      evidenceToRequest: [],
+    },
+    diagnosis: { state: "none", reasonCodes: [] },
+    evidence: { required: [], provided: [], missing: [] },
+    confirmation: { state: "not-required" },
+    fix: { state: "none", reasonCodes: [], diagnosisStillAuthoritative: false },
+    response: { intent: "evidence-request", state: "none" },
+    knowledge: options.knowledge ?? { state: "none", actionable: false },
+  };
+}
+
 async function startApprovalDeskApp(options: {
   deferRecommendation?: boolean;
   deferReconciliationDiagnosis?: boolean;
@@ -4274,6 +4332,7 @@ async function startApprovalDeskApp(options: {
     recommendationHistory?: FixtureRecommendation[];
     recommendationSummary?: Record<string, unknown>;
     operatorGuidance?: Record<string, unknown>;
+    lifecycle?: Record<string, unknown>;
   };
   knowledgeCandidate?: Record<string, unknown>;
   knowledgeGptAdvisory?: Record<string, unknown>;
@@ -4429,6 +4488,11 @@ async function startApprovalDeskApp(options: {
           operatorGuidance: ticket.id === selectedFixtureTicket.id
             ? (options.ticketDetail?.operatorGuidance ?? defaultOperatorGuidance)
             : defaultOperatorGuidance,
+          ...(ticket.id === selectedFixtureTicket.id && options.ticketDetail?.lifecycle === undefined
+            ? {}
+            : { lifecycle: ticket.id === selectedFixtureTicket.id
+              ? options.ticketDetail?.lifecycle
+              : undefined }),
         });
       }
     }
@@ -4458,6 +4522,9 @@ async function startApprovalDeskApp(options: {
         latestRecommendation:
           createdRecommendation ?? options.ticketDetailRecommendation,
         operatorGuidance: options.ticketDetail?.operatorGuidance ?? defaultOperatorGuidance,
+        ...(options.ticketDetail?.lifecycle === undefined
+          ? {}
+          : { lifecycle: options.ticketDetail.lifecycle }),
       });
     }
     if (path === `/api/tickets/${selectedFixtureTicket.id}/customer-replies`) {

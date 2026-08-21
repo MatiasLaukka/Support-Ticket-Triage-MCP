@@ -1992,6 +1992,7 @@ export const approvalDeskHtml = `<!doctype html>
         ticketRequestId: 0,
         evaluationPendingTicketId: null,
         operatorGuidance: null,
+        lifecycle: null,
         diagnoses: [],
         diagnosisLoading: false,
         selectedDiagnosisId: null,
@@ -2109,7 +2110,18 @@ export const approvalDeskHtml = `<!doctype html>
         return fields;
       }
 
+      function adoptAuthoritativeWorkflow(value) {
+        if (value === null || typeof value !== 'object') return;
+        if (value.lifecycle !== undefined) {
+          state.lifecycle = value.lifecycle;
+        }
+        if (value.operatorGuidance !== undefined) {
+          state.operatorGuidance = value.operatorGuidance;
+        }
+      }
+
       function setResult(value) {
+        adoptAuthoritativeWorkflow(value);
         els.resultPanel.textContent = JSON.stringify(value, null, 2);
       }
 
@@ -2753,6 +2765,7 @@ export const approvalDeskHtml = `<!doctype html>
         if (!isCurrentDiagnosisMutation(ticketId, diagnosisId, ticketRequestId, mutationToken)) {
           return;
         }
+        adoptLifecycle(data);
         state.diagnoses = Array.isArray(data.diagnoses) ? data.diagnoses : state.diagnoses;
         state.diagnosisDraft = null;
         state.diagnosisReviewRationale = '';
@@ -2818,6 +2831,7 @@ export const approvalDeskHtml = `<!doctype html>
         if (!isCurrentDiagnosisMutation(ticketId, diagnosisId, ticketRequestId, mutationToken)) {
           return;
         }
+        adoptLifecycle(data);
         state.diagnosisFixPending = false;
         state.diagnosisFixError = null;
         state.diagnosisFixResults = Array.isArray(data.auditEvents) ? data.auditEvents : [];
@@ -3109,17 +3123,26 @@ export const approvalDeskHtml = `<!doctype html>
         const closeReady = shouldShowCloseTicketAction();
         const diagnosisActionReady = shouldShowDiagnoseAction();
         const fixActionReady = shouldShowFixAction();
-        const diagnosisPhaseActive = state.diagnosisUiPhase !== 'normal' && (
-          selectedDiagnosisView() !== null ||
+        const legacyGuidedDiagnosisPhase = !hasLifecycleDescriptor() && (
           requiredReview?.kind === 'diagnosis' ||
           state.operatorGuidance?.nextAction === 'record-diagnosis' ||
           state.operatorGuidance?.nextAction === 'mark-fix-available'
         );
+        const diagnosisPhaseActive = state.diagnosisUiPhase !== 'normal' && (
+          selectedDiagnosisView() !== null ||
+          ['diagnosis-ready', 'diagnosis-review', 'awaiting-confirmation', 'awaiting-fix', 'fix-ready', 'verification'].includes(state.lifecycle?.phase) ||
+          lifecycleActionIsAvailable('record-diagnosis') ||
+          lifecycleActionIsAvailable('record-fix-available') ||
+          lifecycleActionIsAvailable('apply-scoped-fix') ||
+          legacyGuidedDiagnosisPhase
+        );
         const explicitDiagnosisPhaseActive = ['diagnosis', 'inspection', 'approved', 'fix'].includes(state.diagnosisUiPhase);
         const phaseOwnsWorkflowActions =
-          diagnosisPhaseActive && (requiredReview?.kind === 'diagnosis' ||
-          state.operatorGuidance?.nextAction === 'record-diagnosis' ||
-          state.operatorGuidance?.nextAction === 'mark-fix-available' ||
+          diagnosisPhaseActive && (['diagnosis-review', 'awaiting-confirmation', 'awaiting-fix', 'fix-ready', 'verification'].includes(state.lifecycle?.phase) ||
+          lifecycleActionIsAvailable('record-diagnosis') ||
+          lifecycleActionIsAvailable('record-fix-available') ||
+          lifecycleActionIsAvailable('apply-scoped-fix') ||
+          legacyGuidedDiagnosisPhase ||
           state.diagnoses.length > 0);
         const phaseControlsVisible = diagnosisActionReady || fixActionReady;
         const suppressGenericActions = phaseOwnsWorkflowActions;
@@ -3508,7 +3531,34 @@ export const approvalDeskHtml = `<!doctype html>
         return state.operatorGuidance?.requiredReview !== undefined;
       }
 
+      function lifecycleAction(kind) {
+        if (state.lifecycle?.primaryAction?.kind === kind) {
+          return state.lifecycle.primaryAction;
+        }
+        return Array.isArray(state.lifecycle?.actions)
+          ? state.lifecycle.actions.find(function (action) { return action.kind === kind; }) ?? null
+          : null;
+      }
+
+      function lifecycleActionIsAvailable(kind) {
+        const action = lifecycleAction(kind);
+        return action !== null && (action.availability === 'primary' || action.availability === 'available');
+      }
+
+      function adoptLifecycle(data) {
+        if (data !== null && typeof data === 'object' && data.lifecycle !== undefined) {
+          state.lifecycle = data.lifecycle;
+        }
+      }
+
+      function hasLifecycleDescriptor() {
+        return state.lifecycle !== null && typeof state.lifecycle === 'object';
+      }
+
       function shouldShowDiagnoseAction() {
+        if (hasLifecycleDescriptor()) {
+          return state.selectedTicket !== null && lifecycleActionIsAvailable('record-diagnosis');
+        }
         return state.selectedTicket !== null &&
           (state.diagnosisUiPhase === 'normal' && selectedDiagnosisView() !== null ||
             state.diagnosisUiPhase === 'normal' ||
@@ -3516,11 +3566,20 @@ export const approvalDeskHtml = `<!doctype html>
       }
 
       function shouldShowFixAction() {
+        if (hasLifecycleDescriptor()) {
+          return state.selectedTicket !== null && (
+            lifecycleActionIsAvailable('record-fix-available') ||
+            lifecycleActionIsAvailable('apply-scoped-fix')
+          );
+        }
         return state.selectedTicket !== null &&
           (state.operatorGuidance === null || state.operatorGuidance.nextAction === 'mark-fix-available');
       }
 
       function shouldShowCloseTicketAction() {
+        if (hasLifecycleDescriptor()) {
+          return state.selectedTicket !== null && lifecycleActionIsAvailable('resolve-ticket');
+        }
         return state.selectedTicket !== null &&
           state.recommendation !== null &&
           !hasRequiredReviewGate() &&
@@ -3819,6 +3878,7 @@ export const approvalDeskHtml = `<!doctype html>
           state.diagnoses = [];
           state.diagnosisLoading = true;
           state.operatorGuidance = null;
+          state.lifecycle = null;
           state.selectedTicket = null;
           state.recommendation = null;
           state.stage = 'empty';
@@ -3865,6 +3925,7 @@ export const approvalDeskHtml = `<!doctype html>
           ? data.ticket
           : { ...data.ticket, recommendationSummary: data.recommendationSummary };
         state.operatorGuidance = data.operatorGuidance ?? null;
+        state.lifecycle = data.lifecycle ?? null;
         const diagnosisLoad = loadDiagnoses(id, ticketRequestId).catch(function (error) {
           if (isCurrentTicketRequest(id, ticketRequestId)) {
             state.diagnosisLoading = false;

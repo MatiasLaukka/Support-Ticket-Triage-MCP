@@ -522,7 +522,8 @@ function isPersistedDiagnosisContextEvent(
     event.after.diagnosis !== null
   ) {
     const latestReview = latestStrictDiagnosisReviewRecord(audits, event.id);
-    return latestReview?.review.decision !== "reject" &&
+    return !hasLaterDiagnosisInvalidation(audits, event.id) &&
+      latestReview?.review.decision !== "reject" &&
       diagnosisContextFromAudit(event) !== undefined;
   }
   const position = audits.findIndex((candidate) => candidate.id === event.id);
@@ -536,7 +537,21 @@ function isPersistedDiagnosisContextEvent(
   ) {
     return false;
   }
-  return true;
+  return !hasLaterDiagnosisInvalidation(audits, review.review.diagnosisId, position);
+}
+
+function hasLaterDiagnosisInvalidation(
+  audits: readonly AuditEvent[],
+  diagnosisId: string,
+  after?: number,
+): boolean {
+  const diagnosisIndex = after ?? audits.findIndex((event) => event.id === diagnosisId);
+  if (diagnosisIndex < 0) return false;
+  return audits.some((event, index) =>
+    event.action === "diagnosis-invalidated" &&
+    event.before.diagnosisId === diagnosisId &&
+    index > diagnosisIndex,
+  );
 }
 
 /** Return the latest fix that is still current for the conversation. */

@@ -830,7 +830,13 @@ export function latestAuthoritativeDiagnosis(
       if (
         event.action !== "diagnosis-completed" &&
         event.action !== "diagnostic-escalated" &&
-        event.action !== "fix-available"
+        event.action !== "diagnosis-invalidated"
+      ) {
+        return false;
+      }
+      if (
+        event.action === "diagnosis-invalidated" &&
+        event.before.diagnosisId !== originalDiagnosis.id
       ) {
         return false;
       }

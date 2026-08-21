@@ -380,12 +380,16 @@ function summarizeAuditEvent(event: AuditEvent): string {
       return "Diagnosis was completed for the ticket.";
     case "diagnosis-reviewed":
       return "Diagnosis review was recorded without replacing the original diagnosis.";
+    case "diagnosis-invalidated":
+      return `Diagnosis was invalidated: ${event.rationale}`;
     case "diagnostic-escalated":
       return "Diagnostic ambiguity was escalated for specialist review.";
     case "fix-available":
       return "Fix or mitigation is available for customer verification.";
     case "platform-mitigation-available":
       return "Platform mitigation was recorded and is ready for the next governed evaluation.";
+    case "fix-ineffective":
+      return `Fix verification did not succeed: ${event.rationale}`;
     case "ticket-updated":
       return "Ticket fields were updated.";
     case "approval-rejected":

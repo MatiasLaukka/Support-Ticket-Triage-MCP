@@ -110,6 +110,53 @@ describe("operational persistence domain", () => {
     }).success).toBe(false);
   });
 
+  it("accepts append-only recovery events and validates their canonical references", () => {
+    const recoveryBase = {
+      ticketId: "TKT-0001",
+      sequence: 4,
+      occurredAt: "2026-08-10T10:00:00.000Z",
+      actor: "support-lead",
+      commandId,
+    };
+    expect(OperationalEventSchema.safeParse({
+      ...recoveryBase,
+      id: secondEventId,
+      action: "fix-ineffective",
+      facts: {
+        diagnosisId: eventId,
+        fixEventId: secondEventId,
+        outcome: "ineffective",
+        evidence: ["customer-confirmed-not-fixed"],
+      },
+    }).success).toBe(true);
+    expect(OperationalEventSchema.safeParse({
+      ...recoveryBase,
+      id: secondEventId,
+      action: "diagnosis-invalidated",
+      facts: {
+        diagnosisId: eventId,
+        outcome: "invalidated",
+        reasonCode: "contradictory-evidence",
+      },
+    }).success).toBe(true);
+    expect(OperationalEventSchema.safeParse({
+      ...recoveryBase,
+      id: secondEventId,
+      action: "fix-ineffective",
+      facts: { diagnosisId: "diagnosis-event-1", outcome: "ineffective" },
+    }).success).toBe(false);
+    expect(OperationalEventSchema.safeParse({
+      ...recoveryBase,
+      id: secondEventId,
+      action: "fix-ineffective",
+      facts: {
+        diagnosisId: eventId,
+        fixEventId: "fix-event-1",
+        outcome: "ineffective",
+      },
+    }).success).toBe(false);
+  });
+
   it("accepts a ticket revision only when it matches the canonical ticket projection", () => {
     expect(TicketRevisionSchema.safeParse({
       ticketId: "TKT-0001",

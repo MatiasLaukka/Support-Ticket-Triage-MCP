@@ -192,8 +192,9 @@ function categoryFor(
     "diagnosis-completed",
     "diagnosis-reviewed",
     "diagnostic-escalated",
+    "diagnosis-invalidated",
   ].includes(action)) return "diagnosis";
-  if (["fix-available", "platform-mitigation-available"].includes(action)) {
+  if (["fix-available", "platform-mitigation-available", "fix-ineffective"].includes(action)) {
     return "fix-or-mitigation";
   }
   if (action === "ticket-updated") {

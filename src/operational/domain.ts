@@ -58,7 +58,9 @@ const OperationalLifecycleAuditEventSchema = AuditEventSchema.refine(
     "diagnosis-completed",
     "diagnostic-escalated",
     "diagnosis-reviewed",
+    "diagnosis-invalidated",
     "fix-available",
+    "fix-ineffective",
     "platform-mitigation-available",
     "ticket-updated",
   ].includes(event.action),
@@ -76,9 +78,11 @@ const SafeFactKeys = [
   "confidence",
   "count",
   "diagnosisOutcome",
+  "diagnosisId",
   "evidence",
   "evidenceIds",
   "expectedRevision",
+  "fixEventId",
   "fallbackCategory",
   "inputTokens",
   "knownEventId",
@@ -147,6 +151,18 @@ function validateTypedOperationalFacts(
       path: ["messageId"],
       message: "Operational message references require a canonical message ID.",
     });
+  }
+  for (const key of ["diagnosisId", "fixEventId"] as const) {
+    if (
+      Object.prototype.hasOwnProperty.call(facts, key)
+      && !OperationalEventIdSchema.safeParse(facts[key]).success
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: [key],
+        message: `Operational ${key} references require a canonical event ID.`,
+      });
+    }
   }
 }
 

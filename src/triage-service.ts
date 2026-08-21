@@ -259,6 +259,36 @@ const RecordFixInputSchema = z
     ),
   })
   .strict();
+const RecordFixIneffectiveInputSchema = z
+  .object({
+    ticketId: TicketIdSchema,
+    diagnosisId: DiagnosisIdSchema,
+    fixEventId: z.uuid(),
+    sourceTicketRevision: z.number().int().nonnegative(),
+    sourceConversationWatermark: CustomerReplyWatermarkSchema,
+    actor: NonBlankStringSchema,
+    rationale: NonBlankStringSchema.max(500),
+    verificationEvidence: z.array(NonBlankStringSchema.max(240)).min(1).max(32),
+    ineffectiveAt: IsoTimestampSchema,
+  })
+  .strict();
+const InvalidateDiagnosisInputSchema = z
+  .object({
+    ticketId: TicketIdSchema,
+    diagnosisId: DiagnosisIdSchema,
+    sourceTicketRevision: z.number().int().nonnegative(),
+    sourceConversationWatermark: CustomerReplyWatermarkSchema,
+    actor: NonBlankStringSchema,
+    reasonCode: z.enum([
+      "contradictory-evidence",
+      "superseded-diagnosis",
+      "invalidating-event",
+      "fix-ineffective",
+    ]),
+    rationale: NonBlankStringSchema.max(500),
+    invalidatedAt: IsoTimestampSchema,
+  })
+  .strict();
 const CloseTicketInputSchema = z
   .object({
     ticketId: TicketIdSchema,
@@ -450,6 +480,33 @@ export interface RecordFixInput {
   fixedAt: string;
   fix: FixContext;
   knowledgeArticleIds: string[];
+}
+
+export interface RecordFixIneffectiveInput {
+  ticketId: TicketId;
+  diagnosisId: string;
+  fixEventId: string;
+  sourceTicketRevision: number;
+  sourceConversationWatermark: CustomerReplyWatermark;
+  actor: string;
+  rationale: string;
+  verificationEvidence: string[];
+  ineffectiveAt: string;
+}
+
+export interface InvalidateDiagnosisInput {
+  ticketId: TicketId;
+  diagnosisId: string;
+  sourceTicketRevision: number;
+  sourceConversationWatermark: CustomerReplyWatermark;
+  actor: string;
+  reasonCode:
+    | "contradictory-evidence"
+    | "superseded-diagnosis"
+    | "invalidating-event"
+    | "fix-ineffective";
+  rationale: string;
+  invalidatedAt: string;
 }
 
 export interface RecordPlatformMitigationInput {
@@ -2673,6 +2730,271 @@ export class TriageService {
       );
     }
     return auditEvent;
+  }
+
+  /**
+   * Record a failed verification as an append-only operational event. The
+   * diagnosis remains authoritative until the operator explicitly invalidates
+   * it through invalidateDiagnosis.
+   */
+  async recordFixIneffective(
+    input: RecordFixIneffectiveInput,
+    commandContext?: OperationalCommandContext,
+  ): Promise<AuditEvent> {
+    const ineffective = RecordFixIneffectiveInputSchema.parse(input);
+    if (this.dependencies.operationalStore === undefined) {
+      throw new DomainError(
+        "Fix verification outcomes require the operational store.",
+        "REPOSITORY_ERROR",
+      );
+    }
+    if (commandContext === undefined) {
+      throw new DomainError(
+        "Operational fix verification outcomes require an explicit command context.",
+        "REPOSITORY_ERROR",
+      );
+    }
+    const { customerReplyWatermarksMatch } = await import(
+      "./approval-desk/diagnosis-review.js"
+    );
+    const { latestAuthoritativeDiagnosis: latestAuthoritativeDiagnosisFromGuidance } = await import(
+      "./approval-desk/workflow-guidance.js"
+    );
+    const store = this.dependencies.operationalStore;
+    const { ineffectiveAt: _ineffectiveAt, ...semanticRequest } = ineffective;
+    const operation = "record-fix-ineffective";
+    const requestHash = canonicalRequestHash(operation, semanticRequest);
+    return store.transaction((unit) => {
+      const replay = unit.beginCommand(commandContext.commandId, operation, semanticRequest);
+      if (replay !== "new") {
+        return this.replayOperationalLifecycleAudit(replay, ["fix-ineffective"]);
+      }
+      const snapshot = unit.readWorkflowSnapshot(ineffective.ticketId);
+      const audits = this.operationalAuditsFromSnapshot(unit, snapshot);
+      if (snapshot.ticket.revision !== ineffective.sourceTicketRevision) {
+        throw stale("Fix verification ticket revision is stale.");
+      }
+      if (!customerReplyWatermarksMatch(
+        ineffective.sourceConversationWatermark,
+        customerReplyWatermarkFromSnapshot(snapshot),
+      )) {
+        throw stale("Fix verification conversation snapshot is stale.");
+      }
+      assertFixTimestampIsCurrent(ineffective.ineffectiveAt, audits);
+      const fixEvent = audits.find((event) =>
+        event.id === ineffective.fixEventId
+        && event.ticketId === ineffective.ticketId
+        && event.action === "fix-available"
+        && event.before.diagnosisId === ineffective.diagnosisId,
+      );
+      if (fixEvent === undefined) {
+        throw new DomainError(
+          "Fix verification must reference a persisted fix for the selected diagnosis.",
+          "INVALID_APPROVAL_FIELDS",
+        );
+      }
+      if (audits.some((event) =>
+        event.action === "fix-ineffective"
+        && event.before.fixEventId === ineffective.fixEventId,
+      )) {
+        throw stale("The selected fix attempt has already been recorded as ineffective.");
+      }
+      const authoritative = latestAuthoritativeDiagnosisFromGuidance(
+        ineffective.ticketId,
+        audits,
+      );
+      if (authoritative?.diagnosisId !== ineffective.diagnosisId) {
+        throw new DomainError(
+          "An approved current diagnosis is required before recording fix verification.",
+          "INVALID_APPROVAL_FIELDS",
+        );
+      }
+      const auditEvent = AuditEventSchema.parse({
+        id: this.uuid(),
+        timestamp: ineffective.ineffectiveAt,
+        actor: ineffective.actor,
+        action: "fix-ineffective",
+        ticketId: ineffective.ticketId,
+        before: {
+          diagnosisId: ineffective.diagnosisId,
+          fixEventId: ineffective.fixEventId,
+        },
+        after: {
+          outcome: "ineffective",
+          verificationEvidence: ineffective.verificationEvidence,
+          diagnosisStillAuthoritative: true,
+        },
+        rationale: ineffective.rationale,
+        knowledgeArticleIds: fixEvent.knowledgeArticleIds,
+        result: "success",
+      });
+      const [sequence] = unit.allocateEventSequences(ineffective.ticketId, 1);
+      unit.appendEvent({
+        id: auditEvent.id,
+        ticketId: ineffective.ticketId,
+        sequence: sequence!,
+        occurredAt: ineffective.ineffectiveAt,
+        actor: ineffective.actor,
+        action: "fix-ineffective",
+        commandId: commandContext.commandId,
+        facts: {
+          diagnosisId: ineffective.diagnosisId,
+          fixEventId: ineffective.fixEventId,
+          outcome: "ineffective",
+          evidence: ineffective.verificationEvidence,
+          sourceRevision: ineffective.sourceTicketRevision,
+        },
+      });
+      this.appendLifecycleTrace(
+        unit,
+        auditEvent.id,
+        ineffective.ticketId,
+        ineffective.actor,
+        ineffective.ineffectiveAt,
+        "fix-ineffective",
+        ineffective.rationale,
+      );
+      const result: OperationalResultReference = {
+        operation,
+        tickets: [{
+          ticketId: ineffective.ticketId,
+          operationalEventIds: [auditEvent.id],
+          resultingRevision: null,
+        }],
+        lifecycleAuditEvents: [auditEvent],
+      };
+      unit.persistCommandResult(commandContext.commandId, requestHash, result);
+      return auditEvent;
+    });
+  }
+
+  /** Explicitly remove current authority from a diagnosis without rewriting history. */
+  async invalidateDiagnosis(
+    input: InvalidateDiagnosisInput,
+    commandContext?: OperationalCommandContext,
+  ): Promise<AuditEvent> {
+    const invalidation = InvalidateDiagnosisInputSchema.parse(input);
+    if (this.dependencies.operationalStore === undefined) {
+      throw new DomainError(
+        "Diagnosis invalidation requires the operational store.",
+        "REPOSITORY_ERROR",
+      );
+    }
+    if (commandContext === undefined) {
+      throw new DomainError(
+        "Operational diagnosis invalidation requires an explicit command context.",
+        "REPOSITORY_ERROR",
+      );
+    }
+    const { customerReplyWatermarksMatch } = await import(
+      "./approval-desk/diagnosis-review.js"
+    );
+    const { latestAuthoritativeDiagnosis: latestAuthoritativeDiagnosisFromGuidance } = await import(
+      "./approval-desk/workflow-guidance.js"
+    );
+    const store = this.dependencies.operationalStore;
+    const { invalidatedAt: _invalidatedAt, ...semanticRequest } = invalidation;
+    const operation = "invalidate-diagnosis";
+    const requestHash = canonicalRequestHash(operation, semanticRequest);
+    return store.transaction((unit) => {
+      const replay = unit.beginCommand(commandContext.commandId, operation, semanticRequest);
+      if (replay !== "new") {
+        return this.replayOperationalLifecycleAudit(replay, ["diagnosis-invalidated"]);
+      }
+      const snapshot = unit.readWorkflowSnapshot(invalidation.ticketId);
+      const audits = this.operationalAuditsFromSnapshot(unit, snapshot);
+      if (snapshot.ticket.revision !== invalidation.sourceTicketRevision) {
+        throw stale("Diagnosis invalidation ticket revision is stale.");
+      }
+      if (!customerReplyWatermarksMatch(
+        invalidation.sourceConversationWatermark,
+        customerReplyWatermarkFromSnapshot(snapshot),
+      )) {
+        throw stale("Diagnosis invalidation conversation snapshot is stale.");
+      }
+      assertFixTimestampIsCurrent(invalidation.invalidatedAt, audits);
+      const diagnosisEvent = audits.find((event) =>
+        event.id === invalidation.diagnosisId
+        && event.ticketId === invalidation.ticketId
+        && (event.action === "diagnosis-completed" || event.action === "diagnostic-escalated"),
+      );
+      if (diagnosisEvent === undefined) {
+        throw new DomainError(
+          "Diagnosis invalidation must reference a persisted diagnosis.",
+          "INVALID_APPROVAL_FIELDS",
+        );
+      }
+      if (audits.some((event) =>
+        event.action === "diagnosis-invalidated"
+        && event.before.diagnosisId === invalidation.diagnosisId,
+      )) {
+        throw stale("The selected diagnosis has already been invalidated.");
+      }
+      const authoritative = latestAuthoritativeDiagnosisFromGuidance(
+        invalidation.ticketId,
+        audits,
+      );
+      if (authoritative?.diagnosisId !== invalidation.diagnosisId) {
+        throw new DomainError(
+          "Only the current approved diagnosis can be invalidated.",
+          "INVALID_APPROVAL_FIELDS",
+        );
+      }
+      const auditEvent = AuditEventSchema.parse({
+        id: this.uuid(),
+        timestamp: invalidation.invalidatedAt,
+        actor: invalidation.actor,
+        action: "diagnosis-invalidated",
+        ticketId: invalidation.ticketId,
+        before: {
+          diagnosisId: invalidation.diagnosisId,
+          sourceTicketRevision: invalidation.sourceTicketRevision,
+        },
+        after: {
+          diagnosisInvalidated: true,
+          reasonCode: invalidation.reasonCode,
+        },
+        rationale: invalidation.rationale,
+        knowledgeArticleIds: diagnosisEvent.knowledgeArticleIds,
+        result: "success",
+      });
+      const [sequence] = unit.allocateEventSequences(invalidation.ticketId, 1);
+      unit.appendEvent({
+        id: auditEvent.id,
+        ticketId: invalidation.ticketId,
+        sequence: sequence!,
+        occurredAt: invalidation.invalidatedAt,
+        actor: invalidation.actor,
+        action: "diagnosis-invalidated",
+        commandId: commandContext.commandId,
+        facts: {
+          diagnosisId: invalidation.diagnosisId,
+          outcome: "invalidated",
+          reasonCode: invalidation.reasonCode,
+          sourceRevision: invalidation.sourceTicketRevision,
+        },
+      });
+      this.appendLifecycleTrace(
+        unit,
+        auditEvent.id,
+        invalidation.ticketId,
+        invalidation.actor,
+        invalidation.invalidatedAt,
+        "diagnosis-invalidated",
+        invalidation.rationale,
+      );
+      const result: OperationalResultReference = {
+        operation,
+        tickets: [{
+          ticketId: invalidation.ticketId,
+          operationalEventIds: [auditEvent.id],
+          resultingRevision: null,
+        }],
+        lifecycleAuditEvents: [auditEvent],
+      };
+      unit.persistCommandResult(commandContext.commandId, requestHash, result);
+      return auditEvent;
+    });
   }
 
   async recordPlatformMitigation(

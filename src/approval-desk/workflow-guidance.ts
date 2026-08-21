@@ -490,23 +490,12 @@ export function buildOperatorGuidance(input: {
         candidates: input.knowledgeEvolution.candidates,
         audits: input.knowledgeEvolution.audits,
       });
-  if (knowledgePattern.actionable) {
-    return OperatorGuidanceSchema.parse({
-      stage: "pattern-review",
-      changed: "An actionable knowledge pattern is awaiting operator review.",
-      nextAction: "review-pattern",
-      reason: knowledgePattern.reason ??
-        "Review the knowledge pattern before continuing support actions.",
-      approval: noApproval,
-      blockers: [knowledgePattern.reason ?? "Knowledge pattern review is required."],
-      requiredReview: {
-        kind: "knowledge-pattern",
-        ...(knowledgePattern.candidateId === undefined ? {} : { id: knowledgePattern.candidateId }),
-        reason: knowledgePattern.reason ?? "Knowledge pattern review is required.",
-      },
-      knowledgePattern,
-    });
-  }
+  const withKnowledgePattern = (
+    guidance: Omit<z.input<typeof OperatorGuidanceSchema>, "knowledgePattern">,
+  ): OperatorGuidance => OperatorGuidanceSchema.parse({
+    ...guidance,
+    knowledgePattern,
+  });
 
   const latestFix = latestFixAudit(input.audits);
   const hasNewerFix = isAuditNewerThanRecommendation(
@@ -519,7 +508,7 @@ export function buildOperatorGuidance(input: {
     audits: input.audits,
   });
   if (fixingBlockers.length === 0 && !hasNewerFix) {
-    return OperatorGuidanceSchema.parse({
+    return withKnowledgePattern({
       stage: "fix-ready",
       changed: "A confirmed platform-owned diagnosis was recorded.",
       nextAction: "mark-fix-available",
@@ -531,7 +520,7 @@ export function buildOperatorGuidance(input: {
   }
 
   if (hasNewerFix) {
-    return OperatorGuidanceSchema.parse({
+    return withKnowledgePattern({
       stage: "verification",
       changed: "A fix was recorded after the latest evaluation.",
       nextAction: "evaluate-ticket",
@@ -557,7 +546,7 @@ export function buildOperatorGuidance(input: {
       input.audits,
     )
   ) {
-    return OperatorGuidanceSchema.parse({
+    return withKnowledgePattern({
       stage: "verification",
       changed: "A platform mitigation signal was recorded after the latest evaluation.",
       nextAction: "evaluate-ticket",
@@ -578,7 +567,7 @@ export function buildOperatorGuidance(input: {
     )
   ) {
     if (latestRecordedDiagnosticState?.state === "ambiguous") {
-      return OperatorGuidanceSchema.parse({
+      return withKnowledgePattern({
         stage: "diagnosis-recorded",
         changed: "The recorded diagnosis still has unresolved plausible causes.",
         nextAction: "evaluate-ticket",
@@ -596,7 +585,7 @@ export function buildOperatorGuidance(input: {
       ? undefined
       : latestAuthoritativeDiagnosis(input.ticket.id, input.audits);
     if (authoritativeDiagnosis === undefined) {
-      return OperatorGuidanceSchema.parse({
+      return withKnowledgePattern({
         stage: "diagnosis-recorded",
         changed: "A diagnosis was recorded and is awaiting human review.",
         nextAction: "review-diagnosis",
@@ -607,7 +596,7 @@ export function buildOperatorGuidance(input: {
         blockers: [],
       });
     }
-    return OperatorGuidanceSchema.parse({
+    return withKnowledgePattern({
       stage: "diagnosis-recorded",
       changed: "A diagnosis was recorded after the latest evaluation.",
       nextAction: "evaluate-ticket",
@@ -626,7 +615,7 @@ export function buildOperatorGuidance(input: {
     audits: input.audits,
   });
   if (diagnosingBlockers.length === 0) {
-    return OperatorGuidanceSchema.parse({
+    return withKnowledgePattern({
       stage: "diagnosis-ready",
       changed: "The latest evaluated response was sent with diagnosis-ready evidence.",
       nextAction: "record-diagnosis",
@@ -649,7 +638,7 @@ export function buildOperatorGuidance(input: {
     (latestReply === undefined ||
       compareAuditCausalOrder(latestReply, latestSent) <= 0)
   ) {
-    return OperatorGuidanceSchema.parse({
+    return withKnowledgePattern({
       stage: "waiting-customer",
       changed: "The latest approved response was sent.",
       nextAction: "wait-for-customer",
@@ -660,7 +649,7 @@ export function buildOperatorGuidance(input: {
     });
   }
 
-  return OperatorGuidanceSchema.parse({
+  return withKnowledgePattern({
     stage: "active",
     changed: "The ticket is active without a pending governed step.",
     nextAction: "evaluate-ticket",

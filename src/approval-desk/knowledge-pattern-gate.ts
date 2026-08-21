@@ -42,7 +42,7 @@ export function knowledgePatternGate(input: {
     actionable: state === "pending" || state === "deferred",
     candidateId: candidate.id,
     reason: state === "deferred"
-      ? "Pattern review was deferred; approve or reject the candidate before continuing support actions."
-      : "Review the actionable knowledge pattern before continuing support actions.",
+      ? "Pattern review was deferred and remains available as a secondary knowledge action."
+      : "Review the actionable knowledge pattern as a secondary knowledge action.",
   };
 }

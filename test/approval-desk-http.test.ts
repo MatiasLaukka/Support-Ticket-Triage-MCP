@@ -1208,16 +1208,32 @@ describe("createApprovalDeskHttpServer", () => {
       });
       const mcpWorkflow = mcp.structuredContent as any;
       expect(http.body.operatorGuidance).toMatchObject({
-        stage: "pattern-review",
-        nextAction: "review-pattern",
+        stage: "diagnosis-recorded",
+        nextAction: "evaluate-ticket",
         knowledgePattern: {
           state: "pending",
           actionable: true,
           candidateId: "known-cause-platform-delay",
         },
       });
+      expect(http.body.lifecycle).toMatchObject({
+        phase: "awaiting-fix",
+        primaryAction: { kind: "record-fix-available" },
+        knowledge: {
+          state: "pending",
+          actionable: true,
+          secondaryAction: "review-pattern",
+        },
+      });
+      expect(http.body.lifecycle.actions.map(({ kind }: { kind: string }) => kind)).toEqual([
+        "record-fix-available",
+        "review-pattern",
+      ]);
       expect(http.body.operatorGuidance).toEqual(
         JSON.parse(JSON.stringify(mcpWorkflow.operatorGuidance)),
+      );
+      expect(http.body.lifecycle).toEqual(
+        JSON.parse(JSON.stringify(mcpWorkflow.lifecycle)),
       );
     } finally {
       await Promise.allSettled([client.close(), server.close()]);

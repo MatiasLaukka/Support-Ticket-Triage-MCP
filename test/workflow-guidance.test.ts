@@ -15,6 +15,7 @@ import {
   latestAuthoritativeDiagnosis,
   latestDiagnosisAudit,
 } from "../src/approval-desk/workflow-guidance.js";
+import { buildTicketLifecycleView } from "../src/approval-desk/lifecycle.js";
 import type { KnowledgeCandidate } from "../src/knowledge-evolution/domain.js";
 import type { KnowledgeAuditEvent } from "../src/knowledge-evolution/knowledge-audit-repository.js";
 
@@ -560,11 +561,11 @@ describe("buildOperatorGuidance", () => {
     expect(guidance.blockers).toEqual([]);
   });
 
-  it("requires pattern review before offering downstream support actions", () => {
+  it("keeps an actionable pattern advisory while the source ticket remains fix-ready", () => {
     const input = confirmedEngineeringDiagnosisWorkflow();
     const diagnosis = latestDiagnosisAudit(input.audits)!;
     const pattern = actionablePatternCandidate();
-    const guidance = buildOperatorGuidance({
+    const workflow = {
       ...input,
       knowledgeEvolution: {
         candidates: [{
@@ -573,17 +574,72 @@ describe("buildOperatorGuidance", () => {
         }],
         audits: [patternAudit()],
       },
-    });
+    };
+    const guidance = buildOperatorGuidance(workflow);
+    const lifecycle = buildTicketLifecycleView(workflow);
 
     expect(guidance).toMatchObject({
-      stage: "pattern-review",
-      nextAction: "review-pattern",
-      requiredReview: {
-        kind: "knowledge-pattern",
-        id: "candidate-1",
+      stage: "fix-ready",
+      nextAction: "mark-fix-available",
+      knowledgePattern: {
+        state: "pending",
+        actionable: true,
+        candidateId: "candidate-1",
       },
-      knowledgePattern: { state: "pending", actionable: true },
     });
+    expect(guidance.requiredReview).toBeUndefined();
+    expect(lifecycle.phase).toBe("awaiting-fix");
+    expect(lifecycle.primaryAction.kind).toBe("record-fix-available");
+    expect(lifecycle.knowledge).toMatchObject({
+      state: "pending",
+      actionable: true,
+      secondaryAction: "review-pattern",
+    });
+    expect(lifecycle.actions.map(({ kind }) => kind)).toEqual([
+      "record-fix-available",
+      "review-pattern",
+    ]);
+  });
+
+  it("preserves reviewed non-actionable pattern metadata without adding an action", () => {
+    const input = confirmedEngineeringDiagnosisWorkflow();
+    const diagnosis = latestDiagnosisAudit(input.audits)!;
+    const pattern = actionablePatternCandidate();
+    const workflow = {
+      ...input,
+      knowledgeEvolution: {
+        candidates: [{
+          ...pattern,
+          supportingDiagnosisIds: [`diagnosis-${diagnosis.id}`],
+        }],
+        audits: [{
+          ...patternAudit(),
+          action: "approved",
+          result: "approved",
+        }],
+      },
+    };
+
+    const guidance = buildOperatorGuidance(workflow);
+    const lifecycle = buildTicketLifecycleView(workflow);
+
+    expect(guidance).toMatchObject({
+      stage: "fix-ready",
+      nextAction: "mark-fix-available",
+      knowledgePattern: {
+        state: "approved",
+        actionable: false,
+        candidateId: "candidate-1",
+      },
+    });
+    expect(lifecycle.primaryAction.kind).toBe("record-fix-available");
+    expect(lifecycle.knowledge).toMatchObject({
+      state: "approved",
+      actionable: false,
+    });
+    expect(lifecycle.actions.map(({ kind }) => kind)).toEqual([
+      "record-fix-available",
+    ]);
   });
 
   it("requires a fresh evaluation after platform mitigation is recorded", () => {

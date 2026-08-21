@@ -967,7 +967,6 @@ async function demoInject(
 
   switch (input.action) {
     case "customer-reply":
-    case "verification-success":
     case "contradictory-evidence": {
       if (input.body === undefined) {
         throw invalidRequest("This demo transition requires a customer reply body.");
@@ -982,6 +981,20 @@ async function demoInject(
       return {
         action: input.action,
         command: "add-customer-reply",
+        auditEvent,
+        ...(await lifecycleEnvelope({ deps }, ticketId)),
+      };
+    }
+    case "verification-success": {
+      const { ticket, auditEvent } = await deps.service.closeTicket({
+        ticketId,
+        actor: input.actor,
+        closedAt: timestamp,
+      }, commandContext);
+      return {
+        action: input.action,
+        command: "close-ticket",
+        ticket,
         auditEvent,
         ...(await lifecycleEnvelope({ deps }, ticketId)),
       };

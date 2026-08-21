@@ -56,6 +56,7 @@ import {
   OperatorGuidanceSchema,
   buildOperatorGuidance,
 } from "./approval-desk/workflow-guidance.js";
+import { LifecycleViewSchema } from "./approval-desk/lifecycle.js";
 import { automaticReplyForTicket } from "./approval-desk/automatic-customer-replies.js";
 import {
   diagnosisContextForTicket,
@@ -421,6 +422,7 @@ const TicketWorkflowOutputSchema = z
       .strict(),
     latestRecommendation: TriageRecommendationSchema.optional(),
     operatorGuidance: OperatorGuidanceSchema,
+    lifecycle: LifecycleViewSchema,
     decisionTimeline: z.array(DecisionTimelineEntrySchema),
   })
   .strict();

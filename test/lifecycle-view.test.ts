@@ -8,6 +8,11 @@ import {
   LifecycleViewSchema,
   buildTicketLifecycleView,
 } from "../src/approval-desk/lifecycle.js";
+import {
+  buildTicketWorkflowReadModel,
+  buildTicketWorkflowReadModelFromSnapshot,
+} from "../src/approval-desk/workflow-read-model.js";
+import { OperationalWorkflowSnapshotSchema } from "../src/operational/domain.js";
 
 const ticket = TicketSchema.parse({
   id: "TKT-1001",
@@ -88,5 +93,28 @@ describe("lifecycle projection", () => {
     expect(lifecycle.phase).toBe("recommendation-review");
     expect(lifecycle.primaryAction.kind).toBe("review-recommendation");
     expect(lifecycle.current.recommendationId).toBe(recommendation.id);
+  });
+
+  it("uses the same lifecycle builder for legacy and operational empty snapshots", () => {
+    const legacy = buildTicketWorkflowReadModel({
+      ticket,
+      recommendations: [],
+      audits: [],
+    });
+    const snapshot = OperationalWorkflowSnapshotSchema.parse({
+      ticket,
+      ticketRevisions: [],
+      recommendations: [],
+      recommendationRevisions: [],
+      messages: [],
+      diagnoses: [],
+      events: [],
+      traces: [],
+      customerReplyWatermark: { state: "none" },
+    });
+    const operational = buildTicketWorkflowReadModelFromSnapshot(snapshot);
+
+    expect(operational.lifecycle).toEqual(legacy.lifecycle);
+    expect(operational.lifecycle.phase).toBe("evaluation-needed");
   });
 });

@@ -117,4 +117,56 @@ describe("lifecycle projection", () => {
     expect(operational.lifecycle).toEqual(legacy.lifecycle);
     expect(operational.lifecycle.phase).toBe("evaluation-needed");
   });
+
+  it("projects persisted ambiguity without imposing an attempt-count limit", () => {
+    const approvedRecommendation = TriageRecommendationSchema.parse({
+      ...recommendation,
+      resolution: "approved",
+    });
+    const diagnosis = AuditEventSchema.parse({
+      id: "30000000-0000-4000-8000-000000000001",
+      timestamp: "2026-06-10T09:01:00.000Z",
+      actor: "product-support",
+      action: "diagnosis-completed",
+      ticketId: ticket.id,
+      before: {},
+      after: {
+        diagnosis: {
+          status: "completed",
+          causeType: "performance",
+          customerSafeSummary: "Two evidence-backed causes remain plausible.",
+          evidenceUsed: ["browser comparison", "console trace"],
+          confidence: "likely",
+          owner: "engineering",
+          recommendedNextAction: "Collect one more discriminating trace.",
+          doNotSay: ["Do not claim a final root cause."],
+          diagnosticState: {
+            state: "ambiguous",
+            hypotheses: [{
+              id: "browser-session",
+              label: "Browser session",
+              status: "plausible",
+              evidenceUsed: ["browser comparison"],
+              evidenceToConfirm: ["session-specific trace"],
+            }],
+            evidenceToRequest: ["Capture the session-specific trace."],
+            diagnosticAttempts: 7,
+          },
+        },
+      },
+      rationale: "A useful ambiguity round remains open under backend policy.",
+      knowledgeArticleIds: [],
+      result: "success",
+    });
+
+    const lifecycle = buildTicketLifecycleView({
+      ticket,
+      recommendations: [approvedRecommendation],
+      audits: [diagnosis],
+    });
+
+    expect(lifecycle.phase).toBe("evaluation-needed");
+    expect(lifecycle.diagnosticInvestigation.state).toBe("ambiguous");
+    expect(lifecycle.primaryAction.kind).toBe("evaluate-ticket");
+  });
 });

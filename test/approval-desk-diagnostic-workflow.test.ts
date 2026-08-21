@@ -571,6 +571,32 @@ describe("diagnosisContextForTicket", () => {
     });
   });
 
+  it("keeps useful persisted ambiguity open under a larger backend policy", () => {
+    const diagnosis = diagnosisContextForTicket(
+      ticket,
+      recommendation,
+      [
+        diagnosisAudit("2026-06-10T09:04:00.000Z", {
+          ...ambiguousState,
+          diagnosticAttempts: 2,
+        }),
+        customerReply(
+          "2026-06-10T09:05:00.000Z",
+          "The private-window check narrowed the behavior, but both causes remain plausible.",
+        ),
+      ],
+      { maxAttempts: 4 },
+    );
+
+    expect(diagnosis).toMatchObject({
+      confidence: "likely",
+      diagnosticState: {
+        state: "ambiguous",
+        diagnosticAttempts: 3,
+      },
+    });
+  });
+
   it("confirms the browser-session hypothesis when a discriminating reply arrives", () => {
     const diagnosis = diagnosisContextForTicket(ticket, recommendation, [
       diagnosisAudit("2026-06-10T09:02:00.000Z", ambiguousState),

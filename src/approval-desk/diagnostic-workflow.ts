@@ -12,7 +12,9 @@ import { getKnownCause } from "./known-cause-catalog.js";
 import { getKnownEvent } from "./known-event-catalog.js";
 import {
   advanceDiagnosticState,
+  DEFAULT_DIAGNOSTIC_POLICY,
   DiagnosticStateSnapshotSchema,
+  type DiagnosticPolicy,
   type DiagnosticStateSnapshot,
 } from "./diagnostic-state.js";
 import {
@@ -32,6 +34,7 @@ export function diagnosisContextForTicket(
   ticket: Ticket,
   recommendation: TriageRecommendation,
   audits: readonly AuditEvent[] = [],
+  diagnosticPolicy: DiagnosticPolicy = DEFAULT_DIAGNOSTIC_POLICY,
 ): DiagnosisContext {
   const evidenceReferences = providedEvidenceReferences(ticket, recommendation, audits);
   const playbookDiagnosis = diagnoseFromPlaybook({
@@ -41,7 +44,12 @@ export function diagnosisContextForTicket(
   });
   if (playbookDiagnosis !== undefined) {
     const diagnosis = {
-      ...applyPersistedDiagnosticState(playbookDiagnosis, ticket.id, audits),
+      ...applyPersistedDiagnosticState(
+        playbookDiagnosis,
+        ticket.id,
+        audits,
+        diagnosticPolicy,
+      ),
       evidenceReferences,
     };
     if ((recommendation.missingEvidence?.length ?? 0) === 0) return diagnosis;
@@ -266,6 +274,7 @@ function applyPersistedDiagnosticState(
   diagnosis: DiagnosisContext,
   ticketId: string,
   audits: readonly AuditEvent[],
+  diagnosticPolicy: DiagnosticPolicy,
 ): DiagnosisContext {
   const latest = latestDiagnosticSnapshot(audits, ticketId);
   if (latest === undefined || diagnosis.diagnosticState === undefined) {
@@ -289,6 +298,7 @@ function applyPersistedDiagnosticState(
     current: latest.snapshot,
     customerReplyText: replyText,
     contradicted: containsContradictoryEvidence(replyText),
+    policy: diagnosticPolicy,
   });
   return {
     ...diagnosis,

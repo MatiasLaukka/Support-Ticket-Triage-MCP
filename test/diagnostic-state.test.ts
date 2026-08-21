@@ -53,6 +53,50 @@ describe("advanceDiagnosticState", () => {
     });
   });
 
+  it("keeps useful ambiguity open for the configured number of rounds", () => {
+    expect(
+      advanceDiagnosticState({
+        current: { ...ambiguousState, diagnosticAttempts: 2 },
+        customerReplyText: "The private window result narrows the issue, but both causes remain plausible.",
+        contradicted: false,
+        policy: { maxAttempts: 4 },
+      }),
+    ).toMatchObject({
+      state: "ambiguous",
+      diagnosticAttempts: 3,
+    });
+  });
+
+  it("escalates when the configured ambiguity policy is exhausted", () => {
+    expect(
+      advanceDiagnosticState({
+        current: { ...ambiguousState, diagnosticAttempts: 3 },
+        customerReplyText: "The new evidence still leaves both causes plausible.",
+        contradicted: false,
+        policy: { maxAttempts: 4 },
+      }),
+    ).toMatchObject({
+      state: "escalated",
+      diagnosticAttempts: 4,
+      escalationReason: "diagnostic-ambiguity",
+    });
+  });
+
+  it("escalates contradictory evidence immediately regardless of the configured limit", () => {
+    expect(
+      advanceDiagnosticState({
+        current: ambiguousState,
+        customerReplyText: "The editor works privately but is still blank in the same private session.",
+        contradicted: true,
+        policy: { maxAttempts: 10 },
+      }),
+    ).toMatchObject({
+      state: "escalated",
+      diagnosticAttempts: 1,
+      escalationReason: "contradictory-evidence",
+    });
+  });
+
   it("confirms a hypothesis when a discriminating reply identifies it", () => {
     expect(
       advanceDiagnosticState({

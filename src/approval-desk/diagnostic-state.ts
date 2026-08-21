@@ -18,6 +18,12 @@ export const DiagnosticEscalationReasonSchema = z.enum([
   "contradictory-evidence",
 ]);
 
+export const DiagnosticPolicySchema = z
+  .object({
+    maxAttempts: z.number().int().positive(),
+  })
+  .strict();
+
 export const DiagnosticHypothesisSchema = z
   .object({
     id: SlugSchema,
@@ -43,18 +49,25 @@ export type DiagnosticState = z.infer<typeof DiagnosticStateSchema>;
 export type DiagnosticEscalationReason = z.infer<
   typeof DiagnosticEscalationReasonSchema
 >;
+export type DiagnosticPolicy = z.infer<typeof DiagnosticPolicySchema>;
 export type DiagnosticHypothesis = z.infer<typeof DiagnosticHypothesisSchema>;
 export type DiagnosticStateSnapshot = z.infer<
   typeof DiagnosticStateSnapshotSchema
 >;
 
-export const MAX_DIAGNOSTIC_ATTEMPTS = 2;
+export const DEFAULT_DIAGNOSTIC_POLICY: Readonly<DiagnosticPolicy> = Object.freeze({
+  maxAttempts: 2,
+});
+
+/** @deprecated Read the bound from DEFAULT_DIAGNOSTIC_POLICY or inject a policy. */
+export const MAX_DIAGNOSTIC_ATTEMPTS = DEFAULT_DIAGNOSTIC_POLICY.maxAttempts;
 
 export function advanceDiagnosticState(input: {
   current: DiagnosticStateSnapshot;
   customerReplyText: string;
   confirmedHypothesisId?: string;
   contradicted: boolean;
+  policy?: DiagnosticPolicy;
 }): DiagnosticStateSnapshot {
   const { current } = input;
   if (input.confirmedHypothesisId !== undefined) {
@@ -73,7 +86,8 @@ export function advanceDiagnosticState(input: {
   }
 
   const attempts = current.diagnosticAttempts + 1;
-  const shouldEscalate = input.contradicted || attempts >= MAX_DIAGNOSTIC_ATTEMPTS;
+  const policy = DiagnosticPolicySchema.parse(input.policy ?? DEFAULT_DIAGNOSTIC_POLICY);
+  const shouldEscalate = input.contradicted || attempts >= policy.maxAttempts;
   if (shouldEscalate) {
     return DiagnosticStateSnapshotSchema.parse({
       ...current,

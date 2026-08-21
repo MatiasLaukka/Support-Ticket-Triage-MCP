@@ -71,6 +71,8 @@ export interface RuntimePaths {
 }
 
 export interface RuntimeDependencies {
+  /** Environment snapshot used for explicit development/demo-only capabilities. */
+  env: RuntimeEnvironment;
   tickets: TicketRepository | OperationalTicketRepository;
   knowledge: KnowledgeRepository;
   recommendations: RecommendationRepository | OperationalRecommendationRepository;
@@ -303,6 +305,7 @@ export async function createRuntimeDependencies(
   });
 
   return {
+    env,
     tickets,
     knowledge,
     recommendations,

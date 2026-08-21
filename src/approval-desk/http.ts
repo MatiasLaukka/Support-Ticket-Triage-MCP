@@ -54,6 +54,7 @@ import { loadDiagnosticEvaluationScenarios } from "./diagnostic-evaluation-scena
 import type { DiagnosticEvaluationScenario } from "./diagnostic-evaluation.js";
 import {
   diagnosisContextForTicket,
+  diagnosisContextFromAudit,
   fixContextForTicket,
   hasCustomerReplyAfterRecommendation,
   selectPersistedDiagnosticWorkflowContext,
@@ -76,7 +77,7 @@ import {
   summarizeRecommendationsForTicket,
 } from "./workflow-read-model.js";
 import { LifecycleViewSchema } from "./lifecycle.js";
-import { OperatorGuidanceSchema } from "./workflow-guidance.js";
+import { latestDiagnosisAudit, OperatorGuidanceSchema } from "./workflow-guidance.js";
 import {
   KnowledgeCandidateApprovalOutputSchema,
   KnowledgeCandidateDefermentOutputSchema,
@@ -94,6 +95,7 @@ import { unavailableReusableKnowledge } from "../knowledge-evolution/reusable-co
 
 const JSON_BODY_LIMIT_BYTES = 65_536;
 const UNEXPECTED_ERROR_TEXT = "Unexpected local approval desk error.";
+const DEMO_INJECTOR_PATH = /^\/api\/demo\/tickets\/([^/]+)\/inject$/;
 const markSentOperations = new Map<string, Promise<void>>();
 const DiagnosisReviewMutationOutputSchema = DiagnosisReviewActionOutputSchema.extend({
   operatorGuidance: OperatorGuidanceSchema,
@@ -269,6 +271,36 @@ const InvalidateDiagnosisBodySchema = z
     rationale: z.string().trim().min(1).max(500),
   })
   .strict();
+const DemoInjectorBodySchema = z
+  .object({
+    action: z.enum([
+      "customer-reply",
+      "internal-confirmation",
+      "platform-mitigation-available",
+      "fix-applied",
+      "verification-success",
+      "verification-failure",
+      "contradictory-evidence",
+      "invalidate-diagnosis",
+    ]),
+    actor: z.string().trim().min(1),
+    body: z.string().trim().min(1).max(4_000).optional(),
+    eventId: z.string().trim().min(1).optional(),
+    diagnosisId: DiagnosisIdSchema.optional(),
+    fixEventId: z.uuid().optional(),
+    sourceTicketRevision: z.number().int().nonnegative().optional(),
+    sourceConversationWatermark: CustomerReplyWatermarkSchema.optional(),
+    rationale: z.string().trim().min(1).max(500).optional(),
+    verificationEvidence: z.array(z.string().trim().min(1).max(240)).min(1).max(32).optional(),
+    reasonCode: z.enum([
+      "contradictory-evidence",
+      "superseded-diagnosis",
+      "invalidating-event",
+      "fix-ineffective",
+    ]).optional(),
+    impactSet: DiagnosisImpactSetSchema.optional(),
+  })
+  .strict();
 const KnowledgeDiscoveryBodySchema = z.object({
   ticketId: TicketIdSchema.optional(),
   includeGpt: z.boolean().default(false),
@@ -290,6 +322,8 @@ const KnowledgeDefermentBodySchema = z.object({
 }).strict();
 
 export interface ApprovalDeskHttpOptions {
+  /** Explicit development/demo-only transition injectors; never enabled by production entrypoints. */
+  enableDemoInjectors?: boolean;
   expectedOutcomesPath?: string;
   draftProvider?: CustomerResponseDraftProvider;
   classificationReasoningProvider?: ClassificationReasoningProvider;
@@ -323,6 +357,16 @@ async function routeRequest(
     }
     if (request.method === "GET" && url.pathname === "/lifecycle-replay") {
       text(response, 200, lifecycleReplayHtml);
+      return;
+    }
+    if (
+      request.method === "POST" &&
+      DEMO_INJECTOR_PATH.test(url.pathname) &&
+      (!options.enableDemoInjectors || deps.env.NODE_ENV === "production")
+    ) {
+      json(response, 404, {
+        error: { code: "NOT_FOUND", message: "Route not found." },
+      });
       return;
     }
 
@@ -418,6 +462,14 @@ function matchRoute(
       status: 201,
       handle: (context) =>
         applyDiagnosisFix(context, diagnosisFix[1]!, diagnosisFix[2]!),
+    };
+  }
+
+  const demoInjector = DEMO_INJECTOR_PATH.exec(pathname);
+  if (method === "POST" && demoInjector !== null) {
+    return {
+      status: 201,
+      handle: (context) => demoInject(context, demoInjector[1]!),
     };
   }
 
@@ -902,6 +954,176 @@ async function addCustomerReply(
     auditEvent,
     ...(await lifecycleEnvelope({ deps }, ticketId)),
   };
+}
+
+async function demoInject(
+  { deps, request }: RouteContext,
+  id: string,
+): Promise<unknown> {
+  const ticketId = TicketIdSchema.parse(id);
+  const input = DemoInjectorBodySchema.parse(await readJsonBody(request));
+  const commandContext = commandContextFromRequest(request, deps);
+  const timestamp = deps.now().toISOString();
+
+  switch (input.action) {
+    case "customer-reply":
+    case "verification-success":
+    case "contradictory-evidence": {
+      if (input.body === undefined) {
+        throw invalidRequest("This demo transition requires a customer reply body.");
+      }
+      const auditEvent = await deps.service.addCustomerReply({
+        ticketId,
+        actor: input.actor,
+        body: input.body,
+        source: "demo-injector",
+        receivedAt: timestamp,
+      }, commandContext);
+      return {
+        action: input.action,
+        command: "add-customer-reply",
+        auditEvent,
+        ...(await lifecycleEnvelope({ deps }, ticketId)),
+      };
+    }
+    case "internal-confirmation": {
+      const auditEvent = await demoConfirmDiagnosis(deps, ticketId, input, commandContext, timestamp);
+      return {
+        action: input.action,
+        command: "review-diagnosis",
+        auditEvent,
+        ...(await lifecycleEnvelope({ deps }, ticketId)),
+      };
+    }
+    case "platform-mitigation-available": {
+      if (input.eventId === undefined) {
+        throw invalidRequest("Platform mitigation availability requires eventId.");
+      }
+      const auditEvent = await deps.service.recordPlatformMitigation({
+        ticketId,
+        eventId: input.eventId,
+        actor: input.actor,
+        rationale: input.rationale ?? "Demo platform mitigation availability was recorded.",
+        recordedAt: timestamp,
+      }, commandContext);
+      return {
+        action: input.action,
+        command: "record-platform-mitigation",
+        auditEvent,
+        ...(await lifecycleEnvelope({ deps }, ticketId)),
+      };
+    }
+    case "fix-applied": {
+      if (input.diagnosisId === undefined || input.impactSet === undefined) {
+        throw invalidRequest("Fix application requires diagnosisId and impactSet.");
+      }
+      const auditEvents = await deps.service.applyDiagnosisFix({
+        diagnosisId: input.diagnosisId,
+        sourceTicketId: ticketId,
+        impactSet: input.impactSet,
+        actor: input.actor,
+        fixedAt: timestamp,
+      }, commandContext);
+      return {
+        action: input.action,
+        command: "apply-diagnosis-fix",
+        auditEvents,
+        ...(await lifecycleEnvelope({ deps }, ticketId)),
+      };
+    }
+    case "verification-failure": {
+      if (
+        input.diagnosisId === undefined ||
+        input.fixEventId === undefined ||
+        input.sourceTicketRevision === undefined ||
+        input.sourceConversationWatermark === undefined ||
+        input.rationale === undefined ||
+        input.verificationEvidence === undefined
+      ) {
+        throw invalidRequest(
+          "Failed verification requires diagnosisId, fixEventId, source revision/watermark, rationale, and verification evidence.",
+        );
+      }
+      const auditEvent = await deps.service.recordFixIneffective({
+        ticketId,
+        diagnosisId: input.diagnosisId,
+        fixEventId: input.fixEventId,
+        sourceTicketRevision: input.sourceTicketRevision,
+        sourceConversationWatermark: input.sourceConversationWatermark,
+        actor: input.actor,
+        rationale: input.rationale,
+        verificationEvidence: input.verificationEvidence,
+        ineffectiveAt: timestamp,
+      }, commandContext);
+      return {
+        action: input.action,
+        command: "record-fix-ineffective",
+        auditEvent,
+        ...(await lifecycleEnvelope({ deps }, ticketId)),
+      };
+    }
+    case "invalidate-diagnosis": {
+      if (
+        input.diagnosisId === undefined ||
+        input.sourceTicketRevision === undefined ||
+        input.sourceConversationWatermark === undefined ||
+        input.reasonCode === undefined ||
+        input.rationale === undefined
+      ) {
+        throw invalidRequest(
+          "Diagnosis invalidation requires diagnosisId, source revision/watermark, reason code, and rationale.",
+        );
+      }
+      const auditEvent = await deps.service.invalidateDiagnosis({
+        ticketId,
+        diagnosisId: input.diagnosisId,
+        sourceTicketRevision: input.sourceTicketRevision,
+        sourceConversationWatermark: input.sourceConversationWatermark,
+        actor: input.actor,
+        reasonCode: input.reasonCode,
+        rationale: input.rationale,
+        invalidatedAt: timestamp,
+      }, commandContext);
+      return {
+        action: input.action,
+        command: "invalidate-diagnosis",
+        auditEvent,
+        ...(await lifecycleEnvelope({ deps }, ticketId)),
+      };
+    }
+  }
+}
+
+async function demoConfirmDiagnosis(
+  deps: RuntimeDependencies,
+  ticketId: TicketId,
+  input: z.infer<typeof DemoInjectorBodySchema>,
+  commandContext: ReturnType<typeof commandContextFromRequest>,
+  reviewedAt: string,
+): Promise<AuditEvent> {
+  const [ticket, audits] = await Promise.all([
+    deps.tickets.get(ticketId),
+    deps.audits.list(ticketId),
+  ]);
+  const original = latestDiagnosisAudit(audits);
+  const diagnosis = diagnosisContextFromAudit(original);
+  if (original === undefined || diagnosis === undefined) {
+    throw invalidRequest("Internal confirmation requires a recorded diagnosis.");
+  }
+  return deps.service.reviewDiagnosis({
+    decision: "approve",
+    diagnosisId: original.id,
+    ticketId,
+    sourceTicketRevision: ticket.revision,
+    sourceConversationWatermark: customerReplyWatermarkFromAudits(audits),
+    editedDiagnosis: {
+      ...diagnosis,
+      confidence: "confirmed",
+    },
+    actor: input.actor,
+    rationale: input.rationale ?? "Demo internal confirmation was recorded.",
+    reviewedAt,
+  }, commandContext);
 }
 
 async function recordDiagnosis(

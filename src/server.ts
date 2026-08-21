@@ -342,6 +342,7 @@ const EvaluateTicketOutputSchema = z
   .object({
     recommendation: TriageRecommendationSchema,
     operatorGuidance: OperatorGuidanceSchema,
+    lifecycle: LifecycleViewSchema,
   })
   .strict();
 const KnowledgeLearningOutputSchema = z
@@ -365,13 +366,23 @@ const ApprovalOutputSchema = z
   .object({
     ticket: TicketSchema,
     auditEvent: AuditEventSchema,
+    operatorGuidance: OperatorGuidanceSchema,
+    lifecycle: LifecycleViewSchema,
   })
   .strict();
 const RejectionOutputSchema = z
-  .object({ auditEvent: AuditEventSchema })
+  .object({
+    auditEvent: AuditEventSchema,
+    operatorGuidance: OperatorGuidanceSchema,
+    lifecycle: LifecycleViewSchema,
+  })
   .strict();
 const AddCustomerReplyOutputSchema = z
-  .object({ auditEvent: AuditEventSchema })
+  .object({
+    auditEvent: AuditEventSchema,
+    operatorGuidance: OperatorGuidanceSchema,
+    lifecycle: LifecycleViewSchema,
+  })
   .strict();
 const MarkResponseDoneOutputSchema = z
   .object({
@@ -379,17 +390,33 @@ const MarkResponseDoneOutputSchema = z
     approvalEvent: AuditEventSchema,
     sentEvent: AuditEventSchema,
     automaticReply: AuditEventSchema.optional(),
+    operatorGuidance: OperatorGuidanceSchema,
+    lifecycle: LifecycleViewSchema,
   })
   .strict();
 const WorkflowAuditOutputSchema = z
-  .object({ auditEvent: AuditEventSchema })
+  .object({
+    auditEvent: AuditEventSchema,
+    operatorGuidance: OperatorGuidanceSchema,
+    lifecycle: LifecycleViewSchema,
+  })
   .strict();
 const CloseTicketOutputSchema = z
   .object({
     ticket: TicketSchema,
     auditEvent: AuditEventSchema,
+    operatorGuidance: OperatorGuidanceSchema,
+    lifecycle: LifecycleViewSchema,
   })
   .strict();
+const DiagnosisReviewMutationOutputSchema = DiagnosisReviewActionOutputSchema.extend({
+  operatorGuidance: OperatorGuidanceSchema,
+  lifecycle: LifecycleViewSchema,
+});
+const DiagnosisFixMutationOutputSchema = DiagnosisFixActionOutputSchema.extend({
+  operatorGuidance: OperatorGuidanceSchema,
+  lifecycle: LifecycleViewSchema,
+});
 const WorkflowItemSchema = z.record(z.string(), z.unknown());
 const TicketWorkflowOutputSchema = z
   .object({
@@ -692,12 +719,16 @@ export function createTriageServer(
       annotations: SubmissionAnnotations,
     },
     async ({ commandId, ...input }) =>
-      toolResult(async () => ({
-        auditEvent: await deps.service.addCustomerReply({
+      toolResult(async () => {
+        const auditEvent = await deps.service.addCustomerReply({
           ...input,
           receivedAt: deps.now().toISOString(),
-        }, { commandId }),
-      })),
+        }, { commandId });
+        return AddCustomerReplyOutputSchema.parse({
+          auditEvent,
+          ...(await lifecycleEnvelope(deps, input.ticketId)),
+        });
+      }),
   );
 
   server.registerTool(
@@ -725,6 +756,7 @@ export function createTriageServer(
     async (input) =>
       toolResult(async () => ({
         auditEvent: await recordDiagnosis(deps, input),
+        ...(await lifecycleEnvelope(deps, input.ticketId)),
       })),
   );
 
@@ -740,6 +772,7 @@ export function createTriageServer(
     async (input) =>
       toolResult(async () => ({
         auditEvent: await recordPlatformMitigation(deps, input),
+        ...(await lifecycleEnvelope(deps, input.ticketId)),
       })),
   );
 
@@ -749,7 +782,7 @@ export function createTriageServer(
       description:
         "Record an immutable operator review of one original diagnosis audit.",
       inputSchema: ReviewDiagnosisToolInputSchema,
-      outputSchema: DiagnosisReviewActionOutputSchema,
+      outputSchema: DiagnosisReviewMutationOutputSchema,
       annotations: SubmissionAnnotations,
     },
     async (input) => toolResult(() => reviewDiagnosis(deps, input)),
@@ -761,7 +794,7 @@ export function createTriageServer(
       description:
         "Apply a reviewed diagnosis fix to an explicitly selected impact set without closing tickets.",
       inputSchema: ApplyDiagnosisFixToolInputSchema,
-      outputSchema: DiagnosisFixActionOutputSchema,
+      outputSchema: DiagnosisFixMutationOutputSchema,
       annotations: SubmissionAnnotations,
     },
     async (input) => toolResult(() => applyDiagnosisFix(deps, input)),
@@ -779,6 +812,7 @@ export function createTriageServer(
     async (input) =>
       toolResult(async () => ({
         auditEvent: await markFixAvailable(deps, input),
+        ...(await lifecycleEnvelope(deps, input.ticketId)),
       })),
   );
 
@@ -792,12 +826,16 @@ export function createTriageServer(
       annotations: FinalizingAnnotations,
     },
     async ({ commandId, ...input }) =>
-      toolResult(() =>
-        deps.service.approve({
+      toolResult(async () => {
+        const result = await deps.service.approve({
           ...input,
           approvedAt: deps.now().toISOString(),
-        }, { commandId }),
-      ),
+        }, { commandId });
+        return ApprovalOutputSchema.parse({
+          ...result,
+          ...(await lifecycleEnvelope(deps, input.ticketId)),
+        });
+      }),
   );
 
   server.registerTool(
@@ -836,12 +874,16 @@ export function createTriageServer(
       annotations: FinalizingAnnotations,
     },
     async ({ commandId, ...input }) =>
-      toolResult(async () => ({
-        auditEvent: await deps.service.reject({
+      toolResult(async () => {
+        const auditEvent = await deps.service.reject({
           ...input,
           rejectedAt: deps.now().toISOString(),
-        }, { commandId }),
-      })),
+        }, { commandId });
+        return RejectionOutputSchema.parse({
+          auditEvent,
+          ...(await lifecycleEnvelope(deps, input.ticketId)),
+        });
+      }),
   );
 
   registerPrompts(server);
@@ -913,6 +955,30 @@ async function getTicketWorkflow(
   );
 }
 
+async function lifecycleEnvelope(
+  deps: TriageServerDependencies,
+  ticketId: TicketId,
+): Promise<Pick<z.infer<typeof TicketWorkflowOutputSchema>, "operatorGuidance" | "lifecycle">> {
+  const workflow = await getTicketWorkflow(deps, ticketId);
+  return {
+    operatorGuidance: workflow.operatorGuidance,
+    lifecycle: workflow.lifecycle,
+  };
+}
+
+function lifecycleEnvelopeFromParts(input: {
+  ticket: Parameters<typeof buildTicketWorkflowReadModel>[0]["ticket"];
+  audits: Parameters<typeof buildTicketWorkflowReadModel>[0]["audits"];
+  recommendations: Parameters<typeof buildTicketWorkflowReadModel>[0]["recommendations"];
+  knowledgeEvolution?: Parameters<typeof buildTicketWorkflowReadModel>[0]["knowledgeEvolution"];
+}): Pick<z.infer<typeof TicketWorkflowOutputSchema>, "operatorGuidance" | "lifecycle"> {
+  const workflow = buildTicketWorkflowReadModel(input);
+  return {
+    operatorGuidance: workflow.operatorGuidance,
+    lifecycle: workflow.lifecycle,
+  };
+}
+
 async function getTicketDiagnoses(
   deps: TriageServerDependencies,
   ticketId: TicketId,
@@ -929,7 +995,7 @@ async function getTicketDiagnoses(
 async function reviewDiagnosis(
   deps: TriageServerDependencies,
   input: z.infer<typeof ReviewDiagnosisToolInputSchema>,
-): Promise<z.infer<typeof DiagnosisReviewActionOutputSchema>> {
+): Promise<z.infer<typeof DiagnosisReviewMutationOutputSchema>> {
   const { commandId, ...reviewInput } = input;
   const auditEvent = await deps.service.reviewDiagnosis({
     ...reviewInput,
@@ -939,22 +1005,26 @@ async function reviewDiagnosis(
     deps.tickets.get(input.ticketId),
     deps.audits.list(input.ticketId),
   ]);
-  return DiagnosisReviewActionOutputSchema.parse({
+  return DiagnosisReviewMutationOutputSchema.parse({
     auditEvent,
     diagnoses: diagnosisReviewViews({ ticket, audits }),
+    ...(await lifecycleEnvelope(deps, input.ticketId)),
   });
 }
 
 async function applyDiagnosisFix(
   deps: TriageServerDependencies,
   input: z.infer<typeof ApplyDiagnosisFixToolInputSchema>,
-): Promise<z.infer<typeof DiagnosisFixActionOutputSchema>> {
+): Promise<z.infer<typeof DiagnosisFixMutationOutputSchema>> {
   const { commandId, ...fixInput } = input;
   const auditEvents = await deps.service.applyDiagnosisFix({
     ...fixInput,
     fixedAt: deps.now().toISOString(),
   }, { commandId });
-  return DiagnosisFixActionOutputSchema.parse({ auditEvents });
+  return DiagnosisFixMutationOutputSchema.parse({
+    auditEvents,
+    ...(await lifecycleEnvelope(deps, input.sourceTicketId)),
+  });
 }
 
 async function evaluateTicket(
@@ -1010,21 +1080,19 @@ async function evaluateTicket(
     submittedAt: deps.now().toISOString(),
     evaluatedCustomerReplyWatermark: customerReplyWatermarkFromAudits(audits),
   }, { commandId });
-  const { recommendation, recommendations: persistedRecommendations } =
-    evaluation;
-  const [persistedTicket, persistedAudits] =
-    await Promise.all([
-      deps.tickets.get(input.ticketId),
-      deps.audits.list(input.ticketId),
-    ]);
-  return {
+  const { recommendation, recommendations: persistedRecommendations } = evaluation;
+  const [persistedTicket, persistedAudits] = await Promise.all([
+    deps.tickets.get(input.ticketId),
+    deps.audits.list(input.ticketId),
+  ]);
+  return EvaluateTicketOutputSchema.parse({
     recommendation,
-    operatorGuidance: buildOperatorGuidance({
+    ...lifecycleEnvelopeFromParts({
       ticket: persistedTicket,
       audits: persistedAudits,
       recommendations: persistedRecommendations,
     }),
-  };
+  });
 }
 
 async function markResponseDone(
@@ -1061,12 +1129,13 @@ async function markResponseDone(
     sentAt: completed.sentEvent.timestamp,
     parentCommandId: commandId,
   });
-  return {
+  return MarkResponseDoneOutputSchema.parse({
     ticket: completed.ticket,
     approvalEvent: completed.approvalEvent,
     sentEvent: completed.sentEvent,
     ...(automaticReply === undefined ? {} : { automaticReply }),
-  };
+    ...(await lifecycleEnvelope(deps, input.ticketId)),
+  });
 }
 
 async function recordDiagnosis(
@@ -1150,11 +1219,15 @@ async function closeTicket(
   input: z.infer<typeof WorkflowActionInputSchema>,
 ): Promise<z.infer<typeof CloseTicketOutputSchema>> {
   const { commandId, ...closeInput } = input;
-  return deps.service.closeTicket({
+  const result = await deps.service.closeTicket({
     ticketId: closeInput.ticketId,
     actor: closeInput.actor,
     closedAt: deps.now().toISOString(),
   }, { commandId });
+  return CloseTicketOutputSchema.parse({
+    ...result,
+    ...(await lifecycleEnvelope(deps, closeInput.ticketId)),
+  });
 }
 
 async function maybeAddAutomaticCustomerReplyAfterSent(input: {

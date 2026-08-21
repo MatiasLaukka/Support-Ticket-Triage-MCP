@@ -14,6 +14,7 @@ import {
 } from "../domain.js";
 import type {
   AuditEvent,
+  TicketId,
   TriageRecommendation,
 } from "../domain.js";
 import { DomainError } from "../errors.js";
@@ -70,6 +71,8 @@ import {
   latestSupportResponseFromAudits,
   summarizeRecommendationsForTicket,
 } from "./workflow-read-model.js";
+import { LifecycleViewSchema } from "./lifecycle.js";
+import { OperatorGuidanceSchema } from "./workflow-guidance.js";
 import {
   KnowledgeCandidateApprovalOutputSchema,
   KnowledgeCandidateDefermentOutputSchema,
@@ -88,6 +91,14 @@ import { unavailableReusableKnowledge } from "../knowledge-evolution/reusable-co
 const JSON_BODY_LIMIT_BYTES = 65_536;
 const UNEXPECTED_ERROR_TEXT = "Unexpected local approval desk error.";
 const markSentOperations = new Map<string, Promise<void>>();
+const DiagnosisReviewMutationOutputSchema = DiagnosisReviewActionOutputSchema.extend({
+  operatorGuidance: OperatorGuidanceSchema,
+  lifecycle: LifecycleViewSchema,
+});
+const DiagnosisFixMutationOutputSchema = DiagnosisFixActionOutputSchema.extend({
+  operatorGuidance: OperatorGuidanceSchema,
+  lifecycle: LifecycleViewSchema,
+});
 
 const TicketListQuerySchema = z
   .object({
@@ -668,7 +679,7 @@ function isMissingFile(error: unknown): boolean {
 }
 
 async function getTicketDetail(
-  { deps }: RouteContext,
+  { deps }: Pick<RouteContext, "deps">,
   id: string,
 ): Promise<unknown> {
   const ticketId = TicketIdSchema.parse(id);
@@ -701,6 +712,35 @@ async function getTicketDetail(
   return {
     audits: auditPage,
     ...workflow,
+  };
+}
+
+async function lifecycleEnvelope(
+  context: Pick<RouteContext, "deps">,
+  ticketId: TicketId,
+): Promise<{ operatorGuidance: unknown; lifecycle: unknown }> {
+  const { deps } = context;
+  const knowledgeRead = deps.learningAvailability.status === "unavailable"
+    ? Promise.resolve(undefined)
+    : Promise.all([
+        deps.knowledgeEvolution.objects.listCandidates(),
+        deps.knowledgeEvolution.audits.list(),
+      ]).then(([candidates, audits]) => ({ candidates, audits }));
+  const [ticket, audits, recommendations, knowledgeEvolution] = await Promise.all([
+    deps.tickets.get(ticketId),
+    deps.audits.list(ticketId),
+    deps.recommendations.list(),
+    knowledgeRead,
+  ]);
+  const detail = buildTicketWorkflowReadModel({
+    ticket,
+    audits,
+    recommendations,
+    ...(knowledgeEvolution === undefined ? {} : { knowledgeEvolution }),
+  });
+  return {
+    operatorGuidance: detail.operatorGuidance,
+    lifecycle: detail.lifecycle,
   };
 }
 
@@ -769,7 +809,10 @@ async function createRecommendation(
       submittedAt: deps.now().toISOString(),
       evaluatedCustomerReplyWatermark: customerReplyWatermarkFromAudits(audits),
     }, commandContextFromRequest(request, deps));
-    return { recommendation };
+    return {
+      recommendation,
+      ...(await lifecycleEnvelope({ deps }, ticketId)),
+    };
   });
 }
 
@@ -779,12 +822,14 @@ async function addCustomerReply(
 ): Promise<unknown> {
   const ticketId = TicketIdSchema.parse(id);
   const body = CustomerReplyRouteBodySchema.parse(await readJsonBody(request));
-  return {
-    auditEvent: await deps.service.addCustomerReply({
+  const auditEvent = await deps.service.addCustomerReply({
       ...body,
       ticketId,
       receivedAt: deps.now().toISOString(),
-    }, commandContextFromRequest(request, deps)),
+    }, commandContextFromRequest(request, deps));
+  return {
+    auditEvent,
+    ...(await lifecycleEnvelope({ deps }, ticketId)),
   };
 }
 
@@ -824,6 +869,7 @@ async function recordDiagnosis(
         customerReplyWatermark: customerReplyWatermarkFromAudits(audits),
       },
     }, commandContextFromRequest(request, deps)),
+    ...(await lifecycleEnvelope({ deps }, ticketId)),
   };
 }
 
@@ -847,6 +893,7 @@ async function recordPlatformMitigation(
       ticketId,
       recordedAt: deps.now().toISOString(),
     }, commandContextFromRequest(request, deps)),
+    ...(await lifecycleEnvelope({ deps }, ticketId)),
   };
 }
 
@@ -887,13 +934,14 @@ async function reviewDiagnosis(
     deps.audits.list(ticketId),
     deps.operationalDiagnoses?.list(ticketId),
   ]);
-  return DiagnosisReviewActionOutputSchema.parse({
+  return DiagnosisReviewMutationOutputSchema.parse({
     auditEvent,
     diagnoses: diagnosisReviewViews({
       ticket,
       audits,
       ...(originalDiagnoses === undefined ? {} : { originalDiagnoses }),
     }),
+    ...(await lifecycleEnvelope({ deps }, ticketId)),
   });
 }
 
@@ -911,7 +959,10 @@ async function applyDiagnosisFix(
     actor: body.actor,
     fixedAt: deps.now().toISOString(),
   }, commandContextFromRequest(request, deps));
-  return DiagnosisFixActionOutputSchema.parse({ auditEvents });
+  return DiagnosisFixMutationOutputSchema.parse({
+    auditEvents,
+    ...(await lifecycleEnvelope({ deps }, sourceTicketId)),
+  });
 }
 
 async function recordFix(
@@ -942,6 +993,7 @@ async function recordFix(
       fix: fixContextForTicket(persistedDiagnosticContext.diagnosis?.event),
       knowledgeArticleIds: latest?.knowledgeArticleIds ?? [],
     }, commandContextFromRequest(request, deps)),
+    ...(await lifecycleEnvelope({ deps }, ticketId)),
   };
 }
 
@@ -951,11 +1003,15 @@ async function closeTicket(
 ): Promise<unknown> {
   const ticketId = TicketIdSchema.parse(id);
   const body = WorkflowActionBodySchema.parse(await readJsonBody(request));
-  return deps.service.closeTicket({
+  const result = await deps.service.closeTicket({
     ticketId,
     actor: body.actor,
     closedAt: deps.now().toISOString(),
   }, commandContextFromRequest(request, deps));
+  return {
+    ...result,
+    ...(await lifecycleEnvelope({ deps }, ticketId)),
+  };
 }
 
 async function getRecommendation(
@@ -972,11 +1028,15 @@ async function approveRecommendation(
 ): Promise<unknown> {
   const recommendationId = RecommendationIdSchema.parse(id);
   const body = ApprovalBodySchema.parse(await readJsonBody(request));
-  return deps.service.approve({
+  const result = await deps.service.approve({
     ...body,
     recommendationId,
     approvedAt: deps.now().toISOString(),
   }, commandContextFromRequest(request, deps));
+  return {
+    ...result,
+    ...(await lifecycleEnvelope({ deps }, body.ticketId)),
+  };
 }
 
 async function markRecommendationSent(
@@ -1034,6 +1094,7 @@ async function markRecommendationSent(
     return {
       auditEvent,
       ...(automaticReply === undefined ? {} : { automaticReply }),
+      ...(await lifecycleEnvelope({ deps }, body.ticketId)),
     };
   });
 }
@@ -1088,12 +1149,14 @@ async function rejectRecommendation(
 ): Promise<unknown> {
   const recommendationId = RecommendationIdSchema.parse(id);
   const body = RejectBodySchema.parse(await readJsonBody(request));
-  return {
-    auditEvent: await deps.service.reject({
+  const auditEvent = await deps.service.reject({
       ...body,
       recommendationId,
       rejectedAt: deps.now().toISOString(),
-    }, commandContextFromRequest(request, deps)),
+    }, commandContextFromRequest(request, deps));
+  return {
+    auditEvent,
+    ...(await lifecycleEnvelope({ deps }, body.ticketId)),
   };
 }
 
@@ -1103,12 +1166,14 @@ async function cancelApproval(
 ): Promise<unknown> {
   const recommendationId = RecommendationIdSchema.parse(id);
   const body = CancelApprovalBodySchema.parse(await readJsonBody(request));
-  return {
-    auditEvent: await deps.service.cancelApproval({
+  const auditEvent = await deps.service.cancelApproval({
       ...body,
       recommendationId,
       canceledAt: deps.now().toISOString(),
-    }, commandContextFromRequest(request, deps)),
+    }, commandContextFromRequest(request, deps));
+  return {
+    auditEvent,
+    ...(await lifecycleEnvelope({ deps }, body.ticketId)),
   };
 }
 

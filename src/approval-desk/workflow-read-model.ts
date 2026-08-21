@@ -25,6 +25,8 @@ import {
   type OperationalMessageCausalPosition,
 } from "./workflow-causal-context.js";
 import { buildOperatorGuidance } from "./workflow-guidance.js";
+import { buildTicketLifecycleView } from "./lifecycle.js";
+import { operationalAuditEventsFromSnapshot } from "../triage-service.js";
 
 export type RecommendationWorkflowState =
   | "active"
@@ -73,6 +75,7 @@ export function buildTicketWorkflowReadModel(input: {
     recommendationSummary: recommendation.summary,
     latestRecommendation: recommendation.latest,
     operatorGuidance: buildOperatorGuidance(input),
+    lifecycle: buildTicketLifecycleView(input),
     decisionTimeline: [...(input.decisionTimeline ?? [])],
   };
 }
@@ -85,6 +88,12 @@ export function buildTicketWorkflowReadModelFromSnapshot(
   snapshot: OperationalWorkflowSnapshot,
 ) {
   const recommendation = summarizeRecommendationsForSnapshot(snapshot);
+  const audits = operationalAuditEventsFromSnapshot(snapshot);
+  const workflow = {
+    ticket: snapshot.ticket,
+    recommendations: snapshot.recommendations,
+    audits,
+  } as const;
   return {
     ticket: snapshot.ticket,
     conversationHistory: buildConversationHistoryFromSnapshot(snapshot),
@@ -92,6 +101,8 @@ export function buildTicketWorkflowReadModelFromSnapshot(
     recommendationHistory: recommendation.history,
     recommendationSummary: recommendation.summary,
     latestRecommendation: recommendation.latest,
+    operatorGuidance: buildOperatorGuidance(workflow),
+    lifecycle: buildTicketLifecycleView(workflow),
     decisionTimeline: buildDecisionTimeline(snapshot),
   };
 }

@@ -122,6 +122,7 @@ type LifecycleActionKind =
   | "record-fix-ineffective"
   | "resolve-ticket"
   | "specialist-review"
+  | "review-pattern"
   | "none";
 
 type LifecycleAction = {

@@ -802,7 +802,7 @@ async function getTicketDetail(
         deps.knowledgeEvolution.objects.listCandidates(),
         deps.knowledgeEvolution.audits.list(),
       ]).then(([candidates, audits]) => ({ candidates, audits }));
-  const [ticket, auditPage, ticketAudits, recommendations, knowledgeCandidates, knowledgeAudits, decisionTimeline] = await Promise.all([
+  const [ticket, auditPage, ticketAudits, recommendations, knowledgeCandidates, knowledgeAudits, decisionTimeline, originalDiagnoses] = await Promise.all([
     deps.tickets.get(ticketId),
     deps.audits.listPage({ ticketId, offset: 0, limit: 10 }),
     deps.audits.list(ticketId),
@@ -812,11 +812,21 @@ async function getTicketDetail(
     deps.operationalStore === undefined
       ? Promise.resolve([])
       : readDecisionTimeline(ticketId, deps.operationalStore),
+    deps.operationalDiagnoses === undefined
+      ? Promise.resolve(undefined)
+      : deps.operationalDiagnoses.list(ticketId),
   ]);
+  const authoritativeAudits = originalDiagnoses === undefined
+    ? ticketAudits
+    : operationalDiagnosisAudits({
+        ticket,
+        audits: ticketAudits,
+        originalDiagnoses,
+      });
   const workflow = buildTicketWorkflowReadModel({
     ticket,
     recommendations,
-    audits: ticketAudits,
+    audits: authoritativeAudits,
     decisionTimeline,
     ...(deps.learningAvailability.status === "unavailable"
       ? {}

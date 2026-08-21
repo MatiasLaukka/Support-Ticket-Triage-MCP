@@ -204,6 +204,22 @@ describe("operational diagnosis persistence", () => {
         reviewableAfterRestart,
         reviewDiagnosisId,
       );
+      const detailAfterRestart = await requestJson(
+        baseUrl,
+        `/api/tickets/${ticketId}`,
+        undefined,
+        200,
+      );
+      expect(detailAfterRestart.lifecycle.current.diagnosisId).toBe(reviewDiagnosisId);
+      expect(detailAfterRestart.lifecycle.diagnosis.state).toBe("recorded");
+      expect(detailAfterRestart.audits.events).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            id: reviewDiagnosisId,
+            after: expect.objectContaining({ diagnosis: reviewOriginalDiagnosis }),
+          }),
+        ]),
+      );
       const editedDiagnosis = {
         ...reviewOriginalDiagnosis,
         recommendedNextAction:

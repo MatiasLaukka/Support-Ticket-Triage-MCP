@@ -1053,12 +1053,19 @@ async function getTicketDiagnoses(
   deps: TriageServerDependencies,
   ticketId: TicketId,
 ): Promise<z.infer<typeof DiagnosisReviewListOutputSchema>> {
-  const [ticket, audits] = await Promise.all([
+  const [ticket, audits, originalDiagnoses] = await Promise.all([
     deps.tickets.get(ticketId),
     deps.audits.list(ticketId),
+    deps.operationalDiagnoses === undefined
+      ? Promise.resolve(undefined)
+      : deps.operationalDiagnoses.list(ticketId),
   ]);
   return DiagnosisReviewListOutputSchema.parse({
-    diagnoses: diagnosisReviewViews({ ticket, audits }),
+    diagnoses: diagnosisReviewViews({
+      ticket,
+      audits,
+      ...(originalDiagnoses === undefined ? {} : { originalDiagnoses }),
+    }),
   });
 }
 
@@ -1071,13 +1078,20 @@ async function reviewDiagnosis(
     ...reviewInput,
     reviewedAt: deps.now().toISOString(),
   }, { commandId });
-  const [ticket, audits] = await Promise.all([
+  const [ticket, audits, originalDiagnoses] = await Promise.all([
     deps.tickets.get(input.ticketId),
     deps.audits.list(input.ticketId),
+    deps.operationalDiagnoses === undefined
+      ? Promise.resolve(undefined)
+      : deps.operationalDiagnoses.list(input.ticketId),
   ]);
   return DiagnosisReviewMutationOutputSchema.parse({
     auditEvent,
-    diagnoses: diagnosisReviewViews({ ticket, audits }),
+    diagnoses: diagnosisReviewViews({
+      ticket,
+      audits,
+      ...(originalDiagnoses === undefined ? {} : { originalDiagnoses }),
+    }),
     ...(await lifecycleEnvelope(deps, input.ticketId)),
   });
 }

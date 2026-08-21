@@ -10,6 +10,7 @@ import {
   AiPreferenceSchema,
   AuditEventSchema,
   CategorySchema,
+  CustomerReplyWatermarkSchema,
   DuplicateCandidateSchema,
   DraftCustomerResponseStyleInputSchema,
   DiagnosisIdSchema,
@@ -70,6 +71,7 @@ import {
   DiagnosisReviewDraftSchema,
   DiagnosisReviewListOutputSchema,
   diagnosisReviewViews,
+  operationalDiagnosisAudits,
 } from "./approval-desk/diagnosis-review.js";
 import type { TicketRepository } from "./ticket-repository.js";
 import type {
@@ -84,6 +86,7 @@ import {
 import {
   CommandIdSchema,
   DecisionTimelineEntrySchema,
+  type OperationalWorkflowSnapshot,
 } from "./operational/domain.js";
 import {
   readDecisionTimeline,
@@ -273,6 +276,36 @@ const ApplyDiagnosisFixToolInputSchema = z
     sourceTicketId: TicketIdSchema,
     impactSet: DiagnosisImpactSetSchema,
     actor: NonBlankStringSchema,
+  })
+  .strict();
+const RecordFixIneffectiveToolInputSchema = z
+  .object({
+    commandId: CommandIdSchema,
+    ticketId: TicketIdSchema,
+    diagnosisId: DiagnosisIdSchema,
+    fixEventId: z.uuid(),
+    sourceTicketRevision: z.number().int().nonnegative(),
+    sourceConversationWatermark: CustomerReplyWatermarkSchema,
+    actor: NonBlankStringSchema,
+    rationale: NonBlankStringSchema.max(500),
+    verificationEvidence: z.array(NonBlankStringSchema.max(240)).min(1).max(32),
+  })
+  .strict();
+const InvalidateDiagnosisToolInputSchema = z
+  .object({
+    commandId: CommandIdSchema,
+    ticketId: TicketIdSchema,
+    diagnosisId: DiagnosisIdSchema,
+    sourceTicketRevision: z.number().int().nonnegative(),
+    sourceConversationWatermark: CustomerReplyWatermarkSchema,
+    actor: NonBlankStringSchema,
+    reasonCode: z.enum([
+      "contradictory-evidence",
+      "superseded-diagnosis",
+      "invalidating-event",
+      "fix-ineffective",
+    ]),
+    rationale: NonBlankStringSchema.max(500),
   })
   .strict();
 const DiscoverKnowledgeCandidatesInputSchema = z.object({
@@ -472,6 +505,9 @@ export interface TriageServerDependencies {
   };
   learningAvailability?: { readonly status: "available" | "unavailable" };
   operationalStore?: DecisionTimelineSource;
+  operationalDiagnoses?: {
+    list(ticketId?: TicketId): Promise<OperationalWorkflowSnapshot["diagnoses"]>;
+  };
 }
 
 export function createTriageServer(
@@ -817,6 +853,30 @@ export function createTriageServer(
   );
 
   server.registerTool(
+    "record_fix_ineffective",
+    {
+      description:
+        "Record failed verification for one persisted fix attempt without implicitly invalidating its diagnosis.",
+      inputSchema: RecordFixIneffectiveToolInputSchema,
+      outputSchema: WorkflowAuditOutputSchema,
+      annotations: SubmissionAnnotations,
+    },
+    async (input) => toolResult(() => recordFixIneffective(deps, input)),
+  );
+
+  server.registerTool(
+    "invalidate_diagnosis",
+    {
+      description:
+        "Explicitly invalidate the current approved diagnosis while preserving its immutable audit history.",
+      inputSchema: InvalidateDiagnosisToolInputSchema,
+      outputSchema: WorkflowAuditOutputSchema,
+      annotations: SubmissionAnnotations,
+    },
+    async (input) => toolResult(() => invalidateDiagnosis(deps, input)),
+  );
+
+  server.registerTool(
     "approve_triage_recommendation",
     {
       description:
@@ -935,19 +995,29 @@ async function getTicketWorkflow(
         deps.knowledgeEvolution.audits.list(),
       ]).then(([candidates, audits]) => ({ candidates, audits }))
     : Promise.resolve(undefined);
-  const [ticket, audits, recommendations, knowledgeEvolution] = await Promise.all([
+  const [ticket, audits, recommendations, knowledgeEvolution, originalDiagnoses] = await Promise.all([
     deps.tickets.get(ticketId),
     deps.audits.list(ticketId),
     deps.recommendations.list(),
     knowledgeEvolutionRead,
+    deps.operationalDiagnoses === undefined
+      ? Promise.resolve(undefined)
+      : deps.operationalDiagnoses.list(ticketId),
   ]);
+  const authoritativeAudits = originalDiagnoses === undefined
+    ? audits
+    : operationalDiagnosisAudits({
+        ticket,
+        audits,
+        originalDiagnoses,
+      });
   const decisionTimeline = deps.operationalStore === undefined
     ? []
     : await readDecisionTimeline(ticketId, deps.operationalStore);
   return TicketWorkflowOutputSchema.parse(
     buildTicketWorkflowReadModel({
       ticket,
-      audits,
+      audits: authoritativeAudits,
       recommendations,
       decisionTimeline,
       ...(knowledgeEvolution === undefined ? {} : { knowledgeEvolution }),
@@ -1024,6 +1094,36 @@ async function applyDiagnosisFix(
   return DiagnosisFixMutationOutputSchema.parse({
     auditEvents,
     ...(await lifecycleEnvelope(deps, input.sourceTicketId)),
+  });
+}
+
+async function recordFixIneffective(
+  deps: TriageServerDependencies,
+  input: z.infer<typeof RecordFixIneffectiveToolInputSchema>,
+): Promise<z.infer<typeof WorkflowAuditOutputSchema>> {
+  const { commandId, ...recoveryInput } = input;
+  const auditEvent = await deps.service.recordFixIneffective({
+    ...recoveryInput,
+    ineffectiveAt: deps.now().toISOString(),
+  }, { commandId });
+  return WorkflowAuditOutputSchema.parse({
+    auditEvent,
+    ...(await lifecycleEnvelope(deps, input.ticketId)),
+  });
+}
+
+async function invalidateDiagnosis(
+  deps: TriageServerDependencies,
+  input: z.infer<typeof InvalidateDiagnosisToolInputSchema>,
+): Promise<z.infer<typeof WorkflowAuditOutputSchema>> {
+  const { commandId, ...invalidationInput } = input;
+  const auditEvent = await deps.service.invalidateDiagnosis({
+    ...invalidationInput,
+    invalidatedAt: deps.now().toISOString(),
+  }, { commandId });
+  return WorkflowAuditOutputSchema.parse({
+    auditEvent,
+    ...(await lifecycleEnvelope(deps, input.ticketId)),
   });
 }
 

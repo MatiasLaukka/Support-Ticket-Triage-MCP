@@ -411,7 +411,7 @@ export function diagnosisReviewViews(input: {
     });
 }
 
-function operationalDiagnosisAudits(input: {
+export function operationalDiagnosisAudits(input: {
   ticket: Pick<Ticket, "id" | "revision">;
   audits: readonly AuditEvent[];
   originalDiagnoses: readonly OperationalWorkflowSnapshot["diagnoses"][number][];

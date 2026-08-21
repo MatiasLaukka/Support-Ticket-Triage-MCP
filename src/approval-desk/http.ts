@@ -5,7 +5,10 @@ import { z } from "zod";
 import {
   ApprovedFieldSchema,
   AiPreferenceSchema,
+  AuditEventSchema,
   CategorySchema,
+  CustomerReplyWatermarkSchema,
+  DiagnosisIdSchema,
   DraftCustomerResponseStyleInputSchema,
   PrioritySchema,
   TeamSchema,
@@ -62,6 +65,7 @@ import {
   DiagnosisReviewDraftSchema,
   DiagnosisReviewListOutputSchema,
   diagnosisReviewViews,
+  operationalDiagnosisAudits,
 } from "./diagnosis-review.js";
 import { automaticReplyForTicket } from "./automatic-customer-replies.js";
 import {
@@ -99,6 +103,11 @@ const DiagnosisFixMutationOutputSchema = DiagnosisFixActionOutputSchema.extend({
   operatorGuidance: OperatorGuidanceSchema,
   lifecycle: LifecycleViewSchema,
 });
+const RecoveryMutationOutputSchema = z.object({
+  auditEvent: AuditEventSchema,
+  operatorGuidance: OperatorGuidanceSchema,
+  lifecycle: LifecycleViewSchema,
+}).strict();
 
 const TicketListQuerySchema = z
   .object({
@@ -235,6 +244,29 @@ const ApplyDiagnosisFixBodySchema = z
   .object({
     actor: z.string().trim().min(1),
     impactSet: DiagnosisImpactSetSchema,
+  })
+  .strict();
+const RecordFixIneffectiveBodySchema = z
+  .object({
+    sourceTicketRevision: z.number().int().nonnegative(),
+    sourceConversationWatermark: CustomerReplyWatermarkSchema,
+    actor: z.string().trim().min(1),
+    rationale: z.string().trim().min(1).max(500),
+    verificationEvidence: z.array(z.string().trim().min(1).max(240)).min(1).max(32),
+  })
+  .strict();
+const InvalidateDiagnosisBodySchema = z
+  .object({
+    sourceTicketRevision: z.number().int().nonnegative(),
+    sourceConversationWatermark: CustomerReplyWatermarkSchema,
+    actor: z.string().trim().min(1),
+    reasonCode: z.enum([
+      "contradictory-evidence",
+      "superseded-diagnosis",
+      "invalidating-event",
+      "fix-ineffective",
+    ]),
+    rationale: z.string().trim().min(1).max(500),
   })
   .strict();
 const KnowledgeDiscoveryBodySchema = z.object({
@@ -386,6 +418,35 @@ function matchRoute(
       status: 201,
       handle: (context) =>
         applyDiagnosisFix(context, diagnosisFix[1]!, diagnosisFix[2]!),
+    };
+  }
+
+  const ineffectiveFix = /^\/api\/tickets\/([^/]+)\/diagnoses\/([^/]+)\/fixes\/([^/]+)\/ineffective$/.exec(
+    pathname,
+  );
+  if (method === "POST" && ineffectiveFix !== null) {
+    return {
+      status: 201,
+      handle: (context) => recordFixIneffective(
+        context,
+        ineffectiveFix[1]!,
+        ineffectiveFix[2]!,
+        ineffectiveFix[3]!,
+      ),
+    };
+  }
+
+  const diagnosisInvalidation = /^\/api\/tickets\/([^/]+)\/diagnoses\/([^/]+)\/invalidate$/.exec(
+    pathname,
+  );
+  if (method === "POST" && diagnosisInvalidation !== null) {
+    return {
+      status: 201,
+      handle: (context) => invalidateDiagnosis(
+        context,
+        diagnosisInvalidation[1]!,
+        diagnosisInvalidation[2]!,
+      ),
     };
   }
 
@@ -726,15 +787,25 @@ async function lifecycleEnvelope(
         deps.knowledgeEvolution.objects.listCandidates(),
         deps.knowledgeEvolution.audits.list(),
       ]).then(([candidates, audits]) => ({ candidates, audits }));
-  const [ticket, audits, recommendations, knowledgeEvolution] = await Promise.all([
+  const [ticket, audits, recommendations, knowledgeEvolution, originalDiagnoses] = await Promise.all([
     deps.tickets.get(ticketId),
     deps.audits.list(ticketId),
     deps.recommendations.list(),
     knowledgeRead,
+    deps.operationalDiagnoses === undefined
+      ? Promise.resolve(undefined)
+      : deps.operationalDiagnoses.list(ticketId),
   ]);
+  const authoritativeAudits = originalDiagnoses === undefined
+    ? audits
+    : operationalDiagnosisAudits({
+        ticket,
+        audits,
+        originalDiagnoses,
+      });
   const detail = buildTicketWorkflowReadModel({
     ticket,
-    audits,
+    audits: authoritativeAudits,
     recommendations,
     ...(knowledgeEvolution === undefined ? {} : { knowledgeEvolution }),
   });
@@ -962,6 +1033,49 @@ async function applyDiagnosisFix(
   return DiagnosisFixMutationOutputSchema.parse({
     auditEvents,
     ...(await lifecycleEnvelope({ deps }, sourceTicketId)),
+  });
+}
+
+async function recordFixIneffective(
+  { deps, request }: RouteContext,
+  id: string,
+  diagnosisIdValue: string,
+  fixEventIdValue: string,
+): Promise<unknown> {
+  const ticketId = TicketIdSchema.parse(id);
+  const diagnosisId = DiagnosisIdSchema.parse(diagnosisIdValue);
+  const fixEventId = z.uuid().parse(fixEventIdValue);
+  const body = RecordFixIneffectiveBodySchema.parse(await readJsonBody(request));
+  const auditEvent = await deps.service.recordFixIneffective({
+    ...body,
+    ticketId,
+    diagnosisId,
+    fixEventId,
+    ineffectiveAt: deps.now().toISOString(),
+  }, commandContextFromRequest(request, deps));
+  return RecoveryMutationOutputSchema.parse({
+    auditEvent,
+    ...(await lifecycleEnvelope({ deps }, ticketId)),
+  });
+}
+
+async function invalidateDiagnosis(
+  { deps, request }: RouteContext,
+  id: string,
+  diagnosisIdValue: string,
+): Promise<unknown> {
+  const ticketId = TicketIdSchema.parse(id);
+  const diagnosisId = DiagnosisIdSchema.parse(diagnosisIdValue);
+  const body = InvalidateDiagnosisBodySchema.parse(await readJsonBody(request));
+  const auditEvent = await deps.service.invalidateDiagnosis({
+    ...body,
+    ticketId,
+    diagnosisId,
+    invalidatedAt: deps.now().toISOString(),
+  }, commandContextFromRequest(request, deps));
+  return RecoveryMutationOutputSchema.parse({
+    auditEvent,
+    ...(await lifecycleEnvelope({ deps }, ticketId)),
   });
 }
 

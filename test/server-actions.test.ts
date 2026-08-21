@@ -52,6 +52,8 @@ const commandBoundTools = new Set([
   "review_diagnosis",
   "apply_diagnosis_fix",
   "mark_fix_available",
+  "record_fix_ineffective",
+  "invalidate_diagnosis",
   "approve_triage_recommendation",
   "mark_response_done",
   "close_ticket",
@@ -927,6 +929,8 @@ describe("createTriageServer action protocol", () => {
         "review_diagnosis",
         "apply_diagnosis_fix",
         "mark_fix_available",
+        "record_fix_ineffective",
+        "invalidate_diagnosis",
         "mark_response_done",
         "close_ticket",
       ].includes(name),
@@ -936,9 +940,11 @@ describe("createTriageServer action protocol", () => {
       "apply_diagnosis_fix",
       "close_ticket",
       "evaluate_ticket",
+      "invalidate_diagnosis",
       "mark_fix_available",
       "mark_response_done",
       "record_diagnosis",
+      "record_fix_ineffective",
       "review_diagnosis",
     ]);
     for (const action of operatorActions) {
@@ -980,7 +986,12 @@ describe("createTriageServer action protocol", () => {
       idempotentHint: false,
       openWorldHint: false,
     });
-    for (const actionName of ["review_diagnosis", "apply_diagnosis_fix"]) {
+    for (const actionName of [
+      "review_diagnosis",
+      "apply_diagnosis_fix",
+      "record_fix_ineffective",
+      "invalidate_diagnosis",
+    ]) {
       expect(
         operatorActions.find(({ name }) => name === actionName)?.annotations,
       ).toEqual({
@@ -1021,6 +1032,41 @@ describe("createTriageServer action protocol", () => {
     );
     expect(applyDiagnosisFix.inputSchema.properties).not.toHaveProperty("fixedAt");
     expect(applyDiagnosisFix.inputSchema.additionalProperties).toBe(false);
+    const recordFixIneffective = operatorActions.find(
+      ({ name }) => name === "record_fix_ineffective",
+    )!;
+    expect(recordFixIneffective.inputSchema.required).toEqual(
+      expect.arrayContaining([
+        "commandId",
+        "ticketId",
+        "diagnosisId",
+        "fixEventId",
+        "sourceTicketRevision",
+        "sourceConversationWatermark",
+        "actor",
+        "rationale",
+        "verificationEvidence",
+      ]),
+    );
+    expect(recordFixIneffective.inputSchema.properties).not.toHaveProperty("ineffectiveAt");
+    expect(recordFixIneffective.inputSchema.additionalProperties).toBe(false);
+    const invalidateDiagnosis = operatorActions.find(
+      ({ name }) => name === "invalidate_diagnosis",
+    )!;
+    expect(invalidateDiagnosis.inputSchema.required).toEqual(
+      expect.arrayContaining([
+        "commandId",
+        "ticketId",
+        "diagnosisId",
+        "sourceTicketRevision",
+        "sourceConversationWatermark",
+        "actor",
+        "reasonCode",
+        "rationale",
+      ]),
+    );
+    expect(invalidateDiagnosis.inputSchema.properties).not.toHaveProperty("invalidatedAt");
+    expect(invalidateDiagnosis.inputSchema.additionalProperties).toBe(false);
     expect(
       operatorActions.find(({ name }) => name === "mark_fix_available")
         ?.annotations,

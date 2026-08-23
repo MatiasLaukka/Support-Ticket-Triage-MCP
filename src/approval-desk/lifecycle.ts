@@ -285,6 +285,13 @@ function phaseForLifecycle(input: {
   if (input.diagnosis.state === "invalidated" || input.diagnosis.state === "rejected") {
     return "evaluation-needed";
   }
+  // A fresh evaluation with complete evidence is the handoff that records the
+  // next diagnosis. The previous diagnosis may still project an ambiguous or
+  // insufficient diagnostic snapshot, but it is historical once the newer
+  // recommendation satisfies the authoritative diagnosis blockers. Let the
+  // guidance projection own this boundary instead of sending the operator back
+  // into an evaluation loop.
+  if (input.guidance.stage === "diagnosis-ready") return "diagnosis-ready";
   if (input.diagnosticInvestigation.state === "ambiguous" || input.diagnosticInvestigation.state === "insufficient-evidence") {
     return "evaluation-needed";
   }
@@ -301,7 +308,6 @@ function phaseForLifecycle(input: {
         : "verification";
     }
   }
-  if (input.guidance.stage === "diagnosis-ready") return "diagnosis-ready";
   if (input.guidance.stage === "review") return "recommendation-review";
   if (input.recommendation === undefined || input.guidance.stage === "active" || input.guidance.stage === "customer-replied") {
     return "evaluation-needed";

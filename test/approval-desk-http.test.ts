@@ -1599,6 +1599,37 @@ describe("createApprovalDeskHttpServer", () => {
     );
   });
 
+  it("hands TKT-1010 to diagnosis after the automatic evidence loop completes", async () => {
+    const { json } = await startFixture();
+
+    const first = await json("/api/tickets/TKT-1010/recommendations", {
+      method: "POST",
+      body: JSON.stringify({ actor: "approval-desk" }),
+    });
+    expect(first.body.recommendation.missingEvidence.length).toBeGreaterThan(0);
+    await approveAndSend(json, "TKT-1010", first.body.recommendation);
+
+    const second = await json("/api/tickets/TKT-1010/recommendations", {
+      method: "POST",
+      body: JSON.stringify({ actor: "approval-desk" }),
+    });
+    expect(second.body.recommendation.missingEvidence.length).toBeGreaterThan(0);
+    await approveAndSend(json, "TKT-1010", second.body.recommendation);
+
+    const third = await json("/api/tickets/TKT-1010/recommendations", {
+      method: "POST",
+      body: JSON.stringify({ actor: "approval-desk" }),
+    });
+    expect(third.body.recommendation.missingEvidence).toEqual([]);
+    await approveAndSend(json, "TKT-1010", third.body.recommendation);
+
+    const detail = await json("/api/tickets/TKT-1010");
+    expect(detail.body.lifecycle).toMatchObject({
+      phase: "diagnosis-ready",
+      primaryAction: { kind: "record-diagnosis", availability: "primary" },
+    });
+  });
+
   it("records diagnosis only after a done response with complete evidence", async () => {
     const { deps, json } = await startFixture();
     await deps.tickets.update("TKT-1010", 0, (ticket) => ({

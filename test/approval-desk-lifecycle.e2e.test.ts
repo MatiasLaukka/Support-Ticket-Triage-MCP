@@ -325,11 +325,24 @@ describe("Approval Desk lifecycle contract", () => {
 async function startLiveApprovalDeskApp(baseUrl: string) {
   const elements = createElements();
   const requests: Array<{ path: string; init?: RequestInit }> = [];
+  let pendingRequests = 0;
   const document = { createElement: () => new FakeElement(), getElementById: (id: string) => elements[id] };
   const fetchOverride = async (path: string, init?: RequestInit) => {
     requests.push({ path, init });
-    const response = await fetch(`${baseUrl}${path}`, init);
-    return jsonResponse(await response.json(), response.status);
+    pendingRequests += 1;
+    try {
+      const response = await fetch(`${baseUrl}${path}`, init);
+      return jsonResponse(await response.json(), response.status);
+    } finally {
+      pendingRequests -= 1;
+    }
+  };
+  const waitForIdle = async () => {
+    for (let attempt = 0; attempt < 500 && pendingRequests > 0; attempt += 1) {
+      await new Promise((resolveWait) => setTimeout(resolveWait, 10));
+    }
+    await settle(10);
+    expect(pendingRequests).toBe(0);
   };
   Function("document", "fetch", "encodeURIComponent", "confirm", extractScript(approvalDeskHtml))(
     document,
@@ -343,33 +356,28 @@ async function startLiveApprovalDeskApp(baseUrl: string) {
     requests,
     wait: async (milliseconds = 0) => {
       await new Promise((resolveWait) => setTimeout(resolveWait, milliseconds));
-      await settle(10);
+      await waitForIdle();
     },
     setQueueFilter: (value: string) => elements.queueFilters.children.find((field) => field.value === value)!.dispatch("click"),
     selectTicket: async (id: string) => {
       elements.ticketList.children.find((item) => item.innerHTML.includes(id))!.dispatch("click");
-      await new Promise((resolveWait) => setTimeout(resolveWait, 80));
-      await settle(20);
+      await waitForIdle();
     },
     refreshSelectedTicket: async (id: string) => {
       elements.ticketList.children.find((item) => item.innerHTML.includes(id))!.dispatch("click");
-      await new Promise((resolveWait) => setTimeout(resolveWait, 120));
-      await settle(30);
+      await waitForIdle();
     },
     createUpdatedRecommendation: async () => {
       elements.createUpdatedRecommendation.dispatch("click");
-      await new Promise((resolveWait) => setTimeout(resolveWait, 120));
-      await settle(30);
+      await waitForIdle();
     },
     click: async (id: string) => {
       elements[id].dispatch("click");
-      await new Promise((resolveWait) => setTimeout(resolveWait, 80));
-      await settle(10);
+      await waitForIdle();
     },
     backToNormalActionBarAndRefresh: async () => {
       elements.diagnosisPanel.dispatch("click", { target: { dataset: { action: "back-to-normal-action-bar" } } });
-      await new Promise((resolveWait) => setTimeout(resolveWait, 120));
-      await settle(20);
+      await waitForIdle();
     },
   };
 }

@@ -1227,6 +1227,7 @@ describe("createApprovalDeskHttpServer", () => {
       });
       expect(http.body.lifecycle.actions.map(({ kind }: { kind: string }) => kind)).toEqual([
         "record-fix-available",
+        "apply-scoped-fix",
         "review-pattern",
       ]);
       expect(http.body.operatorGuidance).toEqual(
@@ -2758,6 +2759,109 @@ describe("createApprovalDeskHttpServer", () => {
         body: expect.stringContaining("webhook"),
       }),
     );
+  });
+
+  it("recovers from a rejected TKT-1010 diagnosis through evaluation and automatic evidence replies", async () => {
+    let currentNow = new Date("2026-06-10T09:00:00.000Z");
+    const observedRejectedDiagnoses: Array<DiagnosisContext | undefined> = [];
+    const { deps, json } = await startFixture({
+      classificationReasoningProvider: {
+        async reason(input) {
+          observedRejectedDiagnoses.push(input.excludedDiagnosis);
+          return parityClassificationProvider.reason(input);
+        },
+      },
+    }, { now: () => currentNow });
+    await deps.tickets.update("TKT-1010", 0, (ticket) => ({
+      ...ticket,
+      category: "performance",
+      priority: "P3",
+      team: "product",
+      tags: [...ticket.tags, "performance"],
+    }));
+    const initial = await json("/api/tickets/TKT-1010/recommendations", {
+      method: "POST",
+      body: JSON.stringify({
+        actor: "approval-desk",
+        aiPreference: "deterministic",
+        customerReplies: [{
+          id: "reply-rejected-diagnosis-evidence",
+          createdAt: "2026-06-10T09:00:00.000Z",
+          body: "The campaign name is Summer Flash Sale. The failure timestamp was 2026-06-10 09:15 UTC. I use Chrome, and the page is still blank after signing out and back in. The affected scope appears to be 12 profiles in the latest export.",
+        }],
+      }),
+    });
+    expect(initial.status).toBe(201);
+    await approveAndSend(json, "TKT-1010", initial.body.recommendation, false);
+    const diagnosis = await json("/api/tickets/TKT-1010/diagnosis", {
+      method: "POST",
+      body: JSON.stringify({ actor: "product-support" }),
+    });
+    expect(diagnosis.status, JSON.stringify(diagnosis.body)).toBe(201);
+    const original = diagnosis.body.auditEvent.after.diagnosis;
+    const diagnosisId = diagnosis.body.auditEvent.id;
+    const ticket = await json("/api/tickets/TKT-1010");
+    const rejected = await deps.service.reviewDiagnosis({
+      decision: "reject",
+      diagnosisId,
+      ticketId: "TKT-1010",
+      sourceTicketRevision: ticket.body.ticket.revision,
+      sourceConversationWatermark: ticket.body.lifecycle.current.conversationWatermark,
+      editedDiagnosis: original,
+      actor: "matias-reviewer",
+      rationale: "The initial theory needs a different direction.",
+      reviewedAt: "2026-06-10T09:02:00.000Z",
+    });
+    expect(rejected.action).toBe("diagnosis-reviewed");
+
+    const rejectedDetail = await json("/api/tickets/TKT-1010");
+    expect(rejectedDetail.body.lifecycle).toMatchObject({
+      phase: "evaluation-needed",
+      primaryAction: { kind: "evaluate-ticket", availability: "primary" },
+    });
+    expect(rejectedDetail.body.operatorGuidance).toMatchObject({
+      nextAction: "evaluate-ticket",
+    });
+    expect(rejectedDetail.body.operatorGuidance.requiredReview).toBeUndefined();
+
+    await deps.tickets.update("TKT-1010", rejectedDetail.body.ticket.revision, (current) => ({
+      ...current,
+      subject: "Campaign editor stays blank",
+      description: "The campaign editor stays blank after selecting a campaign.",
+    }));
+
+    currentNow = new Date("2026-06-10T09:03:00.000Z");
+    const reevaluated = await json("/api/tickets/TKT-1010/recommendations", {
+      method: "POST",
+      body: JSON.stringify({ actor: "approval-desk", aiPreference: "gpt-preferred" }),
+    });
+    expect(reevaluated.status).toBe(201);
+    expect(observedRejectedDiagnoses).toHaveLength(1);
+    expect(observedRejectedDiagnoses[0]).toMatchObject({
+      causeType: original.causeType,
+      customerSafeSummary: original.customerSafeSummary,
+    });
+    expect((await deps.recommendations.list()).filter((item) => item.ticketId === "TKT-1010")).toHaveLength(2);
+
+    await approveAndSend(json, "TKT-1010", reevaluated.body.recommendation);
+    const afterAutomaticReply = await json("/api/tickets/TKT-1010");
+    expect(afterAutomaticReply.body.conversationTimeline.at(-1)).toMatchObject({
+      kind: "customer-reply",
+    });
+    expect(afterAutomaticReply.body.conversationTimeline.at(-1).body).toContain("ChunkLoadError");
+    expect(afterAutomaticReply.body.recommendationSummary.workflowState).toBe("customer-replied");
+
+    currentNow = new Date("2026-06-10T09:04:00.000Z");
+    const nextCycle = await json("/api/tickets/TKT-1010/recommendations", {
+      method: "POST",
+      body: JSON.stringify({ actor: "approval-desk" }),
+    });
+    expect(nextCycle.status).toBe(201);
+    expect(nextCycle.body.lifecycle).toMatchObject({
+      phase: "recommendation-review",
+      primaryAction: { kind: "review-recommendation", availability: "primary" },
+    });
+    expect((await deps.recommendations.list()).filter((item) => item.ticketId === "TKT-1010")).toHaveLength(3);
   });
 
   it("can disable automatic replies for an Approval Desk testing run", async () => {

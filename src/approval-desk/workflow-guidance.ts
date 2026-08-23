@@ -566,6 +566,20 @@ export function buildOperatorGuidance(input: {
       input.audits,
     )
   ) {
+    if (latestDiagnosisReview?.review.decision === "reject") {
+      return withKnowledgePattern({
+        stage: "diagnosis-recorded",
+        changed: "The latest diagnosis was rejected and needs a new evaluation.",
+        nextAction: "evaluate-ticket",
+        reason:
+          "The rejected diagnosis remains historical; evaluate the current ticket before recording another diagnosis.",
+        approval: noApproval,
+        unlocksTool: "evaluate_ticket",
+        blockers: [],
+        customerNextStep:
+          "Ask for the missing clarification or new evidence, then evaluate the ticket again.",
+      });
+    }
     if (latestRecordedDiagnosticState?.state === "ambiguous") {
       return withKnowledgePattern({
         stage: "diagnosis-recorded",

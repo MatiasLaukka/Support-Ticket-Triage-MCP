@@ -68,7 +68,7 @@ function automaticDiagnosticFollowUpReply(input: {
   recommendation: TriageRecommendation;
   auditsBeforeSent: readonly AuditEvent[];
 }, persistedContext: ReturnType<typeof selectPersistedDiagnosticWorkflowContext>): string | undefined {
-  const diagnosis = persistedContext.diagnosis;
+  const diagnosis = persistedContext.diagnosis ?? persistedContext.rejectedDiagnosis;
   if (
     diagnosis === undefined ||
     !recommendationWasSubmittedAtOrAfter(

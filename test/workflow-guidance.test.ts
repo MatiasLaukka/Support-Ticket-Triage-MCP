@@ -597,6 +597,7 @@ describe("buildOperatorGuidance", () => {
     });
     expect(lifecycle.actions.map(({ kind }) => kind)).toEqual([
       "record-fix-available",
+      "apply-scoped-fix",
       "review-pattern",
     ]);
   });
@@ -639,6 +640,7 @@ describe("buildOperatorGuidance", () => {
     });
     expect(lifecycle.actions.map(({ kind }) => kind)).toEqual([
       "record-fix-available",
+      "apply-scoped-fix",
     ]);
   });
 

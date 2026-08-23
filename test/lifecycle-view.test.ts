@@ -168,5 +168,172 @@ describe("lifecycle projection", () => {
     expect(lifecycle.phase).toBe("evaluation-needed");
     expect(lifecycle.diagnosticInvestigation.state).toBe("ambiguous");
     expect(lifecycle.primaryAction.kind).toBe("evaluate-ticket");
+    expect(lifecycle.actions).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "evaluate-ticket", availability: "primary" }),
+      expect.objectContaining({ kind: "review-diagnosis", availability: "blocked" }),
+      expect.objectContaining({ kind: "revalidate-diagnosis", availability: "blocked" }),
+      expect.objectContaining({ kind: "reject-diagnosis", availability: "blocked" }),
+    ]));
+  });
+
+  it("keeps lifecycle and operator guidance aligned after diagnosis rejection", () => {
+    const approvedRecommendation = TriageRecommendationSchema.parse({
+      ...recommendation,
+      resolution: "approved",
+    });
+    const diagnosis = AuditEventSchema.parse({
+      id: "30000000-0000-4000-8000-000000000010",
+      timestamp: "2026-06-10T09:01:00.000Z",
+      actor: "product-support",
+      action: "diagnosis-completed",
+      ticketId: ticket.id,
+      before: {},
+      after: {
+        diagnosis: {
+          status: "completed",
+          causeType: "performance",
+          customerSafeSummary: "The checkout processing path may be delayed.",
+          evidenceUsed: ["request trace"],
+          confidence: "likely",
+          owner: "engineering",
+          recommendedNextAction: "Collect discriminating evidence.",
+          doNotSay: ["Do not call this confirmed."],
+        },
+      },
+      rationale: "Initial diagnosis recorded for review.",
+      knowledgeArticleIds: [],
+      result: "success",
+    });
+    const rejected = AuditEventSchema.parse({
+      id: "30000000-0000-4000-8000-000000000011",
+      timestamp: "2026-06-10T09:02:00.000Z",
+      actor: "product-support",
+      action: "diagnosis-reviewed",
+      ticketId: ticket.id,
+      before: { diagnosisId: diagnosis.id },
+      after: {
+        diagnosisReview: {
+          decision: "reject",
+          diagnosisId: diagnosis.id,
+          ticketId: ticket.id,
+          sourceTicketRevision: ticket.revision,
+          sourceConversationWatermark: { state: "none" },
+          editedDiagnosis: diagnosis.after.diagnosis,
+          actor: "product-support",
+          rationale: "The evidence does not support this diagnosis.",
+          reviewedAt: "2026-06-10T09:02:00.000Z",
+        },
+      },
+      rationale: "The evidence does not support this diagnosis.",
+      knowledgeArticleIds: [],
+      result: "success",
+    });
+
+    const lifecycle = buildTicketLifecycleView({
+      ticket,
+      recommendations: [approvedRecommendation],
+      audits: [diagnosis, rejected],
+    });
+    const workflow = buildTicketWorkflowReadModel({
+      ticket,
+      recommendations: [approvedRecommendation],
+      audits: [diagnosis, rejected],
+    });
+
+    expect(lifecycle.phase).toBe("evaluation-needed");
+    expect(lifecycle.primaryAction).toMatchObject({ kind: "evaluate-ticket", availability: "primary" });
+    expect(lifecycle.actions).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "evaluate-ticket", availability: "primary" }),
+      expect.objectContaining({ kind: "review-diagnosis", availability: "blocked" }),
+      expect.objectContaining({ kind: "revalidate-diagnosis", availability: "blocked" }),
+      expect.objectContaining({ kind: "reject-diagnosis", availability: "completed" }),
+    ]));
+    expect(workflow.operatorGuidance.nextAction).toBe("evaluate-ticket");
+    expect(workflow.operatorGuidance.requiredReview).toBeUndefined();
+  });
+
+  it("keeps evaluation primary while an approved likely diagnosis awaits confirmation", () => {
+    const awaitingEvidenceRecommendation = TriageRecommendationSchema.parse({
+      ...recommendation,
+      resolution: "approved",
+      requiredEvidence: [{
+        id: "confirmation-trace",
+        label: "Confirmation trace",
+        aliases: [],
+        customerQuestion: "Share the confirmation trace.",
+        source: "policy",
+      }],
+      missingEvidence: [{
+        id: "confirmation-trace",
+        label: "Confirmation trace",
+        aliases: [],
+        customerQuestion: "Share the confirmation trace.",
+        source: "policy",
+      }],
+    });
+    const diagnosis = AuditEventSchema.parse({
+      id: "30000000-0000-4000-8000-000000000020",
+      timestamp: "2026-06-10T09:01:00.000Z",
+      actor: "product-support",
+      action: "diagnosis-completed",
+      ticketId: ticket.id,
+      before: {},
+      after: {
+        diagnosis: {
+          status: "completed",
+          causeType: "performance",
+          customerSafeSummary: "The processing path is likely delayed.",
+          evidenceUsed: ["request trace"],
+          confidence: "likely",
+          owner: "engineering",
+          recommendedNextAction: "Collect the confirmation trace.",
+          doNotSay: ["Do not call this confirmed."],
+        },
+      },
+      rationale: "Likely diagnosis recorded.",
+      knowledgeArticleIds: [],
+      result: "success",
+    });
+    const review = AuditEventSchema.parse({
+      id: "30000000-0000-4000-8000-000000000021",
+      timestamp: "2026-06-10T09:02:00.000Z",
+      actor: "product-support",
+      action: "diagnosis-reviewed",
+      ticketId: ticket.id,
+      before: { diagnosisId: diagnosis.id },
+      after: {
+        diagnosisReview: {
+          decision: "approve",
+          diagnosisId: diagnosis.id,
+          ticketId: ticket.id,
+          sourceTicketRevision: ticket.revision,
+          sourceConversationWatermark: { state: "none" },
+          editedDiagnosis: diagnosis.after.diagnosis,
+          actor: "product-support",
+          rationale: "The likely diagnosis is ready for confirmation.",
+          reviewedAt: "2026-06-10T09:02:00.000Z",
+        },
+      },
+      rationale: "The likely diagnosis is ready for confirmation.",
+      knowledgeArticleIds: [],
+      result: "success",
+    });
+
+    const lifecycle = buildTicketLifecycleView({
+      ticket,
+      recommendations: [awaitingEvidenceRecommendation],
+      audits: [diagnosis, review],
+    });
+
+    expect(lifecycle.phase).toBe("awaiting-confirmation");
+    expect(lifecycle.primaryAction).toMatchObject({
+      kind: "evaluate-ticket",
+      availability: "primary",
+    });
+    expect(lifecycle.actions).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "evaluate-ticket", availability: "primary" }),
+      expect.objectContaining({ kind: "review-diagnosis", availability: "blocked" }),
+      expect.objectContaining({ kind: "revalidate-diagnosis", availability: "blocked" }),
+    ]));
   });
 });

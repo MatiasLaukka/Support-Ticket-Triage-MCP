@@ -235,14 +235,15 @@ export function buildTicketLifecycleView(input: WorkflowLifecycleInput): Lifecyc
     reasonCodes: reasonCodesForPhase({ phase, diagnosis, confirmation, fix }),
   });
   const knowledge = knowledgeProjection(guidanceWithKnowledge);
-  const actions = [
+  const actions = lifecycleActionsForPhase({
+    phase,
     primaryAction,
-    ...(knowledge.actionable ? [{
-      kind: "review-pattern" as const,
-      availability: "available" as const,
-      reasonCodes: ["knowledge-candidate-actionable"],
-    }] : []),
-  ];
+    diagnosis,
+    diagnosticInvestigation,
+    confirmation,
+    fix,
+    knowledgeActionable: knowledge.actionable,
+  });
   return LifecycleViewSchema.parse({
     phase,
     primaryAction,
@@ -333,6 +334,89 @@ function primaryActionForPhase(input: {
   });
 }
 
+function lifecycleActionsForPhase(input: {
+  phase: LifecyclePhase;
+  primaryAction: LifecycleAction;
+  diagnosis: LifecycleView["diagnosis"];
+  diagnosticInvestigation: LifecycleView["diagnosticInvestigation"];
+  confirmation: LifecycleView["confirmation"];
+  fix: LifecycleView["fix"];
+  knowledgeActionable: boolean;
+}): LifecycleAction[] {
+  const actions: LifecycleAction[] = [input.primaryAction];
+  const add = (
+    kind: LifecycleActionKind,
+    availability: LifecycleAction["availability"],
+    reasonCodes: string[],
+  ): void => {
+    if (actions.some((action) => action.kind === kind)) return;
+    actions.push(LifecycleActionSchema.parse({ kind, availability, reasonCodes }));
+  };
+  const diagnosisBlockedReason = input.diagnosticInvestigation.state === "ambiguous"
+    ? "diagnosis-ambiguous"
+    : input.diagnosticInvestigation.state === "insufficient-evidence"
+      ? "diagnosis-insufficient-evidence"
+      : input.diagnosis.state === "rejected"
+        ? "diagnosis-rejected"
+        : input.diagnosis.state === "invalidated"
+          ? "diagnosis-invalidated"
+          : "diagnosis-not-ready";
+
+  switch (input.phase) {
+    case "evaluation-needed":
+      add("review-diagnosis", "blocked", [diagnosisBlockedReason]);
+      add("revalidate-diagnosis", "blocked", [diagnosisBlockedReason]);
+      add(
+        "reject-diagnosis",
+        input.diagnosis.state === "rejected" ? "completed" : "blocked",
+        input.diagnosis.state === "rejected" ? ["diagnosis-rejected"] : [diagnosisBlockedReason],
+      );
+      break;
+    case "recommendation-review":
+      add("send-customer-response", "blocked", ["recommendation-approval-required"]);
+      break;
+    case "diagnosis-ready":
+      add("review-diagnosis", "blocked", ["diagnosis-not-recorded"]);
+      add("revalidate-diagnosis", "blocked", ["diagnosis-not-recorded"]);
+      add("reject-diagnosis", "blocked", ["diagnosis-not-recorded"]);
+      break;
+    case "diagnosis-review":
+      add(
+        "revalidate-diagnosis",
+        input.diagnosis.state === "stale" ? "primary" : "blocked",
+        input.diagnosis.state === "stale" ? ["diagnosis-stale"] : ["diagnosis-not-stale"],
+      );
+      add("reject-diagnosis", "available", ["operator-review"]);
+      break;
+    case "awaiting-confirmation":
+      add("review-diagnosis", "blocked", ["diagnosis-not-confirmed"]);
+      add("revalidate-diagnosis", "blocked", ["diagnosis-not-confirmed"]);
+      add("reject-diagnosis", "blocked", ["diagnosis-not-confirmed"]);
+      break;
+    case "awaiting-fix":
+      add("apply-scoped-fix", "blocked", ["fix-not-available"]);
+      break;
+    case "fix-ready":
+      add("record-fix-available", "completed", ["fix-already-available"]);
+      break;
+    case "verification":
+      add("record-fix-ineffective", "available", ["fix-verification-available"]);
+      break;
+    case "ready-for-close":
+      add("send-customer-response", "completed", ["response-already-sent"]);
+      break;
+    case "resolved":
+      add("resolve-ticket", "completed", ["already-completed"]);
+      break;
+    default:
+      break;
+  }
+  if (input.knowledgeActionable) {
+    add("review-pattern", "available", ["knowledge-candidate-actionable"]);
+  }
+  return actions;
+}
+
 function reasonCodesForPhase(input: {
   phase: LifecyclePhase;
   diagnosis: LifecycleView["diagnosis"];
@@ -342,10 +426,12 @@ function reasonCodesForPhase(input: {
   const reasons: string[] = [];
   if (input.confirmation.state === "awaiting-evidence") reasons.push("missing-evidence");
   if (input.confirmation.state === "awaiting-internal-verification") reasons.push("diagnosis-not-confirmed");
+  if (input.diagnosis.state === "rejected") reasons.push("diagnosis-rejected");
   if (input.diagnosis.state === "stale") reasons.push("diagnosis-stale");
   if (input.diagnosis.state === "invalidated") reasons.push("diagnosis-invalidated");
   if (input.fix.state === "awaiting") reasons.push("fix-not-available");
   if (input.fix.state === "ineffective") reasons.push("fix-ineffective");
+  if (input.phase === "evaluation-needed" && reasons.length === 0) reasons.push("evaluation-required");
   if (reasons.length === 0 && input.phase === "resolved") reasons.push("already-completed");
   return reasons;
 }

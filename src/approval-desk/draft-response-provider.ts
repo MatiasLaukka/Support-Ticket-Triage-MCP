@@ -151,6 +151,15 @@ export interface GptClassificationReasoningInput {
    * must not be passed to model providers.
    */
   deterministicClassification: Omit<TicketClassification, "classificationConfidence">;
+
+  /**
+   * Knowledge selected by the deterministic baseline for advisory grounding.
+   * The classifier provider does not receive the complete knowledge corpus.
+   */
+  knowledgeArticles: ReadonlyArray<
+    Pick<KnowledgeArticle, "id" | "title" | "tags" | "body">
+  >;
+
   excludedDiagnosis?: DiagnosisContext;
 }
 

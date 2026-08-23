@@ -286,7 +286,7 @@ describe("approvalDeskHtml", () => {
     expect(app.el("diagnosisActionPanel").hidden).toBe(true);
     expect(app.el("actionBarTitle").textContent).toBe("Customer replied");
     expect(app.el("createUpdatedRecommendation").hidden).toBe(false);
-    expect(app.el("createUpdatedRecommendation").textContent).toBe("Evaluate again");
+    expect(app.el("createUpdatedRecommendation").textContent).toBe("Evaluate");
   });
 
   it("starts a fresh evaluation cycle from the customer-replied state", async () => {
@@ -395,7 +395,7 @@ describe("approvalDeskHtml", () => {
     expect(app.el("diagnosisPanel").innerHTML).toContain(
       "The likely diagnosis needs confirmation before a fix can be applied.",
     );
-    expect(app.el("diagnosisPanel").innerHTML).not.toContain(">Evaluate again<");
+    expect(app.el("diagnosisPanel").innerHTML).not.toContain(">Re-evaluate<");
     expect(app.el("diagnosisPanel").innerHTML).toContain("Simulate confirmation");
   });
 
@@ -422,7 +422,7 @@ describe("approvalDeskHtml", () => {
     await app.selectFirstTicket();
     app.openApprovedDiagnosis();
 
-    expect(app.el("diagnosisPanel").innerHTML).not.toContain(">Evaluate again<");
+    expect(app.el("diagnosisPanel").innerHTML).not.toContain(">Re-evaluate<");
     expect(app.el("diagnosisPanel").innerHTML).toContain("Waiting for confirmation");
     expect(app.el("diagnosisPanel").innerHTML).toContain("Simulate confirmation");
   });
@@ -526,6 +526,79 @@ describe("approvalDeskHtml", () => {
       "2026-08-19T20:01:41.123Z",
     );
   });
+
+  it("keeps historical diagnosis selection compact and read-only", async () => {
+    const first = fixtureDiagnosisView({ id: "diagnosis-first", summary: "The first theory." });
+    const second = fixtureDiagnosisView({ id: "diagnosis-second", summary: "The current theory." });
+    const app = await startApprovalDeskApp({ diagnoses: [first, second] });
+
+    await app.selectFirstTicket();
+    app.selectDiagnosis(first.originalDiagnosis.id);
+
+    expect(app.el("diagnosisPanel").innerHTML).toContain('data-diagnosis-phase="history"');
+    expect(app.el("diagnosisPanel").innerHTML).toContain("The first theory.");
+    expect(app.el("diagnosisPanel").innerHTML).not.toContain("Evidence:");
+    expect(app.el("diagnosisPanel").innerHTML).not.toContain("Workflow context:");
+    expect(app.el("diagnosisPanel").innerHTML).not.toContain('data-action="review-diagnosis"');
+    expect(app.el("diagnosisPanel").innerHTML).not.toContain('data-action="open-diagnosis-inspection"');
+  });
+
+  it("refreshes the authoritative lifecycle before leaving diagnosis for the action bar", async () => {
+    const app = await startApprovalDeskApp({
+      ticketDetailRecommendation: fixtureRecommendation,
+      diagnoses: [fixtureDiagnosisView()],
+      ticketDetail: {
+        lifecycle: fixtureLifecycle({
+          phase: "diagnosis-review",
+          primaryAction: "review-diagnosis",
+          actions: [lifecycleAction("review-diagnosis", "primary")],
+        }),
+      },
+      ticketDetailLifecycleSequence: [
+        fixtureLifecycle({
+          phase: "diagnosis-review",
+          primaryAction: "review-diagnosis",
+          actions: [lifecycleAction("review-diagnosis", "primary")],
+        }),
+        fixtureLifecycle({
+          phase: "evaluation-needed",
+          primaryAction: "evaluate-ticket",
+          actions: [lifecycleAction("evaluate-ticket", "primary", ["diagnosis-needs-more-evidence"])],
+        }),
+      ],
+    });
+
+    await app.selectFirstTicket();
+    await app.backToNormalActionBarAndRefresh();
+
+    expect(app.el("diagnosisActionPanel").hidden).toBe(true);
+    expect(app.el("createUpdatedRecommendation").hidden).toBe(false);
+    expect(app.el("createUpdatedRecommendation").textContent).toBe("Evaluate");
+    expect(app.el("actionBarTitle").textContent).not.toBe("Response ready");
+    expect(app.ticketDetailRequests()).toBeGreaterThanOrEqual(2);
+  });
+
+  it("explains an authoritative no-action state instead of rendering an empty action bar", async () => {
+    const app = await startApprovalDeskApp({
+      ticketDetail: {
+        lifecycle: fixtureLifecycle({
+          phase: "escalated",
+          primaryAction: "none",
+          actions: [lifecycleAction("none", "primary", ["further-investigation-required"])],
+        }),
+      },
+    });
+
+    await app.selectFirstTicket();
+
+    expect(app.el("actionBarTitle").textContent).toBe("Further investigation required");
+    expect(app.el("actionBarHint").textContent).toContain("No governed operator action is available");
+    expect(app.el("createUpdatedRecommendation").hidden).toBe(true);
+    expect(app.el("diagnoseButton").hidden).toBe(true);
+    expect(app.el("fixButton").hidden).toBe(true);
+    expect(app.el("closeTicketButton").hidden).toBe(true);
+  });
+
 
   it("keeps diagnosis actions compact while inspection remains a separate phase", async () => {
     const app = await startApprovalDeskApp({
@@ -810,7 +883,7 @@ describe("approvalDeskHtml", () => {
     expect(app.el("actionBarHint").textContent).toContain("scoped fix is recorded");
     expect(app.el("createUpdatedRecommendation").hidden).toBe(false);
     expect(app.el("createUpdatedRecommendation").disabled).toBe(false);
-    expect(app.el("createUpdatedRecommendation").textContent).toBe("Brief");
+    expect(app.el("createUpdatedRecommendation").textContent).toBe("Send");
   });
 
   it("keeps scoped fix visible with actionable feedback when persistence fails", async () => {
@@ -2386,7 +2459,7 @@ describe("approvalDeskHtml", () => {
       approvalDeskHtml.indexOf('id="workflowActionBar"'),
     );
     expect(app.el("createUpdatedRecommendation").hidden).toBe(false);
-    expect(app.el("createUpdatedRecommendation").textContent).toBe("Evaluate again");
+    expect(app.el("createUpdatedRecommendation").textContent).toBe("Evaluate");
     expect(app.el("advancedSettings").open).toBe(false);
     expect(app.el("replyComposer").open).toBe(false);
   });
@@ -2489,7 +2562,7 @@ describe("approvalDeskHtml", () => {
     expect(repliedApp.el("createUpdatedRecommendation").hidden).toBe(false);
     expect(repliedApp.el("createUpdatedRecommendation").disabled).toBe(false);
     expect(repliedApp.el("createUpdatedRecommendation").textContent).toBe(
-      "Evaluate again",
+      "Evaluate",
     );
 
     await repliedApp.createUpdatedRecommendation();
@@ -2589,7 +2662,7 @@ describe("approvalDeskHtml", () => {
       "Recommendation failed",
     );
     expect(app.el("createUpdatedRecommendation").disabled).toBe(false);
-    expect(app.el("createUpdatedRecommendation").textContent).toBe("Evaluate again");
+    expect(app.el("createUpdatedRecommendation").textContent).toBe("Evaluate");
     expect(
       app.requests.some((request) => request.path.endsWith("/reject")),
     ).toBe(false);
@@ -2910,7 +2983,7 @@ describe("approvalDeskHtml", () => {
 
     expect(app.el("decisionControls").hidden).toBe(false);
     expect(app.el("createUpdatedRecommendation").hidden).toBe(false);
-    expect(app.el("createUpdatedRecommendation").textContent).toBe("Update");
+    expect(app.el("createUpdatedRecommendation").textContent).toBe("Evaluate");
     expect(app.el("actionBarHint").textContent).toContain(
       "Draft the customer update",
     );
@@ -3071,7 +3144,7 @@ describe("approvalDeskHtml", () => {
       "I sent the remaining evidence.",
     );
     expect(app.el("createUpdatedRecommendation").hidden).toBe(false);
-    expect(app.el("createUpdatedRecommendation").textContent).toBe("Evaluate again");
+    expect(app.el("createUpdatedRecommendation").textContent).toBe("Evaluate");
 
     await app.createUpdatedRecommendation();
 
@@ -4447,6 +4520,7 @@ async function startApprovalDeskApp(options: {
     operatorGuidance?: Record<string, unknown>;
     lifecycle?: Record<string, unknown>;
   };
+  ticketDetailLifecycleSequence?: Array<Record<string, unknown>>;
   recommendationLifecycle?: Record<string, unknown>;
   knowledgeCandidate?: Record<string, unknown>;
   knowledgeGptAdvisory?: Record<string, unknown>;
@@ -4465,6 +4539,7 @@ async function startApprovalDeskApp(options: {
   diagnosisFixFailures?: string[];
   diagnosisFixPlans?: Record<string, DiagnosisMutationPlan[]>;
   diagnosisFixAuditEvents?: Array<Record<string, unknown>>;
+  fetchOverride?: (path: string, init?: RequestInit) => Promise<Response>;
 } = {}) {
   const elements = createElements();
   const requests: Array<{ path: string; init?: RequestInit }> = [];
@@ -4482,12 +4557,16 @@ async function startApprovalDeskApp(options: {
   const conversationTimeline = [
     ...(options.ticketDetail?.conversationTimeline ?? []),
   ];
+  let ticketDetailLifecycleRequestCount = 0;
   const document = {
     createElement: () => new FakeElement(),
     getElementById: (id: string) => elements[id],
   };
   const fetch = async (path: string, init?: RequestInit) => {
     requests.push({ path, init });
+    if (options.fetchOverride !== undefined) {
+      return options.fetchOverride(path, init);
+    }
     if (path === "/api/tickets?limit=50") {
       return jsonResponse({ items: tickets, total: tickets.length });
     }
@@ -4612,6 +4691,11 @@ async function startApprovalDeskApp(options: {
     }
     if (path === `/api/tickets/${selectedFixtureTicket.id}`) {
       await settle(options.ticketDetailDelayTicks?.[selectedFixtureTicket.id] ?? 0);
+      const lifecycleSequence = options.ticketDetailLifecycleSequence;
+      const lifecycle = lifecycleSequence === undefined
+        ? options.ticketDetail?.lifecycle
+        : lifecycleSequence[Math.min(ticketDetailLifecycleRequestCount, lifecycleSequence.length - 1)];
+      ticketDetailLifecycleRequestCount += 1;
       const recommendationHistory = createdRecommendation === undefined
         ? (options.ticketDetail?.recommendationHistory ?? [])
         : [
@@ -4638,9 +4722,9 @@ async function startApprovalDeskApp(options: {
         operatorGuidance: options.ticketDetail?.operatorGuidance ?? defaultOperatorGuidance,
         ...(createdRecommendation !== undefined && options.recommendationLifecycle !== undefined
           ? { lifecycle: options.recommendationLifecycle }
-          : options.ticketDetail?.lifecycle === undefined
+          : lifecycle === undefined
             ? {}
-            : { lifecycle: options.ticketDetail.lifecycle }),
+            : { lifecycle }),
       });
     }
     if (path === `/api/tickets/${selectedFixtureTicket.id}/customer-replies`) {
@@ -4878,9 +4962,20 @@ async function startApprovalDeskApp(options: {
       });
       await settle(10);
     },
+    refreshSelectedTicket: async (id: string) => {
+      const button = elements.ticketList.children.find((item) => item.innerHTML.includes(id));
+      button!.dispatch("click");
+      await settle(40);
+      await new Promise((resolveRefresh) => setTimeout(resolveRefresh, 500));
+    },
     openDiagnosisInspection: () => {
       elements.diagnosisPanel.dispatch("click", {
         target: { dataset: { action: "open-diagnosis-inspection" } },
+      });
+    },
+    selectDiagnosis: (diagnosisId: string) => {
+      elements.diagnosisPanel.dispatch("click", {
+        target: { dataset: { action: "select-diagnosis", diagnosisId } },
       });
     },
     openApprovedDiagnosis: () => {
@@ -4914,6 +5009,12 @@ async function startApprovalDeskApp(options: {
       elements.diagnosisPanel.dispatch("click", {
         target: { dataset: { action: "back-to-normal-action-bar" } },
       });
+    },
+    backToNormalActionBarAndRefresh: async () => {
+      elements.diagnosisPanel.dispatch("click", {
+        target: { dataset: { action: "back-to-normal-action-bar" } },
+      });
+      await settle(30);
     },
     setDiagnosisReviewRationale: (value: string) => {
       elements.diagnosisPanel.dispatch("input", {

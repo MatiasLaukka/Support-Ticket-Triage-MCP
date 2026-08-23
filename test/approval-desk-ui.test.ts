@@ -912,6 +912,25 @@ describe("approvalDeskHtml", () => {
     expect(app.el("diagnosisPanel").innerHTML).toContain("Approve only after checking the evidence");
   });
 
+  it("shows a diagnosis review rejection in Inspection instead of appearing inert", async () => {
+    const app = await startApprovalDeskApp({
+      diagnoses: [fixtureDiagnosisView()],
+      diagnosisReviewPlans: {
+        "TKT-1001": [{ error: "An ambiguous or escalated diagnosis cannot become authoritative." }],
+      },
+    });
+    await app.selectFirstTicket();
+    app.openDiagnosisInspection();
+
+    await app.reviewDiagnosis("approve");
+
+    expect(app.el("diagnosisPanel").innerHTML).toContain("Review could not be recorded.");
+    expect(app.el("diagnosisPanel").innerHTML).toContain(
+      "An ambiguous or escalated diagnosis cannot become authoritative.",
+    );
+    expect(app.el("diagnosisPanel").innerHTML).toContain('data-diagnosis-phase="inspection"');
+  });
+
   it("offers re-evaluation after a rejected diagnosis without showing it as approved", async () => {
     const view = fixtureDiagnosisView();
     const rejectedReview = {

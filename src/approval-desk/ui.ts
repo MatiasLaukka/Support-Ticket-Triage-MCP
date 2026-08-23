@@ -2000,6 +2000,7 @@ export const approvalDeskHtml = `<!doctype html>
         diagnosisDraft: null,
         diagnosisReviewRationale: '',
         diagnosisReviewDecision: null,
+        diagnosisReviewError: null,
         diagnosisImpact: { rationale: '', selectedTicketIds: [], ticketReasons: {} },
         diagnosisFixResults: [],
         diagnosisFixError: null,
@@ -2360,6 +2361,7 @@ export const approvalDeskHtml = `<!doctype html>
         state.diagnosisDraft = null;
         state.diagnosisReviewRationale = '';
         state.diagnosisReviewDecision = null;
+        state.diagnosisReviewError = null;
         state.diagnosisImpact = { rationale: '', selectedTicketIds: [], ticketReasons: {} };
         state.diagnosisFixResults = [];
         state.diagnosisFixError = null;
@@ -2601,6 +2603,9 @@ export const approvalDeskHtml = `<!doctype html>
         const reEvaluateControl = diagnosisRejected || diagnosisNeedsFreshEvaluation(view)
           ? '<button type="button" class="secondary" data-action="reopen-diagnosis-evaluation">Re-evaluate</button>'
           : '';
+        const diagnosisReviewError = state.diagnosisReviewError === null
+          ? ''
+          : '<p class="warning diagnosis-review-error" role="alert"><strong>Review could not be recorded.</strong> ' + escapeHtml(state.diagnosisReviewError) + '</p>';
         const diagnosisNextControl = diagnosisNeedsFreshEvaluation(view)
           ? ''
           : '<button type="button" class="secondary" data-action="open-diagnosis-inspection">Next</button>';
@@ -2631,6 +2636,7 @@ export const approvalDeskHtml = `<!doctype html>
           ? '<section class="diagnosis-phase-panel" data-diagnosis-phase="inspection" aria-label="Inspection">' +
               '<header><h4>Inspection</h4><span class="meta">Edit the fields, then approve or reject.</span></header>' +
               '<p class="diagnosis-inspection-intro">The assistant drafted these fields from the available evidence. Approve only after checking the evidence; reject when the theory needs a different direction.</p>' +
+              diagnosisReviewError +
               '<div class="diagnosis-inspection-grid">' +
                 '<label>Customer-safe summary<textarea data-diagnosis-draft-field="customerSafeSummary">' + escapeHtml(draft.customerSafeSummary ?? '') + '</textarea></label>' +
                 '<label>Recommended next action<textarea data-diagnosis-draft-field="recommendedNextAction">' + escapeHtml(draft.recommendedNextAction ?? '') + '</textarea></label>' +
@@ -2734,6 +2740,8 @@ export const approvalDeskHtml = `<!doctype html>
         const view = selectedDiagnosisView();
         const draft = diagnosisDraftForView(view);
         if (state.selectedTicket === null || view === null || draft === null) {
+          state.diagnosisReviewError = 'The diagnosis review could not be prepared. Reload the ticket and try again.';
+          renderDiagnosisPanel();
           return;
         }
         const ticketId = state.selectedTicket.id;
@@ -2758,6 +2766,8 @@ export const approvalDeskHtml = `<!doctype html>
           }, { writeErrorToResult: false });
         } catch (error) {
           if (isCurrentDiagnosisMutation(ticketId, diagnosisId, ticketRequestId, mutationToken)) {
+            state.diagnosisReviewError = error instanceof Error ? error.message : 'The diagnosis review request failed.';
+            renderDiagnosisPanel();
             setResult({ error: error instanceof Error ? error.message : 'Request failed.' });
           }
           return;
@@ -2766,6 +2776,7 @@ export const approvalDeskHtml = `<!doctype html>
           return;
         }
         adoptLifecycle(data);
+        state.diagnosisReviewError = null;
         state.diagnoses = Array.isArray(data.diagnoses) ? data.diagnoses : state.diagnoses;
         state.diagnosisDraft = null;
         state.diagnosisReviewRationale = '';
@@ -5519,6 +5530,7 @@ export const approvalDeskHtml = `<!doctype html>
           state.diagnosisDraft = null;
           state.diagnosisReviewRationale = '';
           state.diagnosisReviewDecision = null;
+          state.diagnosisReviewError = null;
           state.diagnosisImpact = { rationale: '', selectedTicketIds: [], ticketReasons: {} };
           state.diagnosisFixResults = [];
           renderDiagnosisPanel();
@@ -5528,6 +5540,7 @@ export const approvalDeskHtml = `<!doctype html>
         }
         if (action === 'open-diagnosis-inspection') {
           state.diagnosisReviewDecision = actionTarget.dataset.reviewDecision ?? null;
+          state.diagnosisReviewError = null;
           state.diagnosisUiPhase = 'inspection';
           renderDiagnosisPanel();
           updateControls();

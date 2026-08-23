@@ -79,6 +79,10 @@ describe("Approval Desk lifecycle contract", () => {
           case "revalidate-diagnosis":
             expect(app.el("diagnosisPanel").innerHTML, JSON.stringify(lifecycle)).toContain("data-review-decision=\"revalidate\"");
             break;
+          case "review-recommendation":
+          case "send-customer-response":
+            expect(app.el("approveButton").hidden, JSON.stringify(lifecycle)).toBe(false);
+            break;
           case "record-fix-available":
             expect(app.el("fixButton").hidden).toBe(false);
             break;

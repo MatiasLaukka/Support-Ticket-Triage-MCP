@@ -3,6 +3,7 @@ import {
   DiagnosticTaxonomyContextSchema,
   ProductSurfaceSchema,
   ProblemClassSchema,
+  EvidenceSupportSchema
 } from "../src/diagnostic-taxonomy.js";
 
 
@@ -43,10 +44,10 @@ it("rejects the primary surface when it is repeated as a secondary surface", () 
         },
       ],
       problemClasses: ["data-integrity"],
-      confidence: {
-        productSurface: 0.8,
-        problemClass: 0.7,
-      },
+        support: {
+        productSurface: "supported",
+        problemClass: "supported",
+        },
       basis: {
         source: "initial-classification",
         evidenceIds: [],
@@ -59,16 +60,15 @@ it("rejects the primary surface when it is repeated as a secondary surface", () 
   ).toThrow();
 });
 
-
 it("accepts null primary surface with no secondary surfaces", () => {
   expect(
     DiagnosticTaxonomyContextSchema.parse({
       primaryProductSurface: null,
       secondaryProductSurfaces: [],
       problemClasses: [],
-      confidence: {
-        productSurface: 0,
-        problemClass: 0,
+      support: {
+      productSurface: "tentative",
+      problemClass: "tentative",
       },
       basis: {
         source: "initial-classification",
@@ -96,9 +96,9 @@ it("accepts distinct secondary product surfaces", () => {
         },
       ],
       problemClasses: ["data-integrity"],
-      confidence: {
-        productSurface: 0.8,
-        problemClass: 0.7,
+      support: {
+      productSurface: "supported",
+      problemClass: "supported",
       },
       basis: {
         source: "initial-classification",
@@ -130,9 +130,9 @@ it("rejects duplicate secondary product surfaces", () => {
         },
       ],
       problemClasses: ["data-integrity"],
-      confidence: {
-        productSurface: 0.8,
-        problemClass: 0.7,
+      support: {
+      productSurface: "supported",
+      problemClass: "supported",
       },
       basis: {
         source: "initial-classification",
@@ -141,36 +141,6 @@ it("rejects duplicate secondary product surfaces", () => {
         playbookIds: [],
         knownCauseIds: [],
         explanation: "Duplicate secondary surfaces are invalid.",
-      },
-    }),
-  ).toThrow();
-});
-
-it("rejects the primary product surface when repeated as a secondary surface", () => {
-  expect(() =>
-    DiagnosticTaxonomyContextSchema.parse({
-      primaryProductSurface: {
-        domain: "integrations",
-        area: "shopify",
-      },
-      secondaryProductSurfaces: [
-        {
-          domain: "integrations",
-          area: "shopify",
-        },
-      ],
-      problemClasses: ["data-integrity"],
-      confidence: {
-        productSurface: 0.8,
-        problemClass: 0.7,
-      },
-      basis: {
-        source: "initial-classification",
-        evidenceIds: [],
-        knowledgeArticleIds: [],
-        playbookIds: [],
-        knownCauseIds: [],
-        explanation: "Primary and secondary surfaces must not duplicate each other.",
       },
     }),
   ).toThrow();
@@ -185,9 +155,9 @@ it("rejects duplicate problem classes", () => {
       },
       secondaryProductSurfaces: [],
       problemClasses: ["data-integrity", "data-integrity"],
-      confidence: {
-        productSurface: 0.8,
-        problemClass: 0.8,
+      support: {
+      productSurface: "supported",
+      problemClass: "supported",
       },
       basis: {
         source: "initial-classification",
@@ -201,7 +171,7 @@ it("rejects duplicate problem classes", () => {
   ).toThrow();
 });
 
-it("rejects confidence outside the 0 to 1 range", () => {
+it("rejects invalid evidence support levels", () => {
   expect(() =>
     DiagnosticTaxonomyContextSchema.parse({
       primaryProductSurface: {
@@ -210,9 +180,9 @@ it("rejects confidence outside the 0 to 1 range", () => {
       },
       secondaryProductSurfaces: [],
       problemClasses: ["configuration"],
-      confidence: {
-        productSurface: 1.1,
-        problemClass: -0.1,
+      support: {
+        productSurface: "very-confident",
+        problemClass: "supported",
       },
       basis: {
         source: "initial-classification",
@@ -220,8 +190,14 @@ it("rejects confidence outside the 0 to 1 range", () => {
         knowledgeArticleIds: [],
         playbookIds: [],
         knownCauseIds: [],
-        explanation: "Confidence must stay within the normalized range.",
+        explanation: "Support must use the defined ordinal scale.",
       },
     }),
   ).toThrow();
+});
+
+it("accepts the three evidence support levels", () => {
+  expect(EvidenceSupportSchema.parse("tentative")).toBe("tentative");
+  expect(EvidenceSupportSchema.parse("supported")).toBe("supported");
+  expect(EvidenceSupportSchema.parse("established")).toBe("established");
 });

@@ -182,19 +182,23 @@ export const DiagnosticTaxonomyBasisSchema = z
   })
   .strict();
 
-const ConfidenceSchema = z.number().min(0).max(1);
+export const EvidenceSupportSchema = z.enum([
+  "tentative",
+  "supported",
+  "established",
+]);
 
 export const DiagnosticTaxonomyContextSchema = z
   .object({
     primaryProductSurface: ProductSurfaceSchema.nullable(),
     secondaryProductSurfaces: z.array(ProductSurfaceSchema),
     problemClasses: z.array(ProblemClassSchema),
-    confidence: z
-      .object({
-        productSurface: ConfidenceSchema,
-        problemClass: ConfidenceSchema,
-      })
-      .strict(),
+    support: z
+    .object({
+        productSurface: EvidenceSupportSchema,
+        problemClass: EvidenceSupportSchema,
+    })
+    .strict(),
     basis: DiagnosticTaxonomyBasisSchema,
   })
   .strict()
@@ -240,6 +244,7 @@ export const DiagnosticTaxonomyContextSchema = z
     }
   });
 
+export type EvidenceSupport = z.infer<typeof EvidenceSupportSchema>;
 export type ProductDomain = z.infer<typeof ProductDomainSchema>;
 export type ProductSurface = z.infer<typeof ProductSurfaceSchema>;
 export type ProblemClass = z.infer<typeof ProblemClassSchema>;

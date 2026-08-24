@@ -41,6 +41,96 @@ function temporaryDatabasePath(): string {
 }
 
 describe("OperationalSqliteStore migrations and transaction boundary", () => {
+  function downgradeToV2(databasePath: string): void {
+    const database = new Database(databasePath);
+    database.exec("DROP INDEX IF EXISTS diagnostic_taxonomy_revisions_event_idx");
+    database.exec("DROP TABLE IF EXISTS diagnostic_taxonomy_revisions");
+    database.prepare("DELETE FROM schema_migrations WHERE version > 2").run();
+    database.prepare(
+      "UPDATE operational_metadata SET value = '2' WHERE key = 'schema_version'",
+    ).run();
+    database.close();
+  }
+
+  it("migrates an authentic v2 database to v3 without fabricating taxonomy revisions", () => {
+    const path = temporaryDatabasePath();
+    const initialized = OperationalSqliteStore.open(path);
+    initialized.initialize();
+    initialized.close();
+    downgradeToV2(path);
+
+    const migrated = OperationalSqliteStore.open(path);
+    migrated.initialize();
+    migrated.close();
+
+    const inspector = new Database(path, { readonly: true });
+    try {
+      expect(inspector.prepare(
+        "SELECT version, name FROM schema_migrations ORDER BY version",
+      ).all()).toEqual([
+        { version: 1, name: "initial-operational-schema" },
+        { version: 2, name: "immutable-diagnosis-review-payload" },
+        { version: 3, name: "diagnostic-taxonomy-revisions" },
+      ]);
+      expect(inspector.prepare(
+        "SELECT value FROM operational_metadata WHERE key = 'schema_version'",
+      ).get()).toEqual({ value: "3" });
+      expect(inspector.prepare(
+        "SELECT COUNT(*) AS count FROM diagnostic_taxonomy_revisions",
+      ).get()).toEqual({ count: 0 });
+    } finally {
+      inspector.close();
+    }
+  });
+
+  it("rejects a tampered v2 physical schema before applying the v3 migration", () => {
+    const path = temporaryDatabasePath();
+    const initialized = OperationalSqliteStore.open(path);
+    initialized.initialize();
+    initialized.close();
+    downgradeToV2(path);
+
+    const tampered = new Database(path);
+    tampered.exec("DROP INDEX operational_events_command_idx");
+    tampered.close();
+
+    const reopened = OperationalSqliteStore.open(path);
+    expect(() => reopened.initialize()).toThrow(/corrupt operational schema/i);
+    reopened.close();
+
+    const inspector = new Database(path, { readonly: true });
+    expect(inspector.prepare(
+      "SELECT version FROM schema_migrations ORDER BY version",
+    ).all()).toEqual([{ version: 1 }, { version: 2 }]);
+    expect(inspector.prepare(
+      "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'diagnostic_taxonomy_revisions'",
+    ).get()).toBeUndefined();
+    inspector.close();
+  });
+
+  it("initializes a fresh database at v3 and validates the v3 physical schema", () => {
+    const path = temporaryDatabasePath();
+    const store = OperationalSqliteStore.open(path);
+    store.initialize();
+    store.close();
+
+    const reopened = OperationalSqliteStore.open(path);
+    expect(() => reopened.initialize()).not.toThrow();
+    reopened.close();
+
+    const inspector = new Database(path, { readonly: true });
+    try {
+      expect(inspector.prepare(
+        "SELECT value FROM operational_metadata WHERE key = 'schema_version'",
+      ).get()).toEqual({ value: "3" });
+      expect(inspector.prepare(
+        "SELECT COUNT(*) AS count FROM diagnostic_taxonomy_revisions",
+      ).get()).toEqual({ count: 0 });
+    } finally {
+      inspector.close();
+    }
+  });
+
   it("initializes the complete versioned schema and enforces deferred foreign keys", () => {
     const path = temporaryDatabasePath();
     const store = OperationalSqliteStore.open(path);
@@ -138,6 +228,7 @@ describe("OperationalSqliteStore migrations and transaction boundary", () => {
       });
     });
     initialized.close();
+    downgradeToV2(path);
 
     const legacy = new Database(path);
     legacy.prepare("DELETE FROM schema_migrations WHERE version > 1").run();
@@ -197,6 +288,7 @@ describe("OperationalSqliteStore migrations and transaction boundary", () => {
     const initialized = OperationalSqliteStore.open(path);
     initialized.initialize();
     initialized.close();
+    downgradeToV2(path);
 
     const legacy = new Database(path);
     legacy.prepare("DELETE FROM schema_migrations WHERE version = 2").run();
@@ -241,6 +333,7 @@ describe("OperationalSqliteStore migrations and transaction boundary", () => {
       });
     });
     initialized.close();
+    downgradeToV2(path);
 
     const legacy = new Database(path);
     legacy.prepare("DELETE FROM schema_migrations WHERE version = 2").run();

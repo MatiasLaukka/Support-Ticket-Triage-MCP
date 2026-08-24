@@ -15,6 +15,7 @@ const requiredTables = [
   "conversation_messages",
   "decision_trace_events",
   "diagnoses",
+  "diagnostic_taxonomy_revisions",
   "learning_capture_outbox",
   "operational_events",
   "operational_import_resolutions",
@@ -154,10 +155,11 @@ describe("OperationalSqliteStore migrations and transaction boundary", () => {
     expect(migrations).toEqual([
       { version: 1, name: "initial-operational-schema" },
       { version: 2, name: "immutable-diagnosis-review-payload" },
+      { version: 3, name: "diagnostic-taxonomy-revisions" },
     ]);
     expect(metadata).toEqual([
       { key: "import_state", value: "empty" },
-      { key: "schema_version", value: "2" },
+      { key: "schema_version", value: "3" },
     ]);
 
     expect(() => store.transaction((unit) => {

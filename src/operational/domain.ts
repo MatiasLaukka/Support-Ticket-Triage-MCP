@@ -16,6 +16,7 @@ import {
 } from "../domain.js";
 import { CompletedDiagnosisSchema } from "../knowledge-evolution/domain.js";
 import { DiagnosticStateSnapshotSchema } from "../approval-desk/diagnostic-state.js";
+import { DiagnosticTaxonomyContextSchema } from "../diagnostic-taxonomy.js";
 
 const NonBlankStringSchema = z.string().trim().min(1);
 const IdentifierSchema = z.string().trim().min(1).max(160)
@@ -229,6 +230,22 @@ export const RecommendationRevisionSchema = z.object({
   operationalEventId: OperationalEventIdSchema,
   createdAt: IsoTimestampSchema,
 }).strict().readonly();
+
+export const DiagnosticTaxonomyRevisionSchema = z.object({
+  ticketId: TicketIdSchema,
+  revision: RevisionNumberSchema,
+  context: DiagnosticTaxonomyContextSchema,
+  operationalEventId: OperationalEventIdSchema,
+  createdAt: IsoTimestampSchema,
+}).strict().superRefine((revision, context) => {
+  if (revision.revision < 1) {
+    context.addIssue({
+      code: "custom",
+      path: ["revision"],
+      message: "Diagnostic taxonomy revisions must start at one.",
+    });
+  }
+}).readonly();
 
 const OperationalDiagnosisContextSchema = z.object({
   status: z.literal("completed"),
@@ -594,6 +611,7 @@ export const OperationalWorkflowSnapshotSchema = z.object({
   ticketRevisions: z.array(TicketRevisionSchema),
   recommendations: z.array(TriageRecommendationSchema),
   recommendationRevisions: z.array(RecommendationRevisionSchema),
+  diagnosticTaxonomyRevisions: z.array(DiagnosticTaxonomyRevisionSchema).default([]),
   messages: z.array(ConversationMessageSchema),
   diagnoses: z.array(OperationalDiagnosisRecordSchema),
   events: z.array(OperationalEventSchema),
@@ -624,6 +642,7 @@ export const OperationalWorkflowSnapshotSchema = z.object({
     ...snapshot.ticketRevisions.map((revision) => revision.ticketId),
     ...snapshot.recommendations.map((recommendation) => recommendation.ticketId),
     ...snapshot.recommendationRevisions.map((revision) => revision.recommendation.ticketId),
+    ...snapshot.diagnosticTaxonomyRevisions.map((revision) => revision.ticketId),
     ...snapshot.messages.map((message) => message.ticketId),
     ...snapshot.diagnoses.map((diagnosis) => diagnosis.diagnosis.ticketId),
     ...snapshot.traces.map((trace) => trace.ticketId),
@@ -636,6 +655,7 @@ export const OperationalWorkflowSnapshotSchema = z.object({
   const eventReferences = [
     ...snapshot.ticketRevisions.map((revision) => revision.operationalEventId),
     ...snapshot.recommendationRevisions.map((revision) => revision.operationalEventId),
+    ...snapshot.diagnosticTaxonomyRevisions.map((revision) => revision.operationalEventId),
     ...snapshot.messages.map((message) => message.operationalEventId),
     ...snapshot.diagnoses.map((diagnosis) => diagnosis.operationalEventId),
     ...snapshot.traces.map((trace) => trace.operationalEventId),
@@ -772,6 +792,7 @@ export const DecisionTimelineEntrySchema = z.object({
 export type OperationalEvent = z.infer<typeof OperationalEventSchema>;
 export type TicketRevision = z.infer<typeof TicketRevisionSchema>;
 export type ConversationMessage = z.infer<typeof ConversationMessageSchema>;
+export type DiagnosticTaxonomyRevision = z.infer<typeof DiagnosticTaxonomyRevisionSchema>;
 export type OperationalWorkflowSnapshot = z.infer<typeof OperationalWorkflowSnapshotSchema>;
 export type OperationalOutboxRow = z.infer<typeof OperationalOutboxRowSchema>;
 export type CommandIdempotencyRecord = z.infer<typeof CommandIdempotencyRecordSchema>;

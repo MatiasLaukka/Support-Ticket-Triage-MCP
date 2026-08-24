@@ -17,6 +17,7 @@ import {
   CommandIdempotencyRecordSchema,
   CommandIdSchema,
   ConversationMessageSchema,
+  DiagnosticTaxonomyRevisionSchema,
   DecisionTraceEventSchema,
   ImportResolutionSchema,
   ImportStateSchema,
@@ -35,6 +36,7 @@ import {
   isCanonicalConversationEventPair,
   type CommandIdempotencyRecord,
   type ConversationMessage,
+  type DiagnosticTaxonomyRevision,
   type DecisionTraceEvent,
   type ImportResolution,
   type ImportState,
@@ -123,6 +125,9 @@ interface LocalMessageWriteRow extends LocalEventChildRow {
 interface LocalDiagnosisWriteRow extends LocalEventChildRow {
   original_audit: AuditEvent;
 }
+interface LocalDiagnosticTaxonomyRevisionWriteRow extends LocalEventChildRow {
+  revision: number;
+}
 interface LocalTicketRevisionRow {
   ticket_id: string;
   revision: number;
@@ -168,6 +173,8 @@ export interface OperationalDiagnosisWrite {
   readonly operationalEventId: string;
 }
 
+export interface DiagnosticTaxonomyRevisionWrite extends DiagnosticTaxonomyRevision {}
+
 /**
  * Transaction-scoped persistence primitives. Workflow decisions stay in the
  * domain service; this object validates and atomically stores their write set.
@@ -182,6 +189,7 @@ export class OperationalUnitOfWork {
   private readonly recommendationAggregateWrites: string[] = [];
   private readonly recommendationRevisionWrites: LocalEventChildRow[] = [];
   private readonly diagnosisWrites: LocalDiagnosisWriteRow[] = [];
+  private readonly diagnosticTaxonomyRevisionWrites: LocalDiagnosticTaxonomyRevisionWriteRow[] = [];
   private readonly traceWrites: LocalEventChildRow[] = [];
   private readonly outboxWrites: OperationalOutboxRow[] = [];
   private readonly reservedSequences = new Map<string, number[]>();
@@ -705,6 +713,38 @@ export class OperationalUnitOfWork {
     });
   }
 
+  appendDiagnosticTaxonomyRevision(
+    revision: DiagnosticTaxonomyRevisionWrite,
+  ): void {
+    this.assertActive();
+    this.assertMutationOpen();
+    const parsed = parseWith(
+      DiagnosticTaxonomyRevisionSchema,
+      revision,
+      "Diagnostic taxonomy revision failed operational schema validation.",
+    );
+    this.database.prepare(`
+      INSERT INTO diagnostic_taxonomy_revisions(
+        ticket_id, revision, operational_event_id, created_at,
+        product_surface_support, problem_class_support, payload_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      parsed.ticketId,
+      parsed.revision,
+      parsed.operationalEventId,
+      parsed.createdAt,
+      parsed.context.support.productSurface,
+      parsed.context.support.problemClass,
+      JSON.stringify(parsed),
+    );
+    this.diagnosticTaxonomyRevisionWrites.push({
+      id: `${parsed.ticketId}:${parsed.revision}`,
+      ticket_id: parsed.ticketId,
+      operational_event_id: parsed.operationalEventId,
+      revision: parsed.revision,
+    });
+  }
+
   appendEvent(event: OperationalEventWrite): void {
     this.assertActive();
     this.assertMutationOpen();
@@ -979,6 +1019,14 @@ export class OperationalUnitOfWork {
       RecommendationRevisionSchema,
       "Operational recommendation revision data is corrupt.",
     );
+    const diagnosticTaxonomyRevisions = this.readJoinedPayloads(
+      `SELECT revisions.payload_json FROM diagnostic_taxonomy_revisions AS revisions
+       JOIN operational_events AS events ON events.id = revisions.operational_event_id
+       WHERE revisions.ticket_id = ? ORDER BY events.sequence ASC, revisions.revision ASC`,
+      ticket.id,
+      DiagnosticTaxonomyRevisionSchema,
+      "Operational diagnostic taxonomy revision data is corrupt.",
+    );
     const messages = this.readJoinedPayloads(
       `SELECT messages.payload_json FROM conversation_messages AS messages
        JOIN operational_events AS events ON events.id = messages.operational_event_id
@@ -1012,6 +1060,7 @@ export class OperationalUnitOfWork {
         ticketRevisions,
         recommendations,
         recommendationRevisions,
+        diagnosticTaxonomyRevisions,
         messages,
         diagnoses,
         events,
@@ -1037,6 +1086,7 @@ export class OperationalUnitOfWork {
     this.assertActive();
     this.assertMessageEventBindings();
     this.assertDiagnosisEventBindings();
+    this.assertDiagnosticTaxonomyRevisionEventBindings();
     this.assertLearningOutboxBindings();
     if (this.reservedSequences.size > 0) {
       throw new OperationalStoreError(
@@ -1156,6 +1206,19 @@ export class OperationalUnitOfWork {
         throw new OperationalStoreError(
           "Every operational diagnosis must bind its original audit to the same transaction-local causal event.",
           "IDEMPOTENCY_CONFLICT",
+        );
+      }
+    }
+  }
+
+  private assertDiagnosticTaxonomyRevisionEventBindings(): void {
+    const eventsById = new Map(this.appendedEventWrites.map((event) => [event.id, event] as const));
+    for (const revision of this.diagnosticTaxonomyRevisionWrites) {
+      const event = eventsById.get(revision.operational_event_id);
+      if (event === undefined || event.ticket_id !== revision.ticket_id) {
+        throw new OperationalStoreError(
+          "Every diagnostic taxonomy revision must bind to its transaction-local causal event.",
+          "PERSISTENCE_ERROR",
         );
       }
     }

@@ -21,9 +21,10 @@ import {
 
 export { OperationalStoreError } from "./unit-of-work.js";
 
-const CURRENT_SCHEMA_VERSION = 2;
+const CURRENT_SCHEMA_VERSION = 3;
 const INITIAL_SCHEMA_VERSION = 1;
 const DIAGNOSIS_REVIEW_PAYLOAD_MIGRATION = "immutable-diagnosis-review-payload";
+const DIAGNOSTIC_TAXONOMY_REVISION_MIGRATION = "diagnostic-taxonomy-revisions";
 const DEFAULT_BUSY_TIMEOUT_MS = 250;
 const REQUIRED_TABLES = [
   "schema_migrations",
@@ -40,6 +41,7 @@ const REQUIRED_TABLES = [
   "decision_trace_events",
   "learning_capture_outbox",
 ] as const;
+const V3_REQUIRED_TABLES = [...REQUIRED_TABLES, "diagnostic_taxonomy_revisions"] as const;
 
 interface OperationalSqliteStoreOptions {
   readonly busyTimeoutMs?: number;
@@ -247,13 +249,14 @@ export class OperationalSqliteStore {
   private applyInitialMigration(): void {
     try {
       this.database.exec("BEGIN IMMEDIATE");
-      this.database.exec(INITIAL_SCHEMA_SQL);
+      this.database.exec(CURRENT_SCHEMA_SQL);
       const appliedAt = new Date().toISOString();
       const insertMigration = this.database.prepare(
         "INSERT INTO schema_migrations(version, name, applied_at) VALUES (?, ?, ?)",
       );
       insertMigration.run(INITIAL_SCHEMA_VERSION, "initial-operational-schema", appliedAt);
-      insertMigration.run(CURRENT_SCHEMA_VERSION, DIAGNOSIS_REVIEW_PAYLOAD_MIGRATION, appliedAt);
+      insertMigration.run(2, DIAGNOSIS_REVIEW_PAYLOAD_MIGRATION, appliedAt);
+      insertMigration.run(CURRENT_SCHEMA_VERSION, DIAGNOSTIC_TAXONOMY_REVISION_MIGRATION, appliedAt);
       this.database.prepare(
         "INSERT INTO operational_metadata(key, value) VALUES (?, ?), (?, ?)",
       ).run("schema_version", String(CURRENT_SCHEMA_VERSION), "import_state", "empty");
@@ -304,14 +307,27 @@ export class OperationalSqliteStore {
       && migrations[0]?.name === "initial-operational-schema"
     ) {
       this.applyDiagnosisReviewPayloadMigration();
+      this.validateMigrationTable();
       return;
     }
     if (
-      migrations.length !== 2
+      migrations.length === 2
+      && migrations[0]?.version === INITIAL_SCHEMA_VERSION
+      && migrations[0]?.name === "initial-operational-schema"
+      && migrations[1]?.version === 2
+      && migrations[1]?.name === DIAGNOSIS_REVIEW_PAYLOAD_MIGRATION
+    ) {
+      this.applyDiagnosticTaxonomyRevisionMigration();
+      return;
+    }
+    if (
+      migrations.length !== 3
       || migrations[0]?.version !== INITIAL_SCHEMA_VERSION
       || migrations[0]?.name !== "initial-operational-schema"
-      || migrations[1]?.version !== CURRENT_SCHEMA_VERSION
+      || migrations[1]?.version !== 2
       || migrations[1]?.name !== DIAGNOSIS_REVIEW_PAYLOAD_MIGRATION
+      || migrations[2]?.version !== CURRENT_SCHEMA_VERSION
+      || migrations[2]?.name !== DIAGNOSTIC_TAXONOMY_REVISION_MIGRATION
     ) {
       throw new OperationalStoreError(
         "Corrupt operational schema: migration history is incomplete or inconsistent.",
@@ -336,10 +352,10 @@ export class OperationalSqliteStore {
       const appliedAt = new Date().toISOString();
       this.database.prepare(
         "INSERT INTO schema_migrations(version, name, applied_at) VALUES (?, ?, ?)",
-      ).run(CURRENT_SCHEMA_VERSION, DIAGNOSIS_REVIEW_PAYLOAD_MIGRATION, appliedAt);
+      ).run(2, DIAGNOSIS_REVIEW_PAYLOAD_MIGRATION, appliedAt);
       this.database.prepare(
         "UPDATE operational_metadata SET value = ? WHERE key = 'schema_version'",
-      ).run(String(CURRENT_SCHEMA_VERSION));
+      ).run("2");
       this.database.exec("COMMIT");
     } catch (error) {
       if (this.database.inTransaction) {
@@ -354,8 +370,34 @@ export class OperationalSqliteStore {
     }
   }
 
+  private applyDiagnosticTaxonomyRevisionMigration(): void {
+    try {
+      this.database.exec("BEGIN IMMEDIATE");
+      this.validatePhysicalSchema(2);
+      this.database.exec(DIAGNOSTIC_TAXONOMY_REVISION_SCHEMA_SQL);
+      const appliedAt = new Date().toISOString();
+      this.database.prepare(
+        "INSERT INTO schema_migrations(version, name, applied_at) VALUES (?, ?, ?)",
+      ).run(CURRENT_SCHEMA_VERSION, DIAGNOSTIC_TAXONOMY_REVISION_MIGRATION, appliedAt);
+      this.database.prepare(
+        "UPDATE operational_metadata SET value = ? WHERE key = 'schema_version'",
+      ).run(String(CURRENT_SCHEMA_VERSION));
+      this.database.exec("COMMIT");
+    } catch (error) {
+      if (this.database.inTransaction) {
+        try { this.database.exec("ROLLBACK"); } catch { /* preserve the migration error */ }
+      }
+      if (error instanceof OperationalStoreError) throw error;
+      throw new OperationalStoreError(
+        "Operational diagnostic taxonomy migration failed.",
+        "SCHEMA_ERROR",
+        { cause: error },
+      );
+    }
+  }
+
   private validateLegacySchemaBeforeMigration(): void {
-    this.validatePhysicalSchema();
+    this.validatePhysicalSchema(2);
     const metadata = this.database.prepare(
       "SELECT key, value FROM operational_metadata WHERE key IN ('schema_version', 'import_state')",
     ).all() as MetadataRow[];
@@ -372,7 +414,7 @@ export class OperationalSqliteStore {
   }
 
   private validateCurrentSchema(): void {
-    this.validatePhysicalSchema();
+    this.validatePhysicalSchema(CURRENT_SCHEMA_VERSION);
     const migrations = this.database.prepare(
       "SELECT version, name FROM schema_migrations ORDER BY version ASC",
     ).all() as MigrationRow[];
@@ -392,16 +434,17 @@ export class OperationalSqliteStore {
     }
   }
 
-  private validatePhysicalSchema(): void {
+  private validatePhysicalSchema(version: number): void {
     const tables = this.tableNames();
-    const missingTables = REQUIRED_TABLES.filter((table) => !tables.has(table));
+    const requiredTables = version >= 3 ? V3_REQUIRED_TABLES : REQUIRED_TABLES;
+    const missingTables = requiredTables.filter((table) => !tables.has(table));
     if (missingTables.length > 0) {
       throw new OperationalStoreError(
         `Corrupt operational schema: required tables are missing (${missingTables.join(", ")}).`,
         "SCHEMA_ERROR",
       );
     }
-    if (this.schemaSignature() !== expectedSchemaSignature()) {
+    if (this.schemaSignature() !== expectedSchemaSignature(version)) {
       throw new OperationalStoreError(
         "Corrupt operational schema: tables, columns, constraints, indexes, or triggers differ from the current schema.",
         "SCHEMA_ERROR",
@@ -454,18 +497,26 @@ export class OperationalSqliteStore {
   }
 }
 
-let cachedExpectedSchemaSignature: string | undefined;
+const cachedExpectedSchemaSignatures = new Map<number, string>();
 
-function expectedSchemaSignature(): string {
-  if (cachedExpectedSchemaSignature !== undefined) return cachedExpectedSchemaSignature;
+function expectedSchemaSignature(version: number): string {
+  const cached = cachedExpectedSchemaSignatures.get(version);
+  if (cached !== undefined) return cached;
   const reference = new Database(":memory:");
   try {
-    reference.exec(INITIAL_SCHEMA_SQL);
-    cachedExpectedSchemaSignature = schemaSignatureFor(reference);
-    return cachedExpectedSchemaSignature;
+    reference.exec(schemaSqlForVersion(version));
+    const signature = schemaSignatureFor(reference);
+    cachedExpectedSchemaSignatures.set(version, signature);
+    return signature;
   } finally {
     reference.close();
   }
+}
+
+function schemaSqlForVersion(version: number): string {
+  if (version === 2) return INITIAL_SCHEMA_SQL;
+  if (version === CURRENT_SCHEMA_VERSION) return CURRENT_SCHEMA_SQL;
+  throw new Error(`Unsupported operational schema version ${version}.`);
 }
 
 function schemaSignatureFor(database: Database.Database): string {
@@ -645,3 +696,22 @@ const INITIAL_SCHEMA_SQL = `
   BEFORE DELETE ON decision_trace_events
   BEGIN SELECT RAISE(ABORT, 'decision trace events are append-only'); END;
 `;
+
+const DIAGNOSTIC_TAXONOMY_REVISION_SCHEMA_SQL = `
+  CREATE TABLE diagnostic_taxonomy_revisions (
+    ticket_id TEXT NOT NULL,
+    revision INTEGER NOT NULL CHECK (revision > 0),
+    operational_event_id TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    product_surface_support TEXT NOT NULL CHECK (product_surface_support IN ('tentative', 'supported', 'established')),
+    problem_class_support TEXT NOT NULL CHECK (problem_class_support IN ('tentative', 'supported', 'established')),
+    payload_json TEXT NOT NULL,
+    PRIMARY KEY(ticket_id, revision),
+    FOREIGN KEY(ticket_id) REFERENCES tickets(id) DEFERRABLE INITIALLY DEFERRED,
+    FOREIGN KEY(operational_event_id, ticket_id) REFERENCES operational_events(id, ticket_id) DEFERRABLE INITIALLY DEFERRED
+  );
+  CREATE INDEX diagnostic_taxonomy_revisions_event_idx
+    ON diagnostic_taxonomy_revisions(ticket_id, operational_event_id);
+`;
+
+const CURRENT_SCHEMA_SQL = `${INITIAL_SCHEMA_SQL}\n${DIAGNOSTIC_TAXONOMY_REVISION_SCHEMA_SQL}`;

@@ -12,6 +12,7 @@ import {
 import type { OperationalCommandStore } from "../triage-service.js";
 import {
   ConversationMessageSchema,
+  DiagnosticTaxonomyRevisionSchema,
   DecisionTraceEventSchema,
   ImportResolutionSchema,
   OperationalDiagnosisRecordSchema,
@@ -22,6 +23,7 @@ import {
   canonicalOperationalRequestJson,
   conversationMessageKindForOperationalAction,
   type ConversationMessage,
+  type DiagnosticTaxonomyRevision,
   type DecisionTraceEvent,
   type ImportResolution,
   type ImportState,
@@ -35,6 +37,7 @@ import {
   type OperationalImportSourceMetadata,
   type OperationalDiagnosisWrite,
   type OperationalEventWrite,
+  type DiagnosticTaxonomyRevisionWrite,
   type RecommendationRevisionWrite,
 } from "./unit-of-work.js";
 
@@ -59,6 +62,7 @@ const ImportAggregateContainerSchema = z.object({
   messages: z.array(ConversationMessageSchema),
   recommendations: z.array(TriageRecommendationSchema),
   recommendationRevisions: z.array(RecommendationRevisionSchema),
+  diagnosticTaxonomyRevisions: z.array(DiagnosticTaxonomyRevisionSchema).default([]),
   diagnoses: z.array(OperationalDiagnosisRecordSchema),
   traces: z.array(DecisionTraceEventSchema),
 }).strict();
@@ -78,6 +82,7 @@ export interface OperationalImportAggregate {
   readonly messages: readonly ConversationMessage[];
   readonly recommendations: readonly TriageRecommendation[];
   readonly recommendationRevisions: readonly RecommendationRevisionWrite[];
+  readonly diagnosticTaxonomyRevisions?: readonly DiagnosticTaxonomyRevision[];
   readonly diagnoses: readonly OperationalDiagnosisWrite[];
   /** Only already-present, sanitized source traces belong here. */
   readonly traces: readonly DecisionTraceEvent[];
@@ -386,6 +391,10 @@ function validateAggregate(value: unknown, index: number): AggregateValidationRe
       causalSequence(eventSequence, left.operationalEventId)
       - causalSequence(eventSequence, right.operationalEventId)
       || left.recommendation.id.localeCompare(right.recommendation.id)),
+    diagnosticTaxonomyRevisions: [...source.diagnosticTaxonomyRevisions].sort((left, right) =>
+      causalSequence(eventSequence, left.operationalEventId)
+      - causalSequence(eventSequence, right.operationalEventId)
+      || left.revision - right.revision),
     messages: [...source.messages].sort((left, right) =>
       causalSequence(eventSequence, left.operationalEventId)
       - causalSequence(eventSequence, right.operationalEventId)
@@ -467,6 +476,9 @@ function importAggregate(
       for (const recommendation of aggregate.recommendations) unit.insertRecommendation(recommendation);
       for (const revision of aggregate.ticketRevisions) unit.appendTicketRevision(revision);
       for (const revision of aggregate.recommendationRevisions) unit.appendRecommendationRevision(revision);
+      for (const revision of aggregate.diagnosticTaxonomyRevisions ?? []) {
+        unit.appendDiagnosticTaxonomyRevision(revision as DiagnosticTaxonomyRevisionWrite);
+      }
       for (const message of aggregate.messages) unit.insertMessage(message);
       for (const diagnosis of aggregate.diagnoses) unit.insertDiagnosis(diagnosis);
       for (const event of aggregate.events) {

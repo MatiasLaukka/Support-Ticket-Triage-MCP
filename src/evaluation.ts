@@ -3,6 +3,19 @@ import type {
   RequiredEscalation,
   TriageRecommendation,
 } from "./domain.js";
+import {
+  scoreEvaluationOracle,
+  type EvaluationOracle,
+  type EvaluationOracleInput,
+} from "./evaluation-oracle.js";
+
+export interface OracleEvaluationReport {
+  ticketCount: number;
+  classificationAccuracy: number;
+  knowledgeRequiredCoverage: number;
+  knownCauseAccuracy: number | null;
+  passedScenarioCount: number;
+}
 
 export interface EvaluationReport {
   ticketCount: number;
@@ -245,6 +258,83 @@ function validateEvaluationInput(
           `evaluation set: ${outsideCandidate.ticketId}.`,
       );
     }
+  }
+}
+
+/**
+ * Evaluation-only scoring boundary. Legacy ExpectedOutcome evaluation above is
+ * intentionally unchanged, including exact article-set semantics.
+ */
+export function evaluateRecommendationsAgainstOracles(
+  recommendations: readonly TriageRecommendation[],
+  oracles: readonly EvaluationOracle[],
+): OracleEvaluationReport {
+  validateOracleInput(recommendations, oracles);
+  const recommendationsByTicket = new Map(
+    recommendations.map((recommendation) => [recommendation.ticketId, recommendation]),
+  );
+  const scores = oracles.map((oracle) => {
+    const recommendation = recommendationsByTicket.get(oracle.ticketId);
+    const actual: EvaluationOracleInput | undefined = recommendation === undefined
+      ? undefined
+      : {
+          category: recommendation.category,
+          team: recommendation.team,
+          priority: recommendation.priority,
+          requiredEscalations: recommendation.escalationReasons,
+          knowledgeArticleIds: recommendation.knowledgeArticleIds,
+          knownCause: recommendation.knownCause,
+        };
+    return actual === undefined
+      ? undefined
+      : scoreEvaluationOracle(oracle, actual);
+  });
+  const presentScores = scores.filter((score) => score !== undefined);
+  const requiredArticleCount = oracles.reduce(
+    (count, oracle) => count + oracle.knowledge.requiredArticleIds.length,
+    0,
+  );
+  const matchingRequiredArticles = oracles.reduce((count, oracle) => {
+    const recommendation = recommendationsByTicket.get(oracle.ticketId);
+    return count + (recommendation === undefined
+      ? 0
+      : oracle.knowledge.requiredArticleIds.filter((articleId) => recommendation.knowledgeArticleIds.includes(articleId)).length);
+  }, 0);
+  const knownCauseScores = oracles.map((oracle, index) =>
+    oracle.knownCause === undefined ? undefined : scores[index]?.knownCausePass ?? false,
+  ).filter((score): score is boolean => score !== undefined);
+  return {
+    ticketCount: oracles.length,
+    classificationAccuracy: finiteRate(
+      presentScores.filter(({ classificationPass }) => classificationPass).length,
+      oracles.length,
+    ),
+    knowledgeRequiredCoverage: finiteRate(matchingRequiredArticles, requiredArticleCount),
+    knownCauseAccuracy: knownCauseScores.length === 0
+      ? null
+      : finiteRate(knownCauseScores.filter(Boolean).length, knownCauseScores.length),
+    passedScenarioCount: presentScores.filter(({ all }) => all).length,
+  };
+}
+
+function validateOracleInput(
+  recommendations: readonly TriageRecommendation[],
+  oracles: readonly EvaluationOracle[],
+): void {
+  const recommendationIds = new Set(recommendations.map(({ ticketId }) => ticketId));
+  const oracleIds = new Set(oracles.map(({ ticketId }) => ticketId));
+  const duplicateOracleIds = duplicateTicketIds(oracles.map(({ ticketId }) => ticketId));
+  if (duplicateOracleIds.length > 0) {
+    throw new Error(`Evaluation oracles contain duplicate ticket IDs: ${duplicateOracleIds.join(", ")}.`);
+  }
+  const unexpectedRecommendationIds = [...recommendationIds].filter((ticketId) => !oracleIds.has(ticketId)).sort();
+  const missingRecommendationIds = [...oracleIds].filter((ticketId) => !recommendationIds.has(ticketId)).sort();
+  if (unexpectedRecommendationIds.length > 0 || missingRecommendationIds.length > 0) {
+    throw new Error(
+      "Recommendation ticket IDs must exactly match evaluation oracles " +
+      `(unexpected: ${formatTicketIds(unexpectedRecommendationIds)}; ` +
+      `missing: ${formatTicketIds(missingRecommendationIds)}).`,
+    );
   }
 }
 

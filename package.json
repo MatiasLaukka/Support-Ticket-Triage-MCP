@@ -26,6 +26,7 @@
     "evaluate:ai-comparison": "npm run build && node dist/scripts/evaluate-ai-comparison.js",
     "evaluate:ai-diagnosis": "npm run build && node dist/scripts/evaluate-ai-diagnosis.js",
     "evaluate:knowledge-holdout": "npm run build && node dist/scripts/evaluate-knowledge-holdout.js",
+    "evaluate:oracle-audit": "npm run build && node dist/scripts/audit-evaluation-data.js",
     "start": "node dist/src/index.js",
     "approval-desk": "node dist/src/approval-desk.js",
     "demo:approval-desk": "node dist/scripts/demo-approval-desk.js",
@@ -35,7 +36,7 @@
     "demo:learning-ledger": "npm run build && node dist/scripts/demo-learning-ledger.js",
     "demo:metrics": "npm run build && node dist/scripts/demo-metrics.js",
     "demo:showcase": "node dist/scripts/demo-approval-desk.js",
-    "verify:portfolio": "npm run build && npm run typecheck && npx vitest run --dir test && npm run evaluate:diagnostics && npm run evaluate:lifecycle-replay && npm run evaluate:knowledge-holdout && npm run demo:knowledge-evolution -- --verbose && npm run demo:operational-persistence && npm run demo:metrics"
+    "verify:portfolio": "npm run build && npm run typecheck && npx vitest run --dir test && npm run evaluate:diagnostics && npm run evaluate:oracle-audit && npm run evaluate:lifecycle-replay && npm run evaluate:knowledge-holdout && npm run demo:knowledge-evolution -- --verbose && npm run demo:operational-persistence && npm run demo:metrics"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",

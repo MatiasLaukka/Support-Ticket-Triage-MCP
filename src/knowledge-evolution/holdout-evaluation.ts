@@ -1,5 +1,6 @@
 import type { KnowledgeArticle, RequiredEscalation, SupportState } from "../domain.js";
 import { evaluateTicketWithAi, type CustomerReply, type PreviousSupportResponse } from "../approval-desk/ai-evaluation.js";
+import { scoreExpectedOutcomeCompatibility } from "../evaluation-oracle.js";
 import type { KnowledgeEvolutionService } from "./service.js";
 import type { KnowledgeReference, ReusableKnowledgeResult } from "./reusable-context.js";
 import type { HoldoutEfficacyScenario, HoldoutTurn, KnowledgeHoldoutFixture } from "./holdout-fixtures.js";
@@ -393,12 +394,14 @@ function matchesTarget(fixture: KnowledgeHoldoutFixture, recommendation: Evaluat
 }
 
 function scoreOutcome(fixture: KnowledgeHoldoutFixture, recommendation: EvaluationRecommendation): boolean {
-  const expected = fixture.expectedOutcome;
-  return recommendation.category === expected.category
-    && expected.acceptablePriorities.includes(recommendation.priority)
-    && recommendation.team === expected.team
-    && sameSet(recommendation.escalationReasons ?? [], expected.requiredEscalations)
-    && sameSet(recommendation.knowledgeArticleIds, expected.knowledgeArticleIds);
+  return scoreExpectedOutcomeCompatibility(fixture.expectedOutcome, {
+    category: recommendation.category,
+    team: recommendation.team,
+    priority: recommendation.priority,
+    requiredEscalations: recommendation.escalationReasons ?? [],
+    knowledgeArticleIds: recommendation.knowledgeArticleIds,
+    knownCause: recommendation.knownCause,
+  }).all;
 }
 
 function assertReadOnly(before: HoldoutStateSnapshot, after: HoldoutStateSnapshot): void {

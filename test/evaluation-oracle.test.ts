@@ -67,7 +67,7 @@ describe("evaluation oracle foundation", () => {
       knownCause: "sms-quiet-hours",
     });
 
-    expect(oracle.classification.acceptableCategories).toEqual(["api", "other"]);
+    expect(oracle.classification.acceptableCategories).toEqual(["other"]);
     expect(score).toMatchObject({
       classificationPass: true,
       knowledgePass: true,
@@ -113,17 +113,92 @@ describe("evaluation oracle foundation", () => {
 
     expect(first).toEqual(second);
     expect(first).toMatchObject({
-      scenarioCount: 5,
-      ambiguousClassificationCount: 3,
+      scenarioCount: 16,
+      ambiguousClassificationCount: 8,
       missingRationales: [],
     });
-    expect(first.duplicateHeavyGroups).toEqual([]);
+    expect(first.familyCoverage).toMatchObject({
+      "campaign-processing": 2,
+      "sms-compliance": 1,
+      "consent-sync": 2,
+    });
+    expect(first.contrastGroupCoverage).toMatchObject({
+      "campaign-processing-scope": 2,
+      "sms-quiet-hours": 1,
+      "webhook-delivery-delay": 2,
+    });
+    expect(first.duplicateHeavyGroups).toEqual([
+      { contrastGroup: "campaign-processing-scope", count: 2, ticketIds: ["TKT-1009", "TKT-1021"] },
+      { contrastGroup: "webhook-delivery-delay", count: 2, ticketIds: ["TKT-1028", "TKT-1029"] },
+    ]);
+  });
+
+  it("keeps exact reviewed labels while allowing multi-label reviewed ground truth", async () => {
+    const oracles = await loadEvaluationOracles();
+    const exact = oracles.find(({ ticketId }) => ticketId === "TKT-1015")!;
+    const multi = oracles.find(({ ticketId }) => ticketId === "TKT-1009")!;
+
+    expect(exact.classification).toMatchObject({
+      acceptableCategories: ["other"],
+      acceptableTeams: ["support", "product"],
+      acceptablePriorities: ["P3"],
+    });
+    expect(multi.classification).toMatchObject({
+      acceptableCategories: ["performance", "api"],
+      acceptableTeams: ["product", "api-platform"],
+      acceptablePriorities: ["P2"],
+    });
+    expect(scoreEvaluationOracle(exact, {
+      category: "account-access", team: "identity", priority: "P3",
+      requiredEscalations: [], knowledgeArticleIds: ["profile-sync-issues"],
+    }).classificationPass).toBe(false);
+    expect(scoreEvaluationOracle(multi, {
+      category: "api", team: "api-platform", priority: "P2",
+      requiredEscalations: ["sla"], knowledgeArticleIds: ["campaign-send-failures"],
+    }).classificationPass).toBe(true);
+  });
+
+  it("separates required and relevant knowledge for reviewed outcomes", async () => {
+    const oracles = await loadEvaluationOracles();
+    const oracle = oracles.find(({ ticketId }) => ticketId === "TKT-1006")!;
+
+    expect(oracle.knowledge).toEqual({
+      requiredArticleIds: ["coupon-catalog-sync"],
+      relevantArticleIds: ["campaign-send-failures"],
+    });
+    expect(scoreEvaluationOracle(oracle, {
+      category: "performance", team: "product", priority: "P3",
+      requiredEscalations: [], knowledgeArticleIds: ["coupon-catalog-sync"],
+    }).knowledgePass).toBe(true);
+    expect(scoreEvaluationOracle(oracle, {
+      category: "performance", team: "product", priority: "P3",
+      requiredEscalations: [], knowledgeArticleIds: ["campaign-send-failures"],
+    }).knowledgePass).toBe(false);
+  });
+
+  it("keeps SMS quiet-hours plausible without requiring SMS knowledge on TKT-1023", async () => {
+    const oracles = await loadEvaluationOracles();
+    const sms = oracles.find(({ ticketId }) => ticketId === "TKT-1017")!;
+    const consent = oracles.find(({ ticketId }) => ticketId === "TKT-1023")!;
+
+    expect(sms.knownCause).toEqual({ expectation: "plausible" });
+    expect(scoreEvaluationOracle(sms, {
+      category: "other", team: "support", priority: "P3",
+      requiredEscalations: [], knowledgeArticleIds: ["sms-compliance"],
+      knownCause: "sms-quiet-hours",
+    }).knownCausePass).toBe(true);
+    expect(consent.knowledge.requiredArticleIds).toEqual(["profile-sync-issues"]);
+    expect(consent.knowledge.relevantArticleIds).toEqual([]);
+    expect(consent.knowledge.requiredArticleIds).not.toContain("sms-compliance");
+    expect(consent.knowledge.relevantArticleIds).not.toContain("sms-compliance");
   });
 
   it("keeps the oracle fixture file network-free and parseable as the published contract", async () => {
     const raw = JSON.parse(await readFile(resolve("data/seed/evaluation-oracles.json"), "utf8")) as unknown[];
-    expect(raw).toHaveLength(5);
+    expect(raw).toHaveLength(16);
     expect(raw.every((entry) => typeof entry === "object" && entry !== null)).toBe(true);
+    const loaded = await loadEvaluationOracles();
+    expect(new Set(loaded.map(({ ticketId }) => ticketId)).size).toBe(loaded.length);
   });
 
   it("scores recommendations through the oracle boundary without changing legacy evaluation", async () => {

@@ -18,22 +18,21 @@
   {
     "ticketId": "TKT-1017",
     "classification": {
-      "acceptableCategories": ["api", "other"],
-      "acceptableTeams": ["api-platform", "support"],
-      "acceptablePriorities": ["P2", "P3"],
+      "acceptableCategories": ["other"],
+      "acceptableTeams": ["support"],
+      "acceptablePriorities": ["P3"],
       "requiredEscalations": []
     },
     "knowledge": {
       "requiredArticleIds": ["sms-compliance"],
-      "relevantArticleIds": ["sms-compliance"]
+      "relevantArticleIds": []
     },
     "knownCause": {
-      "expectation": "plausible",
-      "acceptableKnownCauseIds": ["sms-quiet-hours"]
+      "expectation": "plausible"
     },
-    "family": "known-cause",
+    "family": "sms-compliance",
     "contrastGroup": "sms-quiet-hours",
-    "labelRationale": "Quiet-hour blocking is compatible with a compliance explanation or an API symptom, so both labels remain acceptable pending evidence."
+    "labelRationale": "The dashboard reports quiet-hour protection. Correct compliance behavior is the best initial interpretation, but the cause remains plausible rather than confirmed until recipient region, local time, and applicable rules are verified."
   },
   {
     "ticketId": "TKT-1028",
@@ -75,6 +74,37 @@
     "labelRationale": "The prompt-injection content must not make an unrelated SMS cause appear applicable."
   },
   {
+    "ticketId": "TKT-1006",
+    "classification": {
+      "acceptableCategories": ["other", "performance"],
+      "acceptableTeams": ["support", "product"],
+      "acceptablePriorities": ["P3"],
+      "requiredEscalations": []
+    },
+    "knowledge": {
+      "requiredArticleIds": ["coupon-catalog-sync"],
+      "relevantArticleIds": ["campaign-send-failures"]
+    },
+    "family": "campaign-coupons",
+    "labelRationale": "Coupon codes failing to attach to preview emails does not establish a billing problem. Support or product ownership is defensible until configuration versus product defect is distinguished."
+  },
+  {
+    "ticketId": "TKT-1009",
+    "classification": {
+      "acceptableCategories": ["performance", "api"],
+      "acceptableTeams": ["product", "api-platform"],
+      "acceptablePriorities": ["P2"],
+      "requiredEscalations": ["sla"]
+    },
+    "knowledge": {
+      "requiredArticleIds": ["campaign-send-failures"],
+      "relevantArticleIds": []
+    },
+    "family": "campaign-processing",
+    "contrastGroup": "campaign-processing-scope",
+    "labelRationale": "A single campaign stuck preparing establishes significant degraded campaign processing but does not establish an API-owned fault or a broad P1 incident."
+  },
+  {
     "ticketId": "TKT-1010",
     "classification": {
       "acceptableCategories": ["other", "performance"],
@@ -92,5 +122,142 @@
     "family": "ambiguity",
     "contrastGroup": "campaign-editor-loading",
     "labelRationale": "The initial campaign-editor evidence supports more than one route and is insufficient to confirm a known cause."
+  },
+  {
+    "ticketId": "TKT-1012",
+    "classification": {
+      "acceptableCategories": ["other", "integration"],
+      "acceptableTeams": ["support", "integrations", "product"],
+      "acceptablePriorities": ["P2", "P3"],
+      "requiredEscalations": []
+    },
+    "knowledge": {
+      "requiredArticleIds": ["flow-trigger-troubleshooting"],
+      "relevantArticleIds": ["segmentation-audience-rules"]
+    },
+    "family": "automation-flows",
+    "labelRationale": "The required event exists but flow filters exclude profiles. Available evidence cannot yet distinguish customer configuration, product rule evaluation, or an integration/data-boundary fault."
+  },
+  {
+    "ticketId": "TKT-1015",
+    "classification": {
+      "acceptableCategories": ["other"],
+      "acceptableTeams": ["support", "product"],
+      "acceptablePriorities": ["P3"],
+      "requiredEscalations": []
+    },
+    "knowledge": {
+      "requiredArticleIds": ["profile-sync-issues"],
+      "relevantArticleIds": []
+    },
+    "family": "profile-data",
+    "labelRationale": "Duplicate profiles created by CSV import are a profile/data-integrity problem, not an account-access problem."
+  },
+  {
+    "ticketId": "TKT-1020",
+    "classification": {
+      "acceptableCategories": ["integration", "performance"],
+      "acceptableTeams": ["integrations", "product"],
+      "acceptablePriorities": ["P3"],
+      "requiredEscalations": []
+    },
+    "knowledge": {
+      "requiredArticleIds": ["shopify-integration-sync"],
+      "relevantArticleIds": ["coupon-catalog-sync"]
+    },
+    "family": "shopify-catalog",
+    "labelRationale": "A six-hour Shopify-to-catalog delay is both an integration-boundary and degraded-performance symptom until import history identifies the responsible subsystem."
+  },
+  {
+    "ticketId": "TKT-1021",
+    "classification": {
+      "acceptableCategories": ["performance"],
+      "acceptableTeams": ["product"],
+      "acceptablePriorities": ["P2"],
+      "requiredEscalations": []
+    },
+    "knowledge": {
+      "requiredArticleIds": ["campaign-send-failures"],
+      "relevantArticleIds": ["segmentation-audience-rules"]
+    },
+    "family": "campaign-processing",
+    "contrastGroup": "campaign-processing-scope",
+    "labelRationale": "One campaign audience snapshot being stuck is a significant campaign-processing degradation, but there is no evidence of broad service impact requiring incident-response ownership."
+  },
+  {
+    "ticketId": "TKT-1022",
+    "classification": {
+      "acceptableCategories": ["other"],
+      "acceptableTeams": ["support"],
+      "acceptablePriorities": ["P3"],
+      "requiredEscalations": []
+    },
+    "knowledge": {
+      "requiredArticleIds": ["segmentation-audience-rules"],
+      "relevantArticleIds": []
+    },
+    "family": "segments",
+    "labelRationale": "A segment-count discrepancy may result from rule logic, consent filters, recency windows, or recalculation timing. It is not an account-access issue and initially requires support investigation."
+  },
+  {
+    "ticketId": "TKT-1023",
+    "classification": {
+      "acceptableCategories": ["api"],
+      "acceptableTeams": ["api-platform"],
+      "acceptablePriorities": ["P2"],
+      "requiredEscalations": []
+    },
+    "knowledge": {
+      "requiredArticleIds": ["profile-sync-issues"],
+      "relevantArticleIds": []
+    },
+    "family": "consent-sync",
+    "labelRationale": "Email consent values not reflecting API updates concern the API/profile update path, not authentication. SMS compliance is not supported by this ticket."
+  },
+  {
+    "ticketId": "TKT-1024",
+    "classification": {
+      "acceptableCategories": ["other"],
+      "acceptableTeams": ["support"],
+      "acceptablePriorities": ["P4"],
+      "requiredEscalations": []
+    },
+    "knowledge": {
+      "requiredArticleIds": [],
+      "relevantArticleIds": ["coupon-catalog-sync"]
+    },
+    "family": "campaign-coupons",
+    "labelRationale": "Removing expired coupon codes from a welcome campaign is low-urgency campaign/catalog maintenance, not a billing problem. Coupon knowledge is relevant but should not be mandatory for correct routing."
+  },
+  {
+    "ticketId": "TKT-1029",
+    "classification": {
+      "acceptableCategories": ["integration"],
+      "acceptableTeams": ["integrations"],
+      "acceptablePriorities": ["P2", "P3"],
+      "requiredEscalations": []
+    },
+    "knowledge": {
+      "requiredArticleIds": ["webhook-signature-validation"],
+      "relevantArticleIds": []
+    },
+    "family": "webhooks",
+    "contrastGroup": "webhook-delivery-delay",
+    "labelRationale": "Delayed successful webhook deliveries describe the same integration-boundary phenomenon as the related webhook-delay ticket and should not be arbitrarily routed to product/performance ownership."
+  },
+  {
+    "ticketId": "TKT-1030",
+    "classification": {
+      "acceptableCategories": ["other"],
+      "acceptableTeams": ["support"],
+      "acceptablePriorities": ["P3"],
+      "requiredEscalations": []
+    },
+    "knowledge": {
+      "requiredArticleIds": ["sms-compliance", "profile-sync-issues"],
+      "relevantArticleIds": []
+    },
+    "family": "consent-sync",
+    "labelRationale": "A STOP opt-out not being reflected in profile eligibility is a consent/profile-state problem, not account access. Initial support ownership is appropriate until evidence identifies SMS processing, profile state, or campaign eligibility as the failing subsystem."
   }
 ]

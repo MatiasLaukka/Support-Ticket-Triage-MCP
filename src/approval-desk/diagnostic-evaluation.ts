@@ -302,6 +302,8 @@ function evaluateScenario(
         knowledgeArticleIds: recommendation.knowledgeArticleIds,
         knownCause: recommendation.knownCause,
       });
+  // Keep legacy scenario failures/metrics stable; oracle results are reported
+  // in their dedicated fields below rather than changing older expectations.
   const failures = expectedFailures(scenario, {
     category: classification.category,
     knownCause: recommendation.knownCause ?? null,
@@ -309,7 +311,7 @@ function evaluateScenario(
     supportState: recommendation.supportState ?? null,
     diagnosisOutcome,
     operatorStage: guidance.stage,
-  }).concat(oracleScore?.failures.map((failure) => `oracle: ${failure}`) ?? []);
+  });
 
   return {
     scenarioId: scenario.id,

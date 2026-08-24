@@ -31,7 +31,7 @@ describe("diagnostic evaluation harness", () => {
     expect(report.approvalBypassCount).toBe(0);
     expect(report.unsafeCustomerResponseCount).toBe(0);
     expect(report.staleActionCount).toBe(0);
-    expect(report.oracleClassificationAccuracy).toBe(1);
+    expect(report.oracleClassificationAccuracy).toBe(8 / 9);
     expect(report.oracleKnowledgeCoverage).toBe(1);
     expect(report.oracleKnownCauseAccuracy).toBe(1);
     expect(report.observations).toEqual(

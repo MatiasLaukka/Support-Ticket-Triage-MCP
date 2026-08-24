@@ -21,7 +21,7 @@ import {
 
 export { OperationalStoreError } from "./unit-of-work.js";
 
-const CURRENT_SCHEMA_VERSION = 3;
+export const CURRENT_SCHEMA_VERSION = 3;
 const INITIAL_SCHEMA_VERSION = 1;
 const DIAGNOSIS_REVIEW_PAYLOAD_MIGRATION = "immutable-diagnosis-review-payload";
 const DIAGNOSTIC_TAXONOMY_REVISION_MIGRATION = "diagnostic-taxonomy-revisions";

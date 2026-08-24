@@ -18,7 +18,7 @@ import {
   DemoStateLeaseError,
   type DemoStateUsageLease,
 } from "./demo-state-lease.js";
-import { OperationalSqliteStore } from "./operational/sqlite-store.js";
+import { CURRENT_SCHEMA_VERSION, OperationalSqliteStore } from "./operational/sqlite-store.js";
 import { DiagnosisRepository } from "./knowledge-evolution/diagnosis-repository.js";
 import { KnowledgeAuditRepository } from "./knowledge-evolution/knowledge-audit-repository.js";
 import { KnowledgeObjectRepository } from "./knowledge-evolution/knowledge-object-repository.js";
@@ -40,6 +40,7 @@ const DERIVED_OPERATIONAL_TABLES = [
   "operational_events",
   "decision_trace_events",
   "learning_capture_outbox",
+  "diagnostic_taxonomy_revisions",
 ] as const;
 
 export interface OperationalDemoResetInput {
@@ -1309,6 +1310,7 @@ function verifyOperationalBaseline(path: string, expectedTickets: readonly Ticke
       || snapshot.recommendationRevisions.length !== 0
       || snapshot.messages.length !== 0
       || snapshot.diagnoses.length !== 0
+      || snapshot.diagnosticTaxonomyRevisions.length !== 0
       || snapshot.events.length !== 0
       || snapshot.traces.length !== 0
     ) verificationFailure();
@@ -1324,7 +1326,7 @@ function verifyOperationalBaseline(path: string, expectedTickets: readonly Ticke
     ).all() as Array<{ key: string; value: string }>;
     if (!isDeepStrictEqual(metadata, [
       { key: "import_state", value: "native" },
-      { key: "schema_version", value: "2" },
+      { key: "schema_version", value: String(CURRENT_SCHEMA_VERSION) },
     ])) verificationFailure();
   } finally {
     database.close();

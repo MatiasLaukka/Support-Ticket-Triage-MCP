@@ -60,6 +60,7 @@ const OperationalLifecycleAuditEventSchema = AuditEventSchema.refine(
     "diagnostic-escalated",
     "diagnosis-reviewed",
     "diagnosis-invalidated",
+    "diagnostic-taxonomy-revised",
     "fix-available",
     "fix-ineffective",
     "platform-mitigation-available",
@@ -232,6 +233,7 @@ export const RecommendationRevisionSchema = z.object({
 }).strict().readonly();
 
 export const DiagnosticTaxonomyRevisionSchema = z.object({
+  id: IdentifierSchema,
   ticketId: TicketIdSchema,
   revision: RevisionNumberSchema,
   context: DiagnosticTaxonomyContextSchema,
@@ -663,6 +665,46 @@ export const OperationalWorkflowSnapshotSchema = z.object({
   eventReferences.forEach((eventId, index) => {
     if (!eventIds.has(eventId)) {
       context.addIssue({ code: "custom", path: ["eventReferences", index], message: "Snapshot child records must reference a snapshot operational event." });
+    }
+  });
+  const taxonomyRevisionIds = new Set<string>();
+  const taxonomyEventIds = new Set<string>();
+  snapshot.diagnosticTaxonomyRevisions.forEach((revision, index) => {
+    if (taxonomyRevisionIds.has(revision.id)) {
+      context.addIssue({
+        code: "custom",
+        path: ["diagnosticTaxonomyRevisions", index, "id"],
+        message: "Diagnostic taxonomy revision IDs must be unique.",
+      });
+    }
+    taxonomyRevisionIds.add(revision.id);
+    if (taxonomyEventIds.has(revision.operationalEventId)) {
+      context.addIssue({
+        code: "custom",
+        path: ["diagnosticTaxonomyRevisions", index, "operationalEventId"],
+        message: "An operational event may back only one diagnostic taxonomy revision.",
+      });
+    }
+    taxonomyEventIds.add(revision.operationalEventId);
+    const event = snapshot.events.find((candidate) => candidate.id === revision.operationalEventId);
+    if (
+      event === undefined
+      || event.ticketId !== revision.ticketId
+      || event.action !== "diagnostic-taxonomy-revised"
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["diagnosticTaxonomyRevisions", index, "operationalEventId"],
+        message: "Diagnostic taxonomy revisions must bind to a same-ticket diagnostic-taxonomy-revised event.",
+      });
+    }
+    const expectedRevision = index + 1;
+    if (revision.revision !== expectedRevision) {
+      context.addIssue({
+        code: "custom",
+        path: ["diagnosticTaxonomyRevisions", index, "revision"],
+        message: `Diagnostic taxonomy revisions must be contiguous and ordered from one (expected ${expectedRevision}).`,
+      });
     }
   });
   for (const [index, diagnosis] of snapshot.diagnoses.entries()) {

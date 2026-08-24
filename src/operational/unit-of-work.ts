@@ -723,6 +723,60 @@ export class OperationalUnitOfWork {
       revision,
       "Diagnostic taxonomy revision failed operational schema validation.",
     );
+    const event = this.appendedEventWrites.find((candidate) => candidate.id === parsed.operationalEventId);
+    if (event === undefined) {
+      throw new OperationalStoreError(
+        "Every diagnostic taxonomy revision must bind to an operational event appended in the transaction.",
+        "PERSISTENCE_ERROR",
+      );
+    }
+    if (event.ticket_id !== parsed.ticketId) {
+      throw new OperationalStoreError(
+        "Diagnostic taxonomy revision and operational event must reference the same ticket.",
+        "PERSISTENCE_ERROR",
+      );
+    }
+    if (event.action !== "diagnostic-taxonomy-revised") {
+      throw new OperationalStoreError(
+        "Diagnostic taxonomy revisions require a diagnostic-taxonomy-revised event.",
+        "VALIDATION_ERROR",
+      );
+    }
+    const existingRevision = this.database.prepare(
+      "SELECT MAX(revision) AS revision FROM diagnostic_taxonomy_revisions WHERE ticket_id = ?",
+    ).get(parsed.ticketId) as { revision?: number } | undefined;
+    const expectedRevision = (existingRevision?.revision ?? 0) + 1;
+    if (parsed.revision !== expectedRevision) {
+      throw new OperationalStoreError(
+        `Diagnostic taxonomy revisions must be contiguous; expected ${expectedRevision}.`,
+        "STALE_REVISION",
+      );
+    }
+    const existingEvent = this.database.prepare(
+      "SELECT 1 AS found FROM diagnostic_taxonomy_revisions WHERE operational_event_id = ? LIMIT 1",
+    ).get(parsed.operationalEventId) as { found?: number } | undefined;
+    if (existingEvent?.found === 1) {
+      throw new OperationalStoreError(
+        "An operational event may back only one diagnostic taxonomy revision.",
+        "IDEMPOTENCY_CONFLICT",
+      );
+    }
+    const existingId = (this.database.prepare(
+      "SELECT payload_json FROM diagnostic_taxonomy_revisions",
+    ).all() as JsonRow[]).some((row) => {
+      try {
+        const value = JSON.parse(row.payload_json) as { id?: unknown };
+        return value.id === parsed.id;
+      } catch {
+        return false;
+      }
+    });
+    if (existingId || this.diagnosticTaxonomyRevisionWrites.some((row) => row.id === parsed.id)) {
+      throw new OperationalStoreError(
+        "Diagnostic taxonomy revision IDs must be unique.",
+        "IDEMPOTENCY_CONFLICT",
+      );
+    }
     this.database.prepare(`
       INSERT INTO diagnostic_taxonomy_revisions(
         ticket_id, revision, operational_event_id, created_at,
@@ -738,7 +792,7 @@ export class OperationalUnitOfWork {
       JSON.stringify(parsed),
     );
     this.diagnosticTaxonomyRevisionWrites.push({
-      id: `${parsed.ticketId}:${parsed.revision}`,
+      id: parsed.id,
       ticket_id: parsed.ticketId,
       operational_event_id: parsed.operationalEventId,
       revision: parsed.revision,
@@ -1022,7 +1076,7 @@ export class OperationalUnitOfWork {
     const diagnosticTaxonomyRevisions = this.readJoinedPayloads(
       `SELECT revisions.payload_json FROM diagnostic_taxonomy_revisions AS revisions
        JOIN operational_events AS events ON events.id = revisions.operational_event_id
-       WHERE revisions.ticket_id = ? ORDER BY events.sequence ASC, revisions.revision ASC`,
+       WHERE revisions.ticket_id = ? ORDER BY revisions.revision ASC`,
       ticket.id,
       DiagnosticTaxonomyRevisionSchema,
       "Operational diagnostic taxonomy revision data is corrupt.",
@@ -1215,7 +1269,11 @@ export class OperationalUnitOfWork {
     const eventsById = new Map(this.appendedEventWrites.map((event) => [event.id, event] as const));
     for (const revision of this.diagnosticTaxonomyRevisionWrites) {
       const event = eventsById.get(revision.operational_event_id);
-      if (event === undefined || event.ticket_id !== revision.ticket_id) {
+      if (
+        event === undefined
+        || event.ticket_id !== revision.ticket_id
+        || event.action !== "diagnostic-taxonomy-revised"
+      ) {
         throw new OperationalStoreError(
           "Every diagnostic taxonomy revision must bind to its transaction-local causal event.",
           "PERSISTENCE_ERROR",

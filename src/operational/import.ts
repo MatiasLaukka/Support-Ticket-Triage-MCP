@@ -392,9 +392,7 @@ function validateAggregate(value: unknown, index: number): AggregateValidationRe
       - causalSequence(eventSequence, right.operationalEventId)
       || left.recommendation.id.localeCompare(right.recommendation.id)),
     diagnosticTaxonomyRevisions: [...source.diagnosticTaxonomyRevisions].sort((left, right) =>
-      causalSequence(eventSequence, left.operationalEventId)
-      - causalSequence(eventSequence, right.operationalEventId)
-      || left.revision - right.revision),
+      left.revision - right.revision),
     messages: [...source.messages].sort((left, right) =>
       causalSequence(eventSequence, left.operationalEventId)
       - causalSequence(eventSequence, right.operationalEventId)
@@ -476,9 +474,6 @@ function importAggregate(
       for (const recommendation of aggregate.recommendations) unit.insertRecommendation(recommendation);
       for (const revision of aggregate.ticketRevisions) unit.appendTicketRevision(revision);
       for (const revision of aggregate.recommendationRevisions) unit.appendRecommendationRevision(revision);
-      for (const revision of aggregate.diagnosticTaxonomyRevisions ?? []) {
-        unit.appendDiagnosticTaxonomyRevision(revision as DiagnosticTaxonomyRevisionWrite);
-      }
       for (const message of aggregate.messages) unit.insertMessage(message);
       for (const diagnosis of aggregate.diagnoses) unit.insertDiagnosis(diagnosis);
       for (const event of aggregate.events) {
@@ -490,6 +485,9 @@ function importAggregate(
           );
         }
         unit.appendEvent(event as OperationalEventWrite);
+      }
+      for (const revision of aggregate.diagnosticTaxonomyRevisions ?? []) {
+        unit.appendDiagnosticTaxonomyRevision(revision as DiagnosticTaxonomyRevisionWrite);
       }
       for (const trace of aggregate.traces) unit.appendTrace(trace);
       unit.markImportedSource(aggregate.sourceId);

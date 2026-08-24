@@ -313,7 +313,12 @@ export function evaluateRecommendationsAgainstOracles(
     knownCauseAccuracy: knownCauseScores.length === 0
       ? null
       : finiteRate(knownCauseScores.filter(Boolean).length, knownCauseScores.length),
-    passedScenarioCount: presentScores.filter(({ all }) => all).length,
+    passedScenarioCount: presentScores.filter(
+      ({ classificationPass, knowledgePass, knownCausePass }) =>
+        classificationPass &&
+        knowledgePass &&
+        knownCausePass,
+    ).length,
   };
 }
 

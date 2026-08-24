@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import {
   auditEvaluationOracles,
+  EvaluationOracleSchema,
   evaluationOracleFromExpectedOutcome,
   loadEvaluationOracles,
   scoreEvaluationOracle,
@@ -15,6 +16,7 @@ import {
 } from "../src/domain.js";
 import { buildApprovalDeskRecommendationInput } from "../src/approval-desk/recommendation-builder.js";
 import { evaluateRecommendationsAgainstOracles } from "../src/evaluation.js";
+
 
 describe("evaluation oracle foundation", () => {
   it("maps a legacy ExpectedOutcome without changing its semantics", () => {
@@ -54,6 +56,96 @@ describe("evaluation oracle foundation", () => {
     expect(scoreEvaluationOracle(evaluationOracleFromExpectedOutcome(outcome), actual).knowledgePass).toBe(true);
   });
 
+  it("scores matching diagnostic taxonomy expectations", () => {
+    const oracle = EvaluationOracleSchema.parse({
+      ticketId: "TKT-1017",
+      classification: {
+        acceptableCategories: ["other"],
+        acceptableTeams: ["support"],
+        acceptablePriorities: ["P3"],
+        requiredEscalations: [],
+      },
+      knowledge: {
+        requiredArticleIds: ["sms-compliance"],
+        relevantArticleIds: [],
+      },
+      taxonomy: {
+        acceptablePrimaryProductSurfaces: [
+          {
+            domain: "messaging",
+            area: "sms",
+          },
+        ],
+        acceptableProblemClasses: ["expected-behavior"],
+      },
+      knownCause: {
+        expectation: "plausible",
+      },
+      labelRationale: "Reviewed SMS quiet-hours taxonomy.",
+    });
+
+    const score = scoreEvaluationOracle(oracle, {
+      category: "other",
+      team: "support",
+      priority: "P3",
+      requiredEscalations: [],
+      knowledgeArticleIds: ["sms-compliance"],
+      knownCause: "sms-quiet-hours",
+      taxonomy: {
+        primaryProductSurface: {
+          domain: "messaging",
+          area: "sms",
+        },
+        problemClasses: ["expected-behavior"],
+      },
+    });
+
+    expect(score.taxonomyPass).toBe(true);
+    expect(score.all).toBe(true);
+  });
+
+  it("accepts reviewed diagnostic taxonomy expectations", () => {
+  const oracle = EvaluationOracleSchema.parse({
+    ticketId: "TKT-1017",
+    classification: {
+      acceptableCategories: ["other"],
+      acceptableTeams: ["support"],
+      acceptablePriorities: ["P3"],
+      requiredEscalations: [],
+    },
+    knowledge: {
+      requiredArticleIds: ["sms-compliance"],
+      relevantArticleIds: [],
+    },
+    taxonomy: {
+      acceptablePrimaryProductSurfaces: [
+        {
+          domain: "messaging",
+          area: "sms",
+        },
+      ],
+      acceptableProblemClasses: ["expected-behavior"],
+    },
+    knownCause: {
+      expectation: "plausible",
+    },
+    family: "sms-compliance",
+    contrastGroup: "sms-quiet-hours",
+    labelRationale:
+      "Quiet-hours enforcement is an SMS behavior rather than a platform outage.",
+  });
+
+  expect(oracle.taxonomy).toEqual({
+    acceptablePrimaryProductSurfaces: [
+      {
+        domain: "messaging",
+        area: "sms",
+      },
+    ],
+    acceptableProblemClasses: ["expected-behavior"],
+  });
+});
+
   it("scores acceptable labels and does not require merely relevant articles", async () => {
     const oracles = await loadEvaluationOracles();
     const oracle = oracles.find(({ ticketId }) => ticketId === "TKT-1017")!;
@@ -65,6 +157,13 @@ describe("evaluation oracle foundation", () => {
       requiredEscalations: [],
       knowledgeArticleIds: ["sms-compliance"],
       knownCause: "sms-quiet-hours",
+      taxonomy: {
+        primaryProductSurface: {
+          domain: "messaging",
+          area: "sms",
+        },
+        problemClasses: ["expected-behavior"],
+      },
     });
 
     expect(oracle.classification.acceptableCategories).toEqual(["other"]);
@@ -72,8 +171,43 @@ describe("evaluation oracle foundation", () => {
       classificationPass: true,
       knowledgePass: true,
       knownCausePass: true,
+      taxonomyPass: true,
       all: true,
     });
+  });
+
+  it("fails taxonomy scoring when required taxonomy output is missing", () => {
+    const oracle = EvaluationOracleSchema.parse({
+      ticketId: "TKT-1017",
+      classification: {
+        acceptableCategories: ["other"],
+        acceptableTeams: ["support"],
+        acceptablePriorities: ["P3"],
+        requiredEscalations: [],
+      },
+      knowledge: {
+        requiredArticleIds: ["sms-compliance"],
+        relevantArticleIds: [],
+      },
+      taxonomy: {
+        acceptablePrimaryProductSurfaces: [
+          { domain: "messaging", area: "sms" },
+        ],
+        acceptableProblemClasses: ["expected-behavior"],
+      },
+      labelRationale: "Reviewed SMS taxonomy.",
+    });
+
+    const score = scoreEvaluationOracle(oracle, {
+      category: "other",
+      team: "support",
+      priority: "P3",
+      requiredEscalations: [],
+      knowledgeArticleIds: ["sms-compliance"],
+    });
+
+    expect(score.taxonomyPass).toBe(false);
+    expect(score.all).toBe(false);
   });
 
   it("distinguishes plausible, must-not-match, and insufficient-evidence causes", async () => {
@@ -223,6 +357,207 @@ describe("evaluation oracle foundation", () => {
       classificationAccuracy: 1,
       knowledgeRequiredCoverage: 1,
       passedScenarioCount: 1,
+    });
+  });
+
+  it("does not lower legacy recommendation pass counts for taxonomy-only B0 ground truth", async () => {
+    const tickets = TicketSchema.array().parse(
+      JSON.parse(await readFile(resolve("data/seed/tickets.json"), "utf8")),
+    );
+
+    const ticket = tickets.find(({ id }) => id === "TKT-1017")!;
+
+    const outcome = ExpectedOutcomeSchema.array().parse(
+      JSON.parse(await readFile(resolve("data/seed/expected-outcomes.json"), "utf8")),
+    ).find(({ ticketId }) => ticketId === ticket.id)!;
+
+    const { actor: _actor, ...input } =
+      buildApprovalDeskRecommendationInput({
+        ticket,
+        outcome,
+        actor: "taxonomy-oracle-b0-test",
+      });
+
+    const recommendation = TriageRecommendationSchema.parse({
+      ...input,
+
+      category: "other",
+      team: "support",
+      priority: "P3",
+      escalationRequired: false,
+      escalationReasons: [],
+      knowledgeArticleIds: ["sms-compliance"],
+      knownCause: "sms-quiet-hours",
+
+      id: "00000000-0000-4000-8000-000000000017",
+      resolution: "pending",
+      createdAt: ticket.updatedAt,
+    });
+
+    const oracle = (await loadEvaluationOracles())
+      .find(({ ticketId }) => ticketId === ticket.id)!;
+
+    expect(oracle.taxonomy).toBeDefined();
+
+    const report = evaluateRecommendationsAgainstOracles(
+      [recommendation],
+      [oracle],
+    );
+
+    expect(report).toMatchObject({
+      ticketCount: 1,
+      passedScenarioCount: 1,
+    });
+  });
+
+  it("rejects duplicate acceptable primary product surfaces", () => {
+    expect(() =>
+      EvaluationOracleSchema.parse({
+        ticketId: "TKT-1017",
+        classification: {
+          acceptableCategories: ["other"],
+          acceptableTeams: ["support"],
+          acceptablePriorities: ["P3"],
+          requiredEscalations: [],
+        },
+        knowledge: {
+          requiredArticleIds: ["sms-compliance"],
+          relevantArticleIds: [],
+        },
+        taxonomy: {
+          acceptablePrimaryProductSurfaces: [
+            { domain: "messaging", area: "sms" },
+            { domain: "messaging", area: "sms" },
+          ],
+          acceptableProblemClasses: ["expected-behavior"],
+        },
+        labelRationale: "Duplicate product surfaces are invalid.",
+      }),
+    ).toThrow();
+  });
+
+  it("rejects duplicate acceptable problem classes", () => {
+    expect(() =>
+      EvaluationOracleSchema.parse({
+        ticketId: "TKT-1017",
+        classification: {
+          acceptableCategories: ["other"],
+          acceptableTeams: ["support"],
+          acceptablePriorities: ["P3"],
+          requiredEscalations: [],
+        },
+        knowledge: {
+          requiredArticleIds: ["sms-compliance"],
+          relevantArticleIds: [],
+        },
+        taxonomy: {
+          acceptablePrimaryProductSurfaces: [
+            { domain: "messaging", area: "sms" },
+          ],
+          acceptableProblemClasses: [
+            "expected-behavior",
+            "expected-behavior",
+          ],
+        },
+        labelRationale: "Duplicate problem classes are invalid.",
+      }),
+    ).toThrow();
+  });
+
+  it("fails taxonomy scoring when the primary product surface is wrong", () => {
+  const oracle = EvaluationOracleSchema.parse({
+    ticketId: "TKT-1017",
+    classification: {
+      acceptableCategories: ["other"],
+      acceptableTeams: ["support"],
+      acceptablePriorities: ["P3"],
+      requiredEscalations: [],
+    },
+    knowledge: {
+      requiredArticleIds: ["sms-compliance"],
+      relevantArticleIds: [],
+    },
+    taxonomy: {
+      acceptablePrimaryProductSurfaces: [
+        { domain: "messaging", area: "sms" },
+      ],
+      acceptableProblemClasses: ["expected-behavior"],
+    },
+    labelRationale: "Reviewed SMS taxonomy.",
+  });
+
+  const score = scoreEvaluationOracle(oracle, {
+    category: "other",
+    team: "support",
+    priority: "P3",
+    requiredEscalations: [],
+    knowledgeArticleIds: ["sms-compliance"],
+    taxonomy: {
+      primaryProductSurface: {
+        domain: "messaging",
+        area: "email",
+      },
+      problemClasses: ["expected-behavior"],
+    },
+  });
+
+  expect(score.taxonomyPass).toBe(false);
+  expect(score.all).toBe(false);
+});
+
+  it("fails taxonomy scoring when a problem class is outside the acceptable set", () => {
+    const oracle = EvaluationOracleSchema.parse({
+      ticketId: "TKT-1017",
+      classification: {
+        acceptableCategories: ["other"],
+        acceptableTeams: ["support"],
+        acceptablePriorities: ["P3"],
+        requiredEscalations: [],
+      },
+      knowledge: {
+        requiredArticleIds: ["sms-compliance"],
+        relevantArticleIds: [],
+      },
+      taxonomy: {
+        acceptablePrimaryProductSurfaces: [
+          { domain: "messaging", area: "sms" },
+        ],
+        acceptableProblemClasses: ["expected-behavior"],
+      },
+      labelRationale: "Reviewed SMS taxonomy.",
+    });
+
+    const score = scoreEvaluationOracle(oracle, {
+      category: "other",
+      team: "support",
+      priority: "P3",
+      requiredEscalations: [],
+      knowledgeArticleIds: ["sms-compliance"],
+      taxonomy: {
+        primaryProductSurface: {
+          domain: "messaging",
+          area: "sms",
+        },
+        problemClasses: ["expected-behavior", "outage"],
+      },
+    });
+
+    expect(score.taxonomyPass).toBe(false);
+    expect(score.all).toBe(false);
+  });
+
+  it("publishes reviewed taxonomy ground truth for the SMS quiet-hours case", async () => {
+  const oracles = await loadEvaluationOracles();
+  const oracle = oracles.find(({ ticketId }) => ticketId === "TKT-1017")!;
+
+  expect(oracle.taxonomy).toEqual({
+    acceptablePrimaryProductSurfaces: [
+      {
+        domain: "messaging",
+        area: "sms",
+      },
+    ],
+    acceptableProblemClasses: ["expected-behavior"],
     });
   });
 });

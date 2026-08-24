@@ -14,12 +14,41 @@ import {
   type RequiredEscalation,
   type Team,
 } from "./domain.js";
+import {
+  ProductSurfaceSchema,
+  ProblemClassSchema,
+  type ProductSurface,
+  type ProblemClass,
+} from "./diagnostic-taxonomy.js";
 
 const UniqueSlugArraySchema = z
   .array(z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/))
   .refine((values) => new Set(values).size === values.length, {
     message: "Values must be unique.",
   });
+
+const UniqueProductSurfaceArraySchema = z
+  .array(ProductSurfaceSchema)
+  .min(1)
+  .refine(
+    (values) =>
+      new Set(
+        values.map(({ domain, area }) => `${domain}/${area}`),
+      ).size === values.length,
+    {
+      message: "Product surfaces must be unique.",
+    },
+  );
+
+const UniqueProblemClassArraySchema = z
+  .array(ProblemClassSchema)
+  .min(1)
+  .refine(
+    (values) => new Set(values).size === values.length,
+    {
+      message: "Problem classes must be unique.",
+    },
+  );
 
 const UniqueCategoryArraySchema = z
   .array(CategorySchema)
@@ -70,6 +99,15 @@ export const EvaluationOracleSchema = z
         relevantArticleIds: UniqueSlugArraySchema,
       })
       .strict(),
+    taxonomy: z
+      .object({
+        acceptablePrimaryProductSurfaces:
+          UniqueProductSurfaceArraySchema,
+        acceptableProblemClasses:
+          UniqueProblemClassArraySchema,
+      })
+      .strict()
+      .optional(),
     knownCause: z
       .object({
         expectation: KnownCauseExpectationSchema,
@@ -92,12 +130,18 @@ export interface EvaluationOracleInput {
   requiredEscalations: readonly RequiredEscalation[];
   knowledgeArticleIds: readonly string[];
   knownCause?: string | null;
+
+  taxonomy?: {
+    primaryProductSurface: ProductSurface | null;
+    problemClasses: readonly ProblemClass[];
+  };
 }
 
 export interface EvaluationOracleScore {
   classificationPass: boolean;
   knowledgePass: boolean;
   knownCausePass: boolean;
+  taxonomyPass: boolean;
   all: boolean;
   failures: string[];
 }
@@ -181,13 +225,37 @@ export function scoreEvaluationOracle(
   const knownCausePass = knownCauseMatchesOracle(actual.knownCause ?? null, oracle.knownCause);
   if (!knownCausePass) failures.push(`known cause does not satisfy ${oracle.knownCause?.expectation ?? "not-applicable"}`);
 
-  return {
-    classificationPass,
-    knowledgePass,
-    knownCausePass,
-    all: classificationPass && knowledgePass && knownCausePass,
-    failures,
-  };
+  const taxonomyPass =
+  oracle.taxonomy === undefined
+    ? true
+    : actual.taxonomy !== undefined &&
+      actual.taxonomy.primaryProductSurface !== null &&
+      oracle.taxonomy.acceptablePrimaryProductSurfaces.some(
+        (expectedSurface) =>
+          expectedSurface.domain === actual.taxonomy!.primaryProductSurface!.domain &&
+          expectedSurface.area === actual.taxonomy!.primaryProductSurface!.area,
+      ) &&
+      actual.taxonomy.problemClasses.length > 0 &&
+      actual.taxonomy.problemClasses.every((problemClass) =>
+        oracle.taxonomy!.acceptableProblemClasses.includes(problemClass),
+      );
+
+  if (!taxonomyPass) {
+    failures.push("diagnostic taxonomy does not satisfy oracle");
+  }
+
+return {
+  classificationPass,
+  knowledgePass,
+  knownCausePass,
+  taxonomyPass,
+  all:
+    classificationPass &&
+    knowledgePass &&
+    knownCausePass &&
+    taxonomyPass,
+  failures,
+};
 }
 
 /**

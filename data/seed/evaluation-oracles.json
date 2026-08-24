@@ -27,6 +27,17 @@
       "requiredArticleIds": ["sms-compliance"],
       "relevantArticleIds": []
     },
+    "taxonomy": {
+      "acceptablePrimaryProductSurfaces": [
+     {
+      "domain": "messaging",
+      "area": "sms"
+      }
+      ],
+      "acceptableProblemClasses": [
+      "expected-behavior"
+      ]
+    },
     "knownCause": {
       "expectation": "plausible"
     },

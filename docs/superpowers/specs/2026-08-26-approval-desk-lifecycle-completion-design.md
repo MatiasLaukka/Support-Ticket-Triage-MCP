@@ -16,7 +16,9 @@ The ticket lifecycle returned by the backend is the only authority for mutation 
 
 `diagnosisUiPhase` remains presentation-only. It may choose whether the operator is looking at the current diagnosis, Inspection, Scoped Fix, or a historical read-only view, but it cannot grant a mutation or infer that a transition succeeded.
 
-Every governed command must recheck the relevant lifecycle action immediately before posting. This is an in-memory descriptor check, not a mandatory extra GET before every click: the mutation is sent with its existing revision/watermark preconditions, the backend remains authoritative, and a stale/rejected response triggers refresh and reconciliation. Successful commands adopt the returned lifecycle (or perform a full authoritative refresh when the response is not an envelope) before selecting the next presentation.
+Every governed command must recheck the relevant lifecycle action immediately before posting. This is an in-memory descriptor check, not a mandatory extra GET before every click: the mutation is sent with its existing revision/watermark preconditions, the backend remains authoritative, and a stale/rejected response triggers refresh and reconciliation. A single operator gesture may execute at most one governed lifecycle mutation. After a successful mutation, the UI must reconcile and render the returned authoritative state before another governed mutation can be issued; client-side mutation chaining across lifecycle actions is prohibited. If two domain mutations are intentionally atomic, the backend must expose them as one governed command rather than the browser chaining separate commands.
+
+After every successful governed mutation, reconcile every authoritative presentation input affected by that mutation—lifecycle, operator guidance, ticket/revision, current recommendation, diagnoses, and conversation/timeline as applicable—either from the returned authoritative envelope or through a full refresh. Lifecycle-backed paths must not fabricate durable state locally from the fact that a POST succeeded.
 
 ## Lifecycle navigation
 
@@ -90,11 +92,11 @@ The ticket-list projection receives a minimal lifecycle summary (phase, primary 
 
 ## Acceptance invariant
 
-For every durable ticket state, the Action Bar exposes the lifecycle primary action or clearly explains why no operator action is currently possible. It never exposes an enabled action that the backend will reject from that same state.
+For every durable ticket state, the Action Bar exposes the lifecycle primary action or clearly explains why no operator action is currently possible. For every enabled governed UI control anywhere in the Approval Desk, its mutation kind corresponds to a lifecycle action whose availability is `primary` or `available`; `blocked` and `completed` actions never have enabled mutation controls. The UI never exposes an enabled action that the backend will reject from that same state.
 
 The acceptance path uses real Approval Desk HTTP responses and returned lifecycle projections for TKT-1010. Every operator-controlled transition is performed through the same Approval Desk UI control a human would use. Direct HTTP is reserved for external/demo-world events such as customer replies and internal platform confirmation. The path covers evaluation/evidence requests, an ambiguity or rejection recovery cycle, confirmed diagnosis review, scoped fix, post-fix customer response, customer confirmation, re-evaluation, and resolution. Browser state is not fabricated to advance the workflow.
 
-The acceptance path includes at least one restart/reload checkpoint after durable diagnosis or fix state has been written. The runtime is recreated from the persisted operational SQLite state, the Approval Desk reloads the selected ticket, and the journey continues to resolution using the newly returned lifecycle projection.
+The acceptance path includes at least one restart/reload checkpoint after durable diagnosis or fix state has been written. The runtime is recreated from the persisted operational SQLite state, the Approval Desk reloads the selected ticket, and the journey continues to resolution using the newly returned lifecycle projection. It records governed requests and verifies that each operator gesture causes at most one lifecycle mutation and that the next lifecycle action is rendered before the next operator gesture.
 
 TKT-1010 is complemented by an exhaustive presentation matrix over every lifecycle phase and primary action. The matrix asserts the title, hint, primary control, relevant secondary controls, blocked-action explanation, and absence of an empty action bar. It also verifies that lifecycle-backed presentation never falls through to a contradictory local “Response ready” label.
 

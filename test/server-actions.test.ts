@@ -667,10 +667,10 @@ const lifecycleBlockerCases: Array<{
       await approveLatestDiagnosis(fixture);
     },
   },
-  {
-    name: "fix rejects a diagnosis made stale by an existing fix",
+{
+    name: "fix rejects a duplicate fix for the latest diagnosis",
     tool: "mark_fix_available",
-    message: "An approved current diagnosis is required before marking a fix available.",
+    message: "A fix has already been recorded for the latest diagnosis.",
     setup: async (fixture) => {
       await fixture.service.recordDiagnosis({
         ticketId: "TKT-1001",

@@ -13,14 +13,17 @@ import type { CustomerReplyWatermark, DiagnosisContext } from "../triage-service
 import {
   diagnosisContextFromAudit,
 } from "./diagnostic-workflow.js";
+import { compareIsoInstants } from "../iso-instant.js";
 import {
   isDiagnosisStale,
   latestStrictDiagnosisReviewRecord,
 } from "./diagnosis-review.js";
 import {
   auditCausalPositions,
+  auditPositionForEvent,
   compareAuditCausalOrder,
   latestAuditPosition,
+  latestRecommendationSubmissionPosition,
   type AuditCausalPosition,
 } from "./workflow-causal-context.js";
 import {
@@ -221,6 +224,7 @@ export function buildTicketLifecycleView(input: WorkflowLifecycleInput): Lifecyc
     ticket: input.ticket,
     recommendation,
     guidance,
+    latestDiagnosis,
     diagnosis,
     diagnosticInvestigation,
     confirmation,
@@ -269,6 +273,7 @@ function phaseForLifecycle(input: {
   ticket: Ticket;
   recommendation: TriageRecommendation | undefined;
   guidance: OperatorGuidance;
+  latestDiagnosis: AuditEvent | undefined;
   diagnosis: LifecycleView["diagnosis"];
   diagnosticInvestigation: LifecycleView["diagnosticInvestigation"];
   confirmation: LifecycleView["confirmation"];
@@ -276,8 +281,13 @@ function phaseForLifecycle(input: {
   audits: readonly AuditEvent[];
 }): LifecyclePhase {
   if (input.ticket.status === "resolved") return "resolved";
-  if (input.diagnosis.state === "invalidated" || input.diagnosis.state === "rejected") {
-    return "evaluation-needed";
+  const rejectedOrInvalidated = input.diagnosis.state === "invalidated" ||
+    input.diagnosis.state === "rejected";
+  if (rejectedOrInvalidated) {
+    if (isAuditNewerThanRecommendation(input.latestDiagnosis, input.recommendation, input.audits)) {
+      return "evaluation-needed";
+    }
+    if (input.recommendation?.resolution === "pending") return "recommendation-review";
   }
   if (input.guidance.stage === "escalated" || input.diagnosticInvestigation.state === "escalated") {
     return "escalated";
@@ -313,6 +323,24 @@ function phaseForLifecycle(input: {
     return "evaluation-needed";
   }
   return "evaluation-needed";
+}
+
+function isAuditNewerThanRecommendation(
+  event: AuditEvent | undefined,
+  recommendation: TriageRecommendation | undefined,
+  audits: readonly AuditEvent[],
+): boolean {
+  if (event === undefined) return false;
+  if (recommendation === undefined) return true;
+  const eventPosition = auditPositionForEvent(audits, event);
+  const recommendationSubmission = latestRecommendationSubmissionPosition(
+    audits,
+    recommendation.id,
+  );
+  if (eventPosition !== undefined && recommendationSubmission !== undefined) {
+    return compareAuditCausalOrder(eventPosition, recommendationSubmission) > 0;
+  }
+  return compareIsoInstants(event.timestamp, recommendation.createdAt) > 0;
 }
 
 function primaryActionForPhase(input: {

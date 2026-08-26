@@ -831,6 +831,59 @@ describe("lifecycle projection", () => {
     expect(guidance.requiredReview).toBeUndefined();
   });
 
+  it.each([
+    {
+      name: "rejected",
+      audit: (diagnosis: AuditEvent) => matrixDiagnosisReview(
+        diagnosis,
+        "reject",
+        "2026-06-10T09:03:00.000Z",
+      ),
+    },
+    {
+      name: "invalidated",
+      audit: (diagnosis: AuditEvent) => matrixAudit(
+        "30000000-0000-4000-8000-000000000053",
+        "diagnosis-invalidated",
+        "2026-06-10T09:03:00.000Z",
+        {
+          before: { diagnosisId: diagnosis.id },
+          after: { diagnosisInvalidated: true },
+        },
+      ),
+    },
+  ])("keeps a newer pending recommendation reviewable after a $name escalated diagnosis", ({ audit }) => {
+    const escalatedDiagnosis = matrixEscalatedDiagnosis(
+      "30000000-0000-4000-8000-000000000052",
+      "2026-06-10T09:02:00.000Z",
+    );
+    const newerRecommendation = matrixRecommendation({
+      id: "10000000-0000-4000-8000-000000000053",
+      resolution: "pending",
+      supportState: "ready-for-approval",
+      createdAt: "2026-06-10T09:04:00.000Z",
+    });
+    const input = {
+      ticket,
+      recommendations: [newerRecommendation],
+      audits: [
+        escalatedDiagnosis,
+        audit(escalatedDiagnosis),
+        matrixSubmission(newerRecommendation.id, newerRecommendation.createdAt),
+      ],
+    };
+
+    const lifecycle = buildTicketLifecycleView(input);
+    const guidance = buildTicketWorkflowReadModel(input).operatorGuidance;
+
+    expect(lifecycle.phase).toBe("recommendation-review");
+    expect(lifecycle.primaryAction).toMatchObject({
+      kind: "review-recommendation",
+      availability: "primary",
+    });
+    expect(guidance.nextAction).toBe("review-recommendation");
+  });
+
   it("keeps evaluation primary while an approved likely diagnosis awaits confirmation", () => {
     const awaitingEvidenceRecommendation = TriageRecommendationSchema.parse({
       ...recommendation,

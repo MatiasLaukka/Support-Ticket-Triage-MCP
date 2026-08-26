@@ -276,15 +276,15 @@ function phaseForLifecycle(input: {
   audits: readonly AuditEvent[];
 }): LifecyclePhase {
   if (input.ticket.status === "resolved") return "resolved";
+  if (input.diagnosis.state === "invalidated" || input.diagnosis.state === "rejected") {
+    return "evaluation-needed";
+  }
   if (input.guidance.stage === "escalated" || input.diagnosticInvestigation.state === "escalated") {
     return "escalated";
   }
   if (input.guidance.stage === "ready-for-close") return "ready-for-close";
   if (input.recommendation?.resolution === "pending") return "recommendation-review";
   if (input.guidance.stage === "waiting-customer") return "waiting-for-customer";
-  if (input.diagnosis.state === "invalidated" || input.diagnosis.state === "rejected") {
-    return "evaluation-needed";
-  }
   // A fresh evaluation with complete evidence is the handoff that records the
   // next diagnosis. The previous diagnosis may still project an ambiguous or
   // insufficient diagnostic snapshot, but it is historical once the newer

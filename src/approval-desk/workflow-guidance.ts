@@ -440,11 +440,22 @@ export function buildOperatorGuidance(input: {
       currentTicketRevision: input.ticket.revision,
       latestConversationWatermark: conversationWatermarkFromAudits(input.audits),
     }).stale;
+  const latestDiagnosisInvalidated = latestDiagnosis !== undefined &&
+    input.audits.some((event) =>
+      event.action === "diagnosis-invalidated" &&
+      event.before.diagnosisId === latestDiagnosis.id,
+    );
+  const latestDiagnosisRequiresEvaluation =
+    isAuditNewerThanRecommendation(latestDiagnosis, latest, input.audits) &&
+    (latestDiagnosisReview?.review.decision === "reject" || latestDiagnosisInvalidated);
   if (
-    latest?.supportState === "escalated" ||
-    latestDiagnosticContext?.diagnosticState?.state === "escalated" ||
-    latestDiagnosis?.action === "diagnostic-escalated" ||
-    latestRecordedDiagnosticState?.state === "escalated"
+    !latestDiagnosisRequiresEvaluation &&
+    (
+      latest?.supportState === "escalated" ||
+      latestDiagnosticContext?.diagnosticState?.state === "escalated" ||
+      latestDiagnosis?.action === "diagnostic-escalated" ||
+      latestRecordedDiagnosticState?.state === "escalated"
+    )
   ) {
     return OperatorGuidanceSchema.parse({
       stage: "escalated",
@@ -566,11 +577,6 @@ export function buildOperatorGuidance(input: {
       input.audits,
     )
   ) {
-    const latestDiagnosisInvalidated = latestDiagnosis !== undefined &&
-      input.audits.some((event) =>
-        event.action === "diagnosis-invalidated" &&
-        event.before.diagnosisId === latestDiagnosis.id,
-      );
     if (
       latestDiagnosisReview?.review.decision === "reject" ||
       latestDiagnosisInvalidated

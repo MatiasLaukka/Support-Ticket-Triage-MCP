@@ -138,6 +138,46 @@ function matrixDiagnosis(
   });
 }
 
+function matrixEscalatedDiagnosis(id: string, timestamp: string) {
+  return matrixAudit(id, "diagnostic-escalated", timestamp, {
+    after: {
+      diagnosis: {
+        status: "completed",
+        causeType: "performance",
+        customerSafeSummary: "Two evidence-backed causes remain plausible.",
+        evidenceUsed: ["request trace"],
+        confidence: "likely",
+        owner: "engineering",
+        recommendedNextAction: "Specialist review is required.",
+        doNotSay: [],
+        diagnosticState: {
+          state: "escalated",
+          diagnosticAttempts: 2,
+          escalationReason: "diagnostic-ambiguity",
+          specialistTeam: "product",
+          hypotheses: [
+            {
+              id: "browser-session",
+              label: "Browser/session issue",
+              status: "plausible",
+              evidenceUsed: ["request trace"],
+              evidenceToConfirm: ["Private window result"],
+            },
+            {
+              id: "frontend-loading",
+              label: "Frontend loading issue",
+              status: "plausible",
+              evidenceUsed: ["request trace"],
+              evidenceToConfirm: ["Console error"],
+            },
+          ],
+          evidenceToRequest: ["No further automated questions."],
+        },
+      },
+    },
+  });
+}
+
 function matrixDiagnosisReview(
   diagnosis: AuditEvent,
   decision: "approve" | "reject" | "revalidate" = "approve",
@@ -725,6 +765,70 @@ describe("lifecycle projection", () => {
     ]));
     expect(workflow.operatorGuidance.nextAction).toBe("evaluate-ticket");
     expect(workflow.operatorGuidance.requiredReview).toBeUndefined();
+  });
+
+  it.each([
+    {
+      name: "rejected",
+      audit: (diagnosis: AuditEvent) => matrixDiagnosisReview(
+        diagnosis,
+        "reject",
+        "2026-06-10T09:03:00.000Z",
+      ),
+      reasonCode: "diagnosis-rejected",
+    },
+    {
+      name: "invalidated",
+      audit: (diagnosis: AuditEvent) => matrixAudit(
+        "30000000-0000-4000-8000-000000000051",
+        "diagnosis-invalidated",
+        "2026-06-10T09:03:00.000Z",
+        {
+          before: { diagnosisId: diagnosis.id },
+          after: { diagnosisInvalidated: true },
+        },
+      ),
+      reasonCode: "diagnosis-invalidated",
+    },
+  ])("returns evaluation-needed after a $name escalated diagnosis", ({ audit, reasonCode }) => {
+    const escalatedDiagnosis = matrixEscalatedDiagnosis(
+      "30000000-0000-4000-8000-000000000050",
+      "2026-06-10T09:02:00.000Z",
+    );
+    const escalationRecommendation = matrixRecommendation({
+      supportState: "escalated",
+      escalationRequired: true,
+      escalationReasons: ["diagnostic-ambiguity"],
+    });
+    const audits = [escalatedDiagnosis, audit(escalatedDiagnosis)];
+    const input = {
+      ticket,
+      recommendations: [escalationRecommendation],
+      audits,
+    };
+
+    const lifecycle = buildTicketLifecycleView(input);
+    const guidance = buildTicketWorkflowReadModel(input).operatorGuidance;
+
+    expect(lifecycle.phase).toBe("evaluation-needed");
+    expect(lifecycle.primaryAction).toMatchObject({
+      kind: "evaluate-ticket",
+      availability: "primary",
+    });
+    expect(lifecycle.actions).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: "review-diagnosis",
+        availability: "blocked",
+        reasonCodes: [reasonCode],
+      }),
+      expect.objectContaining({
+        kind: "revalidate-diagnosis",
+        availability: "blocked",
+        reasonCodes: [reasonCode],
+      }),
+    ]));
+    expect(guidance.nextAction).toBe("evaluate-ticket");
+    expect(guidance.requiredReview).toBeUndefined();
   });
 
   it("keeps evaluation primary while an approved likely diagnosis awaits confirmation", () => {

@@ -4591,6 +4591,114 @@ describe("approvalDeskHtml", () => {
     expect(app.el("closeTicketButton").textContent).not.toContain("Close");
   });
 
+  it("does not expose inspection clarification when evaluation is blocked by the lifecycle", async () => {
+    const app = await startApprovalDeskApp({
+      diagnoses: [fixtureDiagnosisView()],
+      ticketDetail: {
+        lifecycle: fixtureLifecycle({
+          phase: "diagnosis-review",
+          primaryAction: "none",
+          actions: [
+            lifecycleAction("none", "primary", ["operator-review"]),
+            lifecycleAction("review-diagnosis", "blocked", ["operator-review"]),
+            lifecycleAction("evaluate-ticket", "blocked", ["evidence-pending"]),
+          ],
+        }),
+      },
+    });
+
+    await app.selectFirstTicket();
+    app.openDiagnosisInspection();
+
+    const inspection = app.el("diagnosisPanel").innerHTML;
+    expect(inspection).not.toContain('data-action="reopen-diagnosis-evaluation"');
+    expect(inspection).not.toContain('data-action="review-diagnosis"');
+  });
+
+  it("does not fall back to demo fix mutations when a lifecycle descriptor has no fix action", async () => {
+    const diagnosis = fixtureDiagnosisView({ confidence: "confirmed" });
+    const approved = {
+      decision: "approve",
+      diagnosisId: diagnosis.originalDiagnosis.id,
+      editedDiagnosis: diagnosis.originalDiagnosis.after.diagnosis,
+    };
+    const app = await startApprovalDeskApp({
+      diagnoses: [{ ...diagnosis, reviews: [approved], latestReview: approved }],
+      ticketDetail: {
+        lifecycle: fixtureLifecycle({
+          phase: "waiting-for-customer",
+          primaryAction: "none",
+          actions: [lifecycleAction("none", "primary", ["customer-confirmation-pending"])],
+        }),
+      },
+    });
+
+    await app.selectFirstTicket();
+    app.openApprovedDiagnosis();
+
+    const panel = app.el("diagnosisPanel").innerHTML;
+    expect(panel).not.toContain('data-action="simulate-confirmation"');
+    expect(panel).not.toContain('data-action="prepare-diagnosis-response"');
+    expect(panel).not.toContain('data-action="simulate-solution"');
+  });
+
+  it.each([
+    ["review-diagnosis", "Review"],
+    ["revalidate-diagnosis", "Revalidate"],
+  ])("reopens the refreshed %s lifecycle action after Back without generic response controls", async (primaryAction, label) => {
+    const diagnosis = fixtureDiagnosisView({ stale: primaryAction === "revalidate-diagnosis" });
+    const app = await startApprovalDeskApp({
+      diagnoses: [diagnosis],
+      ticketDetailLifecycleSequence: [
+        fixtureLifecycle({
+          phase: "fix-ready",
+          primaryAction: "apply-scoped-fix",
+          actions: [lifecycleAction("apply-scoped-fix", "primary", ["fix-ready"])],
+        }),
+        fixtureLifecycle({
+          phase: "diagnosis-review",
+          primaryAction,
+          actions: [lifecycleAction(primaryAction, "primary", ["operator-review"])],
+        }),
+      ],
+    });
+
+    await app.selectFirstTicket();
+    app.openApprovedDiagnosis();
+    app.backToNormalActionBar();
+    await app.wait(30);
+
+    expect(app.el("diagnosisPanel").innerHTML).toContain('data-diagnosis-phase="diagnosis"');
+    expect(app.el("diagnosisPanel").innerHTML).toContain(label);
+    expect(app.el("reviewDraftButton").hidden).toBe(true);
+    expect(app.el("approveButton").hidden).toBe(true);
+  });
+
+  it("prioritizes the ready-to-resolve lifecycle title and hint over an open diagnosis", async () => {
+    const diagnosis = fixtureDiagnosisView({ confidence: "confirmed" });
+    const approved = {
+      decision: "approve",
+      diagnosisId: diagnosis.originalDiagnosis.id,
+      editedDiagnosis: diagnosis.originalDiagnosis.after.diagnosis,
+    };
+    const app = await startApprovalDeskApp({
+      diagnoses: [{ ...diagnosis, reviews: [approved], latestReview: approved }],
+      ticketDetail: {
+        lifecycle: fixtureLifecycle({
+          phase: "ready-for-close",
+          primaryAction: "resolve-ticket",
+          actions: [lifecycleAction("resolve-ticket", "primary", ["response-sent"])],
+        }),
+      },
+    });
+
+    await app.selectFirstTicket();
+
+    expect(app.el("actionBarTitle").textContent).toBe("Ready to resolve");
+    expect(app.el("actionBarHint").textContent).toContain("Resolve");
+    expect(app.el("actionBarTitle").textContent).not.toBe("Diagnosis");
+  });
+
   it.each([
     ["resolved", "none", "Resolved", "resolved"],
     ["waiting-for-customer", "none", "Waiting for customer", "customer"],

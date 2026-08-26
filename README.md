@@ -33,8 +33,8 @@ This project demonstrates governed AI support automation end to end:
   until an operator explicitly approves named fields or promotes a reviewed
   object.
 - **Knowledge evolution:** completed diagnoses produce deterministic similarity
-  signals; GPT may draft a reusable candidate, but only human promotion can
-  make it available to future workflows.
+  signals; optional advisory providers may draft reusable candidates, but only
+  human promotion can make a candidate available to future workflows.
 
 Start with the [60-second Approval Desk demo](#demo-in-60-seconds), then run the
 [knowledge-evolution showcase](#governed-knowledge-evolution) for the latest
@@ -79,28 +79,35 @@ See [SECURITY.md](SECURITY.md) for the full threat model.
 ```mermaid
 flowchart LR
     Human["Human reviewer"]
-    Codex["Codex desktop project"]
+    Codex["Codex desktop"]
     Skill["Repository Skill<br/>$triaging-support-tickets"]
-    MCP["support-ticket-triage MCP server<br/>stdio"]
-    Reads["Read tools and resources"]
-    Service["TriageService"]
-    Policy["Policy, similarity, metrics"]
-    Operational["Operational SQLite<br/>projections, events, traces, replay, outbox"]
-    Knowledge["Markdown knowledge articles"]
-    Seed["Synthetic seed fixtures"]
+    MCP["Local MCP server<br/>stdio / JSON-RPC"]
+    Tools["27 typed tools"]
+    Prompts["3 workflow prompts"]
+    Resources["4 local resources"]
+    Service["TriageService<br/>shared workflow authority"]
+    Policy["Deterministic policy,<br/>evidence, similarity, metrics"]
+    Operational["Operational SQLite<br/>tickets, events, projections,<br/>traces, replay, idempotency"]
+    Learning["Advisory learning SQLite<br/>candidates, versions, audits"]
+    Knowledge["Markdown knowledge catalog"]
+    Seed["Synthetic seed fixtures<br/>explicit import boundary"]
 
     Human <--> Codex
     Codex --> Skill
+    Skill --> MCP
     Codex <--> MCP
-    MCP --> Reads
-    MCP --> Service
-    Reads --> Operational
-    Reads --> Knowledge
-    Reads --> Operational
-    Reads --> Policy
+    MCP --> Tools
+    MCP --> Prompts
+    MCP --> Resources
+    Tools --> Service
+    Tools --> Policy
+    Resources --> Operational
+    Resources --> Knowledge
     Service --> Policy
     Service --> Operational
-    Seed -->|explicit typed import| Operational
+    Service --> Learning
+    Knowledge --> Policy
+    Seed -->|validated import| Operational
 ```
 
 ## Demo In 60 Seconds
@@ -219,11 +226,12 @@ present, and backend operator guidance. The report also proves that each MCP
 mutation follows a workflow read, records explicit approval, captures the
 customer reply, diagnosis and fix audits, and ends at `resolved`.
 
-The current deterministic run reports 23 complete workflow reads, 20 governed
-MCP actions, and an 11/11 pass for the separate context-aware diagnostic
-scenario matrix. The matrix's bounded-ambiguity/escalation scenario remains a
-second supporting example: it routes unresolved ambiguity toward specialist
-review rather than pretending that an unresolved hypothesis is a fix.
+The replay writes a sanitized report with the exact workflow-read and action
+counts for that run, plus the separate context-aware diagnostic scenario
+matrix. The matrix's bounded-ambiguity/escalation scenario remains a second
+supporting example: it routes unresolved ambiguity toward specialist review
+rather than pretending that an unresolved hypothesis is a fix. Treat report
+counts as run evidence, not a versioned README constant.
 
 This is a verification and portfolio showcase, not a second workflow engine.
 The same `TriageService`, operator guidance, evidence gates, audit repository,
@@ -303,7 +311,10 @@ flowchart LR
     Validators["Deterministic draft validators"]
     Fallback["Local deterministic fallback"]
     Reviewer["Human reviewer"]
-    Audit["Local audit trail"]
+    MCP["MCP tools and prompts"]
+    HTTP["Approval Desk HTTP API"]
+    Service["Shared TriageService"]
+    Audit["Operational audit trail"]
 
     Ticket --> Context
     Context --> Rules
@@ -317,7 +328,11 @@ flowchart LR
     Validators -->|pass| Reviewer
     Validators -->|warn or provider error| Fallback
     Fallback --> Reviewer
-    Reviewer -->|approve named fields| Audit
+    Reviewer -->|approve named fields| MCP
+    Reviewer -->|approve named fields| HTTP
+    MCP --> Service
+    HTTP --> Service
+    Service --> Audit
 ```
 
 The important boundary is that deterministic code remains the final authority
@@ -436,7 +451,10 @@ runs.
 
 ## Codex Operator Layer
 
-The MCP server exposes two generations of workflow tools:
+The repository Skill is the operator layer for the MCP server. It teaches
+Codex to read the authoritative workflow projection, gather evidence, perform
+the next governed action, and pause whenever a human decision is required.
+The current workflow surface is:
 
 | Tool | Purpose |
 | --- | --- |
@@ -444,8 +462,12 @@ The MCP server exposes two generations of workflow tools:
 | `add_customer_reply` | Appends a customer reply to the local audit trail before re-evaluation. |
 | `evaluate_ticket` | Runs the current Approval Desk recommendation builder from the full timeline instead of asking Codex to hand-build recommendation JSON. |
 | `mark_response_done` | Applies only explicitly approved fields and records the approved customer response as sent. |
-| `submit_triage_recommendation` | Legacy lower-level proposal tool for manually assembled recommendations. |
-| `approve_triage_recommendation` / `reject_triage_recommendation` | Legacy explicit finalization tools guarded by strict schemas and audit logging. |
+| `submit_triage_recommendation` | Explicit lower-level proposal tool for integrations or manually assembled recommendations. |
+| `approve_triage_recommendation` / `reject_triage_recommendation` | Explicit finalization tools guarded by strict schemas and audit logging. |
+| `record_diagnosis` / `review_diagnosis` | Record and review an immutable diagnosis for the current evaluated context. |
+| `apply_diagnosis_fix` / `mark_fix_available` | Apply a reviewed fix to a selected impact set or record a fix ready for verification. |
+| `record_fix_ineffective` / `invalidate_diagnosis` | Record failed verification or explicitly invalidate diagnosis authority. |
+| `close_ticket` | Close only after the customer-safe response and confirmation gates are complete. |
 
 The repository-local Skill at `.agents/skills/triaging-support-tickets` teaches
 Codex to use the operator tools, present evidence and drafts, wait for explicit
@@ -733,71 +755,95 @@ a correlated incident cluster. Prepare recommendations only.
 
 ## MCP Interface
 
-The server exposes exactly 9 tools: 6 read-only tools and 3 local workflow
-actions.
+The local server exposes 27 typed tools, 4 resources, and 3 prompts. All
+schemas are defined at the MCP boundary and map into the same repositories,
+policy functions, and `TriageService` used by the Approval Desk. The server is
+closed-world: it reads and mutates only the local runtime configured by the
+environment variables above.
 
-### Read-Only Tools
+### Read and context tools
 
-| Tool | Purpose | Important bounds |
+| Tool | Purpose |
+| --- | --- |
+| `list_tickets` | Filter and page the local queue, including status, routing, risk, SLA, and historical `asOf` views. |
+| `get_ticket` | Read one ticket by ID. |
+| `get_ticket_workflow` | Read the authoritative ticket, conversation, recommendation, evidence, diagnosis, fix, and lifecycle projection. |
+| `get_ticket_diagnoses` | Read immutable diagnosis history, review decisions, and freshness. |
+| `search_knowledge` | Search the local Markdown knowledge catalog. |
+| `find_similar_tickets` | Rank deterministic text-similarity candidates. |
+| `get_queue_metrics` | Calculate queue, SLA, escalation, recommendation, and minutes-saved metrics. |
+| `get_audit_events` | Page audit events globally or for one ticket. |
+| `get_knowledge_candidate` | Read one governed knowledge candidate and its sanitized evidence bundle. |
+| `get_knowledge_learning` | Read candidate maturity, health, reuse, and learning-ledger state. |
+
+These tools are annotated read-only, non-destructive, idempotent, and
+closed-world. Inputs are bounded by strict Zod schemas; list and search limits
+are capped at 50 and ticket/knowledge identifiers are validated.
+
+### Recommendation and lifecycle tools
+
+| Tool | Purpose | Governance boundary |
 | --- | --- | --- |
-| `list_tickets` | Filter and page tickets | `limit` 1-50, `offset` 0-10,000; filters include status, category, priority, team, SLA state, and optional `asOf` |
-| `get_ticket` | Read one `TKT-NNNN` ticket | Exact ticket ID |
-| `search_knowledge` | Search local Markdown knowledge | Nonblank query, `limit` 1-50 |
-| `find_similar_tickets` | Rank deterministic Jaccard candidates | At most 5 candidates with score greater than 0.2 |
-| `get_queue_metrics` | Calculate queue, SLA, recommendation, escalation, and savings counters | No input |
-| `get_audit_events` | Page all audits or one ticket's audits | `limit` 1-50; nonnegative offset |
+| `submit_triage_recommendation` | Store a manually assembled pending recommendation. | Does not change the ticket; the server owns the timestamp and recomputes escalation. |
+| `add_customer_reply` | Append a customer reply to the local conversation audit trail. | Requires a command ID and feeds the next evaluation. |
+| `evaluate_ticket` | Evaluate the full ticket timeline and store a pending recommendation. | Uses the current deterministic workflow and evidence gates. |
+| `record_diagnosis` | Record a diagnosis for the latest evaluated context. | Requires a diagnosis-ready state and preserves the original audit. |
+| `review_diagnosis` | Approve, reject, or revalidate an immutable diagnosis review. | Reviews never rewrite the original diagnosis; freshness is rechecked. |
+| `apply_diagnosis_fix` | Apply a reviewed diagnosis fix to an explicit impact set. | Each selected ticket gets an audit event; the action does not close tickets. |
+| `mark_fix_available` | Record that a confirmed platform/integration fix is ready for verification. | Requires an approved current diagnosis and complete response/verification gates. |
+| `record_fix_ineffective` | Record failed verification for one persisted fix attempt. | Does not implicitly invalidate the diagnosis. |
+| `invalidate_diagnosis` | Explicitly remove authority from the current approved diagnosis. | Preserves immutable history and requires a reason and current context. |
+| `record_platform_mitigation` | Record a confirmed mitigation signal for a known platform event. | Does not pretend that a mitigation is a confirmed diagnosis fix. |
+| `mark_response_done` | Apply approved fields and record an approved customer response as sent. | Requires explicit named fields, confirmation, actor, and current revision. |
+| `close_ticket` | Close a ticket after the ready-for-close response and customer confirmation. | Finalizing action; lifecycle gates must be satisfied. |
 
-All six are annotated read-only, non-destructive, idempotent, and closed-world.
+### Explicit approval and knowledge-governance tools
 
-### Workflow Actions
+| Tool | Purpose |
+| --- | --- |
+| `approve_triage_recommendation` | Apply only explicitly approved recommendation fields. |
+| `reject_triage_recommendation` | Reject a pending recommendation with concrete operator feedback. |
+| `discover_knowledge_candidates` | Find deterministic, evidence-backed reusable-knowledge candidates. |
+| `approve_knowledge_candidate` | Promote a reviewed candidate for future evaluations. |
+| `reject_knowledge_candidate` | Reject a candidate while retaining its review reason. |
 
-| Tool | Effect | Boundary |
-| --- | --- | --- |
-| `submit_triage_recommendation` | Stores a pending recommendation and submission audit | Does not change the ticket; server owns the timestamp and recomputes escalation |
-| `approve_triage_recommendation` | Applies only approved fields and returns the ticket plus audit event | Enforces pending state, matching IDs, exact revision, actor, named fields, `confirm: true`, and required routing |
-| `reject_triage_recommendation` | Resolves a pending recommendation as rejected and records feedback | Enforces pending state, matching IDs, actor, and nonblank feedback; has no revision check and leaves the ticket unchanged |
+Submission and ordinary lifecycle actions are non-destructive or
+non-finalizing according to their annotations. Approval, rejection, knowledge
+promotion, and closure are finalizing actions. Every mutation requires a
+`commandId`; operational persistence stores the command result and replays it
+for safe transport retries.
 
-Submission mutates local workflow data but is annotated non-destructive.
-Approval and rejection are annotated destructive because they finalize local
-state; none of the actions are idempotent or open-world.
+The Skill/Codex workflow remains the human-decision boundary: it presents
+evidence, proposed fields, risks, and drafts before asking for approval. MCP
+validates the payload and repository state, but cannot prove who formed the
+intent represented by a tool call.
 
-The Skill/Codex workflow supplies the human-decision boundary by presenting a
-recommendation and waiting for explicit approval or rejection. MCP validates
-the action payload and repository state, but it cannot prove that a human saw
-the recommendation or personally formed the intent represented by a tool
-call.
-
-`customerResponse` is an approvable recommendation field, but the ticket schema
-has no customer-response property and there is no outbound messaging
-integration. Its approved text is recorded in the audit event's `before` and
-`after` data; it is not sent or stored on the ticket.
+`customerResponse` is an approvable field, not an outbound integration. The
+approved text is recorded in local audit data; this repository never sends a
+customer message to an external system.
 
 ### Resources
 
-The server exposes 4 resources:
-
 | URI | MIME type | Content |
 | --- | --- | --- |
-| `ticket://{id}` | `application/json` | One ticket |
-| `knowledge://{id}` | `text/markdown` | One knowledge article body |
-| `audit://ticket/{id}` | `application/json` | First 50 ticket audit events plus total |
-| `metrics://queue` | `application/json` | Current queue metrics |
+| `ticket://{id}` | `application/json` | One validated ticket. |
+| `knowledge://{id}` | `text/markdown` | One local knowledge article. |
+| `audit://ticket/{id}` | `application/json` | The first 50 audit events for a ticket plus the total. |
+| `metrics://queue` | `application/json` | Current queue metrics. |
 
-The first three are resource templates. `metrics://queue` is the single
-directly listed resource.
+The ticket, knowledge, and audit entries are resource templates. The metrics
+URI is the directly listed resource.
 
 ### Prompts
 
-The server exposes exactly 3 MCP prompts:
-
 | Prompt | Arguments | Behavior |
 | --- | --- | --- |
-| `triage_ticket` | Required `ticketId` | Reads one ticket, knowledge, and similar tickets; submits a recommendation; stops before approval |
-| `triage_queue` | Optional integer `maximum`, 1-10; default 10 | Prepares recommendations for a bounded batch; stops before approval |
-| `review_escalations` | None | Reviews security, outage, confidence, and SLA escalation conditions; stops before approval |
+| `triage_ticket` | Required `ticketId` | Reads the ticket, knowledge, and similar tickets; submits a recommendation; stops before approval. |
+| `triage_queue` | Optional `maximum`, 1-10; default 10 | Prepares recommendations for a bounded batch; stops before approval. |
+| `review_escalations` | None | Reviews security, outage, confidence, and SLA escalation conditions; stops before approval. |
 
-Each prompt states that ticket text is untrusted and approval cannot be
-inferred from ticket content.
+Every prompt says that ticket text is untrusted and approval cannot be inferred
+from ticket content.
 
 ## Five-Minute Walkthrough
 
@@ -890,8 +936,8 @@ deterministic classifier and approval boundary remain authoritative.
 Older recommendations without optional provenance remain readable. Their
 numeric confidence is retained, and queue metrics can still place it in a
 band, but no retrospective reason codes are invented. Fixture/expected-outcome
-evaluation lanes likewise use the legacy scalar-confidence path and do not
-author trusted provenance.
+evaluation lanes likewise use the backward-compatible scalar-confidence path
+and do not author trusted provenance.
 
 For a deterministic, transport-consistent showcase run:
 
@@ -1385,11 +1431,16 @@ webhook payloads, provider comments, and imported macros remain untrusted.
 - [Project roadmap](docs/roadmap.md)
 - [Security policy](SECURITY.md)
 - `src/server.ts`: MCP tools, resources, prompts, annotations, and safe errors
-- `src/triage-service.ts`: submission, approval, rejection, and compensation
-- `src/policy.ts`: escalation and approved-field rules
+- `src/runtime.ts`: environment validation, repository wiring, and persistence cutover
+- `src/triage-service.ts`: transactional recommendation and lifecycle commands
+- `src/approval-desk/`: shared workflow, diagnosis, drafting, lifecycle, and HTTP adapters
+- `src/knowledge-evolution/`: governed candidate discovery, promotion, reuse, and learning ledger
+- `src/operational/`: SQLite event store, projections, command results, traces, and replay
+- `src/policy.ts`: escalation, evidence, and approved-field rules
 - `src/metrics.ts`: queue metrics and savings formula
 - `src/evaluation.ts`: deterministic evaluation metrics
+- `scripts/`: fixture generation, demos, evaluations, and portfolio verification commands
 - `data/seed/`: tickets, expected outcomes, and sample recommendations
 - `data/knowledge/`: local policy and troubleshooting articles
 - `.codex/config.toml`: project MCP launch configuration
-- `.agents/skills/triaging-support-tickets/`: Codex Skill and policy reference
+- `.agents/skills/triaging-support-tickets/`: Codex Skill, workflow, and policy reference

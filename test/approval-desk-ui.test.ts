@@ -623,8 +623,8 @@ describe("approvalDeskHtml", () => {
 
     await app.selectFirstTicket();
 
-    expect(app.el("actionBarTitle").textContent).toBe("Further investigation required");
-    expect(app.el("actionBarHint").textContent).toContain("No governed operator action is available");
+    expect(app.el("actionBarTitle").textContent).toBe("Specialist review required");
+    expect(app.el("actionBarHint").textContent).toContain("Specialist review");
     expect(app.el("createUpdatedRecommendation").hidden).toBe(true);
     expect(app.el("diagnoseButton").hidden).toBe(true);
     expect(app.el("fixButton").hidden).toBe(true);
@@ -670,10 +670,12 @@ describe("approvalDeskHtml", () => {
     await app.selectFirstTicket();
     app.openDiagnosisInspection();
     app.backToDiagnosis();
+    await app.wait(30);
 
     expect(app.el("diagnosisPanel").innerHTML).toContain('data-diagnosis-phase="diagnosis"');
 
     app.backToNormalActionBar();
+    await app.wait(30);
 
     expect(app.el("diagnosisActionPanel").hidden).toBe(true);
     expect(app.el("diagnoseButton").hidden).toBe(false);
@@ -709,7 +711,7 @@ describe("approvalDeskHtml", () => {
     const panel = app.el("diagnosisPanel");
     expect(panel.innerHTML).toContain('data-diagnosis-phase="diagnosis"');
     expect(panel.innerHTML).not.toContain("Revalidate");
-    expect(panel.innerHTML).toContain(">Next<");
+    expect(panel.innerHTML).toContain(">Review<");
     expect(panel.innerHTML).not.toContain('data-diagnosis-phase="inspection"');
     expect(panel.innerHTML).not.toContain('data-diagnosis-phase="scoped-fix"');
 
@@ -723,6 +725,7 @@ describe("approvalDeskHtml", () => {
     expect(panel.innerHTML).not.toContain("<details");
 
     app.backToDiagnosis();
+    await app.wait(30);
     expect(panel.innerHTML).toContain('data-diagnosis-phase="diagnosis"');
 
     app.openDiagnosisInspection();
@@ -732,7 +735,7 @@ describe("approvalDeskHtml", () => {
     expect(panel.innerHTML).not.toContain('data-diagnosis-phase="diagnosis"');
     expect(panel.innerHTML).not.toContain('data-diagnosis-phase="inspection"');
     expect(panel.innerHTML).toContain("Edit");
-    expect(panel.innerHTML).toContain("Next");
+    expect(panel.innerHTML).toContain("Open Scoped Fix");
     expect(panel.innerHTML).not.toContain('type="checkbox"');
     expect(panel.innerHTML).not.toContain("<details");
 
@@ -1068,14 +1071,14 @@ describe("approvalDeskHtml", () => {
     await app.selectFirstTicket();
 
     expect(app.el("diagnosisPanel").innerHTML).toContain("Approval is unavailable");
-    expect(app.el("diagnosisPanel").innerHTML).toContain("Ask for clarification");
+    expect(app.el("diagnosisPanel").innerHTML).toContain("Clarify");
     expect(app.el("diagnosisPanel").innerHTML).not.toContain('data-action="open-diagnosis-inspection"');
     expect(app.el("diagnosisPanel").innerHTML).toContain("Try the editor in a private window.");
 
     app.openDiagnosisInspection();
 
     expect(app.el("diagnosisPanel").innerHTML).not.toContain('data-decision="approve"');
-    expect(app.el("diagnosisPanel").innerHTML).toContain("Ask for clarification");
+    expect(app.el("diagnosisPanel").innerHTML).toContain("Clarify");
     expect(app.el("diagnosisPanel").innerHTML).toContain("Share any browser console loading error.");
   });
 
@@ -1148,6 +1151,7 @@ describe("approvalDeskHtml", () => {
     expect(app.el("diagnosisPanel").innerHTML).not.toContain('data-action="open-diagnosis-inspection"');
 
     app.backToNormalActionBar();
+    await app.wait(30);
     expect(app.el("actionBarTitle").textContent).not.toBe("Response ready");
     expect(app.el("createUpdatedRecommendation").hidden).toBe(false);
 
@@ -1183,6 +1187,7 @@ describe("approvalDeskHtml", () => {
     expect(app.el("diagnosisPanel").innerHTML).toContain('data-action="back-to-normal-action-bar"');
 
     app.backToNormalActionBar();
+    await app.wait(30);
     expect(app.el("diagnosisActionPanel").hidden).toBe(true);
     expect(app.el("diagnoseButton").hidden).toBe(false);
   });
@@ -3256,8 +3261,8 @@ describe("approvalDeskHtml", () => {
 
     await app.selectFirstTicket();
 
-    expect(app.el("actionBarTitle").textContent).toBe("Further investigation required");
-    expect(app.el("actionBarHint").textContent).toContain("No governed operator action");
+    expect(app.el("actionBarTitle").textContent).toBe("Waiting for customer");
+    expect(app.el("actionBarHint").textContent).toContain("Waiting for the customer");
     expect(app.el("approveButton").hidden).toBe(true);
     expect(app.el("reviewDraftButton").hidden).toBe(true);
   });
@@ -4458,6 +4463,227 @@ describe("approvalDeskHtml", () => {
     });
   });
 
+  it("keeps ambiguous inspection read-only while exposing lifecycle clarification evidence", async () => {
+    const view = fixtureDiagnosisView({ confidence: "likely" });
+    view.originalDiagnosis.after.diagnosis = {
+      ...view.originalDiagnosis.after.diagnosis,
+      diagnosticState: { state: "ambiguous" },
+    } as typeof view.originalDiagnosis.after.diagnosis;
+    const app = await startApprovalDeskApp({
+      diagnoses: [view],
+      ticketDetail: {
+        lifecycle: {
+          ...fixtureLifecycle({
+            phase: "evaluation-needed",
+            primaryAction: "evaluate-ticket",
+            actions: [
+              lifecycleAction("evaluate-ticket", "primary", ["diagnosis-ambiguous"]),
+              lifecycleAction("review-diagnosis", "blocked", ["diagnosis-ambiguous"]),
+              lifecycleAction("revalidate-diagnosis", "blocked", ["diagnosis-ambiguous"]),
+              lifecycleAction("reject-diagnosis", "blocked", ["diagnosis-ambiguous"]),
+            ],
+          }),
+          diagnosticInvestigation: {
+            state: "ambiguous",
+            hypotheses: [],
+            evidenceToRequest: ["Share the browser console loading error."],
+          },
+        },
+      },
+    });
+
+    await app.selectFirstTicket();
+    app.openDiagnosisInspection();
+
+    const inspection = app.el("diagnosisPanel").innerHTML;
+    expect(inspection).toContain('data-diagnosis-phase="inspection"');
+    expect(inspection).toContain("Share the browser console loading error.");
+    expect(inspection).toContain('data-action="reopen-diagnosis-evaluation"');
+    expect(inspection).not.toContain('data-action="review-diagnosis"');
+    expect(inspection).not.toContain('data-action="open-diagnosis-inspection"');
+    expect(inspection).not.toContain('data-decision="approve"');
+  });
+
+  it("uses the record-diagnosis descriptor even when the legacy summary says customer-replied", async () => {
+    const app = await startApprovalDeskApp({
+      ticketDetailRecommendation: { ...fixtureRecommendation, resolution: "approved" },
+      ticketDetail: {
+        recommendationSummary: {
+          workflowState: "customer-replied",
+          latestRecommendationId: fixtureRecommendation.id,
+          latestResolution: "approved",
+          hasSentResponse: true,
+          hasCustomerReply: true,
+        },
+        lifecycle: fixtureLifecycle({
+          phase: "diagnosis-ready",
+          primaryAction: "record-diagnosis",
+          actions: [lifecycleAction("record-diagnosis", "primary", ["evidence-complete"])],
+        }),
+      },
+    });
+
+    await app.selectFirstTicket();
+
+    expect(app.el("diagnoseButton").hidden).toBe(false);
+    expect(app.el("diagnoseButton").disabled).toBe(false);
+    expect(app.el("createUpdatedRecommendation").hidden).toBe(true);
+  });
+
+  it("does not execute a blocked scoped-fix control and opens it only from an available descriptor", async () => {
+    const diagnosis = fixtureDiagnosisView({ confidence: "confirmed" });
+    const approved = {
+      decision: "approve",
+      diagnosisId: diagnosis.originalDiagnosis.id,
+      editedDiagnosis: diagnosis.originalDiagnosis.after.diagnosis,
+    };
+    const blocked = await startApprovalDeskApp({
+      diagnoses: [{ ...diagnosis, reviews: [approved], latestReview: approved }],
+      ticketDetail: {
+        lifecycle: fixtureLifecycle({
+          phase: "evaluation-needed",
+          primaryAction: "evaluate-ticket",
+          actions: [
+            lifecycleAction("evaluate-ticket", "primary"),
+            lifecycleAction("apply-scoped-fix", "blocked", ["fix-not-ready"]),
+          ],
+        }),
+      },
+    });
+    await blocked.selectFirstTicket();
+    await blocked.click("fixButton");
+
+    expect(blocked.el("fixButton").hidden).toBe(true);
+    expect(blocked.requests.some((request) => request.path === "/api/tickets/TKT-1001/fix")).toBe(false);
+
+    const available = await startApprovalDeskApp({
+      diagnoses: [{ ...diagnosis, reviews: [approved], latestReview: approved }],
+      ticketDetail: {
+        lifecycle: fixtureLifecycle({
+          phase: "fix-ready",
+          primaryAction: "apply-scoped-fix",
+          actions: [lifecycleAction("apply-scoped-fix", "primary", ["fix-ready"])],
+        }),
+      },
+    });
+    await available.selectFirstTicket();
+    expect(available.el("fixButton").hidden).toBe(false);
+    await available.click("fixButton");
+
+    expect(available.el("diagnosisPanel").innerHTML).toContain('data-diagnosis-phase="scoped-fix"');
+  });
+
+  it("uses Resolve, never Close, for the ready-for-close lifecycle action", async () => {
+    const app = await startApprovalDeskApp({
+      ticketDetail: {
+        lifecycle: fixtureLifecycle({
+          phase: "ready-for-close",
+          primaryAction: "resolve-ticket",
+          actions: [lifecycleAction("resolve-ticket", "primary", ["response-sent"])],
+        }),
+      },
+    });
+
+    await app.selectFirstTicket();
+
+    expect(app.el("closeTicketButton").hidden).toBe(false);
+    expect(app.el("closeTicketButton").textContent).toBe("Resolve");
+    expect(app.el("closeTicketButton").textContent).not.toContain("Close");
+  });
+
+  it.each([
+    ["resolved", "none", "Resolved", "resolved"],
+    ["waiting-for-customer", "none", "Waiting for customer", "customer"],
+    ["escalated", "specialist-review", "Specialist review required", "specialist"],
+  ])("explains the %s no-action lifecycle phase without generic response-ready copy", async (phase, action, title, hint) => {
+    const app = await startApprovalDeskApp({
+      ticketDetail: {
+        lifecycle: fixtureLifecycle({
+          phase,
+          primaryAction: action,
+          actions: [lifecycleAction(action, "primary", ["phase-explanation"])],
+        }),
+      },
+    });
+
+    await app.selectFirstTicket();
+
+    expect(app.el("actionBarTitle").textContent).toBe(title);
+    expect(app.el("actionBarHint").textContent.toLowerCase()).toContain(hint);
+    expect(app.el("actionBarHint").textContent).not.toContain("Response ready");
+    expect(app.el("actionBarHint").textContent).not.toBe("");
+  });
+
+  it("reconciles each Back transition before exposing the lifecycle-backed opener", async () => {
+    const app = await startApprovalDeskApp({
+      diagnoses: [fixtureDiagnosisView()],
+      ticketDetailLifecycleSequence: [
+        fixtureLifecycle({
+          phase: "diagnosis-review",
+          primaryAction: "review-diagnosis",
+          actions: [lifecycleAction("review-diagnosis", "primary")],
+        }),
+        fixtureLifecycle({
+          phase: "diagnosis-review",
+          primaryAction: "review-diagnosis",
+          actions: [lifecycleAction("review-diagnosis", "primary")],
+        }),
+        fixtureLifecycle({
+          phase: "evaluation-needed",
+          primaryAction: "evaluate-ticket",
+          actions: [lifecycleAction("evaluate-ticket", "primary", ["diagnosis-rejected"])],
+        }),
+      ],
+    });
+
+    await app.selectFirstTicket();
+    app.openDiagnosisInspection();
+    app.backToDiagnosis();
+    await app.wait(30);
+
+    expect(app.ticketDetailRequests()).toBeGreaterThanOrEqual(2);
+    expect(app.el("diagnosisPanel").innerHTML).toContain('data-diagnosis-phase="diagnosis"');
+
+    app.backToNormalActionBar();
+    await app.wait(30);
+
+    expect(app.ticketDetailRequests()).toBeGreaterThanOrEqual(3);
+    expect(app.el("diagnosisActionPanel").hidden).toBe(true);
+    expect(app.el("createUpdatedRecommendation").hidden).toBe(false);
+    expect(app.el("createUpdatedRecommendation").textContent).toBe("Evaluate");
+  });
+
+  it("renders an older rejected diagnosis read-only without reclaiming the current lifecycle action bar", async () => {
+    const rejected = fixtureDiagnosisView({ id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", summary: "Rejected historical theory." });
+    const rejectedReview = {
+      decision: "reject",
+      diagnosisId: rejected.originalDiagnosis.id,
+      editedDiagnosis: rejected.originalDiagnosis.after.diagnosis,
+    };
+    const current = fixtureDiagnosisView({ id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", summary: "Current diagnosis." });
+    const app = await startApprovalDeskApp({
+      diagnoses: [{ ...rejected, reviews: [rejectedReview], latestReview: rejectedReview }, current],
+      ticketDetail: {
+        lifecycle: fixtureLifecycle({
+          phase: "evaluation-needed",
+          primaryAction: "evaluate-ticket",
+          actions: [lifecycleAction("evaluate-ticket", "primary", ["diagnosis-rejected"])],
+        }),
+      },
+    });
+
+    await app.selectFirstTicket();
+    expect(app.el("createUpdatedRecommendation").hidden).toBe(false);
+
+    app.selectDiagnosis(rejected.originalDiagnosis.id);
+
+    expect(app.el("diagnosisPanel").innerHTML).toContain('data-diagnosis-phase="history"');
+    expect(app.el("diagnosisPanel").innerHTML).toContain("Rejected historical theory.");
+    expect(app.el("diagnosisPanel").innerHTML).not.toContain('data-action="review-diagnosis"');
+    expect(app.el("createUpdatedRecommendation").hidden).toBe(false);
+    expect(app.el("createUpdatedRecommendation").textContent).toBe("Evaluate");
+  });
+
   it("uses customer-friendly predicted reply labels instead of fixture names", () => {
     expect(approvalDeskHtml).toContain("All requested evidence");
     expect(approvalDeskHtml).toContain("Fix verification details");
@@ -4817,7 +5043,14 @@ async function startApprovalDeskApp(options: {
   const elements = createElements();
   const requests: Array<{ path: string; init?: RequestInit }> = [];
   const recommendation = options.recommendation ?? fixtureRecommendation;
-  const tickets = options.tickets ?? [fixtureTicket];
+  const tickets = options.tickets ?? [{
+    ...fixtureTicket,
+    customer: { ...fixtureTicket.customer },
+    requester: { ...fixtureTicket.requester },
+    tags: [...fixtureTicket.tags],
+    sla: { ...fixtureTicket.sla },
+    relatedTicketIds: [...fixtureTicket.relatedTicketIds],
+  }];
   const selectedFixtureTicket = tickets[0]!;
   const defaultOperatorGuidance = { nextAction: "evaluate-ticket" };
   const metrics = { pendingRecommendations: 0, queueDepth: 1 };

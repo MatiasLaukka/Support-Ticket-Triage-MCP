@@ -289,6 +289,38 @@ describe("approvalDeskHtml", () => {
     expect(app.el("createUpdatedRecommendation").textContent).toBe("Evaluate");
   });
 
+  it("honors an authoritative evaluation action even when an older response is awaiting send", async () => {
+    const app = await startApprovalDeskApp({
+      ticketDetailRecommendation: {
+        ...fixtureRecommendation,
+        resolution: "approved",
+      },
+      ticketDetail: {
+        conversationTimeline: [{
+          kind: "customer-reply",
+          timestamp: "2026-06-10T09:05:00.000Z",
+          actor: "Avery Brooks",
+          body: "I have already sent the details; please investigate further.",
+        }],
+        lifecycle: fixtureLifecycle({
+          phase: "evaluation-needed",
+          primaryAction: "evaluate-ticket",
+          actions: [lifecycleAction("evaluate-ticket", "primary", ["customer-reply-received"])],
+        }),
+      },
+    });
+
+    await app.selectFirstTicket();
+
+    expect(app.el("actionBarTitle").textContent).not.toBe("Response ready");
+    expect(app.el("createUpdatedRecommendation").hidden).toBe(false);
+    expect(app.el("createUpdatedRecommendation").textContent).toBe("Evaluate");
+
+    await app.createUpdatedRecommendation();
+
+    expect(app.requests.filter((request) => request.path === "/api/tickets/TKT-1001/recommendations")).toHaveLength(1);
+  });
+
   it("starts a fresh evaluation cycle from the customer-replied state", async () => {
     const app = await startApprovalDeskApp({
       diagnoses: [fixtureDiagnosisView({ stale: true })],

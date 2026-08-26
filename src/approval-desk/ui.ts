@@ -3036,7 +3036,8 @@ export const approvalDeskHtml = `<!doctype html>
       }
 
       function canCreateRecommendation() {
-        return state.selectedTicket !== null && !isApprovedAwaitingSend();
+        return state.selectedTicket !== null &&
+          (!isApprovedAwaitingSend() || lifecycleActionIsAvailable('evaluate-ticket'));
       }
 
       function createUpdatedRecommendationLabel() {
@@ -4405,7 +4406,7 @@ export const approvalDeskHtml = `<!doctype html>
           focusRequiredReview();
           return;
         }
-        if (isApprovedAwaitingSend()) {
+        if (isApprovedAwaitingSend() && !lifecycleActionIsAvailable('evaluate-ticket')) {
           setResult({ error: 'Mark the approved response as sent before creating a new recommendation for this ticket.' });
           return;
         }

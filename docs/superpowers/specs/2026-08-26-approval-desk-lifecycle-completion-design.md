@@ -56,6 +56,12 @@ After a successful scoped fix, the UI refreshes the authoritative lifecycle and 
 
 Customer confirmation therefore starts the next governed evaluation cycle. A customer report that the problem persists follows the same evidence/evaluation route or the lifecycle's explicit further-investigation explanation; it does not create a new lifecycle state.
 
+### Confirmed diagnoses that need no platform fix
+
+A confirmed diagnosis owned by the customer or support team can be valid without an engineering or integration-partner mitigation event. Such a diagnosis must not enter `awaiting-fix` merely because no platform fix audit exists. Reuse the existing `verification` phase with a `no-platform-fix-required` reason and primary `evaluate-ticket`, and render the diagnosis's customer/support action plus the verification request. Do not fabricate a fix event, mark a fix as applied, or add a lifecycle phase. Engineering- and integration-partner-owned diagnoses retain the existing fix-availability path.
+
+The following remain explicitly deferred from this slice: specialist-result/re-entry workflow, a permanent-no-fix disposition, and state-aware conversational GPT fallback for nonstandard customer replies. A future GPT fallback may interpret conversational intent and vary drafting, but lifecycle, evidence, diagnosis, and fix truth remain deterministic and authoritative.
+
 ## Presentation contract
 
 When a lifecycle descriptor exists, titles, hints, button labels, and enabled states derive from the primary/available action descriptors:
@@ -94,7 +100,7 @@ The ticket-list projection receives a minimal lifecycle summary (phase, primary 
 
 For every durable ticket state, the Action Bar exposes the lifecycle primary action or clearly explains why no operator action is currently possible. For every enabled governed UI control anywhere in the Approval Desk, its mutation kind corresponds to a lifecycle action whose availability is `primary` or `available`; `blocked` and `completed` actions never have enabled mutation controls. The UI never exposes an enabled action that the backend will reject from that same state.
 
-The acceptance path uses real Approval Desk HTTP responses and returned lifecycle projections for TKT-1010. Every operator-controlled transition is performed through the same Approval Desk UI control a human would use. Direct HTTP is reserved for external/demo-world events such as customer replies and internal platform confirmation. The path covers evaluation/evidence requests, an ambiguity or rejection recovery cycle, confirmed diagnosis review, scoped fix, post-fix customer response, customer confirmation, re-evaluation, and resolution. Browser state is not fabricated to advance the workflow.
+General correctness is established by an exhaustive lifecycle/presentation matrix over every existing phase/action and a cross-ticket invariant audit over all seeded scenarios. TKT-1010 is the deep composition test, not the sole correctness proof. The acceptance path uses real Approval Desk HTTP responses and returned lifecycle projections for TKT-1010. Every operator-controlled transition is performed through the same Approval Desk UI control a human would use. Direct HTTP is reserved for external/demo-world events such as customer replies and internal platform confirmation. The path covers evaluation/evidence requests, an ambiguity or rejection recovery cycle, confirmed diagnosis review, scoped fix, post-fix customer response, customer confirmation, re-evaluation, and resolution. Browser state is not fabricated to advance the workflow.
 
 The acceptance path includes at least one restart/reload checkpoint after durable diagnosis or fix state has been written. The runtime is recreated from the persisted operational SQLite state, the Approval Desk reloads the selected ticket, and the journey continues to resolution using the newly returned lifecycle projection. It records governed requests and verifies that each operator gesture causes at most one lifecycle mutation and that the next lifecycle action is rendered before the next operator gesture.
 

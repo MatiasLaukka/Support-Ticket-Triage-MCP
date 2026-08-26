@@ -20,9 +20,12 @@
 - Back refreshes authoritative data before the settled action bar is rendered; it must never leave an empty action bar or fall through to contradictory “Response ready” copy.
 - Ambiguous, insufficient, rejected, stale, or otherwise unconfirmed diagnoses expose lifecycle-authorized Evaluate/Re-evaluate/Clarify and evidence/questions; they never expose an enabled Next → Inspection → Approve path.
 - A confirmed diagnosis opens Scoped Fix only when the lifecycle reports `apply-scoped-fix` as available/primary. Resolve is exposed only when the lifecycle reports `ready-for-close` / `resolve-ticket`.
+- A confirmed customer/support-owned diagnosis with no platform mitigation uses the existing verification/customer-action path with a `no-platform-fix-required` explanation; do not fabricate a fix event or add a lifecycle phase.
 - Existing playbook evidence requirements remain authoritative. Automatic/synthetic reply coverage must be tested through the real extraction/evaluation path; a generic fallback sentence is not sufficient.
+- General correctness comes from exhaustive lifecycle/presentation state coverage plus a cross-ticket invariant audit over every seeded scenario. TKT-1010 is the deep composition test, not the only correctness proof.
 - The existing successful Scoped Fix → refresh → Brief behavior, SQLite persistence, diagnosis authority, MCP parity, single-flight evaluation, and append-only history must remain intact.
 - Do not add lifecycle phases, alter deterministic classification/routing/priority, redesign diagnosis governance, add retrieval or semantic search, change known-cause semantics, or redesign the UI beyond the targeted lifecycle/presentation corrections.
+- Specialist-result/re-entry workflow, permanent-no-fix disposition, and state-aware conversational GPT fallback for nonstandard customer replies are explicitly deferred. Any future GPT assistance may vary drafting, but lifecycle/evidence/diagnosis/fix truth remains deterministic and authoritative.
 - Do not rewrite the embedded HTML template wholesale. Make small targeted patches in the existing inline script and preserve legacy fixture fallback when no lifecycle descriptor is present.
 - Queue lifecycle data is additive only and must be generated from the same lifecycle/read-model code; do not duplicate lifecycle rules in the queue renderer.
 - Execute tasks in order with one fresh implementation subagent at a time. After each task, run both a specification-compliance review and a code-quality/regression review, resolve findings, run the task tests, and commit the task-level change before continuing.
@@ -35,6 +38,7 @@
 
 - `src/approval-desk/lifecycle.ts` — complete the lifecycle action descriptor projection where RED contract tests identify missing primary/available/blocked/completed actions or reason codes; do not change phases or domain authority.
 - `src/approval-desk/workflow-guidance.ts` — ensure rejected/invalidated diagnoses cannot reassert `review-diagnosis` guidance over the lifecycle’s `evaluate-ticket` primary action.
+- `src/approval-desk/all-ticket-lifecycle-audit.ts` — extend the existing seed audit with lifecycle/action-descriptor observations and cross-ticket invariant checks; do not duplicate lifecycle computation.
 - `src/approval-desk/ui.ts` — add the lifecycle action guard, authoritative refresh/reconciliation path, phase-aware titles/hints, Back recovery, single-mutation gesture handling, and lifecycle-derived diagnosis/recommendation/fix controls using targeted inline-script patches only.
 - `src/approval-desk/http.ts` — add an additive minimal lifecycle summary to `GET /api/tickets` using the canonical workflow/lifecycle projection and the same operational diagnosis normalization used by detail reads.
 
@@ -45,6 +49,7 @@
 - `test/approval-desk-ui.test.ts` — focused unit-style browser-harness regressions for lifecycle-driven controls, Back reconciliation, inline errors, one mutation per gesture, compact historical views, and no contradictory/empty action bar.
 - `test/approval-desk-http.test.ts` — queue lifecycle-summary projection and real evidence-loop/command-envelope checks where the HTTP route is the smallest faithful boundary.
 - `test/automatic-customer-replies.test.ts` — focused generator coverage only where it can prove each required evidence ID has a specific, non-generic sample sentence.
+- `test/all-ticket-lifecycle-audit.test.ts` — assert the cross-ticket invariant audit covers all seeded scenarios and reports no action-descriptor contradictions.
 
 ### New or separately scoped acceptance test
 
@@ -383,10 +388,103 @@
 
 ---
 
-## Task 6: Replace the partial TKT-1010 acceptance path with real UI-driven lifecycle coverage
+## Task 6: Cover confirmed diagnoses that require no platform fix and audit every seed ticket
 
 **Files:**
-- Modify: `test/approval-desk-lifecycle.e2e.test.ts` or create `test/approval-desk-lifecycle-completion.e2e.test.ts` if keeping the existing contract test unchanged produces less risk. The completion journey must remain in its own e2e file, never in `approval-desk-ui.test.ts`.
+- Modify: `src/approval-desk/lifecycle.ts`
+- Modify: `src/approval-desk/all-ticket-lifecycle-audit.ts`
+- Modify: `src/approval-desk/workflow-guidance.ts` only to surface the existing diagnosis customer/support action for this path.
+- Test: `test/lifecycle-view.test.ts`
+- Test: `test/all-ticket-lifecycle-audit.test.ts`
+- Test: `test/approval-desk-ui.test.ts`
+
+**Interfaces:**
+- Consumes: `DiagnosisContext.owner`, `buildTicketLifecycleView()`, `auditSeedTicketLifecycles()`, and the existing seeded tickets/outcomes.
+- Produces: a deterministic no-platform-fix interpretation and an all-seed invariant report. A confirmed `customer` or `support` diagnosis with no platform mitigation projects through the existing `verification` phase, primary `evaluate-ticket`, `fix.state === "none"`, and reason code `no-platform-fix-required`; it never projects `awaiting-fix` or fabricates a fix event. Engineering/integration-partner ownership retains the existing fix-availability path.
+
+- [ ] **Step 1: Add RED coverage for customer/support-owned confirmed diagnoses.**
+
+  Add lifecycle fixtures with a recorded diagnosis, an approved/revalidated review, complete evidence, no `fix-available`/`platform-mitigation-available` audit, and `owner: "customer"` or `owner: "support"`. Assert for both owners:
+
+  ```ts
+  expect(view.phase).toBe("verification");
+  expect(view.fix.state).toBe("none");
+  expect(view.fix.reasonCodes).toContain("no-platform-fix-required");
+  expect(view.primaryAction).toMatchObject({ kind: "evaluate-ticket", availability: "primary" });
+  expect(view.actions).toEqual(expect.arrayContaining([
+    expect.objectContaining({ kind: "evaluate-ticket", availability: "primary" }),
+  ]));
+  ```
+
+  Assert that the same fixtures do not contain an enabled `record-fix-available` or `apply-scoped-fix` action and that the guidance/read-model text carries the diagnosis’s customer/support action and verification request. Add a UI harness fixture for the same lifecycle and assert the Action Bar exposes Evaluate plus the customer-action/verification explanation, with no Fix control. Keep an engineering-owned fixture proving the current `awaiting-fix` behavior remains unchanged.
+
+- [ ] **Step 2: Add RED coverage for the cross-ticket seed invariant audit.**
+
+  Extend `auditSeedTicketLifecycles()` observations with the canonical lifecycle phase, primary action kind, and descriptor consistency failures. For every ticket loaded from `data/seed/tickets.json`, assert:
+
+  ```ts
+  expect(report.ticketCount).toBe(tickets.length);
+  expect(report.observations).toHaveLength(tickets.length);
+  expect(report.lifecycleInvariantPassCount).toBe(tickets.length);
+  expect(report.observations.every(({ lifecyclePrimaryAction, lifecycleActions }) =>
+    lifecycleActions.some((action) => action.kind === lifecyclePrimaryAction && action.availability === "primary")
+  )).toBe(true);
+  ```
+
+  The audit must also flag an enabled action whose descriptor is `blocked`/`completed`, a missing primary descriptor, or a non-resolved/non-waiting state with `none` as primary. Existing classification and expected-outcome metrics for all 30 tickets remain unchanged.
+
+- [ ] **Step 3: Run the RED no-fix and seed-audit tests.**
+
+  Run:
+
+  ```text
+  npx vitest run test/lifecycle-view.test.ts test/all-ticket-lifecycle-audit.test.ts --exclude ".worktrees/**"
+  ```
+
+  Expected: no-fix fixtures fail because the current phase code sends every approved diagnosis without a fix to `awaiting-fix`, and the extended audit fields/guards are not yet present.
+
+- [ ] **Step 4: Implement the existing-phase no-platform-fix rule.**
+
+  Add one internal predicate in `lifecycle.ts`:
+
+  ```ts
+  function diagnosisRequiresPlatformFix(owner: DiagnosisContext["owner"] | undefined): boolean {
+    return owner === undefined || owner === "engineering" || owner === "integration-partner";
+  }
+  ```
+
+  Pass the current approved diagnosis owner into `fixProjection()`, `phaseForLifecycle()`, and `reasonCodesForPhase()`. When an approved, confirmed diagnosis has no fix audit and `diagnosisRequiresPlatformFix(owner)` is false, return a `fix` projection with `state: "none"`, `reasonCodes: ["no-platform-fix-required"]`, and `diagnosisStillAuthoritative: true`; then return `verification` with primary `evaluate-ticket`. In `lifecycleActionsForPhase()`, do not add `record-fix-ineffective` for this `fix.state === "none"` case. In `workflow-guidance.ts`, preserve the existing evaluate primary and use the diagnosis’s `recommendedNextAction` as the customer/support next-step text. Do not emit or infer a fix audit, change `DiagnosisContext`, or add a lifecycle phase. Keep the existing owner/platform mitigation checks for engineering and integration-partner diagnoses.
+
+- [ ] **Step 5: Implement the all-seed lifecycle/action audit through canonical projection.**
+
+  In `all-ticket-lifecycle-audit.ts`, build the lifecycle view using the same `buildTicketLifecycleView()` input used by the Approval Desk read model, record `lifecyclePhase`, `lifecyclePrimaryAction`, and `lifecycleActions`, and append descriptor mismatches to the existing `lifecycleInvariantMismatches` array. Do not duplicate phase selection or action mapping. Preserve all current report fields and expected-outcome comparison behavior.
+
+- [ ] **Step 6: Run GREEN tests and focused lifecycle regressions.**
+
+  Run:
+
+  ```text
+  npx vitest run test/lifecycle-view.test.ts test/all-ticket-lifecycle-audit.test.ts test/approval-desk-ui.test.ts --exclude ".worktrees/**"
+  npm run typecheck
+  ```
+
+  Expected: both no-platform-fix owners use the customer-action/verification path, engineering/integration behavior remains unchanged, and every seeded scenario passes the descriptor invariant.
+
+- [ ] **Step 7: Review and commit Task 6.**
+
+  Check that no new lifecycle state or fix event was introduced and that the seed audit computes its lifecycle through canonical code. Run `git diff --check` and commit:
+
+  ```text
+  git add src/approval-desk/lifecycle.ts src/approval-desk/all-ticket-lifecycle-audit.ts test/lifecycle-view.test.ts test/all-ticket-lifecycle-audit.test.ts
+  git commit -m "fix: keep no-platform-fix diagnoses actionable"
+  ```
+
+---
+
+## Task 7: Replace the partial TKT-1010 acceptance path with real UI-driven lifecycle coverage
+
+**Files:**
+- Create: `test/approval-desk-lifecycle-completion.e2e.test.ts` — keep the existing `test/approval-desk-lifecycle.e2e.test.ts` contract test unchanged unless a shared helper import is needed.
 
 **Interfaces:**
 - Consumes: the real Approval Desk HTTP server, `approvalDeskHtml`, the existing browser harness (`startLiveApprovalDeskApp` and its element/request helpers), persisted operational SQLite runtime creation/restart, and the lifecycle projection returned by `GET /api/tickets/:id`.
@@ -427,7 +525,7 @@
   npx vitest run test/approval-desk-lifecycle-completion.e2e.test.ts --exclude ".worktrees/**"
   ```
 
-  If the test is extending the existing file, run the equivalent file path. Expected: direct-HTTP operator steps or stale UI transitions fail the new assertions.
+  Expected: direct-HTTP operator steps or stale UI transitions fail the new assertions.
 
 - [ ] **Step 3: Refactor only the e2e harness needed for UI controls and restart.**
 
@@ -445,18 +543,18 @@
 
   Expected: the complete journey reaches resolved, the restart resumes from SQLite, and every operator gesture has at most one governed mutation request.
 
-- [ ] **Step 5: Review and commit Task 6.**
+- [ ] **Step 5: Review and commit Task 7.**
 
   Review that the test’s operator transitions are UI-driven, direct HTTP is limited to external/demo events, and no browser state is fabricated. Run `git diff --check` and commit:
 
   ```text
-  git add test/approval-desk-lifecycle.e2e.test.ts test/approval-desk-lifecycle-completion.e2e.test.ts
+  git add test/approval-desk-lifecycle-completion.e2e.test.ts
   git commit -m "test: cover complete Approval Desk lifecycle for TKT-1010"
   ```
 
 ---
 
-## Task 7: Whole-branch verification and final review
+## Task 8: Whole-branch verification and final review
 
 **Files:**
 - No new production files. Review all files changed by Tasks 1–6.
@@ -470,7 +568,7 @@
   Run:
 
   ```text
-  npx vitest run test/lifecycle-view.test.ts test/workflow-guidance.test.ts test/approval-desk-ui.test.ts test/approval-desk-http.test.ts test/approval-desk-diagnostic-workflow.test.ts test/automatic-customer-replies.test.ts test/approval-desk-lifecycle.e2e.test.ts test/approval-desk-lifecycle-completion.e2e.test.ts --exclude ".worktrees/**"
+  npx vitest run test/lifecycle-view.test.ts test/workflow-guidance.test.ts test/lifecycle-slice-matrix.test.ts test/all-ticket-lifecycle-audit.test.ts test/approval-desk-ui.test.ts test/approval-desk-http.test.ts test/approval-desk-diagnostic-workflow.test.ts test/automatic-customer-replies.test.ts test/approval-desk-lifecycle.e2e.test.ts test/approval-desk-lifecycle-completion.e2e.test.ts --exclude ".worktrees/**"
   ```
 
 - [ ] **Step 2: Run repository verification.**
@@ -506,8 +604,9 @@
 - Back/recovery: Task 2 covers all approved Back edges and refresh-before-render; Task 3 covers failure reconciliation.
 - Evidence loop: Task 4 proves generated evidence through extraction/evaluation and retains the existing automatic-reply mechanism.
 - Confirmed/fix/resolve path: Tasks 2, 3, and 6 cover `fix-ready`, Scoped Fix, verification, `ready-for-close`, and Resolve without adding lifecycle states.
+- No-platform-fix path: Task 6 covers confirmed customer/support-owned diagnoses through existing verification semantics without fabricating a fix; specialist re-entry, permanent disposition, and conversational fallback remain deferred.
 - Queue consistency: Task 5 adds only the specified lifecycle summary and reuses canonical projection logic.
-- Persistence/restart/MCP compatibility: Task 3 preserves existing command envelopes and Task 6 restarts from operational SQLite; no MCP or persistence redesign is introduced.
+- Persistence/restart/MCP compatibility: Task 3 preserves existing command envelopes and Task 7 restarts from operational SQLite; no MCP or persistence redesign is introduced.
 - UI scope: targeted inline-script patches only; no wholesale template rewrite or unrelated visual redesign.
 - Placeholders: every task contains concrete file paths, assertions, commands, and commit steps rather than deferred or unbound instructions.
 - Type consistency: all tasks use existing `LifecycleActionKind`, `LifecycleAction`, `LifecycleView`, and the named Approval Desk helpers/routes; the one new queue shape is explicitly `{ phase, primaryAction, reasonCodes }`.

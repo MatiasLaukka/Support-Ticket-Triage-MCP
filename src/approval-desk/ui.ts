@@ -1998,6 +1998,7 @@ export const approvalDeskHtml = `<!doctype html>
         selectedDiagnosisId: null,
         diagnosisUiPhase: 'auto',
         diagnosisDraft: null,
+        diagnosisDraftId: null,
         diagnosisReviewRationale: '',
         diagnosisReviewDecision: null,
         diagnosisReviewError: null,
@@ -2362,6 +2363,7 @@ export const approvalDeskHtml = `<!doctype html>
         state.selectedDiagnosisId = null;
         state.diagnosisUiPhase = 'auto';
         state.diagnosisDraft = null;
+        state.diagnosisDraftId = null;
         state.diagnosisReviewRationale = '';
         state.diagnosisReviewDecision = null;
         state.diagnosisReviewError = null;
@@ -2458,6 +2460,7 @@ export const approvalDeskHtml = `<!doctype html>
       function resetDiagnosisAfterCustomerReply() {
         state.diagnosisUiPhase = 'normal';
         state.diagnosisDraft = null;
+        state.diagnosisDraftId = null;
         state.diagnosisReviewRationale = '';
         state.diagnosisReviewDecision = null;
         state.diagnosisImpact = { rationale: '', selectedTicketIds: [], ticketReasons: {} };
@@ -2501,14 +2504,18 @@ export const approvalDeskHtml = `<!doctype html>
       }
 
       function diagnosisDraftForView(view) {
-        if (state.diagnosisDraft !== null) {
+        const diagnosisId = view?.originalDiagnosis?.id ?? null;
+        if (state.diagnosisDraft !== null && state.diagnosisDraftId === diagnosisId) {
           return state.diagnosisDraft;
         }
         const source = diagnosisContextForView(view);
         if (source === null) {
+          state.diagnosisDraft = null;
+          state.diagnosisDraftId = null;
           return null;
         }
         state.diagnosisDraft = JSON.parse(JSON.stringify(source));
+        state.diagnosisDraftId = diagnosisId;
         return state.diagnosisDraft;
       }
 
@@ -2738,8 +2745,13 @@ export const approvalDeskHtml = `<!doctype html>
         const scopedFixReady = hasLifecycleDescriptor()
           ? lifecycleActionIsAvailable('apply-scoped-fix')
           : shouldShowFixAction();
+        const fixAvailabilityReady = hasLifecycleDescriptor()
+          ? lifecycleActionIsAvailable('record-fix-available')
+          : shouldShowFixAction();
         const approvedNextControl = scopedFixReady
           ? '<button type="button" data-action="open-scoped-fix">Next</button>'
+          : fixAvailabilityReady
+            ? '<button type="button" class="accent-action" data-action="record-fix-available">Fix</button>'
           : canReevaluateCurrentDiagnosis()
             ? '<button type="button" class="secondary" data-action="reopen-diagnosis-evaluation">Re-evaluate</button>'
             : current.confidence !== 'confirmed'
@@ -2893,6 +2905,7 @@ export const approvalDeskHtml = `<!doctype html>
         state.diagnosisReviewError = null;
         state.diagnoses = Array.isArray(data.diagnoses) ? data.diagnoses : state.diagnoses;
         state.diagnosisDraft = null;
+        state.diagnosisDraftId = null;
         state.diagnosisReviewRationale = '';
         state.diagnosisReviewDecision = null;
         state.diagnosisImpact = { rationale: '', selectedTicketIds: [], ticketReasons: {} };
@@ -2970,6 +2983,7 @@ export const approvalDeskHtml = `<!doctype html>
         state.diagnosisFixResults = Array.isArray(data.auditEvents) ? data.auditEvents : [];
         state.diagnosisImpact = { rationale: '', selectedTicketIds: [], ticketReasons: {} };
         state.diagnosisDraft = null;
+        state.diagnosisDraftId = null;
         state.diagnosisReviewRationale = '';
         state.diagnosisUiPhase = 'normal';
         await refreshSelectedTicketQueueAndEvidence({ waitForDiagnoses: true });
@@ -5781,6 +5795,7 @@ export const approvalDeskHtml = `<!doctype html>
         if (action === 'select-diagnosis') {
           state.selectedDiagnosisId = actionTarget.dataset.diagnosisId;
           state.diagnosisDraft = null;
+          state.diagnosisDraftId = null;
           state.diagnosisReviewRationale = '';
           state.diagnosisReviewDecision = null;
           state.diagnosisReviewError = null;
@@ -5836,6 +5851,9 @@ export const approvalDeskHtml = `<!doctype html>
           updateControls();
         }
         if (action === 'simulate-solution') {
+          void recordFix().catch(function (error) { setResult({ error: error.message }); });
+        }
+        if (action === 'record-fix-available') {
           void recordFix().catch(function (error) { setResult({ error: error.message }); });
         }
         if (action === 'simulate-confirmation') {
@@ -5917,6 +5935,13 @@ export const approvalDeskHtml = `<!doctype html>
         void recordDiagnosis().catch(function (error) { setResult({ error: error.message }); });
       });
       els.fixButton.addEventListener('click', function () {
+        if (hasLifecycleDescriptor() && lifecycleActionIsAvailable('apply-scoped-fix')) {
+          state.diagnosisUiPhase = 'fix';
+          renderDiagnosisPanel();
+          renderRecommendationStageControls();
+          updateControls();
+          return;
+        }
         void recordFix().catch(function (error) { setResult({ error: error.message }); });
       });
       els.closeTicketButton.addEventListener('click', function () {

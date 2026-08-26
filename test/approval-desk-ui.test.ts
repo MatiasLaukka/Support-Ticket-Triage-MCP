@@ -1155,6 +1155,98 @@ describe("approvalDeskHtml", () => {
     expect(app.el("diagnoseButton").hidden).toBe(false);
   });
 
+  it("reloads the latest confirmed diagnosis into Inspection after a presentation refresh", async () => {
+    const earlier = fixtureDiagnosisView({
+      id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      confidence: "likely",
+      summary: "Earlier ambiguous diagnosis.",
+    });
+    const confirmed = fixtureDiagnosisView({
+      id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+      confidence: "confirmed",
+      summary: "Latest confirmed diagnosis.",
+    });
+    const app = await startApprovalDeskApp({
+      diagnoses: [earlier, confirmed],
+      ticketDetail: {
+        lifecycle: fixtureLifecycle({
+          phase: "diagnosis-review",
+          primaryAction: "review-diagnosis",
+          actions: [lifecycleAction("review-diagnosis", "primary", ["operator-review"])],
+        }),
+      },
+    });
+
+    await app.selectFirstTicket();
+    app.selectDiagnosis(earlier.originalDiagnosis.id);
+    app.openDiagnosisInspection();
+    expect(app.el("diagnosisPanel").innerHTML).toContain("Earlier ambiguous diagnosis.");
+
+    await app.selectTicket("TKT-1001");
+    app.openDiagnosisInspection();
+
+    expect(app.el("diagnosisPanel").innerHTML).toContain("Latest confirmed diagnosis.");
+    expect(app.el("diagnosisPanel").innerHTML).not.toContain("Earlier ambiguous diagnosis.");
+  });
+
+  it("offers the governed Fix action from an approved confirmed diagnosis awaiting a fix", async () => {
+    const view = fixtureDiagnosisView({ confidence: "confirmed" });
+    const review = {
+      decision: "approve",
+      diagnosisId: view.originalDiagnosis.id,
+      editedDiagnosis: view.originalDiagnosis.after.diagnosis,
+    };
+    const app = await startApprovalDeskApp({
+      diagnoses: [{ ...view, reviews: [review], latestReview: review }],
+      ticketDetail: {
+        lifecycle: fixtureLifecycle({
+          phase: "awaiting-fix",
+          primaryAction: "record-fix-available",
+          actions: [lifecycleAction("record-fix-available", "primary", ["fix-not-available"])],
+        }),
+      },
+    });
+
+    await app.selectFirstTicket();
+
+    expect(app.el("diagnosisPanel").innerHTML).toContain("Fix");
+    expect(app.el("diagnosisPanel").innerHTML).toContain('data-action="record-fix-available"');
+    expect(app.el("diagnosisPanel").innerHTML).not.toContain("Simulate solution");
+
+    app.el("diagnosisPanel").dispatch("click", {
+      target: { dataset: { action: "record-fix-available" } },
+    });
+    await app.wait(10);
+    expect(app.requests.some((request) => request.path === "/api/tickets/TKT-1001/fix")).toBe(true);
+  });
+
+  it("opens Scoped Fix from the action bar when the lifecycle permits applying it", async () => {
+    const view = fixtureDiagnosisView({ confidence: "confirmed" });
+    const review = {
+      decision: "approve",
+      diagnosisId: view.originalDiagnosis.id,
+      editedDiagnosis: view.originalDiagnosis.after.diagnosis,
+    };
+    const app = await startApprovalDeskApp({
+      diagnoses: [{ ...view, reviews: [review], latestReview: review }],
+      ticketDetail: {
+        lifecycle: fixtureLifecycle({
+          phase: "fix-ready",
+          primaryAction: "apply-scoped-fix",
+          actions: [lifecycleAction("apply-scoped-fix", "primary", ["fix-ready"])],
+        }),
+      },
+    });
+
+    await app.selectFirstTicket();
+    expect(app.el("fixButton").hidden).toBe(false);
+
+    await app.click("fixButton");
+
+    expect(app.el("diagnosisPanel").innerHTML).toContain('data-diagnosis-phase="scoped-fix"');
+    expect(app.requests.some((request) => request.path === "/api/tickets/TKT-1001/fix")).toBe(false);
+  });
+
   it("shows an explicit diagnosis state mismatch when required review has no canonical view", async () => {
     const app = await startApprovalDeskApp({
       ticketDetail: {

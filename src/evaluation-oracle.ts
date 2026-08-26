@@ -20,6 +20,7 @@ import {
   type ProductSurface,
   type ProblemClass,
 } from "./diagnostic-taxonomy.js";
+import type { TaxonomyInferenceCandidate } from "./taxonomy-inference.js";
 
 const UniqueSlugArraySchema = z
   .array(z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/))
@@ -194,6 +195,47 @@ export async function loadEvaluationOracles(
   return parsed;
 }
 
+export interface TaxonomyOracleScore {
+  primarySurfacePass: boolean;
+  problemClassPass: boolean;
+  taxonomyPass: boolean;
+  abstained: boolean;
+}
+
+export function scoreTaxonomyOracle(
+  expectation: NonNullable<EvaluationOracle["taxonomy"]>,
+  actual:
+    | {
+        primaryProductSurface: ProductSurface | null;
+        problemClasses: readonly ProblemClass[];
+      }
+    | undefined,
+): TaxonomyOracleScore {
+  const primaryProductSurface = actual?.primaryProductSurface ?? null;
+
+  const primarySurfacePass =
+    primaryProductSurface !== null &&
+    expectation.acceptablePrimaryProductSurfaces.some(
+      ({ domain, area }) =>
+        domain === primaryProductSurface.domain &&
+        area === primaryProductSurface.area,
+    );
+
+  const problemClassPass =
+    actual !== undefined &&
+    actual.problemClasses.length > 0 &&
+    actual.problemClasses.every((problemClass) =>
+    expectation.acceptableProblemClasses.includes(problemClass),
+ );
+
+  return {
+    primarySurfacePass,
+    problemClassPass,
+    taxonomyPass: primarySurfacePass && problemClassPass,
+    abstained: primaryProductSurface === null,
+  };
+}
+
 export function scoreEvaluationOracle(
   oracle: EvaluationOracle,
   actual: EvaluationOracleInput,
@@ -226,19 +268,12 @@ export function scoreEvaluationOracle(
   if (!knownCausePass) failures.push(`known cause does not satisfy ${oracle.knownCause?.expectation ?? "not-applicable"}`);
 
   const taxonomyPass =
-  oracle.taxonomy === undefined
-    ? true
-    : actual.taxonomy !== undefined &&
-      actual.taxonomy.primaryProductSurface !== null &&
-      oracle.taxonomy.acceptablePrimaryProductSurfaces.some(
-        (expectedSurface) =>
-          expectedSurface.domain === actual.taxonomy!.primaryProductSurface!.domain &&
-          expectedSurface.area === actual.taxonomy!.primaryProductSurface!.area,
-      ) &&
-      actual.taxonomy.problemClasses.length > 0 &&
-      actual.taxonomy.problemClasses.every((problemClass) =>
-        oracle.taxonomy!.acceptableProblemClasses.includes(problemClass),
-      );
+    oracle.taxonomy === undefined
+      ? true
+      : scoreTaxonomyOracle(
+          oracle.taxonomy,
+          actual.taxonomy,
+        ).taxonomyPass;
 
   if (!taxonomyPass) {
     failures.push("diagnostic taxonomy does not satisfy oracle");

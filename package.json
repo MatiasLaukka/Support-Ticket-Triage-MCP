@@ -27,7 +27,7 @@
     "evaluate:ai-diagnosis": "npm run build && node dist/scripts/evaluate-ai-diagnosis.js",
     "evaluate:knowledge-holdout": "npm run build && node dist/scripts/evaluate-knowledge-holdout.js",
     "start": "node dist/src/index.js",
-    "approval-desk": "node dist/src/approval-desk.js",
+    "approval-desk": "npm run build && node dist/src/approval-desk.js",
     "demo:approval-desk": "node dist/scripts/demo-approval-desk.js",
     "demo:skill-showcase": "node dist/scripts/demo-skill-showcase.js",
     "demo:knowledge-evolution": "npm run build && node dist/scripts/demo-knowledge-evolution.js",

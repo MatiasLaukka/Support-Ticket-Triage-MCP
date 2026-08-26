@@ -77,37 +77,44 @@ See [SECURITY.md](SECURITY.md) for the full threat model.
 ## Architecture
 
 ```mermaid
-flowchart LR
-    Human["Human reviewer"]
-    Codex["Codex desktop"]
-    Skill["Repository Skill<br/>$triaging-support-tickets"]
-    MCP["Local MCP server<br/>stdio / JSON-RPC"]
-    Tools["27 typed tools"]
-    Prompts["3 workflow prompts"]
-    Resources["4 local resources"]
-    Service["TriageService<br/>shared workflow authority"]
-    Policy["Deterministic policy,<br/>evidence, similarity, metrics"]
-    Operational["Operational SQLite<br/>tickets, events, projections,<br/>traces, replay, idempotency"]
-    Learning["Advisory learning SQLite<br/>candidates, versions, audits"]
-    Knowledge["Markdown knowledge catalog"]
-    Seed["Synthetic seed fixtures<br/>explicit import boundary"]
+flowchart TB
+    Experience["EXPERIENCE<br/>Human reviewer · Codex desktop · Approval Desk"]
+    Adapters["ADAPTERS<br/>Repository Skill · MCP stdio/JSON-RPC · HTTP"]
+    Application["SHARED APPLICATION<br/>TriageService · policy · read path · knowledge evolution"]
+    DataAccess["DATA ACCESS<br/>Repositories · read models"]
+    Persistence["PERSISTENCE<br/>Operational SQLite · advisory learning SQLite · Markdown catalog"]
 
-    Human <--> Codex
-    Codex --> Skill
-    Skill --> MCP
-    Codex <--> MCP
-    MCP --> Tools
-    MCP --> Prompts
-    MCP --> Resources
-    Tools --> Service
-    Tools --> Policy
-    Resources --> Operational
-    Resources --> Knowledge
-    Service --> Policy
-    Service --> Operational
-    Service --> Learning
-    Knowledge --> Policy
-    Seed -->|validated import| Operational
+    Experience --> Adapters --> Application --> DataAccess --> Persistence
+```
+
+The overview intentionally shows one dependency spine. The companion view
+below expands only the three execution paths that matter for understanding
+runtime behavior.
+
+### Shared execution paths
+
+```mermaid
+flowchart TB
+    subgraph Commands["GOVERNED COMMAND PATH"]
+        direction LR
+        MCPCommand["MCP"] --> TriageCommand["TriageService"]
+        HTTPCommand["HTTP"] --> TriageCommand
+        TriageCommand --> OperationalCommand["Operational SQLite"]
+    end
+
+    subgraph Reads["READ PATH"]
+        direction LR
+        MCPRead["MCP"] --> ReadModels["Read models<br/>and repositories"]
+        HTTPRead["HTTP"] --> ReadModels
+        ReadModels --> OperationalRead["Operational SQLite"]
+        ReadModels --> Catalog["Markdown catalog"]
+    end
+
+    subgraph Learning["ADVISORY KNOWLEDGE PATH"]
+        direction LR
+        KnowledgeService["Knowledge evolution"] --> LearningStore["Learning SQLite"]
+        KnowledgeService --> CatalogLearning["Markdown catalog"]
+    end
 ```
 
 ## Demo In 60 Seconds

@@ -1137,6 +1137,24 @@ export const approvalDeskHtml = `<!doctype html>
         padding: 0.45rem 0.65rem;
       }
 
+      .diagnosis-history-selector {
+        gap: 0.35rem;
+        margin-top: 0.2rem;
+      }
+
+      .diagnosis-history-selector button {
+        align-items: center;
+        display: inline-flex;
+        gap: 0.35rem;
+        min-height: 2.35rem;
+        padding: 0.55rem 0.7rem;
+      }
+
+      .diagnosis-history-selector button .meta {
+        color: rgba(255, 255, 255, 0.8);
+        font-size: 0.7rem;
+      }
+
       .reply-mode {
         margin-top: 0.55rem;
       }
@@ -2359,6 +2377,20 @@ export const approvalDeskHtml = `<!doctype html>
         return text.length === 0 ? text : text.charAt(0).toUpperCase() + text.slice(1);
       }
 
+      function diagnosisRecordedTimestamp(candidate) {
+        const recordedAt = candidate?.originalDiagnosis?.timestamp ??
+          candidate?.originalDiagnosis?.occurredAt ??
+          candidate?.originalDiagnosis?.createdAt;
+        if (typeof recordedAt !== 'string' || recordedAt.trim() === '') {
+          return 'recorded time unavailable';
+        }
+        const parsed = Date.parse(recordedAt);
+        if (!Number.isFinite(parsed)) {
+          return 'recorded time unavailable';
+        }
+        return new Date(parsed).toISOString().slice(0, 16).replace('T', ' ') + 'Z';
+      }
+
       function resetDiagnosisInteraction() {
         state.selectedDiagnosisId = null;
         state.diagnosisUiPhase = 'auto';
@@ -2620,14 +2652,10 @@ export const approvalDeskHtml = `<!doctype html>
         const defaultFixRationale = 'The reviewed diagnosis applies to the source ticket.';
         const fixRationale = state.diagnosisImpact.rationale || sourceReason || defaultFixRationale;
         const selector = state.diagnoses.length > 1
-          ? '<div class="quick-reasons" aria-label="Recorded diagnoses">' + state.diagnoses.map(function (candidate) {
+          ? '<div class="quick-reasons diagnosis-history-selector" aria-label="Recorded diagnoses">' + state.diagnoses.map(function (candidate) {
               const candidateId = candidate.originalDiagnosis?.id ?? '';
               const diagnosisNumber = state.diagnoses.indexOf(candidate) + 1;
-              const recordedAt = String(candidate.originalDiagnosis?.timestamp ?? '');
-              const shortTimestamp = recordedAt.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/);
-              const timestampLabel = shortTimestamp === null
-                ? 'recorded time unavailable'
-                : shortTimestamp[1] + '-' + shortTimestamp[2] + '-' + shortTimestamp[3] + ' ' + shortTimestamp[4] + ':' + shortTimestamp[5] + 'Z';
+              const timestampLabel = diagnosisRecordedTimestamp(candidate);
               return '<button type="button" class="secondary" data-action="select-diagnosis" data-diagnosis-id="' + escapeHtml(candidateId) + '">' +
                 '<span>Diagnosis ' + escapeHtml(String(diagnosisNumber)) + '</span><span class="meta">' + escapeHtml(timestampLabel) + '</span>' +
               '</button>';
@@ -2726,10 +2754,13 @@ export const approvalDeskHtml = `<!doctype html>
         const inspectionRejectControl = diagnosisClarification !== null || !lifecycleMutationAvailable('reject-diagnosis')
           ? ''
           : '<button type="button" class="danger" data-action="review-diagnosis" data-decision="reject">Reject</button>';
+        const inspectionIntro = current.confidence === 'confirmed'
+          ? 'This diagnosis is confirmed. Inspect the drafted fields, review them, and approve to continue to the scoped fix.'
+          : 'This diagnosis is likely, not confirmed. Review the drafted fields, then gather more evidence and evaluate again if the theory is not ready.';
         const inspectionPhase = !historicalDiagnosis && effectivePhase === 'inspection'
           ? '<section class="diagnosis-phase-panel" data-diagnosis-phase="inspection" aria-label="Inspection">' +
               '<header><h4>Inspection</h4><span class="meta">' + escapeHtml(diagnosisClarification === null ? 'Edit the fields, then approve or reject.' : 'Clarification is required before approval.') + '</span></header>' +
-              '<p class="diagnosis-inspection-intro">The assistant drafted these fields from the available evidence. Approve only after checking the evidence; reject when the theory needs a different direction.</p>' +
+              '<p class="diagnosis-inspection-intro">' + escapeHtml(inspectionIntro) + '</p>' +
               diagnosisClarificationNotice +
               diagnosisReviewError +
               '<div class="diagnosis-inspection-grid">' +
@@ -3312,6 +3343,12 @@ export const approvalDeskHtml = `<!doctype html>
           lifecycleActionIsAvailable('apply-scoped-fix') ||
           legacyGuidedDiagnosisPhase);
         const phaseControlsVisible = diagnosisActionReady || fixActionReady;
+        const currentDiagnosis = selectedDiagnosisView();
+        const confirmedDiagnosisPresentation = !historicalDiagnosis &&
+          state.diagnosisUiPhase !== 'normal' &&
+          currentDiagnosis !== null &&
+          diagnosisContextForView(currentDiagnosis)?.confidence === 'confirmed' &&
+          (diagnosisActionReady || fixActionReady || ['diagnosis-review', 'awaiting-confirmation', 'awaiting-fix', 'fix-ready', 'verification'].includes(state.lifecycle?.phase));
         const lifecycleNoAction = hasLifecycleDescriptor() &&
           ['none', 'specialist-review'].includes(state.lifecycle?.primaryAction?.kind);
         const suppressGenericActions = historicalDiagnosis || phaseOwnsWorkflowActions || lifecycleNoAction;
@@ -3361,6 +3398,8 @@ export const approvalDeskHtml = `<!doctype html>
           : 'Mark task done';
         els.startRejectButton.hidden = suppressGenericActions || !hasRecommendation || approvedWorkflow || closeReady || reviewGateActive;
         els.backToRecommendation.hidden = !(hasRecommendation && state.stage === 'approval');
+        els.decisionChips.hidden = confirmedDiagnosisPresentation;
+        els.decisionSummary.hidden = confirmedDiagnosisPresentation;
         els.decisionChips.innerHTML = hasRecommendation ? renderDecisionChips(state.recommendation) : '';
         els.decisionSummary.textContent = hasRecommendation ? decisionSummaryText(state.recommendation) : 'Review the draft and evidence, then approve or edit.';
         els.discoverKnowledgeButton.disabled = state.selectedTicket === null || state.knowledgeDiscoveryPending;
@@ -4634,7 +4673,8 @@ export const approvalDeskHtml = `<!doctype html>
         if (state.selectedTicket === null) {
           return;
         }
-        const data = await requestJson('/api/tickets/' + encodeURIComponent(state.selectedTicket.id) + '/fix', {
+        const ticketId = state.selectedTicket.id;
+        const data = await requestJson('/api/tickets/' + encodeURIComponent(ticketId) + '/fix', {
           method: 'POST',
           body: JSON.stringify({
             actor: els.actor.value.trim() || 'approval-desk'
@@ -4643,6 +4683,13 @@ export const approvalDeskHtml = `<!doctype html>
         setResult(data);
         state.diagnosisUiPhase = 'normal';
         await refreshSelectedTicketQueueAndEvidence();
+        if (state.selectedTicket?.id === ticketId &&
+            lifecycleActionIsAvailable('apply-scoped-fix')) {
+          state.diagnosisUiPhase = 'fix';
+          renderDiagnosisPanel();
+          renderRecommendationStageControls();
+          updateControls();
+        }
       }
 
       async function closeTicket() {
@@ -5807,6 +5854,14 @@ export const approvalDeskHtml = `<!doctype html>
           void reviewSelectedDiagnosis(actionTarget.dataset.decision).catch(function (error) { setResult({ error: error.message }); });
         }
         if (action === 'open-diagnosis-inspection') {
+          const latest = latestDiagnosisView();
+          const selected = selectedDiagnosisView();
+          if (latest !== null && selected?.originalDiagnosis?.id !== latest.originalDiagnosis?.id &&
+              diagnosisContextForView(latest)?.confidence === 'confirmed') {
+            state.selectedDiagnosisId = latest.originalDiagnosis.id;
+            state.diagnosisDraft = null;
+            state.diagnosisDraftId = null;
+          }
           state.diagnosisReviewDecision = actionTarget.dataset.reviewDecision ?? null;
           state.diagnosisReviewError = null;
           state.diagnosisUiPhase = 'inspection';

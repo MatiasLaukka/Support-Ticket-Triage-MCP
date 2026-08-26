@@ -3298,7 +3298,9 @@ export const approvalDeskHtml = `<!doctype html>
           lifecycleActionIsAvailable('apply-scoped-fix') ||
           legacyGuidedDiagnosisPhase);
         const phaseControlsVisible = diagnosisActionReady || fixActionReady;
-        const suppressGenericActions = historicalDiagnosis || phaseOwnsWorkflowActions;
+        const lifecycleNoAction = hasLifecycleDescriptor() &&
+          ['none', 'specialist-review'].includes(state.lifecycle?.primaryAction?.kind);
+        const suppressGenericActions = historicalDiagnosis || phaseOwnsWorkflowActions || lifecycleNoAction;
         const workflowActionReady = shouldShowCreateUpdatedRecommendation() || diagnosisActionReady || fixActionReady || closeReady;
         els.setupControls.hidden = hasRecommendation;
         els.decisionControls.hidden = historicalDiagnosis || (phaseOwnsWorkflowActions && !phaseControlsVisible) || (!hasRecommendation && !diagnosisActionReady && !fixActionReady) || (waitingForReply && !workflowActionReady) || state.stage === 'approval' || state.stage === 'reject';

@@ -2989,6 +2989,89 @@ describe("approvalDeskHtml", () => {
     );
   });
 
+  it("keeps a waiting-on-platform-fix ticket actionable from its lifecycle", async () => {
+    const app = await startApprovalDeskApp({
+      ticketDetailRecommendation: {
+        ...fixtureRecommendation,
+        resolution: "approved",
+        supportState: "waiting-on-platform-fix",
+        missingEvidence: [],
+      },
+      ticketDetail: {
+        lifecycle: fixtureLifecycle({
+          phase: "awaiting-confirmation",
+          primaryAction: "evaluate-ticket",
+          actions: [
+            lifecycleAction("evaluate-ticket", "primary", ["diagnosis-not-confirmed"]),
+            lifecycleAction("review-diagnosis", "blocked", ["diagnosis-not-confirmed"]),
+          ],
+        }),
+        conversationTimeline: [
+          {
+            kind: "support-response-sent",
+            timestamp: "2026-06-10T09:05:00.000Z",
+            actor: "approval-desk",
+            recommendationId: fixtureRecommendation.id,
+            body: "We are checking the platform mitigation.",
+          },
+          {
+            kind: "customer-reply",
+            timestamp: "2026-06-10T09:06:00.000Z",
+            actor: "Mia Johnson",
+            body: "I have already sent the requested details.",
+          },
+        ],
+        recommendationSummary: {
+          workflowState: "customer-replied",
+          latestRecommendationId: fixtureRecommendation.id,
+          latestResolution: "approved",
+          hasSentResponse: true,
+          hasCustomerReply: true,
+        },
+      },
+    });
+
+    await app.selectFirstTicket();
+
+    expect(app.el("actionBarTitle").textContent).toBe("Waiting for confirmation");
+    expect(app.el("actionBarHint").textContent).toContain("Evaluate the current confirmation evidence");
+    expect(app.el("createUpdatedRecommendation").hidden).toBe(false);
+    expect(app.el("createUpdatedRecommendation").textContent).toBe("Re-evaluate");
+    expect(app.el("actionBarTitle").textContent).not.toBe("Response ready");
+  });
+
+  it("explains a lifecycle wait instead of presenting a misleading response action", async () => {
+    const app = await startApprovalDeskApp({
+      ticketDetailRecommendation: {
+        ...fixtureRecommendation,
+        resolution: "approved",
+        supportState: "waiting-on-platform-fix",
+        missingEvidence: [],
+      },
+      ticketDetail: {
+        lifecycle: fixtureLifecycle({
+          phase: "waiting-for-customer",
+          primaryAction: "none",
+          actions: [lifecycleAction("none", "primary", ["awaiting-customer-reply"])],
+        }),
+        recommendationSummary: {
+          workflowState: "waiting",
+          latestRecommendationId: fixtureRecommendation.id,
+          latestResolution: "approved",
+          hasSentResponse: true,
+          hasCustomerReply: false,
+        },
+      },
+    });
+
+    await app.selectFirstTicket();
+
+    expect(app.el("actionBarTitle").textContent).toBe("Further investigation required");
+    expect(app.el("actionBarHint").textContent).toContain("No governed operator action");
+    expect(app.el("approveButton").hidden).toBe(true);
+    expect(app.el("reviewDraftButton").hidden).toBe(true);
+  });
+
   it("renders previous recommendations compactly in collapsed history", async () => {
     const app = await startApprovalDeskApp({
       ticketDetailRecommendation: {

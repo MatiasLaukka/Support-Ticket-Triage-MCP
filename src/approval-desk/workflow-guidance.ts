@@ -566,13 +566,24 @@ export function buildOperatorGuidance(input: {
       input.audits,
     )
   ) {
-    if (latestDiagnosisReview?.review.decision === "reject") {
+    const latestDiagnosisInvalidated = latestDiagnosis !== undefined &&
+      input.audits.some((event) =>
+        event.action === "diagnosis-invalidated" &&
+        event.before.diagnosisId === latestDiagnosis.id,
+      );
+    if (
+      latestDiagnosisReview?.review.decision === "reject" ||
+      latestDiagnosisInvalidated
+    ) {
       return withKnowledgePattern({
         stage: "diagnosis-recorded",
-        changed: "The latest diagnosis was rejected and needs a new evaluation.",
+        changed: latestDiagnosisInvalidated
+          ? "The latest diagnosis was invalidated and needs a new evaluation."
+          : "The latest diagnosis was rejected and needs a new evaluation.",
         nextAction: "evaluate-ticket",
-        reason:
-          "The rejected diagnosis remains historical; evaluate the current ticket before recording another diagnosis.",
+        reason: latestDiagnosisInvalidated
+          ? "The invalidated diagnosis remains historical; evaluate the current ticket before recording another diagnosis."
+          : "The rejected diagnosis remains historical; evaluate the current ticket before recording another diagnosis.",
         approval: noApproval,
         unlocksTool: "evaluate_ticket",
         blockers: [],

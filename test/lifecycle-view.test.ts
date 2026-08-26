@@ -3,6 +3,7 @@ import {
   AuditEventSchema,
   TicketSchema,
   TriageRecommendationSchema,
+  type AuditEvent,
 } from "../src/domain.js";
 import {
   LifecycleViewSchema,
@@ -59,7 +60,336 @@ const recommendation = TriageRecommendationSchema.parse({
   createdAt: "2026-06-10T09:00:00.000Z",
 });
 
+function matrixRecommendation(
+  overrides: Partial<typeof recommendation> = {},
+) {
+  return TriageRecommendationSchema.parse({
+    ...recommendation,
+    id: "10000000-0000-4000-8000-000000000002",
+    resolution: "approved",
+    supportState: "diagnosing",
+    ...overrides,
+  });
+}
+
+function matrixAudit(
+  id: string,
+  action: AuditEvent["action"],
+  timestamp: string,
+  overrides: Partial<AuditEvent> = {},
+) {
+  return AuditEventSchema.parse({
+    id,
+    timestamp,
+    actor: "approval-desk",
+    action,
+    ticketId: ticket.id,
+    before: {},
+    after: {},
+    rationale: "Lifecycle matrix fixture.",
+    knowledgeArticleIds: [],
+    result: "success",
+    ...overrides,
+  });
+}
+
+function matrixSubmission(recommendationId: string, timestamp = "2026-06-10T09:00:00.000Z") {
+  return matrixAudit(
+    `40000000-0000-4000-8000-${recommendationId.slice(-12)}`,
+    "recommendation-submitted",
+    timestamp,
+    { recommendationId },
+  );
+}
+
+function matrixResponse(recommendationId: string, timestamp = "2026-06-10T09:01:00.000Z") {
+  return matrixAudit(
+    `50000000-0000-4000-8000-${recommendationId.slice(-12)}`,
+    "customer-response-sent",
+    timestamp,
+    {
+      recommendationId,
+      after: { sentAt: timestamp },
+    },
+  );
+}
+
+function matrixDiagnosis(
+  id: string,
+  timestamp: string,
+  confidence: "confirmed" | "likely" = "confirmed",
+  owner: "engineering" | "support" = "engineering",
+  diagnosticState?: Record<string, unknown>,
+) {
+  return matrixAudit(id, "diagnosis-completed", timestamp, {
+    after: {
+      diagnosis: {
+        status: "completed",
+        causeType: "performance",
+        customerSafeSummary: "The checkout processing path is delayed.",
+        evidenceUsed: ["request trace"],
+        confidence,
+        owner,
+        recommendedNextAction: "Apply the governed mitigation.",
+        doNotSay: ["Do not claim this is resolved."],
+        ...(diagnosticState === undefined ? {} : { diagnosticState }),
+      },
+    },
+  });
+}
+
+function matrixDiagnosisReview(
+  diagnosis: AuditEvent,
+  decision: "approve" | "reject" | "revalidate" = "approve",
+  timestamp = "2026-06-10T09:03:00.000Z",
+) {
+  return matrixAudit(
+    `60000000-0000-4000-8000-${diagnosis.id.slice(-12)}`,
+    "diagnosis-reviewed",
+    timestamp,
+    {
+      actor: "product-support",
+      before: { diagnosisId: diagnosis.id },
+      after: {
+        diagnosisReview: {
+          decision,
+          diagnosisId: diagnosis.id,
+          ticketId: ticket.id,
+          sourceTicketRevision: ticket.revision,
+          sourceConversationWatermark: { state: "none" },
+          editedDiagnosis: diagnosis.after.diagnosis,
+          actor: "product-support",
+          rationale: "Lifecycle matrix review.",
+          reviewedAt: timestamp,
+        },
+      },
+    },
+  );
+}
+
+function matrixViews() {
+  const approved = matrixRecommendation();
+  const submitted = matrixSubmission(approved.id);
+  const sent = matrixResponse(approved.id);
+  const diagnosis = matrixDiagnosis(
+    "30000000-0000-4000-8000-000000000001",
+    "2026-06-10T09:02:00.000Z",
+  );
+  const likelyDiagnosis = matrixDiagnosis(
+    "30000000-0000-4000-8000-000000000002",
+    "2026-06-10T09:02:00.000Z",
+    "likely",
+  );
+  const confirmedReview = matrixDiagnosisReview(diagnosis);
+  const likelyReview = matrixDiagnosisReview(likelyDiagnosis);
+  const withConfirmedDiagnosis = [submitted, sent, diagnosis, confirmedReview];
+  return [
+    {
+      name: "evaluation-needed",
+      input: { ticket, recommendations: [], audits: [] },
+      expectedPrimary: "evaluate-ticket",
+      expectedDescriptors: [
+        ["evaluate-ticket", "primary", ["evaluation-required"]],
+        ["review-diagnosis", "blocked", ["diagnosis-not-ready"]],
+        ["revalidate-diagnosis", "blocked", ["diagnosis-not-ready"]],
+        ["reject-diagnosis", "blocked", ["diagnosis-not-ready"]],
+      ],
+    },
+    {
+      name: "recommendation-review",
+      input: {
+        ticket,
+        recommendations: [TriageRecommendationSchema.parse({ ...recommendation, resolution: "pending" })],
+        audits: [matrixSubmission(recommendation.id)],
+      },
+      expectedPrimary: "review-recommendation",
+      expectedDescriptors: [
+        ["review-recommendation", "primary", ["recommendation-approval-required"]],
+        ["send-customer-response", "blocked", ["recommendation-approval-required"]],
+      ],
+    },
+    {
+      name: "waiting-for-customer",
+      input: {
+        ticket,
+        recommendations: [matrixRecommendation({
+          supportState: "needs-information",
+          missingEvidence: [{
+            id: "request-id",
+            label: "Request ID",
+            aliases: [],
+            customerQuestion: "Share the request ID.",
+            source: "policy",
+          }],
+        })],
+        audits: [submitted, sent],
+      },
+      expectedPrimary: "none",
+      expectedDescriptors: [["none", "primary", ["awaiting-customer-reply"]]],
+    },
+    {
+      name: "diagnosis-ready",
+      input: { ticket, recommendations: [approved], audits: [submitted, sent] },
+      expectedPrimary: "record-diagnosis",
+      expectedDescriptors: [
+        ["record-diagnosis", "primary", ["diagnosis-ready"]],
+        ["review-diagnosis", "blocked", ["diagnosis-not-recorded"]],
+        ["revalidate-diagnosis", "blocked", ["diagnosis-not-recorded"]],
+        ["reject-diagnosis", "blocked", ["diagnosis-not-recorded"]],
+      ],
+    },
+    {
+      name: "diagnosis-review",
+      input: { ticket, recommendations: [approved], audits: [...withConfirmedDiagnosis.slice(0, 2), diagnosis] },
+      expectedPrimary: "review-diagnosis",
+      expectedDescriptors: [
+        ["review-diagnosis", "primary", ["diagnosis-not-approved"]],
+        ["revalidate-diagnosis", "blocked", ["diagnosis-not-stale"]],
+        ["reject-diagnosis", "available", ["operator-review"]],
+      ],
+    },
+    {
+      name: "awaiting-confirmation",
+      input: {
+        ticket,
+        recommendations: [matrixRecommendation({
+          requiredEvidence: [{
+            id: "confirmation-trace",
+            label: "Confirmation trace",
+            aliases: [],
+            customerQuestion: "Share the confirmation trace.",
+            source: "policy",
+          }],
+          missingEvidence: [{
+            id: "confirmation-trace",
+            label: "Confirmation trace",
+            aliases: [],
+            customerQuestion: "Share the confirmation trace.",
+            source: "policy",
+          }],
+        })],
+        audits: [submitted, sent, likelyDiagnosis, likelyReview],
+      },
+      expectedPrimary: "evaluate-ticket",
+      expectedDescriptors: [
+        ["evaluate-ticket", "primary", ["missing-evidence", "fix-not-available"]],
+        ["review-diagnosis", "blocked", ["diagnosis-not-confirmed"]],
+        ["revalidate-diagnosis", "blocked", ["diagnosis-not-confirmed"]],
+        ["reject-diagnosis", "blocked", ["diagnosis-not-confirmed"]],
+      ],
+    },
+    {
+      name: "awaiting-fix",
+      input: { ticket, recommendations: [approved], audits: withConfirmedDiagnosis },
+      expectedPrimary: "record-fix-available",
+      expectedDescriptors: [
+        ["record-fix-available", "primary", ["fix-not-available"]],
+        ["apply-scoped-fix", "blocked", ["fix-not-available"]],
+      ],
+    },
+    {
+      name: "fix-ready",
+      input: {
+        ticket,
+        recommendations: [approved],
+        audits: [...withConfirmedDiagnosis, matrixAudit(
+          "70000000-0000-4000-8000-000000000001",
+          "platform-mitigation-available",
+          "2026-06-10T09:04:00.000Z",
+          { before: { diagnosisId: diagnosis.id }, after: { fix: { status: "available" } } },
+        )],
+      },
+      expectedPrimary: "apply-scoped-fix",
+      expectedDescriptors: [
+        ["apply-scoped-fix", "primary", ["fix-ready"]],
+        ["record-fix-available", "completed", ["fix-already-available"]],
+      ],
+    },
+    {
+      name: "verification",
+      input: {
+        ticket,
+        recommendations: [approved],
+        audits: [...withConfirmedDiagnosis, matrixAudit(
+          "70000000-0000-4000-8000-000000000002",
+          "fix-available",
+          "2026-06-10T09:04:00.000Z",
+          { before: { diagnosisId: diagnosis.id }, after: { fix: { status: "available" } } },
+        )],
+      },
+      expectedPrimary: "evaluate-ticket",
+      expectedDescriptors: [
+        ["evaluate-ticket", "primary", ["fix-verification-required"]],
+        ["record-fix-ineffective", "available", ["fix-verification-available"]],
+      ],
+    },
+    {
+      name: "ready-for-close",
+      input: {
+        ticket,
+        recommendations: [matrixRecommendation({ supportState: "ready-for-close" })],
+        audits: [matrixSubmission(approved.id), matrixResponse(approved.id)],
+      },
+      expectedPrimary: "resolve-ticket",
+      expectedDescriptors: [
+        ["resolve-ticket", "primary", ["ready-for-close"]],
+        ["send-customer-response", "completed", ["response-already-sent"]],
+      ],
+    },
+    {
+      name: "escalated",
+      input: {
+        ticket,
+        recommendations: [matrixRecommendation({ supportState: "escalated" })],
+        audits: [submitted, sent, matrixAudit(
+          "80000000-0000-4000-8000-000000000001",
+          "diagnostic-escalated",
+          "2026-06-10T09:02:00.000Z",
+          { after: { diagnosis: {
+            status: "completed",
+            causeType: "performance",
+            customerSafeSummary: "Two causes remain plausible.",
+            evidenceUsed: ["request trace"],
+            confidence: "likely",
+            owner: "engineering",
+            recommendedNextAction: "Specialist review is required.",
+            doNotSay: [],
+            diagnosticState: {
+              state: "escalated",
+              hypotheses: [],
+              evidenceToRequest: [],
+              escalationReason: "diagnostic-ambiguity",
+            },
+          } } },
+        )],
+      },
+      expectedPrimary: "specialist-review",
+      expectedDescriptors: [["specialist-review", "primary", ["specialist-review-required"]]],
+    },
+    {
+      name: "resolved",
+      input: { ticket: TicketSchema.parse({ ...ticket, status: "resolved" }), recommendations: [], audits: [] },
+      expectedPrimary: "none",
+      expectedDescriptors: [
+        ["none", "primary", ["already-completed"]],
+        ["resolve-ticket", "completed", ["already-completed"]],
+      ],
+    },
+  ] as const;
+}
+
 describe("lifecycle projection", () => {
+  it.each(matrixViews())("keeps the complete phase/action contract for $name", ({ name, input, expectedPrimary, expectedDescriptors }) => {
+    const view = buildTicketLifecycleView(input);
+
+    expect(view.phase, name).toBe(name);
+    expect(view.primaryAction).toMatchObject({ kind: expectedPrimary, availability: "primary" });
+    expect(view.actions).toEqual(expect.arrayContaining(expectedDescriptors.map(([kind, availability, reasonCodes]) =>
+      expect.objectContaining({ kind, availability, reasonCodes }),
+    )));
+    expect(new Set(view.actions.map(({ kind }) => kind)).size).toBe(view.actions.length);
+  });
+
   it("has a strict additive contract and exposes evaluation-needed without a recommendation", () => {
     const lifecycle = buildTicketLifecycleView({ ticket, recommendations: [], audits: [] });
 

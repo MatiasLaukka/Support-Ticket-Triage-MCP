@@ -429,6 +429,8 @@ function reasonCodesForPhase(input: {
   confirmation: LifecycleView["confirmation"];
   fix: LifecycleView["fix"];
 }): string[] {
+  if (input.phase === "waiting-for-customer") return ["awaiting-customer-reply"];
+  if (input.phase === "escalated") return ["specialist-review-required"];
   const reasons: string[] = [];
   if (input.confirmation.state === "awaiting-evidence") reasons.push("missing-evidence");
   if (input.confirmation.state === "awaiting-internal-verification") reasons.push("diagnosis-not-confirmed");
@@ -439,6 +441,20 @@ function reasonCodesForPhase(input: {
   if (input.fix.state === "ineffective") reasons.push("fix-ineffective");
   if (input.phase === "evaluation-needed" && reasons.length === 0) reasons.push("evaluation-required");
   if (reasons.length === 0 && input.phase === "resolved") reasons.push("already-completed");
+  if (reasons.length === 0) {
+    const phaseReasonCodes: Partial<Record<LifecyclePhase, string>> = {
+      "recommendation-review": "recommendation-approval-required",
+      "waiting-for-customer": "awaiting-customer-reply",
+      "diagnosis-ready": "diagnosis-ready",
+      "diagnosis-review": "diagnosis-not-approved",
+      "fix-ready": "fix-ready",
+      verification: "fix-verification-required",
+      "ready-for-close": "ready-for-close",
+      escalated: "specialist-review-required",
+    };
+    const phaseReasonCode = phaseReasonCodes[input.phase];
+    if (phaseReasonCode !== undefined) reasons.push(phaseReasonCode);
+  }
   return reasons;
 }
 

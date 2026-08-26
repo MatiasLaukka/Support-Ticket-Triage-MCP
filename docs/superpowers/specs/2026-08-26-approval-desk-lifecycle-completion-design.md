@@ -16,7 +16,7 @@ The ticket lifecycle returned by the backend is the only authority for mutation 
 
 `diagnosisUiPhase` remains presentation-only. It may choose whether the operator is looking at the current diagnosis, Inspection, Scoped Fix, or a historical read-only view, but it cannot grant a mutation or infer that a transition succeeded.
 
-Every governed command must recheck the relevant lifecycle action immediately before posting. A stale control must refresh the ticket and render the returned lifecycle instead of issuing a known-invalid mutation. Successful commands adopt the returned lifecycle (or perform a full authoritative refresh when the response is not an envelope) before selecting the next presentation.
+Every governed command must recheck the relevant lifecycle action immediately before posting. This is an in-memory descriptor check, not a mandatory extra GET before every click: the mutation is sent with its existing revision/watermark preconditions, the backend remains authoritative, and a stale/rejected response triggers refresh and reconciliation. Successful commands adopt the returned lifecycle (or perform a full authoritative refresh when the response is not an envelope) before selecting the next presentation.
 
 ## Lifecycle navigation
 
@@ -33,7 +33,7 @@ Selecting an older diagnosis only renders compact, read-only history. It never r
 
 ## Evidence and diagnosis loop
 
-The existing playbook evidence requirements remain authoritative. The implementation adds a deterministic coverage check that every evidence requirement used by the demo has a corresponding customer-reply path through the existing automatic/synthetic reply mechanism. This is a test/data-support check, not a change to production classification or diagnosis authority.
+The existing playbook evidence requirements remain authoritative. The implementation adds a deterministic coverage check that every evidence requirement used by the demo has a corresponding customer-reply path through the existing automatic/synthetic reply mechanism. Coverage is proven through the real evidence extraction/evaluation path: generated text must cause the corresponding requirement to move from missing to provided. A generic fallback sentence that merely produces text is not sufficient. This is a test/data-support check, not a change to production classification or diagnosis authority.
 
 The operator-facing loop is:
 
@@ -69,9 +69,9 @@ When a lifecycle descriptor exists, titles, hints, button labels, and enabled st
 | `record-fix-available` | Fix |
 | `apply-scoped-fix` | Open Scoped Fix, then Fix |
 | `resolve-ticket` | Resolve |
-| `none` / `specialist-review` | Further investigation required |
+| `specialist-review` | Further investigation required / Specialist review |
 
-Local recommendation summaries may explain context, but they cannot override a lifecycle title or action. In particular, `awaiting-fix`, `fix-ready`, and `ready-for-close` must not be presented as a generic “Response ready” state.
+Local recommendation summaries may explain context, but they cannot override a lifecycle title or action. Presentation for `none` is phase- and reason-aware: `resolved` renders Resolved, `waiting-for-customer` explains that no operator action is available until a reply, and specialist/escalated states render Further investigation required. In particular, `awaiting-fix`, `fix-ready`, and `ready-for-close` must not be presented as a generic “Response ready” state. Lifecycle-backed presentation must not retain unconditional response-ready chips, hints, or secondary controls that contradict the descriptor.
 
 ## Error and refresh behavior
 
@@ -92,7 +92,11 @@ The ticket-list projection receives a minimal lifecycle summary (phase, primary 
 
 For every durable ticket state, the Action Bar exposes the lifecycle primary action or clearly explains why no operator action is currently possible. It never exposes an enabled action that the backend will reject from that same state.
 
-The acceptance path uses real Approval Desk HTTP responses and returned lifecycle projections for TKT-1010. It covers evaluation/evidence requests, an ambiguity or rejection recovery cycle, confirmed diagnosis review, scoped fix, post-fix customer response, customer confirmation, re-evaluation, and resolution. Browser state is not fabricated to advance the workflow.
+The acceptance path uses real Approval Desk HTTP responses and returned lifecycle projections for TKT-1010. Every operator-controlled transition is performed through the same Approval Desk UI control a human would use. Direct HTTP is reserved for external/demo-world events such as customer replies and internal platform confirmation. The path covers evaluation/evidence requests, an ambiguity or rejection recovery cycle, confirmed diagnosis review, scoped fix, post-fix customer response, customer confirmation, re-evaluation, and resolution. Browser state is not fabricated to advance the workflow.
+
+The acceptance path includes at least one restart/reload checkpoint after durable diagnosis or fix state has been written. The runtime is recreated from the persisted operational SQLite state, the Approval Desk reloads the selected ticket, and the journey continues to resolution using the newly returned lifecycle projection.
+
+TKT-1010 is complemented by an exhaustive presentation matrix over every lifecycle phase and primary action. The matrix asserts the title, hint, primary control, relevant secondary controls, blocked-action explanation, and absence of an empty action bar. It also verifies that lifecycle-backed presentation never falls through to a contradictory local “Response ready” label.
 
 ## Compatibility
 

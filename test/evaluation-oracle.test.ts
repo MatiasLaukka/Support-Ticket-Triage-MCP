@@ -406,6 +406,7 @@ describe("evaluation oracle foundation", () => {
 
     expect(report).toMatchObject({
       ticketCount: 1,
+      taxonomyAccuracy: 0,
       passedScenarioCount: 1,
     });
   });
@@ -503,7 +504,7 @@ describe("evaluation oracle foundation", () => {
 
   expect(score.taxonomyPass).toBe(false);
   expect(score.all).toBe(false);
-});
+  });
 
   it("fails taxonomy scoring when a problem class is outside the acceptable set", () => {
     const oracle = EvaluationOracleSchema.parse({
@@ -560,4 +561,63 @@ describe("evaluation oracle foundation", () => {
     acceptableProblemClasses: ["expected-behavior"],
     });
   });
+
+  it("reports null taxonomy accuracy when no oracle defines taxonomy ground truth", async () => {
+    const tickets = TicketSchema.array().parse(
+      JSON.parse(
+        await readFile(resolve("data/seed/tickets.json"), "utf8"),
+      ),
+    );
+
+    const ticket = tickets.find(({ id }) => id === "TKT-1001")!;
+
+    const outcome = ExpectedOutcomeSchema.array().parse(
+      JSON.parse(
+        await readFile(
+          resolve("data/seed/expected-outcomes.json"),
+          "utf8",
+        ),
+      ),
+    ).find(({ ticketId }) => ticketId === ticket.id)!;
+
+    const { actor: _actor, ...input } =
+      buildApprovalDeskRecommendationInput({
+        ticket,
+        outcome,
+        actor: "taxonomy-metric-test",
+      });
+
+    const recommendation = TriageRecommendationSchema.parse({
+      ...input,
+      id: "00000000-0000-4000-8000-000000000101",
+      resolution: "pending",
+      createdAt: ticket.updatedAt,
+    });
+
+    const oracle = (await loadEvaluationOracles())
+      .find(({ ticketId }) => ticketId === ticket.id)!;
+
+    const report = evaluateRecommendationsAgainstOracles(
+      [recommendation],
+      [oracle],
+    );
+
+    expect(report.taxonomyAccuracy).toBeNull();
+  });
+
+  it("publishes contrasting taxonomy ground truth for the SMS opt-out state case", async () => {
+    const oracles = await loadEvaluationOracles();
+    const oracle = oracles.find(({ ticketId }) => ticketId === "TKT-1030")!;
+
+    expect(oracle.taxonomy).toEqual({
+      acceptablePrimaryProductSurfaces: [
+        {
+          domain: "customer-data",
+          area: "consent",
+        },
+      ],
+      acceptableProblemClasses: ["data-integrity"],
+    });
+  });
+
 });

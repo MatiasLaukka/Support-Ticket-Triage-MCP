@@ -268,6 +268,17 @@
       "requiredArticleIds": ["sms-compliance", "profile-sync-issues"],
       "relevantArticleIds": []
     },
+    "taxonomy": {
+      "acceptablePrimaryProductSurfaces": [
+        {
+          "domain": "customer-data",
+          "area": "consent"
+        }
+      ],
+      "acceptableProblemClasses": [
+        "data-integrity"
+      ]
+    },
     "family": "consent-sync",
     "labelRationale": "A STOP opt-out not being reflected in profile eligibility is a consent/profile-state problem, not account access. Initial support ownership is appropriate until evidence identifies SMS processing, profile state, or campaign eligibility as the failing subsystem."
   }

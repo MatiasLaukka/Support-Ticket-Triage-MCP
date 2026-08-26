@@ -14,6 +14,7 @@ export interface OracleEvaluationReport {
   classificationAccuracy: number;
   knowledgeRequiredCoverage: number;
   knownCauseAccuracy: number | null;
+  taxonomyAccuracy: number | null;
   passedScenarioCount: number;
 }
 
@@ -303,6 +304,13 @@ export function evaluateRecommendationsAgainstOracles(
   const knownCauseScores = oracles.map((oracle, index) =>
     oracle.knownCause === undefined ? undefined : scores[index]?.knownCausePass ?? false,
   ).filter((score): score is boolean => score !== undefined);
+  const taxonomyScores = oracles
+    .map((oracle, index) =>
+      oracle.taxonomy === undefined
+        ? undefined
+        : scores[index]?.taxonomyPass ?? false,
+    )
+    .filter((score): score is boolean => score !== undefined);
   return {
     ticketCount: oracles.length,
     classificationAccuracy: finiteRate(
@@ -313,6 +321,12 @@ export function evaluateRecommendationsAgainstOracles(
     knownCauseAccuracy: knownCauseScores.length === 0
       ? null
       : finiteRate(knownCauseScores.filter(Boolean).length, knownCauseScores.length),
+    taxonomyAccuracy: taxonomyScores.length === 0
+      ? null
+      : finiteRate(
+          taxonomyScores.filter(Boolean).length,
+          taxonomyScores.length,
+        ),
     passedScenarioCount: presentScores.filter(
       ({ classificationPass, knowledgePass, knownCausePass }) =>
         classificationPass &&

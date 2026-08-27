@@ -637,7 +637,10 @@ export function buildOperatorGuidance(input: {
       unlocksTool: "evaluate_ticket",
       blockers: [],
       customerNextStep:
-        "No customer action is required until support sends the reviewed diagnostic update.",
+        authoritativeDiagnosis.diagnosis.owner === "customer" ||
+          authoritativeDiagnosis.diagnosis.owner === "support"
+          ? authoritativeDiagnosis.diagnosis.recommendedNextAction
+          : "No customer action is required until support sends the reviewed diagnostic update.",
     });
   }
 

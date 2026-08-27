@@ -118,8 +118,9 @@ function matrixDiagnosis(
   id: string,
   timestamp: string,
   confidence: "confirmed" | "likely" = "confirmed",
-  owner: "engineering" | "support" = "engineering",
+  owner: "engineering" | "support" | "customer" = "engineering",
   diagnosticState?: Record<string, unknown>,
+  recommendedNextAction = "Apply the governed mitigation.",
 ) {
   return matrixAudit(id, "diagnosis-completed", timestamp, {
     after: {
@@ -130,7 +131,7 @@ function matrixDiagnosis(
         evidenceUsed: ["request trace"],
         confidence,
         owner,
-        recommendedNextAction: "Apply the governed mitigation.",
+        recommendedNextAction,
         doNotSay: ["Do not claim this is resolved."],
         ...(diagnosticState === undefined ? {} : { diagnosticState }),
       },
@@ -967,5 +968,82 @@ describe("lifecycle projection", () => {
       expect.objectContaining({ kind: "review-diagnosis", availability: "blocked" }),
       expect.objectContaining({ kind: "revalidate-diagnosis", availability: "blocked" }),
     ]));
+  });
+
+  it.each([
+    {
+      owner: "customer" as const,
+      recommendedNextAction: "Ask the customer to confirm whether the issue still reproduces.",
+    },
+    {
+      owner: "support" as const,
+      recommendedNextAction: "Verify the documented support-side action, then confirm the outcome.",
+    },
+  ])("keeps a confirmed $owner diagnosis actionable without inventing a platform fix", ({ owner, recommendedNextAction }) => {
+    const approved = matrixRecommendation();
+    const diagnosis = matrixDiagnosis(
+      `30000000-0000-4000-8000-0000000000${owner === "customer" ? "61" : "62"}`,
+      "2026-06-10T09:02:00.000Z",
+      "confirmed",
+      owner,
+      undefined,
+      recommendedNextAction,
+    );
+    const review = matrixDiagnosisReview(
+      diagnosis,
+      "approve",
+      owner === "customer" ? "2026-06-10T09:03:00.000Z" : "2026-06-10T09:03:30.000Z",
+    );
+    const input = {
+      ticket,
+      recommendations: [approved],
+      audits: [matrixSubmission(approved.id), matrixResponse(approved.id), diagnosis, review],
+    };
+
+    const lifecycle = buildTicketLifecycleView(input);
+    const workflow = buildTicketWorkflowReadModel(input);
+
+    expect(lifecycle.phase).toBe("verification");
+    expect(lifecycle.fix.state).toBe("none");
+    expect(lifecycle.fix.reasonCodes).toContain("no-platform-fix-required");
+    expect(lifecycle.primaryAction).toMatchObject({
+      kind: "evaluate-ticket",
+      availability: "primary",
+    });
+    expect(lifecycle.actions).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "evaluate-ticket", availability: "primary" }),
+    ]));
+    expect(lifecycle.actions).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "record-fix-available", availability: "primary" }),
+      expect.objectContaining({ kind: "apply-scoped-fix", availability: "primary" }),
+      expect.objectContaining({ kind: "record-fix-ineffective" }),
+    ]));
+    expect(workflow.operatorGuidance.nextAction).toBe("evaluate-ticket");
+    expect(workflow.operatorGuidance.customerNextStep).toBe(recommendedNextAction);
+  });
+
+  it("keeps engineering-owned confirmed diagnoses on the governed awaiting-fix path", () => {
+    const approved = matrixRecommendation();
+    const diagnosis = matrixDiagnosis(
+      "30000000-0000-4000-8000-000000000063",
+      "2026-06-10T09:02:00.000Z",
+      "confirmed",
+      "engineering",
+      undefined,
+      "Apply the governed mitigation.",
+    );
+    const review = matrixDiagnosisReview(diagnosis);
+    const lifecycle = buildTicketLifecycleView({
+      ticket,
+      recommendations: [approved],
+      audits: [matrixSubmission(approved.id), matrixResponse(approved.id), diagnosis, review],
+    });
+
+    expect(lifecycle.phase).toBe("awaiting-fix");
+    expect(lifecycle.fix.state).toBe("awaiting");
+    expect(lifecycle.primaryAction).toMatchObject({
+      kind: "record-fix-available",
+      availability: "primary",
+    });
   });
 });

@@ -219,6 +219,8 @@ export function buildTicketLifecycleView(input: WorkflowLifecycleInput): Lifecyc
     audits: input.audits,
     diagnosis,
     authoritativeDiagnosisId: authoritative?.diagnosisId,
+    authoritativeDiagnosisOwner: authoritative?.diagnosis.owner,
+    authoritativeDiagnosisConfirmed: authoritative?.diagnosis.confidence === "confirmed",
   });
   const phase = phaseForLifecycle({
     ticket: input.ticket,
@@ -310,7 +312,8 @@ function phaseForLifecycle(input: {
     if (input.confirmation.state === "awaiting-evidence" || input.confirmation.state === "awaiting-internal-verification") {
       return "awaiting-confirmation";
     }
-    if (input.fix.state === "awaiting" || input.fix.state === "none") return "awaiting-fix";
+    if (input.fix.state === "awaiting") return "awaiting-fix";
+    if (input.fix.state === "none") return "verification";
     if (input.fix.state === "available" || input.fix.state === "ready-to-apply") return "fix-ready";
     if (input.fix.state === "applied" || input.fix.state === "verification-pending" || input.fix.state === "ineffective") {
       return input.fix.state === "ineffective" && input.fix.diagnosisStillAuthoritative
@@ -434,7 +437,9 @@ function lifecycleActionsForPhase(input: {
       add("record-fix-available", "completed", ["fix-already-available"]);
       break;
     case "verification":
-      add("record-fix-ineffective", "available", ["fix-verification-available"]);
+      if (input.fix.state !== "none") {
+        add("record-fix-ineffective", "available", ["fix-verification-available"]);
+      }
       break;
     case "ready-for-close":
       add("send-customer-response", "completed", ["response-already-sent"]);
@@ -465,6 +470,9 @@ function reasonCodesForPhase(input: {
   if (input.diagnosis.state === "rejected") reasons.push("diagnosis-rejected");
   if (input.diagnosis.state === "stale") reasons.push("diagnosis-stale");
   if (input.diagnosis.state === "invalidated") reasons.push("diagnosis-invalidated");
+  if (input.fix.state === "none" && input.fix.reasonCodes.includes("no-platform-fix-required")) {
+    reasons.push("no-platform-fix-required");
+  }
   if (input.fix.state === "awaiting") reasons.push("fix-not-available");
   if (input.fix.state === "ineffective") reasons.push("fix-ineffective");
   if (input.phase === "evaluation-needed" && reasons.length === 0) reasons.push("evaluation-required");
@@ -560,12 +568,26 @@ function fixProjection(input: {
   audits: readonly AuditEvent[];
   diagnosis: LifecycleView["diagnosis"];
   authoritativeDiagnosisId: string | undefined;
+  authoritativeDiagnosisOwner: DiagnosisContext["owner"] | undefined;
+  authoritativeDiagnosisConfirmed: boolean;
 }): LifecycleView["fix"] {
   const fixPositions = auditCausalPositions(input.audits).filter(({ event }) =>
     ["platform-mitigation-available", "fix-available", "fix-ineffective"].includes(event.action as string),
   );
   const latest = fixPositions.at(-1)?.event;
   if (latest === undefined) {
+    if (
+      input.authoritativeDiagnosisId !== undefined &&
+      input.authoritativeDiagnosisConfirmed &&
+      !diagnosisRequiresPlatformFix(input.authoritativeDiagnosisOwner)
+    ) {
+      return {
+        state: "none",
+        diagnosisId: input.authoritativeDiagnosisId,
+        reasonCodes: ["no-platform-fix-required"],
+        diagnosisStillAuthoritative: input.diagnosis.state === "approved",
+      };
+    }
     return {
       state: input.authoritativeDiagnosisId === undefined ? "none" : "awaiting",
       ...(input.authoritativeDiagnosisId === undefined ? {} : { diagnosisId: input.authoritativeDiagnosisId }),
@@ -594,6 +616,12 @@ function fixProjection(input: {
     reasonCodes: [],
     diagnosisStillAuthoritative: input.diagnosis.state === "approved",
   };
+}
+
+function diagnosisRequiresPlatformFix(
+  owner: DiagnosisContext["owner"] | undefined,
+): boolean {
+  return owner === undefined || owner === "engineering" || owner === "integration-partner";
 }
 
 function responseProjection(input: {

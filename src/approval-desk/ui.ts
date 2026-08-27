@@ -2481,6 +2481,16 @@ export const approvalDeskHtml = `<!doctype html>
             state.operatorGuidance.reason.trim() !== '') {
           return state.operatorGuidance.reason;
         }
+        if (
+          hasLifecycleDescriptor() &&
+          state.lifecycle?.fix?.state === 'none' &&
+          Array.isArray(state.lifecycle?.fix?.reasonCodes) &&
+          state.lifecycle.fix.reasonCodes.includes('no-platform-fix-required') &&
+          typeof current?.recommendedNextAction === 'string' &&
+          current.recommendedNextAction.trim() !== ''
+        ) {
+          return current.recommendedNextAction;
+        }
         if (current?.confidence !== 'confirmed') {
           return 'The likely diagnosis needs more evidence before a fix can be applied.';
         }

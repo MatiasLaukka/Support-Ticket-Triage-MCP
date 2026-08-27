@@ -19,6 +19,21 @@ describe("all-ticket lifecycle audit", () => {
     expect(report.ticketCount).toBe(30);
     expect(report.observations).toHaveLength(30);
     expect(report.lifecycleInvariantPassCount).toBe(30);
+    expect(report.ticketCount).toBe(tickets.length);
+    expect(report.observations).toHaveLength(tickets.length);
+    expect(report.observations.every((observation) => {
+      const lifecyclePrimaryAction = (observation as typeof observation & {
+        lifecyclePrimaryAction?: string;
+      }).lifecyclePrimaryAction;
+      const lifecycleActions = (observation as typeof observation & {
+        lifecycleActions?: Array<{ kind?: string; availability?: string }>;
+      }).lifecycleActions;
+      return typeof lifecyclePrimaryAction === "string" &&
+        Array.isArray(lifecycleActions) &&
+        lifecycleActions.some((action) =>
+          action.kind === lifecyclePrimaryAction && action.availability === "primary"
+        );
+    })).toBe(true);
     expect(report.observations.map(({ ticketId }) => ticketId)).toEqual(
       expect.arrayContaining(["TKT-1001", "TKT-1017", "TKT-1024", "TKT-1030"]),
     );
@@ -36,10 +51,13 @@ describe("all-ticket lifecycle audit", () => {
     expect(report.observations.find(({ ticketId }) => ticketId === "TKT-1001")).toMatchObject({
       lifecycleGate: "evidence-required",
       lifecycleInvariantMismatches: [],
+      lifecyclePhase: "recommendation-review",
+      lifecyclePrimaryAction: "review-recommendation",
     });
     expect(report.observations.find(({ ticketId }) => ticketId === "TKT-1028")).toMatchObject({
       lifecycleGate: "known-event-with-evidence",
       lifecycleInvariantMismatches: [],
+      lifecyclePrimaryAction: "review-recommendation",
     });
   });
 });

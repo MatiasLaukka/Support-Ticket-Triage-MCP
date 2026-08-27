@@ -1258,6 +1258,60 @@ describe("approvalDeskHtml", () => {
     expect(app.requests.some((request) => request.path === "/api/tickets/TKT-1001/fix")).toBe(true);
   });
 
+  it.each([
+    {
+      owner: "customer" as const,
+      nextStep: "Ask the customer to confirm whether the issue still reproduces.",
+    },
+    {
+      owner: "support" as const,
+      nextStep: "Verify the documented support-side action, then confirm the outcome.",
+    },
+  ])("keeps the Action Bar on re-evaluation for a confirmed $owner diagnosis with no platform fix", async ({ owner, nextStep }) => {
+    const view = fixtureDiagnosisView({
+      confidence: "confirmed",
+      owner,
+      recommendedNextAction: nextStep,
+    });
+    const review = {
+      decision: "approve",
+      diagnosisId: view.originalDiagnosis.id,
+      editedDiagnosis: view.originalDiagnosis.after.diagnosis,
+    };
+    const app = await startApprovalDeskApp({
+      ticketDetailRecommendation: {
+        ...fixtureRecommendation,
+        resolution: "approved",
+      },
+      diagnoses: [{ ...view, reviews: [review], latestReview: review }],
+      ticketDetail: {
+        lifecycle: {
+          ...fixtureLifecycle({
+            phase: "verification",
+            primaryAction: "evaluate-ticket",
+            actions: [lifecycleAction("evaluate-ticket", "primary", ["no-platform-fix-required"])],
+          }),
+          fix: {
+            state: "none",
+            reasonCodes: ["no-platform-fix-required"],
+            diagnosisStillAuthoritative: true,
+          },
+          response: { intent: "fix-verification", state: "none" },
+        },
+      },
+    });
+
+    await app.selectFirstTicket();
+
+    expect(app.el("actionBarTitle").textContent).toBe("Re-evaluate");
+    expect(app.el("actionBarHint").textContent).toContain("Re-evaluate the ticket");
+    expect(app.el("createUpdatedRecommendation").hidden).toBe(false);
+    expect(app.el("createUpdatedRecommendation").textContent).toBe("Re-evaluate");
+    expect(app.el("fixButton").hidden).toBe(true);
+    expect(app.el("diagnosisPanel").innerHTML).toContain(nextStep);
+    expect(app.el("diagnosisPanel").innerHTML).not.toContain('data-action="record-fix-available"');
+  });
+
   it("opens Scoped Fix from the action bar when the lifecycle permits applying it", async () => {
     const view = fixtureDiagnosisView({ confidence: "confirmed" });
     const review = {
@@ -5590,15 +5644,23 @@ const fixtureConversationTimeline = [
   },
 ];
 
-function fixtureDiagnosisView(options: { stale?: boolean; id?: string; summary?: string; confidence?: "likely" | "confirmed" } = {}) {
+function fixtureDiagnosisView(options: {
+  stale?: boolean;
+  id?: string;
+  summary?: string;
+  confidence?: "likely" | "confirmed";
+  owner?: "engineering" | "support" | "customer";
+  recommendedNextAction?: string;
+} = {}) {
   const diagnosis = {
     status: "completed",
     causeType: "platform-delay",
     customerSafeSummary: options.summary ?? "Checkout event processing is delayed.",
     evidenceUsed: ["request trace", "affected timestamp"],
     confidence: options.confidence ?? "confirmed",
-    owner: "engineering",
-    recommendedNextAction: "Apply the reviewed platform fix when it is available.",
+    owner: options.owner ?? "engineering",
+    recommendedNextAction:
+      options.recommendedNextAction ?? "Apply the reviewed platform fix when it is available.",
     doNotSay: ["Do not expose internal diagnostics."],
   };
   return {

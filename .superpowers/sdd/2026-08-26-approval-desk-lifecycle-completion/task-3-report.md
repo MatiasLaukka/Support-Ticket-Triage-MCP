@@ -51,3 +51,32 @@ Result: `tsc -p tsconfig.json` completed successfully.
 ## Concerns
 
 - Git reported LF-to-CRLF conversion warnings for the edited tracked files during diff inspection. No whitespace defect is expected, but `git diff --check` should remain the final gate before commit.
+
+## 2026-08-27 follow-up fix round
+
+- Preserved the in-progress mutation reconciliation work in `src/approval-desk/ui.ts` and `test/approval-desk-ui.test.ts` instead of resetting it.
+- Fixed non-lifecycle diagnosis review reconciliation to derive the post-review panel from refreshed authoritative diagnosis state instead of dropping back to an empty normal phase.
+- Preserved scoped-fix inline errors across refresh attempts by keeping the scoped-fix presentation active when a governed fix mutation fails.
+- Re-rendered the customer-reply focus immediately after a replacement evaluation consumes the latest reply, so the action bar reflects the refreshed consumed watermark without waiting for another event.
+- Updated stale UI assertions to match the authoritative-refresh contract and the unchanged legacy non-lifecycle counts.
+
+Follow-up verification:
+
+```text
+npx vitest run test/approval-desk-ui.test.ts --exclude ".worktrees/**"
+```
+
+Result: 180 passed.
+
+```text
+npx vitest run test/approval-desk-ui.test.ts test/approval-desk-http.test.ts test/approval-desk-diagnostic-workflow.test.ts --exclude ".worktrees/**"
+```
+
+Result: 3 files passed; 284 tests passed.
+
+```text
+npm run typecheck
+git diff --check
+```
+
+Result: `tsc -p tsconfig.json` completed successfully; `git diff --check` reported only LF/CRLF conversion warnings and no whitespace errors.

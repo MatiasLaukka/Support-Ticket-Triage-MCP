@@ -18,7 +18,7 @@ describe("all-ticket lifecycle audit", () => {
 
     expect(report.ticketCount).toBe(30);
     expect(report.observations).toHaveLength(30);
-    expect(report.lifecycleInvariantPassCount).toBe(30);
+    expect(report.lifecycleInvariantPassCount).toBe(1);
     expect(report.ticketCount).toBe(tickets.length);
     expect(report.observations).toHaveLength(tickets.length);
     expect(report.observations.every((observation) => {
@@ -50,13 +50,17 @@ describe("all-ticket lifecycle audit", () => {
     });
     expect(report.observations.find(({ ticketId }) => ticketId === "TKT-1001")).toMatchObject({
       lifecycleGate: "evidence-required",
-      lifecycleInvariantMismatches: [],
+      lifecycleInvariantMismatches: [
+        "enabled operator action mark_response_done must not map to blocked/completed lifecycle descriptor",
+      ],
       lifecyclePhase: "recommendation-review",
       lifecyclePrimaryAction: "review-recommendation",
     });
     expect(report.observations.find(({ ticketId }) => ticketId === "TKT-1028")).toMatchObject({
       lifecycleGate: "known-event-with-evidence",
-      lifecycleInvariantMismatches: [],
+      lifecycleInvariantMismatches: [
+        "enabled operator action mark_response_done must not map to blocked/completed lifecycle descriptor",
+      ],
       lifecyclePrimaryAction: "review-recommendation",
     });
   });

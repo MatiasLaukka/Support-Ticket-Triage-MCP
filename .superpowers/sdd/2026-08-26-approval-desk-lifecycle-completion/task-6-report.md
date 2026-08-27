@@ -83,3 +83,29 @@ whitespace errors were reported.
 - Git reports LF-to-CRLF conversion warnings for the edited tracked files in
   this worktree, but the verification commands completed cleanly and
   `git diff --check` reported no whitespace defects.
+
+## Follow-up review finding
+
+The lifecycle audit originally checked only primary-action descriptor
+consistency. It did not flag an enabled operator tool when its canonical
+lifecycle descriptor was `blocked` or `completed`. The audit now maps each
+`unlocksTool` value to its canonical lifecycle action and records that
+contradiction as an invariant mismatch. Regression coverage verifies the
+seeded `mark_response_done`/blocked descriptor mismatch and preserves the
+canonical primary-descriptor checks.
+
+Follow-up verification:
+
+```text
+npx vitest run test/lifecycle-view.test.ts test/all-ticket-lifecycle-audit.test.ts test/approval-desk-ui.test.ts --exclude ".worktrees/**"
+```
+
+Result: 3 files passed; 211 tests passed.
+
+```text
+npm run typecheck
+git diff --check
+```
+
+Result: typecheck completed successfully and diff-check reported no
+whitespace errors.

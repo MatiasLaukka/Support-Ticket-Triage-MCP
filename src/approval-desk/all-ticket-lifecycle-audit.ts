@@ -162,6 +162,16 @@ function lifecycleInvariantFailures(input: {
   )) {
     failures.push("lifecycle primary action must include a primary descriptor");
   }
+  const enabledActionKind = lifecycleActionKindForTool(input.guidance.unlocksTool);
+  const enabledActionDescriptor = enabledActionKind === undefined
+    ? undefined
+    : input.lifecycle.actions.find(({ kind }) => kind === enabledActionKind);
+  if (enabledActionDescriptor !== undefined &&
+    ["blocked", "completed"].includes(enabledActionDescriptor.availability)) {
+    failures.push(
+      `enabled operator action ${input.guidance.unlocksTool} must not map to blocked/completed lifecycle descriptor`,
+    );
+  }
   if (
     input.lifecycle.primaryAction.kind === "none" &&
     !["waiting-for-customer", "resolved"].includes(input.lifecycle.phase)
@@ -169,6 +179,20 @@ function lifecycleInvariantFailures(input: {
     failures.push("only waiting-for-customer or resolved lifecycles may use none as the primary action");
   }
   return failures;
+}
+
+function lifecycleActionKindForTool(
+  tool: ReturnType<typeof buildOperatorGuidance>["unlocksTool"],
+): ReturnType<typeof buildTicketLifecycleView>["actions"][number]["kind"] | undefined {
+  switch (tool) {
+    case "evaluate_ticket": return "evaluate-ticket";
+    case "mark_response_done": return "send-customer-response";
+    case "record_diagnosis": return "record-diagnosis";
+    case "review_diagnosis": return "review-diagnosis";
+    case "mark_fix_available": return "record-fix-available";
+    case "close_ticket": return "resolve-ticket";
+    default: return undefined;
+  }
 }
 
 function compareClassification(

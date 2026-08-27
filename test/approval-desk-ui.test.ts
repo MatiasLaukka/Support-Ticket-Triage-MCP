@@ -4792,6 +4792,171 @@ describe("approvalDeskHtml", () => {
     expect(app.el("createUpdatedRecommendation").textContent).toBe("Evaluate");
   });
 
+  it("requires separate approval and send gestures with authoritative reconciliation between them", async () => {
+    const reviewLifecycle = fixtureLifecycle({
+      phase: "recommendation-review",
+      primaryAction: "review-recommendation",
+      actions: [lifecycleAction("review-recommendation", "primary", ["operator-review"])],
+    });
+    const sendLifecycle = fixtureLifecycle({
+      phase: "response-ready",
+      primaryAction: "send-customer-response",
+      actions: [lifecycleAction("send-customer-response", "primary", ["recommendation-approved"])],
+    });
+    const app = await startApprovalDeskApp({
+      ticketDetailRecommendation: fixtureRecommendation,
+      ticketDetailLifecycleSequence: [reviewLifecycle, sendLifecycle],
+    });
+    await app.selectFirstTicket();
+
+    await app.approve();
+
+    expect(app.requests.filter((request) => request.path.endsWith("/approve"))).toHaveLength(1);
+    expect(app.requests.filter((request) => request.path.endsWith("/mark-sent"))).toHaveLength(0);
+    expect(app.ticketDetailRequests()).toBe(2);
+    expect(app.el("approveButton").textContent).toBe("Send");
+
+    await app.approve();
+
+    expect(app.requests.filter((request) => request.path.endsWith("/approve"))).toHaveLength(1);
+    expect(app.requests.filter((request) => request.path.endsWith("/mark-sent"))).toHaveLength(1);
+  });
+
+  it.each(["blocked", "completed"] as const)(
+    "does not POST a %s governed recommendation review descriptor",
+    async (availability) => {
+      const app = await startApprovalDeskApp({
+        ticketDetailRecommendation: fixtureRecommendation,
+        ticketDetail: {
+          lifecycle: fixtureLifecycle({
+            phase: "evaluation-needed",
+            primaryAction: "evaluate-ticket",
+            actions: [
+              lifecycleAction("evaluate-ticket", "primary"),
+              lifecycleAction("review-recommendation", availability, ["review-not-available"]),
+            ],
+          }),
+        },
+      });
+      await app.selectFirstTicket();
+
+      await app.approve();
+
+      expect(app.requests.some((request) => request.path.endsWith("/approve"))).toBe(false);
+      expect(app.requests.some((request) => request.path.endsWith("/mark-sent"))).toBe(false);
+      expect(app.parsedResult()).toMatchObject({ error: expect.stringContaining("Review not available") });
+    },
+  );
+
+  it.each([
+    ["approve", "review-diagnosis"],
+    ["reject", "reject-diagnosis"],
+    ["revalidate", "revalidate-diagnosis"],
+  ] as const)(
+    "reconciles ticket, diagnoses, lifecycle, guidance, and conversation after diagnosis %s",
+    async (decision, actionKind) => {
+      const diagnosis = fixtureDiagnosisView({ stale: decision === "revalidate" });
+      const app = await startApprovalDeskApp({
+        diagnoses: [diagnosis],
+        ticketDetail: {
+          lifecycle: fixtureLifecycle({
+            phase: "diagnosis-review",
+            primaryAction: actionKind,
+            actions: [lifecycleAction(actionKind, "primary")],
+          }),
+        },
+      });
+      await app.selectFirstTicket();
+      const detailBefore = app.ticketDetailRequests();
+      const diagnosesBefore = app.diagnosisRequests();
+      const queueBefore = app.queueRequests();
+      const evidenceBefore = app.evidenceRequests();
+
+      await app.reviewDiagnosis(decision);
+
+      const reviewRequests = app.requests.filter((request) => request.path.endsWith("/review"));
+      expect(reviewRequests).toHaveLength(1);
+      expect(JSON.parse(String(reviewRequests[0]?.init?.body))).toMatchObject({ decision });
+      expect(app.ticketDetailRequests()).toBe(detailBefore + 1);
+      expect(app.diagnosisRequests()).toBe(diagnosesBefore + 1);
+      expect(app.queueRequests()).toBe(queueBefore + 1);
+      expect(app.evidenceRequests()).toBe(evidenceBefore + 1);
+    },
+  );
+
+  it("refreshes durable state and keeps a stale diagnosis-review error inline", async () => {
+    const app = await startApprovalDeskApp({
+      diagnoses: [fixtureDiagnosisView()],
+      diagnosisReviewPlans: {
+        "TKT-1001": [{
+          error: "The diagnosis review used stale ticket context.",
+          status: 409,
+          code: "STALE_TICKET_CONTEXT",
+        }],
+      },
+      ticketDetailLifecycleSequence: [
+        fixtureLifecycle({
+          phase: "diagnosis-review",
+          primaryAction: "review-diagnosis",
+          actions: [lifecycleAction("review-diagnosis", "primary")],
+        }),
+        fixtureLifecycle({
+          phase: "evaluation-needed",
+          primaryAction: "evaluate-ticket",
+          actions: [lifecycleAction("evaluate-ticket", "primary", ["stale-context"])],
+        }),
+      ],
+    });
+    await app.selectFirstTicket();
+    app.openDiagnosisInspection();
+    const detailBefore = app.ticketDetailRequests();
+    const diagnosesBefore = app.diagnosisRequests();
+    const queueBefore = app.queueRequests();
+    const evidenceBefore = app.evidenceRequests();
+
+    await app.reviewDiagnosis("approve");
+    await app.wait(30);
+
+    expect(app.ticketDetailRequests()).toBe(detailBefore + 1);
+    expect(app.diagnosisRequests()).toBe(diagnosesBefore + 1);
+    expect(app.queueRequests()).toBe(queueBefore + 1);
+    expect(app.evidenceRequests()).toBe(evidenceBefore + 1);
+    expect(app.el("diagnosisPanel").innerHTML).toContain("The diagnosis review used stale ticket context.");
+    expect(app.el("diagnosisPanel").innerHTML).not.toContain('data-diagnosis-phase="inspection"');
+    expect(app.el("actionBarTitle").textContent).toBe("Re-evaluate");
+  });
+
+  it("keeps a double-clicked evaluation single-flight and renders the reconciled lifecycle", async () => {
+    const app = await startApprovalDeskApp({
+      deferRecommendation: true,
+      ticketDetail: {
+        lifecycle: fixtureLifecycle({
+          phase: "evaluation-needed",
+          primaryAction: "evaluate-ticket",
+          actions: [lifecycleAction("evaluate-ticket", "primary")],
+        }),
+      },
+      recommendationLifecycle: fixtureLifecycle({
+        phase: "recommendation-review",
+        primaryAction: "review-recommendation",
+        actions: [lifecycleAction("review-recommendation", "primary")],
+      }),
+    });
+    await app.selectFirstTicket();
+
+    app.createRecommendationWithoutSettling();
+    app.createRecommendationWithoutSettling();
+    await app.wait(2);
+    expect(app.requests.filter((request) => request.path.endsWith("/recommendations"))).toHaveLength(1);
+
+    app.releaseRecommendation();
+    await app.wait(40);
+
+    expect(app.requests.filter((request) => request.path.endsWith("/recommendations"))).toHaveLength(1);
+    expect(app.el("actionBarTitle").textContent).toBe("Review recommendation");
+    expect(app.el("recommendationPanel").innerHTML).toContain(fixtureRecommendation.draftCustomerResponse);
+  });
+
   it("uses customer-friendly predicted reply labels instead of fixture names", () => {
     expect(approvalDeskHtml).toContain("All requested evidence");
     expect(approvalDeskHtml).toContain("Fix verification details");
@@ -5061,6 +5226,8 @@ type FixtureRecommendation = Omit<typeof fixtureRecommendation, "classificationS
 type DiagnosisMutationPlan = {
   delayTicks?: number;
   error?: string;
+  status?: number;
+  code?: string;
   diagnoses?: Array<Record<string, unknown>>;
   auditEvent?: Record<string, unknown>;
   auditEvents?: Array<Record<string, unknown>>;
@@ -5245,7 +5412,7 @@ async function startApprovalDeskApp(options: {
       const plan = options.diagnosisReviewPlans?.[ticketId]?.[requestIndex];
       await settle(plan?.delayTicks ?? options.diagnosisReviewDelayTicks?.[ticketId] ?? 0);
       if (plan?.error !== undefined) {
-        return jsonResponse({ error: { message: plan.error } }, 503);
+        return jsonResponse({ error: { message: plan.error, code: plan.code } }, plan.status ?? 503);
       }
       if (options.diagnosisReviewFailures?.includes(ticketId) === true) {
         return jsonResponse({ error: { message: "Diagnosis review is unavailable." } }, 503);
@@ -5420,6 +5587,9 @@ async function startApprovalDeskApp(options: {
       }, 201);
     }
     if (path === "/api/recommendations/11111111-1111-4111-8111-111111111111/approve") {
+      if (createdRecommendation !== undefined) {
+        createdRecommendation = { ...createdRecommendation, resolution: "approved" };
+      }
       return jsonResponse({
         ticket: { ...fixtureTicket, revision: 1, category: "authentication" },
         auditEvent: { action: "recommendation-approved" },
@@ -5487,6 +5657,9 @@ async function startApprovalDeskApp(options: {
       requests.filter((request) => request.path === "/api/evidence").length,
     queueRequests: () =>
       requests.filter((request) => request.path === "/api/tickets?limit=50")
+        .length,
+    diagnosisRequests: () =>
+      requests.filter((request) => request.path === `/api/tickets/${selectedFixtureTicket.id}/diagnoses`)
         .length,
     ticketDetailRequests: () =>
       requests.filter((request) => request.path === `/api/tickets/${selectedFixtureTicket.id}`)

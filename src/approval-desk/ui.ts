@@ -2729,6 +2729,7 @@ export const approvalDeskHtml = `<!doctype html>
             '<header><h4>Diagnosis</h4><span class="meta">Review the diagnosis before continuing.</span></header>' +
             stale +
             diagnosisClarificationNotice +
+            diagnosisReviewError +
             '<div class="diagnosis-review-grid">' +
               originalTheoryPanel +
               '<div class="card"><h4>Current diagnosis</h4>' +
@@ -2807,6 +2808,7 @@ export const approvalDeskHtml = `<!doctype html>
         const approvedPhase = !historicalDiagnosis && effectivePhase === 'approved'
           ? '<section class="diagnosis-phase-panel" data-diagnosis-phase="approved-diagnosis" aria-label="Approved diagnosis">' +
               '<header><h4>Approved diagnosis</h4><span class="meta">' + escapeHtml(confirmedDiagnosis ? 'Follow the next governed lifecycle step.' : 'More evidence is needed before a fix can be applied.') + '</span></header>' +
+              diagnosisReviewError +
               '<div class="card diagnosis-approved-summary"><h4>Current diagnosis</h4>' +
                 diagnosisStatusChips(current) +
                 '<p>' + escapeHtml(current.customerSafeSummary ?? 'No approved diagnosis summary is available.') + '</p>' +
@@ -2921,55 +2923,79 @@ export const approvalDeskHtml = `<!doctype html>
         if (state.diagnosisReviewRationale.trim() !== '') {
           body.rationale = state.diagnosisReviewRationale.trim();
         }
-        let data;
-        try {
-          data = await requestJson('/api/tickets/' + encodeURIComponent(ticketId) + '/diagnoses/' + encodeURIComponent(diagnosisId) + '/review', {
+        if (!hasLifecycleDescriptor()) {
+          let data;
+          try {
+            data = await requestJson('/api/tickets/' + encodeURIComponent(ticketId) + '/diagnoses/' + encodeURIComponent(diagnosisId) + '/review', {
+              method: 'POST',
+              body: JSON.stringify(body)
+            }, { writeErrorToResult: false });
+          } catch (error) {
+            if (isCurrentDiagnosisMutation(ticketId, diagnosisId, ticketRequestId, mutationToken)) {
+              state.diagnosisReviewError = error instanceof Error ? error.message : 'The diagnosis review request failed.';
+              renderDiagnosisPanel();
+              setResult({ error: error instanceof Error ? error.message : 'Request failed.' });
+            }
+            return;
+          }
+          if (!isCurrentDiagnosisMutation(ticketId, diagnosisId, ticketRequestId, mutationToken)) {
+            return;
+          }
+          adoptLifecycle(data);
+          state.diagnosisReviewError = null;
+          state.diagnoses = Array.isArray(data.diagnoses) ? data.diagnoses : state.diagnoses;
+          state.diagnosisDraft = null;
+          state.diagnosisDraftId = null;
+          state.diagnosisReviewRationale = '';
+          state.diagnosisReviewDecision = null;
+          state.diagnosisImpact = { rationale: '', selectedTicketIds: [], ticketReasons: {} };
+          state.diagnosisFixResults = [];
+          const resultingLifecycle = data.lifecycle;
+          state.diagnosisUiPhase = resultingLifecycle === undefined
+            ? (decision === 'approve' ? 'approved' : 'diagnosis')
+            : resultingLifecycle.diagnosis?.state === 'approved'
+              ? 'approved'
+              : resultingLifecycle.phase === 'diagnosis-review'
+                ? 'diagnosis'
+                : 'normal';
+          renderDiagnosisPanel();
+          renderRecommendationStageControls();
+          setResult(data);
+          return;
+        }
+        await runGovernedMutation(mutationKind, async function () {
+          return requestJson('/api/tickets/' + encodeURIComponent(ticketId) + '/diagnoses/' + encodeURIComponent(diagnosisId) + '/review', {
             method: 'POST',
             body: JSON.stringify(body)
           }, { writeErrorToResult: false });
-        } catch (error) {
-          if (isCurrentDiagnosisMutation(ticketId, diagnosisId, ticketRequestId, mutationToken)) {
-            const message = error instanceof Error ? error.message : 'The diagnosis review request failed.';
-            try {
-              await selectTicket(ticketId, { waitForDiagnoses: true });
-            } catch (_) {
-              // Preserve the original domain failure when reconciliation is unavailable.
-            }
-            if (state.selectedTicket?.id === ticketId) {
-              state.diagnosisUiPhase = 'inspection';
-              state.diagnosisReviewError = message;
-              renderDiagnosisPanel();
-            }
-            setResult({ error: error instanceof Error ? error.message : 'Request failed.' });
-            if (state.selectedTicket?.id === ticketId) {
-              renderDiagnosisPanel();
-            }
+        }, {
+          waitForDiagnoses: true,
+          isCurrent: function () {
+            return isCurrentDiagnosisMutation(ticketId, diagnosisId, ticketRequestId, mutationToken);
+          },
+          setInlineError: function (message) {
+            state.diagnosisReviewError = message;
+          },
+          clearInlineError: function () {
+            state.diagnosisReviewError = null;
+          },
+          render: function () {
+            renderDiagnosisPanel();
+          },
+          beforeRefreshSuccess: function () {
+            state.diagnosisDraft = null;
+            state.diagnosisDraftId = null;
+            state.diagnosisReviewRationale = '';
+            state.diagnosisReviewDecision = null;
+            state.diagnosisImpact = { rationale: '', selectedTicketIds: [], ticketReasons: {} };
+            state.diagnosisFixResults = [];
+          },
+          afterRefresh: function () {
+            renderDiagnosisPanel();
+            renderRecommendationStageControls();
+            updateControls();
           }
-          return;
-        }
-        if (!isCurrentDiagnosisMutation(ticketId, diagnosisId, ticketRequestId, mutationToken)) {
-          return;
-        }
-        adoptLifecycle(data);
-        state.diagnosisReviewError = null;
-        state.diagnoses = Array.isArray(data.diagnoses) ? data.diagnoses : state.diagnoses;
-        state.diagnosisDraft = null;
-        state.diagnosisDraftId = null;
-        state.diagnosisReviewRationale = '';
-        state.diagnosisReviewDecision = null;
-        state.diagnosisImpact = { rationale: '', selectedTicketIds: [], ticketReasons: {} };
-        state.diagnosisFixResults = [];
-        const resultingLifecycle = data.lifecycle;
-        state.diagnosisUiPhase = resultingLifecycle === undefined
-          ? (decision === 'approve' ? 'approved' : 'diagnosis')
-          : resultingLifecycle.diagnosis?.state === 'approved'
-            ? 'approved'
-            : resultingLifecycle.phase === 'diagnosis-review'
-              ? 'diagnosis'
-              : 'normal';
-        renderDiagnosisPanel();
-        renderRecommendationStageControls();
-        setResult(data);
+        });
       }
 
       async function applySelectedDiagnosisFix() {
@@ -2994,9 +3020,54 @@ export const approvalDeskHtml = `<!doctype html>
         state.diagnosisFixError = null;
         state.diagnosisFixPending = true;
         renderDiagnosisPanel();
-        let data;
-        try {
-          data = await requestJson('/api/tickets/' + encodeURIComponent(ticketId) + '/diagnoses/' + encodeURIComponent(diagnosisId) + '/fix', {
+        if (!hasLifecycleDescriptor()) {
+          let data;
+          try {
+            data = await requestJson('/api/tickets/' + encodeURIComponent(ticketId) + '/diagnoses/' + encodeURIComponent(diagnosisId) + '/fix', {
+              method: 'POST',
+              body: JSON.stringify({
+                actor,
+                impactSet: {
+                  actor,
+                  rationale: impactRationale,
+                  tickets: impactTicketIds.map(function (impactTicketId) {
+                    return {
+                      ticketId: impactTicketId,
+                      reason: impactTicketId === ticketId
+                        ? sourceReason
+                        : state.diagnosisImpact.ticketReasons?.[impactTicketId] ?? ''
+                    };
+                  })
+                }
+              })
+            }, { writeErrorToResult: false });
+          } catch (error) {
+            if (isCurrentDiagnosisMutation(ticketId, diagnosisId, ticketRequestId, mutationToken)) {
+              state.diagnosisFixPending = false;
+              state.diagnosisFixError = error instanceof Error ? error.message : 'The scoped fix request failed.';
+              renderDiagnosisPanel();
+              setResult({ error: error instanceof Error ? error.message : 'Request failed.' });
+            }
+            return;
+          }
+          if (!isCurrentDiagnosisMutation(ticketId, diagnosisId, ticketRequestId, mutationToken)) {
+            return;
+          }
+          adoptLifecycle(data);
+          state.diagnosisFixPending = false;
+          state.diagnosisFixError = null;
+          state.diagnosisFixResults = Array.isArray(data.auditEvents) ? data.auditEvents : [];
+          state.diagnosisImpact = { rationale: '', selectedTicketIds: [], ticketReasons: {} };
+          state.diagnosisDraft = null;
+          state.diagnosisDraftId = null;
+          state.diagnosisReviewRationale = '';
+          state.diagnosisUiPhase = 'normal';
+          await refreshSelectedTicketQueueAndEvidence({ waitForDiagnoses: true });
+          setResult(data);
+          return;
+        }
+        await runGovernedMutation('apply-scoped-fix', async function () {
+          return requestJson('/api/tickets/' + encodeURIComponent(ticketId) + '/diagnoses/' + encodeURIComponent(diagnosisId) + '/fix', {
             method: 'POST',
             body: JSON.stringify({
               actor,
@@ -3014,29 +3085,36 @@ export const approvalDeskHtml = `<!doctype html>
               }
             })
           }, { writeErrorToResult: false });
-        } catch (error) {
-          if (isCurrentDiagnosisMutation(ticketId, diagnosisId, ticketRequestId, mutationToken)) {
+        }, {
+          waitForDiagnoses: true,
+          isCurrent: function () {
+            return isCurrentDiagnosisMutation(ticketId, diagnosisId, ticketRequestId, mutationToken);
+          },
+          setInlineError: function (message) {
             state.diagnosisFixPending = false;
-            state.diagnosisFixError = error instanceof Error ? error.message : 'The scoped fix request failed.';
+            state.diagnosisFixError = message;
+          },
+          clearInlineError: function () {
+            state.diagnosisFixError = null;
+          },
+          beforeRefreshSuccess: function (data) {
+            state.diagnosisFixPending = false;
+            state.diagnosisFixResults = Array.isArray(data.auditEvents) ? data.auditEvents : [];
+            state.diagnosisImpact = { rationale: '', selectedTicketIds: [], ticketReasons: {} };
+            state.diagnosisDraft = null;
+            state.diagnosisDraftId = null;
+            state.diagnosisReviewRationale = '';
+            state.diagnosisUiPhase = 'normal';
+          },
+          afterRefresh: function (result) {
+            if (result.error === null && state.selectedTicket?.id === ticketId && lifecycleActionIsAvailable('apply-scoped-fix')) {
+              state.diagnosisUiPhase = 'fix';
+            }
             renderDiagnosisPanel();
-            setResult({ error: error instanceof Error ? error.message : 'Request failed.' });
+            renderRecommendationStageControls();
+            updateControls();
           }
-          return;
-        }
-        if (!isCurrentDiagnosisMutation(ticketId, diagnosisId, ticketRequestId, mutationToken)) {
-          return;
-        }
-        adoptLifecycle(data);
-        state.diagnosisFixPending = false;
-        state.diagnosisFixError = null;
-        state.diagnosisFixResults = Array.isArray(data.auditEvents) ? data.auditEvents : [];
-        state.diagnosisImpact = { rationale: '', selectedTicketIds: [], ticketReasons: {} };
-        state.diagnosisDraft = null;
-        state.diagnosisDraftId = null;
-        state.diagnosisReviewRationale = '';
-        state.diagnosisUiPhase = 'normal';
-        await refreshSelectedTicketQueueAndEvidence({ waitForDiagnoses: true });
-        setResult(data);
+        });
       }
 
       function createRecommendationLabel() {
@@ -3407,6 +3485,8 @@ export const approvalDeskHtml = `<!doctype html>
           (approvedWorkflow && isCurrentRecommendationSent());
         const primaryActionLabel = reviewGateActive
           ? 'Review'
+          : hasLifecycleDescriptor() && state.lifecycle?.primaryAction?.kind === 'send-customer-response'
+            ? 'Send'
           : isCollectingEvidenceWorkflow()
             ? 'Send'
             : 'Done';
@@ -3415,8 +3495,10 @@ export const approvalDeskHtml = `<!doctype html>
         els.approveButton.title = reviewGateActive
           ? 'Review the required diagnosis or pattern action before continuing'
           : primaryActionLabel === 'Send'
-            ? 'Approve and send the evidence request to the customer'
-          : 'Mark task done';
+            ? hasLifecycleDescriptor() && state.lifecycle?.primaryAction?.kind === 'send-customer-response'
+              ? 'Send the approved response to the customer'
+              : 'Approve and send the evidence request to the customer'
+            : 'Mark task done';
         els.startRejectButton.hidden = suppressGenericActions || !hasRecommendation || approvedWorkflow || closeReady || reviewGateActive;
         els.backToRecommendation.hidden = !(hasRecommendation && state.stage === 'approval');
         els.decisionChips.hidden = confirmedDiagnosisPresentation;
@@ -3554,7 +3636,7 @@ export const approvalDeskHtml = `<!doctype html>
           (state.diagnosisUiPhase === 'normal' || state.diagnosisUiPhase === 'auto')) {
           return state.lifecycle?.phase === 'awaiting-confirmation'
             ? 'Waiting for confirmation'
-            : 'Diagnosis update needed';
+            : 'Re-evaluate';
         }
         if (state.diagnosisUiPhase !== 'normal' && selectedDiagnosisView() !== null) {
           return 'Diagnosis';
@@ -3780,7 +3862,8 @@ export const approvalDeskHtml = `<!doctype html>
       function shouldShowMarkSentAction() {
         const summary = state.selectedTicket?.recommendationSummary ?? {};
         const approved = state.recommendation?.resolution === 'approved' || summary.latestResolution === 'approved';
-        return approved && !isCurrentRecommendationSent();
+        return (approved || state.lifecycle?.primaryAction?.kind === 'send-customer-response') &&
+          !isCurrentRecommendationSent();
       }
 
       function shouldShowCreateUpdatedRecommendation() {
@@ -3937,7 +4020,7 @@ export const approvalDeskHtml = `<!doctype html>
                 hint: 'Evaluate the current confirmation evidence before continuing.'
               }
             : {
-                title: 'Diagnosis update needed',
+                title: 'Re-evaluate',
                 hint: 'Re-evaluate the ticket after clarification or the rejected diagnosis.'
               };
         }
@@ -4631,21 +4714,36 @@ export const approvalDeskHtml = `<!doctype html>
         if (Object.keys(fieldOverrides).length > 0) {
           body.fieldOverrides = fieldOverrides;
         }
-        const approvedRecommendation = state.recommendation;
-        const data = await requestJson('/api/recommendations/' + encodeURIComponent(state.recommendation.id) + '/approve', {
-          method: 'POST',
-          body: JSON.stringify(body)
+        if (!hasLifecycleDescriptor()) {
+          const approvedRecommendation = state.recommendation;
+          const data = await requestJson('/api/recommendations/' + encodeURIComponent(state.recommendation.id) + '/approve', {
+            method: 'POST',
+            body: JSON.stringify(body)
+          });
+          state.recommendation = { ...approvedRecommendation, resolution: 'approved' };
+          state.stage = 'approved';
+          state.selectedTicket = withRecommendationSummary(data.ticket, state.recommendation, 'draft-ready');
+          replaceTicket(state.selectedTicket);
+          resetApprovalControls();
+          renderTicket();
+          renderTicketList();
+          renderRecommendation();
+          await loadMetrics(data);
+          await refreshEvidenceBestEffort();
+          return;
+        }
+        await runGovernedMutation('review-recommendation', async function () {
+          return requestJson('/api/recommendations/' + encodeURIComponent(state.recommendation.id) + '/approve', {
+            method: 'POST',
+            body: JSON.stringify(body)
+          }, { writeErrorToResult: false });
+        }, {
+          waitForDiagnoses: true,
+          afterSuccess: async function (data) {
+            resetApprovalControls();
+            await loadMetrics(data);
+          }
         });
-        state.recommendation = { ...approvedRecommendation, resolution: 'approved' };
-        state.stage = 'approved';
-        state.selectedTicket = withRecommendationSummary(data.ticket, state.recommendation, 'draft-ready');
-        replaceTicket(state.selectedTicket);
-        resetApprovalControls();
-        renderTicket();
-        renderTicketList();
-        renderRecommendation();
-        await loadMetrics(data);
-        await refreshEvidenceBestEffort();
       }
 
       async function rejectRecommendation() {
@@ -4712,83 +4810,122 @@ export const approvalDeskHtml = `<!doctype html>
         if (state.recommendation === null || state.selectedTicket === null) {
           return;
         }
-        const recommendationToComplete = state.recommendation;
-        const ticketId = state.selectedTicket.id;
-        const actor = els.actor.value.trim() || 'approval-desk';
-        if (!isApprovedWorkflow()) {
-          const approvedFields = selectedFields();
-          const body = {
-            ticketId,
-            expectedRevision: recommendationToComplete.sourceRevision,
-            approvedFields,
-            actor,
-            confirm: true
-          };
-          if (approvedFields.includes('customerResponse')) {
-            body.editedCustomerResponse = els.editedCustomerResponse.value.trim();
-          }
-          const fieldOverrides = collectFieldOverrides(approvedFields);
-          if (Object.keys(fieldOverrides).length > 0) {
-            body.fieldOverrides = fieldOverrides;
-          }
-          const approvalData = await requestJson('/api/recommendations/' + encodeURIComponent(recommendationToComplete.id) + '/approve', {
-            method: 'POST',
-            body: JSON.stringify(body)
-          });
-          state.recommendation = { ...recommendationToComplete, resolution: 'approved' };
-          state.stage = 'approved';
-          state.selectedTicket = withRecommendationSummary(approvalData.ticket, state.recommendation, 'draft-ready');
-          replaceTicket(state.selectedTicket);
-          resetApprovalControls();
-        }
-        if (!isCurrentRecommendationSentFor(recommendationToComplete.id)) {
-          const sentData = await requestJson('/api/recommendations/' + encodeURIComponent(recommendationToComplete.id) + '/mark-sent', {
-            method: 'POST',
-            body: JSON.stringify({
+        if (!hasLifecycleDescriptor()) {
+          const recommendationToComplete = state.recommendation;
+          const ticketId = state.selectedTicket.id;
+          const actor = els.actor.value.trim() || 'approval-desk';
+          if (!isApprovedWorkflow()) {
+            const approvedFields = selectedFields();
+            const body = {
               ticketId,
+              expectedRevision: recommendationToComplete.sourceRevision,
+              approvedFields,
               actor,
-              automaticReplyEnabled: !els.disableAutomaticReplies.checked
-            })
-          });
-          els.replyComposer.open = false;
-          setResult(sentData);
-          await refreshSelectedTicketQueueAndEvidence();
-          await loadMetrics(sentData);
+              confirm: true
+            };
+            if (approvedFields.includes('customerResponse')) {
+              body.editedCustomerResponse = els.editedCustomerResponse.value.trim();
+            }
+            const fieldOverrides = collectFieldOverrides(approvedFields);
+            if (Object.keys(fieldOverrides).length > 0) {
+              body.fieldOverrides = fieldOverrides;
+            }
+            const approvalData = await requestJson('/api/recommendations/' + encodeURIComponent(recommendationToComplete.id) + '/approve', {
+              method: 'POST',
+              body: JSON.stringify(body)
+            });
+            state.recommendation = { ...recommendationToComplete, resolution: 'approved' };
+            state.stage = 'approved';
+            state.selectedTicket = withRecommendationSummary(approvalData.ticket, state.recommendation, 'draft-ready');
+            replaceTicket(state.selectedTicket);
+            resetApprovalControls();
+          }
+          if (!isCurrentRecommendationSentFor(recommendationToComplete.id)) {
+            const sentData = await requestJson('/api/recommendations/' + encodeURIComponent(recommendationToComplete.id) + '/mark-sent', {
+              method: 'POST',
+              body: JSON.stringify({
+                ticketId,
+                actor,
+                automaticReplyEnabled: !els.disableAutomaticReplies.checked
+              })
+            });
+            els.replyComposer.open = false;
+            setResult(sentData);
+            await refreshSelectedTicketQueueAndEvidence();
+            await loadMetrics(sentData);
+            return;
+          }
+          renderTicket();
+          renderTicketList();
+          renderRecommendation();
           return;
         }
-        renderTicket();
-        renderTicketList();
-        renderRecommendation();
+        if (isApprovedWorkflow()) {
+          await markResponseSent();
+          return;
+        }
+        await approveRecommendation();
       }
 
       async function markResponseSent() {
         if (state.recommendation === null || state.selectedTicket === null) {
           return;
         }
-        const data = await requestJson('/api/recommendations/' + encodeURIComponent(state.recommendation.id) + '/mark-sent', {
-          method: 'POST',
-          body: JSON.stringify({
-            ticketId: state.selectedTicket.id,
-            actor: els.actor.value.trim() || 'approval-desk',
-            automaticReplyEnabled: !els.disableAutomaticReplies.checked
-          })
+        if (!hasLifecycleDescriptor()) {
+          const data = await requestJson('/api/recommendations/' + encodeURIComponent(state.recommendation.id) + '/mark-sent', {
+            method: 'POST',
+            body: JSON.stringify({
+              ticketId: state.selectedTicket.id,
+              actor: els.actor.value.trim() || 'approval-desk',
+              automaticReplyEnabled: !els.disableAutomaticReplies.checked
+            })
+          });
+          setResult(data);
+          await refreshSelectedTicketQueueAndEvidence();
+          return;
+        }
+        await runGovernedMutation('send-customer-response', async function () {
+          return requestJson('/api/recommendations/' + encodeURIComponent(state.recommendation.id) + '/mark-sent', {
+            method: 'POST',
+            body: JSON.stringify({
+              ticketId: state.selectedTicket.id,
+              actor: els.actor.value.trim() || 'approval-desk',
+              automaticReplyEnabled: !els.disableAutomaticReplies.checked
+            })
+          }, { writeErrorToResult: false });
+        }, {
+          waitForDiagnoses: true,
+          afterSuccess: function () {
+            els.replyComposer.open = false;
+          }
         });
-        setResult(data);
-        await refreshSelectedTicketQueueAndEvidence();
       }
 
       async function recordDiagnosis() {
         if (state.selectedTicket === null || !lifecycleMutationAvailable('record-diagnosis')) {
           return;
         }
-        const data = await requestJson('/api/tickets/' + encodeURIComponent(state.selectedTicket.id) + '/diagnosis', {
-          method: 'POST',
-          body: JSON.stringify({
-            actor: els.actor.value.trim() || 'approval-desk'
-          })
+        if (!hasLifecycleDescriptor()) {
+          const data = await requestJson('/api/tickets/' + encodeURIComponent(state.selectedTicket.id) + '/diagnosis', {
+            method: 'POST',
+            body: JSON.stringify({
+              actor: els.actor.value.trim() || 'approval-desk'
+            })
+          });
+          setResult(data);
+          await refreshSelectedTicketQueueAndEvidence();
+          return;
+        }
+        await runGovernedMutation('record-diagnosis', async function () {
+          return requestJson('/api/tickets/' + encodeURIComponent(state.selectedTicket.id) + '/diagnosis', {
+            method: 'POST',
+            body: JSON.stringify({
+              actor: els.actor.value.trim() || 'approval-desk'
+            })
+          }, { writeErrorToResult: false });
+        }, {
+          waitForDiagnoses: true
         });
-        setResult(data);
-        await refreshSelectedTicketQueueAndEvidence();
       }
 
       async function recordFix() {
@@ -4796,36 +4933,74 @@ export const approvalDeskHtml = `<!doctype html>
           return;
         }
         const ticketId = state.selectedTicket.id;
-        const data = await requestJson('/api/tickets/' + encodeURIComponent(ticketId) + '/fix', {
-          method: 'POST',
-          body: JSON.stringify({
-            actor: els.actor.value.trim() || 'approval-desk'
-          })
-        });
-        setResult(data);
-        state.diagnosisUiPhase = 'normal';
-        await refreshSelectedTicketQueueAndEvidence();
-        if (state.selectedTicket?.id === ticketId &&
-            lifecycleActionIsAvailable('apply-scoped-fix')) {
-          state.diagnosisUiPhase = 'fix';
-          renderDiagnosisPanel();
-          renderRecommendationStageControls();
-          updateControls();
+        if (!hasLifecycleDescriptor()) {
+          const data = await requestJson('/api/tickets/' + encodeURIComponent(ticketId) + '/fix', {
+            method: 'POST',
+            body: JSON.stringify({
+              actor: els.actor.value.trim() || 'approval-desk'
+            })
+          });
+          setResult(data);
+          state.diagnosisUiPhase = 'normal';
+          await refreshSelectedTicketQueueAndEvidence();
+          if (state.selectedTicket?.id === ticketId &&
+              lifecycleActionIsAvailable('apply-scoped-fix')) {
+            state.diagnosisUiPhase = 'fix';
+            renderDiagnosisPanel();
+            renderRecommendationStageControls();
+            updateControls();
+          }
+          return;
         }
+        await runGovernedMutation('record-fix-available', async function () {
+          return requestJson('/api/tickets/' + encodeURIComponent(ticketId) + '/fix', {
+            method: 'POST',
+            body: JSON.stringify({
+              actor: els.actor.value.trim() || 'approval-desk'
+            })
+          }, { writeErrorToResult: false });
+        }, {
+          waitForDiagnoses: true,
+          beforeRefreshSuccess: function () {
+            state.diagnosisUiPhase = 'normal';
+          },
+          afterRefresh: function (result) {
+            if (result.error === null && state.selectedTicket?.id === ticketId &&
+                lifecycleActionIsAvailable('apply-scoped-fix')) {
+              state.diagnosisUiPhase = 'fix';
+              renderDiagnosisPanel();
+              renderRecommendationStageControls();
+              updateControls();
+            }
+          }
+        });
       }
 
       async function closeTicket() {
         if (state.selectedTicket === null || !lifecycleMutationAvailable('resolve-ticket')) {
           return;
         }
-        const data = await requestJson('/api/tickets/' + encodeURIComponent(state.selectedTicket.id) + '/close', {
-          method: 'POST',
-          body: JSON.stringify({
-            actor: els.actor.value.trim() || 'approval-desk'
-          })
+        if (!hasLifecycleDescriptor()) {
+          const data = await requestJson('/api/tickets/' + encodeURIComponent(state.selectedTicket.id) + '/close', {
+            method: 'POST',
+            body: JSON.stringify({
+              actor: els.actor.value.trim() || 'approval-desk'
+            })
+          });
+          setResult(data);
+          await refreshSelectedTicketQueueAndEvidence();
+          return;
+        }
+        await runGovernedMutation('resolve-ticket', async function () {
+          return requestJson('/api/tickets/' + encodeURIComponent(state.selectedTicket.id) + '/close', {
+            method: 'POST',
+            body: JSON.stringify({
+              actor: els.actor.value.trim() || 'approval-desk'
+            })
+          }, { writeErrorToResult: false });
+        }, {
+          waitForDiagnoses: true
         });
-        setResult(data);
-        await refreshSelectedTicketQueueAndEvidence();
       }
 
       async function persistDemoCustomerReply(value) {
@@ -4899,6 +5074,90 @@ export const approvalDeskHtml = `<!doctype html>
         }
         await loadQueue();
         await refreshEvidenceBestEffort();
+      }
+
+      function governedMutationUnavailableMessage(kind, fallbackMessage) {
+        const message = lifecycleActionReason(kind) || fallbackMessage || 'This action is not available in the current lifecycle state.';
+        return message.length === 0
+          ? message
+          : message.charAt(0).toUpperCase() + message.slice(1);
+      }
+
+      async function refreshGovernedMutationState(options) {
+        const selectedId = state.selectedTicket?.id;
+        const queueRefresh = loadQueue();
+        const evidenceRefresh = refreshEvidenceBestEffort();
+        if (selectedId !== undefined) {
+          await selectTicket(selectedId, { waitForDiagnoses: options?.waitForDiagnoses === true });
+        }
+        await queueRefresh;
+        await evidenceRefresh;
+      }
+
+      async function runGovernedMutation(kind, post, options) {
+        if (state.selectedTicket === null) {
+          return null;
+        }
+        if (hasLifecycleDescriptor() && !lifecycleActionIsAvailable(kind)) {
+          const message = governedMutationUnavailableMessage(kind, options?.blockedMessage);
+          if (typeof options?.setInlineError === 'function') {
+            options.setInlineError(message);
+          }
+          if (typeof options?.render === 'function') {
+            options.render();
+          }
+          setResult({ error: message });
+          return null;
+        }
+        if (typeof options?.isCurrent === 'function' && !options.isCurrent()) {
+          return null;
+        }
+        const ticketId = state.selectedTicket.id;
+        let data = null;
+        let mutationError = null;
+        try {
+          data = await post();
+        } catch (error) {
+          mutationError = error instanceof Error ? error : new Error('Request failed.');
+        }
+        if (typeof options?.isCurrent === 'function' && !options.isCurrent()) {
+          return null;
+        }
+        if (mutationError === null) {
+          if (typeof options?.clearInlineError === 'function') {
+            options.clearInlineError();
+          }
+          if (typeof options?.beforeRefreshSuccess === 'function') {
+            options.beforeRefreshSuccess(data);
+          }
+        } else if (typeof options?.setInlineError === 'function') {
+          options.setInlineError(mutationError.message, mutationError);
+        }
+        try {
+          await refreshGovernedMutationState({ waitForDiagnoses: options?.waitForDiagnoses === true });
+        } catch (refreshError) {
+          if (mutationError === null) {
+            throw refreshError;
+          }
+        }
+        if (typeof options?.isCurrent === 'function' && !options.isCurrent()) {
+          return null;
+        }
+        if (state.selectedTicket?.id === ticketId && typeof options?.afterRefresh === 'function') {
+          options.afterRefresh({ data, error: mutationError });
+        }
+        if (mutationError !== null) {
+          setResult({ error: mutationError.message, code: mutationError.code });
+          return null;
+        }
+        if (typeof options?.afterSuccess === 'function') {
+          await options.afterSuccess(data);
+          if (typeof options?.isCurrent === 'function' && !options.isCurrent()) {
+            return null;
+          }
+        }
+        setResult(data);
+        return data;
       }
 
       function presentationPhaseAfterBack(phase) {
@@ -5040,7 +5299,8 @@ export const approvalDeskHtml = `<!doctype html>
       function isApprovedWorkflow() {
         return state.stage === 'approved' ||
           state.recommendation?.resolution === 'approved' ||
-          state.selectedTicket?.recommendationSummary?.latestResolution === 'approved';
+          state.selectedTicket?.recommendationSummary?.latestResolution === 'approved' ||
+          state.lifecycle?.primaryAction?.kind === 'send-customer-response';
       }
 
       function isCollectingEvidenceWorkflow() {

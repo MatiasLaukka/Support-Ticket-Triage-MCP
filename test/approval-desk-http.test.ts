@@ -910,6 +910,102 @@ describe("createApprovalDeskHttpServer", () => {
     });
   });
 
+  it("includes lifecycle summaries in mixed queue responses and aligns them with detail lifecycles", async () => {
+    const { deps, json } = await startFixture();
+
+    await recordCurrentDiagnosis(deps, "TKT-1003");
+    const fixReadyDiagnosis = await recordCurrentDiagnosis(deps, "TKT-1001");
+    await approveLatestDiagnosis(deps, "TKT-1001");
+    await deps.audits.append(AuditEventSchema.parse({
+      id: "92000000-0000-4000-8000-000000000001",
+      timestamp: "2026-06-10T09:04:00.000Z",
+      actor: "product-support",
+      action: "platform-mitigation-available",
+      ticketId: "TKT-1001",
+      before: { diagnosisId: fixReadyDiagnosis.id },
+      after: {
+        eventId: "EVT-2026-06-10-WEBHOOK-LATENCY",
+        status: "available",
+      },
+      rationale: "The scoped platform mitigation is now available.",
+      knowledgeArticleIds: [],
+      result: "success",
+    }));
+
+    await seedReadyToCloseWorkflow(deps, "TKT-1007");
+    await seedReadyToCloseWorkflow(deps, "TKT-1002", {
+      recommendationId: "88888888-8888-4888-8888-888888888889",
+      submissionAuditId: "88888888-8888-4888-8888-888888888891",
+      sentAuditId: "88888888-8888-4888-8888-888888888892",
+    });
+    const closeResolved = await json("/api/tickets/TKT-1002/close", {
+      method: "POST",
+      body: JSON.stringify({ actor: "matias-reviewer" }),
+    });
+    expect(closeResolved.status, JSON.stringify(closeResolved.body)).toBe(200);
+
+    const list = await json("/api/tickets?limit=20");
+    expect(list.status).toBe(200);
+
+    const expectedSummaries = new Map([
+      ["TKT-1005", { phase: "evaluation-needed", primaryAction: "evaluate-ticket" }],
+      ["TKT-1003", { phase: "diagnosis-review", primaryAction: "review-diagnosis" }],
+      ["TKT-1001", { phase: "fix-ready", primaryAction: "apply-scoped-fix" }],
+      ["TKT-1007", { phase: "ready-for-close", primaryAction: "resolve-ticket" }],
+      ["TKT-1002", { phase: "resolved", primaryAction: "none" }],
+    ] as const);
+
+    const detailResponses = await Promise.all(
+      [...expectedSummaries.keys()].map(async (ticketId) => [
+        ticketId,
+        await json(`/api/tickets/${ticketId}`),
+      ] as const),
+    );
+    const detailByTicket = new Map(
+      detailResponses.map(([ticketId, detail]) => {
+        expect(detail.status, JSON.stringify(detail.body)).toBe(200);
+        return [ticketId, detail.body] as const;
+      }),
+    );
+
+    for (const [ticketId, expected] of expectedSummaries) {
+      const item = list.body.items.find((ticket: any) => ticket.id === ticketId);
+      expect(item).toBeDefined();
+      expect(item.lifecycleSummary).toMatchObject({
+        phase: expect.any(String),
+        primaryAction: expect.any(String),
+        reasonCodes: expect.any(Array),
+      });
+      expect(item.lifecycleSummary).toMatchObject(expected);
+
+      const detail = detailByTicket.get(ticketId)!;
+      expect(item.lifecycleSummary).toEqual({
+        phase: detail.lifecycle.phase,
+        primaryAction: detail.lifecycle.primaryAction.kind,
+        reasonCodes: detail.lifecycle.primaryAction.reasonCodes,
+      });
+    }
+
+    expect(
+      list.body.items.find((ticket: any) => ticket.id === "TKT-1001")?.lifecycleSummary,
+    ).toMatchObject({
+      phase: "fix-ready",
+      primaryAction: "apply-scoped-fix",
+    });
+    expect(
+      list.body.items.find((ticket: any) => ticket.id === "TKT-1007")?.lifecycleSummary,
+    ).toMatchObject({
+      phase: "ready-for-close",
+      primaryAction: "resolve-ticket",
+    });
+    expect(
+      list.body.items.find((ticket: any) => ticket.id === "TKT-1002")?.lifecycleSummary,
+    ).toMatchObject({
+      phase: "resolved",
+      primaryAction: "none",
+    });
+  });
+
   it("includes latest recommendation in ticket detail responses", async () => {
     const { json } = await startFixture();
     const created = await json("/api/tickets/TKT-1005/recommendations", {
@@ -4809,10 +4905,19 @@ async function ticketRevision(
 async function seedReadyToCloseWorkflow(
   deps: Awaited<ReturnType<typeof createRuntimeDependencies>>,
   ticketId: Ticket["id"],
+  ids: {
+    recommendationId: string;
+    submissionAuditId: string;
+    sentAuditId: string;
+  } = {
+    recommendationId: "88888888-8888-4888-8888-888888888888",
+    submissionAuditId: "88888888-8888-4888-8888-888888888889",
+    sentAuditId: "88888888-8888-4888-8888-888888888890",
+  },
 ): Promise<void> {
   const ticket = await deps.tickets.get(ticketId);
   const recommendation = TriageRecommendationSchema.parse({
-    id: "88888888-8888-4888-8888-888888888888",
+    id: ids.recommendationId,
     ticketId,
     sourceRevision: ticket.revision,
     category: "incident",
@@ -4836,7 +4941,7 @@ async function seedReadyToCloseWorkflow(
   });
   await deps.recommendations.create(recommendation);
   await deps.audits.append(AuditEventSchema.parse({
-    id: "88888888-8888-4888-8888-888888888889",
+    id: ids.submissionAuditId,
     timestamp: "2026-06-10T09:00:00.000Z",
     actor: "approval-desk",
     action: "recommendation-submitted",
@@ -4849,7 +4954,7 @@ async function seedReadyToCloseWorkflow(
     result: "success",
   }));
   await deps.audits.append(AuditEventSchema.parse({
-    id: "88888888-8888-4888-8888-888888888890",
+    id: ids.sentAuditId,
     timestamp: "2026-06-10T09:01:00.000Z",
     actor: "matias-reviewer",
     action: "customer-response-sent",

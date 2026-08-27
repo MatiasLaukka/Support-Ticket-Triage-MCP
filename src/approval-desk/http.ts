@@ -715,16 +715,38 @@ async function listTickets({ deps, url }: RouteContext): Promise<unknown> {
     deps.recommendations.list(),
     deps.audits.list(),
   ]);
+  const workflows = new Map(
+    await Promise.all(
+      tickets.items.map(async (ticket) => {
+        const originalDiagnoses = deps.operationalDiagnoses === undefined
+          ? undefined
+          : await deps.operationalDiagnoses.list(ticket.id);
+        return [
+          ticket.id,
+          buildAuthoritativeWorkflowReadModel({
+            ticket,
+            recommendations,
+            audits: audits.filter((event) => event.ticketId === ticket.id),
+            ...(originalDiagnoses === undefined ? {} : { originalDiagnoses }),
+          }),
+        ] as const;
+      }),
+    ),
+  );
   return {
     ...tickets,
-    items: tickets.items.map((ticket) => ({
-      ...ticket,
-      recommendationSummary: summarizeRecommendationsForTicket(
-        ticket,
-        recommendations,
-        audits,
-      ).summary,
-    })),
+    items: tickets.items.map((ticket) => {
+      const workflow = workflows.get(ticket.id)!;
+      return {
+        ...ticket,
+        recommendationSummary: workflow.recommendationSummary,
+        lifecycleSummary: {
+          phase: workflow.lifecycle.phase,
+          primaryAction: workflow.lifecycle.primaryAction.kind,
+          reasonCodes: workflow.lifecycle.primaryAction.reasonCodes,
+        },
+      };
+    }),
   };
 }
 
@@ -816,18 +838,12 @@ async function getTicketDetail(
       ? Promise.resolve(undefined)
       : deps.operationalDiagnoses.list(ticketId),
   ]);
-  const authoritativeAudits = originalDiagnoses === undefined
-    ? ticketAudits
-    : operationalDiagnosisAudits({
-        ticket,
-        audits: ticketAudits,
-        originalDiagnoses,
-      });
-  const workflow = buildTicketWorkflowReadModel({
+  const workflow = buildAuthoritativeWorkflowReadModel({
     ticket,
     recommendations,
-    audits: authoritativeAudits,
-    decisionTimeline,
+    audits: ticketAudits,
+    ...(decisionTimeline.length === 0 ? {} : { decisionTimeline }),
+    ...(originalDiagnoses === undefined ? {} : { originalDiagnoses }),
     ...(deps.learningAvailability.status === "unavailable"
       ? {}
       : { knowledgeEvolution: { candidates: knowledgeCandidates, audits: knowledgeAudits } }),
@@ -858,23 +874,47 @@ async function lifecycleEnvelope(
       ? Promise.resolve(undefined)
       : deps.operationalDiagnoses.list(ticketId),
   ]);
-  const authoritativeAudits = originalDiagnoses === undefined
-    ? audits
-    : operationalDiagnosisAudits({
-        ticket,
-        audits,
-        originalDiagnoses,
-      });
-  const detail = buildTicketWorkflowReadModel({
+  const detail = buildAuthoritativeWorkflowReadModel({
     ticket,
-    audits: authoritativeAudits,
+    audits,
     recommendations,
+    ...(originalDiagnoses === undefined ? {} : { originalDiagnoses }),
     ...(knowledgeEvolution === undefined ? {} : { knowledgeEvolution }),
   });
   return {
     operatorGuidance: detail.operatorGuidance,
     lifecycle: detail.lifecycle,
   };
+}
+
+function buildAuthoritativeWorkflowReadModel(input: {
+  ticket: Parameters<typeof buildTicketWorkflowReadModel>[0]["ticket"];
+  recommendations: Parameters<typeof buildTicketWorkflowReadModel>[0]["recommendations"];
+  audits: Parameters<typeof buildTicketWorkflowReadModel>[0]["audits"];
+  originalDiagnoses?: NonNullable<
+    Awaited<ReturnType<NonNullable<RuntimeDependencies["operationalDiagnoses"]>["list"]>>
+  >;
+  knowledgeEvolution?: Parameters<typeof buildTicketWorkflowReadModel>[0]["knowledgeEvolution"];
+  decisionTimeline?: Parameters<typeof buildTicketWorkflowReadModel>[0]["decisionTimeline"];
+}) {
+  const authoritativeAudits = input.originalDiagnoses === undefined
+    ? input.audits
+    : operationalDiagnosisAudits({
+        ticket: input.ticket,
+        audits: input.audits,
+        originalDiagnoses: input.originalDiagnoses,
+      });
+  return buildTicketWorkflowReadModel({
+    ticket: input.ticket,
+    recommendations: input.recommendations,
+    audits: authoritativeAudits,
+    ...(input.knowledgeEvolution === undefined
+      ? {}
+      : { knowledgeEvolution: input.knowledgeEvolution }),
+    ...(input.decisionTimeline === undefined
+      ? {}
+      : { decisionTimeline: input.decisionTimeline }),
+  });
 }
 
 async function createRecommendation(

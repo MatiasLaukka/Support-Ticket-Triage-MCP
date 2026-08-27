@@ -5332,6 +5332,49 @@ describe("approvalDeskHtml", () => {
     expect(app.el("recommendationPanel").innerHTML).toContain(fixtureRecommendation.draftCustomerResponse);
   });
 
+  it("refreshes the queue read model after evaluation reconciliation", async () => {
+    const app = await startApprovalDeskApp({
+      ticketDetail: {
+        lifecycle: fixtureLifecycle({
+          phase: "evaluation-needed",
+          primaryAction: "evaluate-ticket",
+          actions: [lifecycleAction("evaluate-ticket", "primary")],
+        }),
+      },
+      recommendationLifecycle: fixtureLifecycle({
+        phase: "recommendation-review",
+        primaryAction: "review-recommendation",
+        actions: [lifecycleAction("review-recommendation", "primary")],
+      }),
+    });
+    await app.selectFirstTicket();
+    const queueBefore = app.queueRequests();
+
+    await app.createRecommendation();
+
+    expect(app.queueRequests()).toBe(queueBefore + 1);
+  });
+
+  it("reports the evaluate-ticket descriptor reason when evaluation is blocked", async () => {
+    const app = await startApprovalDeskApp({
+      ticketDetail: {
+        lifecycle: fixtureLifecycle({
+          phase: "diagnosis-review",
+          primaryAction: "none",
+          actions: [
+            lifecycleAction("none", "primary", ["operator-review"]),
+            lifecycleAction("evaluate-ticket", "blocked", ["evidence-pending"]),
+          ],
+        }),
+      },
+    });
+    await app.selectFirstTicket();
+
+    await app.createRecommendation();
+
+    expect(app.parsedResult()).toMatchObject({ error: "evidence pending." });
+  });
+
   it("uses customer-friendly predicted reply labels instead of fixture names", () => {
     expect(approvalDeskHtml).toContain("All requested evidence");
     expect(approvalDeskHtml).toContain("Fix verification details");

@@ -4604,7 +4604,7 @@ export const approvalDeskHtml = `<!doctype html>
           return;
         }
         if (hasLifecycleDescriptor() && !lifecycleActionIsAvailable('evaluate-ticket')) {
-          setResult({ error: lifecycleActionReason(state.lifecycle?.primaryAction?.kind) || 'Evaluating this ticket is not available in the current lifecycle state.' });
+          setResult({ error: lifecycleActionReason('evaluate-ticket') || 'Evaluating this ticket is not available in the current lifecycle state.' });
           return;
         }
         const ticketId = state.selectedTicket.id;
@@ -4653,6 +4653,7 @@ export const approvalDeskHtml = `<!doctype html>
           state.consumedCustomerReplyTimestamp = latestCustomerReplyTimestamp();
           renderRecommendationStageControls();
           updateControls();
+          await loadQueue();
           await refreshEvidenceBestEffort();
         } catch (error) {
           if (!isCurrentTicketRequest(ticketId, ticketRequestId)) {

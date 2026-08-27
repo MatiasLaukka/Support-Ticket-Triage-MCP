@@ -80,3 +80,30 @@ git diff --check
 ```
 
 Result: `tsc -p tsconfig.json` completed successfully; `git diff --check` reported only LF/CRLF conversion warnings and no whitespace errors.
+
+## 2026-08-27 scoped re-review fixes
+
+- Evaluation reconciliation now reloads the queue read model after the canonical selected-ticket, diagnosis, guidance, conversation, and evidence refresh.
+- Blocked evaluation now reports `lifecycleActionReason('evaluate-ticket')`, even when another action is the lifecycle primary action.
+- Added focused regressions covering both behaviors; no request-token, idempotency, single-flight, or existing guard behavior changed.
+
+Verification:
+
+```text
+npx vitest run test/approval-desk-ui.test.ts --exclude ".worktrees/**"
+```
+
+Result: 1 file passed; 182 tests passed.
+
+```text
+npx vitest run test/approval-desk-ui.test.ts test/approval-desk-http.test.ts test/approval-desk-diagnostic-workflow.test.ts --exclude ".worktrees/**"
+```
+
+Result: 3 files passed; 286 tests passed.
+
+```text
+npm run typecheck
+git diff --check
+```
+
+Result: typecheck passed; diff check reported only the repository's LF/CRLF conversion warnings and no whitespace errors.

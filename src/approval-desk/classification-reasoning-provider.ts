@@ -15,10 +15,11 @@ import {
   OpenAiTimeoutError,
   UnavailableOpenAiError,
 } from "./draft-response-provider.js";
+import { makeOpenAiResponsesUrl } from "../utils/normalize-url.js";
+import { parseOpenAiTimeoutMs } from "../utils/parse-openai-timeout.js";
 
 const DEFAULT_MODEL = "gpt-5.6-luna";
 const DEFAULT_TIMEOUT_MS = 20_000;
-const OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses";
 
 function nullableOptional<T>(schema: z.ZodType<T>) {
   return schema.nullable().transform((value) => value ?? undefined).optional();
@@ -94,6 +95,7 @@ export class OpenAiClassificationReasoningProvider
     apiKey: string;
     model?: string;
     timeoutMs?: number;
+    baseUrl?: string;
     fetch?: FetchLike;
     now?: () => number;
   }) {}
@@ -102,10 +104,12 @@ export class OpenAiClassificationReasoningProvider
     const model = this.options.model ?? DEFAULT_MODEL;
     const now = this.options.now ?? Date.now;
     const startedAt = now();
+    const effectiveBaseUrl = makeOpenAiResponsesUrl(this.options.baseUrl);
     const envelope = await requestReasoning({
       apiKey: this.options.apiKey,
       model,
       timeoutMs: this.options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+      baseUrl: effectiveBaseUrl,
       fetch: this.options.fetch ?? fetch,
       input,
     });
@@ -140,9 +144,12 @@ export function createClassificationReasoningProviderFromEnv(
   if (!options.preferOpenAi) return undefined;
   const apiKey = env.OPENAI_API_KEY?.trim();
   if (!apiKey) return new UnavailableClassificationReasoningProvider();
+  const timeoutMs = parseOpenAiTimeoutMs(env.TRIAGE_OPENAI_TIMEOUT_MS);
   return new OpenAiClassificationReasoningProvider({
     apiKey,
     model: env.OPENAI_MODEL?.trim() || DEFAULT_MODEL,
+    baseUrl: env.TRIAGE_OPENAI_BASE_URL?.trim(),
+    timeoutMs,
   });
 }
 
@@ -150,13 +157,14 @@ async function requestReasoning(input: {
   apiKey: string;
   model: string;
   timeoutMs: number;
+  baseUrl: string;
   fetch: FetchLike;
   input: GptClassificationReasoningInput;
 }): Promise<{ outputText: string; usage?: AiUsage }> {
   const abortController = new AbortController();
   let timeout: ReturnType<typeof setTimeout> | undefined;
   const response = await Promise.race([
-    input.fetch(OPENAI_RESPONSES_URL, {
+    input.fetch(input.baseUrl, {
       method: "POST",
       headers: {
         "content-type": "application/json",
@@ -195,10 +203,37 @@ async function requestReasoning(input: {
   } catch {
     throw new InvalidClassificationSchemaError("response-envelope", ["response"]);
   }
-  const parsedResult = z.object({
-    output: z.array(z.object({
-      content: z.array(z.object({ type: z.string(), text: z.string().optional() })),
+  // Strict schema for reasoning output item (Ollama-style)
+  const ReasoningItemSchema = z.object({
+    type: z.literal("reasoning"),
+    summary: z.array(z.object({
+      type: z.literal("summary_text"),
+      text: z.string(),
+    })).optional(),
+    encrypted_content: z.string().optional(),
+  });
+
+  // Strict schema for message output item (OpenAI-style)
+  const MessageItemSchema = z.object({
+    type: z.literal("message"),
+    status: z.string().optional(),
+    role: z.string().optional(),
+    content: z.array(z.object({
+      type: z.literal("output_text"),
+      text: z.string(),
+      annotations: z.array(z.unknown()).optional(),
+      logprobs: z.array(z.unknown()).optional(),
     })),
+  });
+
+  // Discriminated union on `type` field - only "reasoning" or "message" allowed
+  const OutputItemSchema = z.discriminatedUnion("type", [
+    ReasoningItemSchema,
+    MessageItemSchema,
+  ]);
+
+  const parsedResult = z.object({
+    output: z.array(OutputItemSchema),
     usage: z.object({
       input_tokens: z.number().int().nonnegative(),
       output_tokens: z.number().int().nonnegative(),
@@ -212,10 +247,14 @@ async function requestReasoning(input: {
     );
   }
   const parsed = parsedResult.data;
+  // Extract classification text from message items only (reasoning items are ignored)
   const outputText = parsed.output
+    .filter((item): item is z.infer<typeof MessageItemSchema> => item.type === "message")
     .flatMap((item) => item.content)
     .find((content) => content.type === "output_text")?.text;
-  if (outputText === undefined) throw new Error("OpenAI classification response did not include output text.");
+  if (outputText === undefined) {
+    throw new InvalidClassificationSchemaError("reasoning-json", ["outputText"]);
+  }
   let usage: AiUsage | undefined;
   if (parsed.usage !== undefined) {
     const usageResult = AiUsageSchema.safeParse({

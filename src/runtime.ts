@@ -155,6 +155,7 @@ export function createKnowledgeCandidateDraftProviderFromEnv(
   return createOpenAiKnowledgeCandidateDraftProvider({
     apiKey: env.OPENAI_API_KEY,
     model: env.TRIAGE_KNOWLEDGE_CANDIDATE_MODEL?.trim() || env.OPENAI_MODEL?.trim(),
+    baseUrl: env.TRIAGE_OPENAI_BASE_URL?.trim(),
     timeoutMs: parseKnowledgeCandidateTimeoutMs(env.TRIAGE_KNOWLEDGE_CANDIDATE_TIMEOUT_MS),
   });
 }
@@ -417,7 +418,12 @@ function isOperationalLearningOutboxStore(
 function parseKnowledgeCandidateTimeoutMs(value: string | undefined): number {
   if (value === undefined || value.trim() === "") return 20_000;
   const parsed = Number(value);
-  return Number.isFinite(parsed) && parsed > 0 ? Math.round(parsed) : 20_000;
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    throw new StartupConfigError(
+      `TRIAGE_KNOWLEDGE_CANDIDATE_TIMEOUT_MS must be a positive integer. Received: "${value}"`,
+    );
+  }
+  return Math.round(parsed);
 }
 
 function invalidMinutesSaved(): StartupConfigError {

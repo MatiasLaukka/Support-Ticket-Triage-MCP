@@ -34,3 +34,16 @@
 - Reusable knowledge results are registered and deep-frozen by `listReusableApproved`; token issuance now rejects caller-authored structural lookalikes and relies on immutable registered exact-version keys.
 - A regression proves fabricated snapshots cannot mint a persistence token, while real service results retain exact-version and v1-to-v2 pinning behavior.
 - Full `npm test` passed after the registry hardening.
+
+## Task 4 evidence loop coverage
+
+- Added seeded demo coverage in `test/automatic-customer-replies.test.ts` that gathers the evidence requirements exercised by the Approval Desk demo tickets and proves each requirement gets a deterministic automatic customer-reply sentence instead of the generic `example-<id>` fallback.
+- Added a real HTTP lifecycle test for `TKT-1001` that runs the production `approve -> mark-sent -> automatic customer reply -> re-evaluate` path twice and proves the supplied evidence moves from `missingEvidence` to `providedEvidence` across the first subset and remaining subset rounds.
+- Strengthened the rejected `TKT-1010` diagnosis recovery test so the next evaluation explicitly receives `rejectedDiagnosis` context, asks for the fresh clarification set, and the automatic follow-up reply drives the ticket forward into the next governed cycle without fabricated state or new endpoints.
+- No production changes were required in `src/approval-desk/automatic-customer-replies.ts`; the new coverage passed against the existing deterministic samples after the test expectations were aligned with the real workflow outputs.
+
+## Task 4 verification
+
+- Focused RED/GREEN suite: `npx vitest run test/automatic-customer-replies.test.ts test/approval-desk-http.test.ts test/approval-desk-diagnostic-workflow.test.ts --exclude ".worktrees/**"` -> `109 passed`.
+- `npm run typecheck` passed.
+- `git diff --check` passed aside from the existing Windows `LF will be replaced by CRLF` warnings on the edited test files.

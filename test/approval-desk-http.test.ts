@@ -1630,6 +1630,76 @@ describe("createApprovalDeskHttpServer", () => {
     });
   });
 
+  it("removes each supplied TKT-1001 evidence requirement across two automatic reply rounds", async () => {
+    const { json } = await startFixture();
+
+    const first = await json("/api/tickets/TKT-1001/recommendations", {
+      method: "POST",
+      body: JSON.stringify({ actor: "approval-desk" }),
+    });
+
+    expect(first.status).toBe(201);
+    expect(first.body.recommendation.missingEvidence.map((item: any) => item.id)).toEqual([
+      "store-url",
+      "profile-email",
+      "event-id",
+      "request-id",
+      "api-response-status",
+    ]);
+
+    const firstSent = await approveAndSendWithAutomaticReply(
+      json,
+      "TKT-1001",
+      first.body.recommendation,
+    );
+    expect(firstSent.body.automaticReply.after.body).toContain(
+      "The affected store is https://store.example.test",
+    );
+    expect(firstSent.body.automaticReply.after.body).toContain(
+      "One affected profile is customer@example.test",
+    );
+
+    const second = await json("/api/tickets/TKT-1001/recommendations", {
+      method: "POST",
+      body: JSON.stringify({ actor: "approval-desk" }),
+    });
+
+    expect(second.status).toBe(201);
+    expect(second.body.recommendation.supportState).toBe("information-received");
+    expect(second.body.recommendation.missingEvidence.map((item: any) => item.id)).toEqual([
+      "event-id",
+      "request-id",
+      "api-response-status",
+    ]);
+    expect(second.body.recommendation.providedEvidence.map((item: any) => item.id)).toEqual(
+      expect.arrayContaining(["store-url", "profile-email"]),
+    );
+
+    const secondSent = await approveAndSendWithAutomaticReply(
+      json,
+      "TKT-1001",
+      second.body.recommendation,
+    );
+    expect(secondSent.body.automaticReply.after.body).toContain(
+      "The event ID is evt_checkout_7788 at 2026-06-10 09:15 UTC",
+    );
+    expect(secondSent.body.automaticReply.after.body).toContain(
+      "The request ID is req_12345",
+    );
+    expect(secondSent.body.automaticReply.after.body).toContain(
+      "The API response status is 202 accepted",
+    );
+
+    const third = await json("/api/tickets/TKT-1001/recommendations", {
+      method: "POST",
+      body: JSON.stringify({ actor: "approval-desk" }),
+    });
+
+    expect(third.status).toBe(201);
+    expect(third.body.recommendation.missingEvidence).toEqual([]);
+    expect(third.body.recommendation.supportState).toBe("waiting-on-platform-fix");
+  });
+
   it("records diagnosis only after a done response with complete evidence", async () => {
     const { deps, json } = await startFixture();
     await deps.tickets.update("TKT-1010", 0, (ticket) => ({
@@ -2867,6 +2937,15 @@ describe("createApprovalDeskHttpServer", () => {
       body: JSON.stringify({ actor: "approval-desk", aiPreference: "gpt-preferred" }),
     });
     expect(reevaluated.status).toBe(201);
+    expect(reevaluated.body.recommendation.supportState).toBe("needs-information");
+    expect(reevaluated.body.recommendation.missingEvidence.map((item: any) => item.id)).toEqual([
+      "campaign-name",
+      "failure-timestamp",
+      "browser-session-details",
+      "affected-scope",
+      "problem-summary",
+      "reproduction-steps",
+    ]);
     expect(observedRejectedDiagnoses).toHaveLength(1);
     expect(observedRejectedDiagnoses[0]).toMatchObject({
       causeType: original.causeType,
@@ -2888,6 +2967,8 @@ describe("createApprovalDeskHttpServer", () => {
       body: JSON.stringify({ actor: "approval-desk" }),
     });
     expect(nextCycle.status).toBe(201);
+    expect(nextCycle.body.recommendation.supportState).toBe("waiting-on-platform-fix");
+    expect(nextCycle.body.recommendation.missingEvidence).toEqual([]);
     expect(nextCycle.body.lifecycle).toMatchObject({
       phase: "recommendation-review",
       primaryAction: { kind: "review-recommendation", availability: "primary" },
@@ -4796,6 +4877,35 @@ async function approveAndSend(
     }),
   });
   expect(sent.status).toBe(200);
+}
+
+async function approveAndSendWithAutomaticReply(
+  json: Awaited<ReturnType<typeof startFixture>>["json"],
+  ticketId: string,
+  recommendation: { id: string; draftCustomerResponse: string },
+): Promise<{ status: number; body: any; response: Response }> {
+  const approved = await json(`/api/recommendations/${recommendation.id}/approve`, {
+    method: "POST",
+    body: JSON.stringify({
+      ticketId,
+      expectedRevision: await ticketRevision(json, ticketId),
+      approvedFields: ["customerResponse"],
+      editedCustomerResponse: recommendation.draftCustomerResponse,
+      actor: "matias-reviewer",
+      confirm: true,
+    }),
+  });
+  expect(approved.status).toBe(200);
+  const sent = await json(`/api/recommendations/${recommendation.id}/mark-sent`, {
+    method: "POST",
+    body: JSON.stringify({
+      ticketId,
+      actor: "matias-reviewer",
+    }),
+  });
+  expect(sent.status).toBe(200);
+  expect(sent.body.automaticReply).toBeDefined();
+  return sent;
 }
 
 async function createDiagnosedPlatformDelayTicket(

@@ -33,6 +33,7 @@ import {
   listReusableApproved,
   type ReusableKnowledgeResult,
 } from "../src/knowledge-evolution/reusable-context.js";
+import { automaticReplyForTicket } from "../src/approval-desk/automatic-customer-replies.js";
 import {
   EVIDENCE_PARITY,
   requestIdKnowledgeObject,
@@ -1699,6 +1700,87 @@ describe("createApprovalDeskHttpServer", () => {
     expect(third.body.recommendation.missingEvidence).toEqual([]);
     expect(third.body.recommendation.supportState).toBe("waiting-on-platform-fix");
   });
+
+  it("removes the seeded first-round evidence IDs that the automatic reply actually supplies", async () => {
+    const { deps, json } = await startFixture();
+    const scenarios: Array<{
+      ticket: Ticket;
+      recommendation: { id: string; draftCustomerResponse: string; missingEvidence?: Array<{ id: string }> };
+      expectedAutomaticReply: string;
+      expectedSuppliedIds: string[];
+    }> = [];
+
+    let offset = 0;
+    while (true) {
+      const page = await deps.tickets.list({ offset, limit: 64 });
+      for (const ticket of page.items) {
+        const created = await json(`/api/tickets/${ticket.id}/recommendations`, {
+          method: "POST",
+          body: JSON.stringify({ actor: "approval-desk" }),
+        });
+        expect(created.status, `Expected evaluation for ${ticket.id}.`).toBe(201);
+
+        const recommendation = TriageRecommendationSchema.parse(created.body.recommendation);
+        if ((recommendation.missingEvidence?.length ?? 0) === 0) {
+          continue;
+        }
+
+        const expectedAutomaticReply = automaticReplyForTicket({
+          ticket,
+          recommendation,
+          auditsBeforeSent: await deps.audits.list(ticket.id),
+        });
+        expect(
+          expectedAutomaticReply,
+          `Expected a deterministic first-round automatic reply for ${ticket.id}.`,
+        ).toBeDefined();
+
+        scenarios.push({
+          ticket,
+          recommendation,
+          expectedAutomaticReply: expectedAutomaticReply!,
+          expectedSuppliedIds: firstRoundAutomaticEvidenceIds(recommendation),
+        });
+      }
+
+      offset += page.items.length;
+      if (offset >= page.total || page.items.length === 0) {
+        break;
+      }
+    }
+
+    expect(scenarios.length).toBeGreaterThan(0);
+
+    for (const scenario of scenarios) {
+      const sent = await approveAndSendWithAutomaticReply(
+        json,
+        scenario.ticket.id,
+        scenario.recommendation,
+      );
+      const automaticReplyBody = sent.body.automaticReply.after.body;
+
+      expect(automaticReplyBody).toBe(scenario.expectedAutomaticReply);
+      expect(automaticReplyBody).not.toContain("example-");
+
+      const next = await json(`/api/tickets/${scenario.ticket.id}/recommendations`, {
+        method: "POST",
+        body: JSON.stringify({ actor: "approval-desk" }),
+      });
+      expect(next.status).toBe(201);
+
+      const nextRecommendation = TriageRecommendationSchema.parse(next.body.recommendation);
+      const nextMissingIds = new Set(
+        (nextRecommendation.missingEvidence ?? []).map(({ id }) => id),
+      );
+
+      for (const evidenceId of scenario.expectedSuppliedIds) {
+        expect(
+          nextMissingIds.has(evidenceId),
+          `${scenario.ticket.id} should stop missing ${evidenceId} after its automatic reply is sent.`,
+        ).toBe(false);
+      }
+    }
+  }, 40000);
 
   it("records diagnosis only after a done response with complete evidence", async () => {
     const { deps, json } = await startFixture();
@@ -4906,6 +4988,20 @@ async function approveAndSendWithAutomaticReply(
   expect(sent.status).toBe(200);
   expect(sent.body.automaticReply).toBeDefined();
   return sent;
+}
+
+function firstRoundAutomaticEvidenceIds(
+  recommendation: {
+    missingEvidence?: ReadonlyArray<{ id: string }>;
+  },
+): string[] {
+  const missingEvidence = recommendation.missingEvidence ?? [];
+
+  // First-round automatic replies intentionally send only the first subset when the
+  // request asks for more than three evidence items; later rounds are covered elsewhere.
+  return (missingEvidence.length > 3 ? missingEvidence.slice(0, 2) : missingEvidence).map(
+    ({ id }: { id: string }) => id,
+  );
 }
 
 async function createDiagnosedPlatformDelayTicket(

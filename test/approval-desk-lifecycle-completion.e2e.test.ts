@@ -159,8 +159,9 @@ describe("Approval Desk lifecycle completion e2e", () => {
         .at(-1);
       expect(firstMarkSentResponse?.body).toMatchObject({
         automaticReply: {
+          action: "customer-reply-received",
           after: {
-            source: "demo-auto-reply",
+            body: expect.any(String),
           },
         },
       });

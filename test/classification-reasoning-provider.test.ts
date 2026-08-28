@@ -296,7 +296,6 @@ describe("OpenAiClassificationReasoningProvider", () => {
 
     const execution = await provider.reason({
       ...providerInput(),
-      knowledgeArticles: [],
     });
 
     expect(execution.reasoning).toMatchObject({

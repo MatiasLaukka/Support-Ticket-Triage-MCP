@@ -2013,6 +2013,7 @@ export const approvalDeskHtml = `<!doctype html>
         evaluationPendingTicketId: null,
         governedMutationToken: null,
         governedMutationRefreshPending: null,
+        governedMutationRefreshRetry: null,
         nextGovernedMutationToken: 0,
         operatorGuidance: null,
         lifecycle: null,
@@ -2817,14 +2818,15 @@ export const approvalDeskHtml = `<!doctype html>
         const inspectionReviewKind = state.diagnosisReviewDecision === 'revalidate' ? 'revalidate-diagnosis' : 'review-diagnosis';
         const inspectionReviewAvailable = lifecycleMutationAvailable(inspectionReviewKind);
         const inspectionClarifyAvailable = lifecycleMutationAvailable('evaluate-ticket');
+        const inspectionMutationDisabled = state.governedMutationToken === null ? '' : ' disabled';
         const inspectionReviewControl = diagnosisClarification !== null || !inspectionReviewAvailable
           ? inspectionClarifyAvailable
-            ? '<button type="button" class="secondary" data-action="reopen-diagnosis-evaluation">Clarify</button>'
+            ? '<button type="button" class="secondary" data-action="reopen-diagnosis-evaluation"' + inspectionMutationDisabled + '>Clarify</button>'
             : '<span class="diagnosis-fix-waiting" role="status">' + escapeHtml(lifecycleActionReason('evaluate-ticket') || lifecycleActionReason(inspectionReviewKind) || 'No governed inspection action is available.') + '</span>'
-          : '<button type="button" data-action="review-diagnosis" data-decision="' + (state.diagnosisReviewDecision === 'revalidate' ? 'revalidate' : 'approve') + '">' + (state.diagnosisReviewDecision === 'revalidate' ? 'Revalidate' : 'Approve') + '</button>';
+          : '<button type="button" data-action="review-diagnosis" data-decision="' + (state.diagnosisReviewDecision === 'revalidate' ? 'revalidate' : 'approve') + '"' + inspectionMutationDisabled + '>' + (state.diagnosisReviewDecision === 'revalidate' ? 'Revalidate' : 'Approve') + '</button>';
         const inspectionRejectControl = diagnosisClarification !== null || !lifecycleMutationAvailable('reject-diagnosis')
           ? ''
-          : '<button type="button" class="danger" data-action="review-diagnosis" data-decision="reject">Reject</button>';
+          : '<button type="button" class="danger" data-action="review-diagnosis" data-decision="reject"' + inspectionMutationDisabled + '>Reject</button>';
         const inspectionIntro = current.confidence === 'confirmed'
           ? 'This diagnosis is confirmed. Inspect the drafted fields, review them, and approve to continue to the scoped fix.'
           : 'This diagnosis is likely, not confirmed. Review the drafted fields, then gather more evidence and evaluate again if the theory is not ready.';
@@ -4334,6 +4336,7 @@ export const approvalDeskHtml = `<!doctype html>
         els.createUpdatedRecommendation.textContent = evaluationPending ? 'Evaluating…' : createUpdatedRecommendationLabel();
         els.createUpdatedRecommendation.title = createRecommendationLabel();
         els.refreshQueue.textContent = state.governedMutationRefreshPending === null ? 'Refresh' : 'Retry refresh';
+        els.refreshQueue.disabled = state.governedMutationRefreshRetry !== null;
         els.manualRepliesButton.textContent = manualRepliesEnabled ? 'Automatic' : 'Manual';
         els.manualRepliesButton.title = manualRepliesEnabled
           ? 'Switch back to automatic customer replies'
@@ -5154,7 +5157,7 @@ export const approvalDeskHtml = `<!doctype html>
         await evidenceRefresh;
       }
 
-      async function refreshCurrentSelectionAfterMutationSelectionChange(ticketId, selectionToken, options) {
+      async function refreshCurrentSelectionAfterMutationSelectionChange(ticketId, selectionToken, options, refreshOptions) {
         if (state.ticketSelectionToken === selectionToken) {
           return;
         }
@@ -5173,31 +5176,65 @@ export const approvalDeskHtml = `<!doctype html>
           return;
         }
         await selectTicket(selectedId, {
-          waitForDiagnoses: options?.waitForDiagnoses === true
+          waitForDiagnoses: options?.waitForDiagnoses === true,
+          propagateError: refreshOptions?.propagateError === true
         });
       }
 
-      function reportGovernedMutationRefreshUnavailable(error) {
+      async function refreshCurrentSelectionForGovernedRetry(pending) {
+        await refreshCurrentSelectionAfterMutationSelectionChange(
+          pending.ticketId,
+          pending.selectionToken,
+          pending.options,
+          { propagateError: true }
+        );
+        if (state.selectedTicket === null) {
+          throw new Error('The current ticket selection could not be refreshed.');
+        }
+      }
+
+      function reportGovernedMutationRefreshUnavailable(error, pending) {
+        const mutationFailed = pending?.mutationError !== null && pending?.mutationError !== undefined;
         setResult({
           code: 'AUTHORITATIVE_REFRESH_REQUIRED',
-          error: 'The action was saved, but the authoritative ticket state could not be refreshed. Use Retry refresh before taking another governed action.',
-          refreshError: error instanceof Error ? error.message : 'Ticket refresh is unavailable.'
+          error: mutationFailed
+            ? 'The action failed, and the authoritative ticket state could not be refreshed. Use Retry refresh before taking another governed action.'
+            : 'The action was saved, but the authoritative ticket state could not be refreshed. Use Retry refresh before taking another governed action.',
+          refreshError: error instanceof Error ? error.message : 'Ticket refresh is unavailable.',
+          ...(mutationFailed
+            ? {
+                actionError: pending.mutationError.message,
+                actionErrorCode: pending.mutationError.code
+              }
+            : {})
         });
       }
 
-      async function finishGovernedMutationAfterRefresh(pending) {
-        const { data, isCurrent, options, selectionToken, ticketId } = pending;
+      async function finishGovernedMutationAfterRefresh(pending, refreshOptions) {
+        const { data, isCurrent, mutationError, options, selectionToken, ticketId } = pending;
         if (!isCurrent()) {
-          await refreshCurrentSelectionAfterMutationSelectionChange(ticketId, selectionToken, options);
+          if (refreshOptions?.propagateSelectionError === true) {
+            await refreshCurrentSelectionForGovernedRetry(pending);
+          } else {
+            await refreshCurrentSelectionAfterMutationSelectionChange(ticketId, selectionToken, options);
+          }
           return null;
         }
         if (typeof options?.afterRefresh === 'function') {
-          options.afterRefresh({ data, error: null });
+          options.afterRefresh({ data, error: mutationError });
+        }
+        if (mutationError !== null) {
+          setResult({ error: mutationError.message, code: mutationError.code });
+          return null;
         }
         if (typeof options?.afterSuccess === 'function') {
           await options.afterSuccess(data);
           if (!isCurrent()) {
-            await refreshCurrentSelectionAfterMutationSelectionChange(ticketId, selectionToken, options);
+            if (refreshOptions?.propagateSelectionError === true) {
+              await refreshCurrentSelectionForGovernedRetry(pending);
+            } else {
+              await refreshCurrentSelectionAfterMutationSelectionChange(ticketId, selectionToken, options);
+            }
             return null;
           }
         }
@@ -5205,29 +5242,64 @@ export const approvalDeskHtml = `<!doctype html>
         return data;
       }
 
+      async function reconcileGovernedMutationRefresh(pending) {
+        try {
+          const stillOnMutationSelection = state.ticketSelectionToken === pending.selectionToken &&
+            state.selectedTicket?.id === pending.ticketId;
+          if (stillOnMutationSelection) {
+            await refreshGovernedMutationState({
+              ticketId: pending.ticketId,
+              waitForDiagnoses: pending.options?.waitForDiagnoses === true,
+              preservePresentation: pending.mutationError !== null && pending.options?.preservePresentationOnError === true
+            });
+            if (!pending.isCurrent()) {
+              await refreshCurrentSelectionForGovernedRetry(pending);
+            } else {
+              await finishGovernedMutationAfterRefresh(pending, { propagateSelectionError: true });
+            }
+          } else {
+            const queueRefresh = loadQueue({ writeErrorToResult: false }).catch(function () {
+              // Queue freshness is optional; ticket detail remains authoritative.
+            });
+            const evidenceRefresh = refreshEvidenceBestEffort();
+            await refreshCurrentSelectionForGovernedRetry(pending);
+            await queueRefresh;
+            await evidenceRefresh;
+          }
+        } catch (error) {
+          reportGovernedMutationRefreshUnavailable(error, pending);
+          updateControls();
+          return;
+        }
+        if (state.governedMutationRefreshPending === pending) {
+          state.governedMutationRefreshPending = null;
+        }
+        if (state.governedMutationToken === pending.mutationToken) {
+          state.governedMutationToken = null;
+        }
+        updateControls();
+        if (typeof pending.options?.render === 'function') {
+          pending.options.render();
+        }
+      }
+
       async function retryGovernedMutationRefresh() {
         const pending = state.governedMutationRefreshPending;
         if (pending === null) {
           return false;
         }
-        try {
-          await refreshGovernedMutationState({
-            ticketId: pending.ticketId,
-            waitForDiagnoses: pending.options?.waitForDiagnoses === true
-          });
-        } catch (error) {
-          reportGovernedMutationRefreshUnavailable(error);
-          updateControls();
+        if (state.governedMutationRefreshRetry !== null) {
+          await state.governedMutationRefreshRetry;
           return true;
         }
+        const retry = reconcileGovernedMutationRefresh(pending);
+        state.governedMutationRefreshRetry = retry;
+        updateControls();
         try {
-          await finishGovernedMutationAfterRefresh(pending);
+          await retry;
         } finally {
-          if (state.governedMutationRefreshPending === pending) {
-            state.governedMutationRefreshPending = null;
-          }
-          if (state.governedMutationToken === pending.mutationToken) {
-            state.governedMutationToken = null;
+          if (state.governedMutationRefreshRetry === retry) {
+            state.governedMutationRefreshRetry = null;
           }
           updateControls();
         }
@@ -5294,18 +5366,22 @@ export const approvalDeskHtml = `<!doctype html>
               preservePresentation: mutationError !== null && options?.preservePresentationOnError === true
             });
           } catch (refreshError) {
-            if (mutationError === null) {
-              state.governedMutationRefreshPending = {
-                data,
-                isCurrent,
-                mutationToken,
-                options,
-                selectionToken,
-                ticketId
-              };
-              reportGovernedMutationRefreshUnavailable(refreshError);
-              return null;
+            state.governedMutationRefreshPending = {
+              data,
+              isCurrent,
+              mutationError,
+              mutationToken,
+              options,
+              selectionToken,
+              ticketId
+            };
+            if (typeof options?.render === 'function') {
+              options.render();
+            } else if (typeof options?.afterRefresh === 'function') {
+              options.afterRefresh({ data, error: mutationError });
             }
+            reportGovernedMutationRefreshUnavailable(refreshError, state.governedMutationRefreshPending);
+            return null;
           }
           if (!isCurrent()) {
             await refreshCurrentSelectionAfterMutationSelectionChange(ticketId, selectionToken, options);
@@ -5328,11 +5404,16 @@ export const approvalDeskHtml = `<!doctype html>
           setResult(data);
           return data;
         } finally {
+          let releasedMutationLock = false;
           if (state.governedMutationToken === mutationToken &&
               state.governedMutationRefreshPending?.mutationToken !== mutationToken) {
             state.governedMutationToken = null;
+            releasedMutationLock = true;
           }
           updateControls();
+          if (releasedMutationLock && typeof options?.render === 'function') {
+            options.render();
+          }
         }
       }
 

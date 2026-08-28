@@ -5498,6 +5498,140 @@ describe("approvalDeskHtml", () => {
     expect(app.requests.filter((request) => request.path.endsWith("/mark-sent"))).toHaveLength(1);
   });
 
+  it("keeps a failed diagnosis review locked when its authoritative refresh also fails", async () => {
+    const app = await startApprovalDeskApp({
+      diagnoses: [fixtureDiagnosisView()],
+      diagnosisReviewPlans: {
+        "TKT-1001": [{
+          error: "The diagnosis review used stale ticket context.",
+          status: 409,
+          code: "STALE_TICKET_CONTEXT",
+        }],
+      },
+      failTicketDetailOn: [2],
+      ticketDetail: {
+        lifecycle: fixtureLifecycle({
+          phase: "diagnosis-review",
+          primaryAction: "review-diagnosis",
+          actions: [lifecycleAction("review-diagnosis", "primary")],
+        }),
+      },
+    });
+    await app.selectFirstTicket();
+    app.openDiagnosisInspection();
+
+    await app.reviewDiagnosis("approve");
+
+    expect(app.parsedResult()).toMatchObject({
+      code: "AUTHORITATIVE_REFRESH_REQUIRED",
+      error: expect.stringContaining("authoritative ticket state"),
+    });
+    expect(app.el("diagnosisPanel").innerHTML).toContain("The diagnosis review used stale ticket context.");
+    expect(app.el("refreshQueue").textContent).toBe("Retry refresh");
+
+    app.openDiagnosisInspection();
+    expect(app.el("diagnosisPanel").innerHTML).toContain('data-decision="approve" disabled');
+    await app.reviewDiagnosis("approve");
+
+    expect(app.requests.filter((request) => request.path.endsWith("/review"))).toHaveLength(1);
+  });
+
+  it("retries a failed diagnosis review refresh without reposting or losing the domain error", async () => {
+    const app = await startApprovalDeskApp({
+      diagnoses: [fixtureDiagnosisView()],
+      diagnosisReviewPlans: {
+        "TKT-1001": [{
+          error: "The diagnosis review used stale ticket context.",
+          status: 409,
+          code: "STALE_TICKET_CONTEXT",
+        }],
+      },
+      failTicketDetailOn: [2],
+      ticketDetail: {
+        lifecycle: fixtureLifecycle({
+          phase: "diagnosis-review",
+          primaryAction: "review-diagnosis",
+          actions: [lifecycleAction("review-diagnosis", "primary")],
+        }),
+      },
+    });
+    await app.selectFirstTicket();
+    app.openDiagnosisInspection();
+
+    await app.reviewDiagnosis("approve");
+    await app.refreshQueue();
+    await app.wait(30);
+
+    expect(app.el("refreshQueue").textContent).toBe("Refresh");
+    expect(app.el("diagnosisPanel").innerHTML).toContain("The diagnosis review used stale ticket context.");
+    expect(app.parsedResult()).toMatchObject({
+      error: "The diagnosis review used stale ticket context.",
+      code: "STALE_TICKET_CONTEXT",
+    });
+    expect(app.requests.filter((request) => request.path.endsWith("/review"))).toHaveLength(1);
+  });
+
+  it("retries authoritative refresh against the current selection instead of the stale mutation ticket", async () => {
+    const app = await startApprovalDeskApp({
+      failTicketDetailOn: [2],
+      tickets: [
+        fixtureTicket,
+        { ...fixtureTicket, id: "TKT-1002", subject: "Second ticket" },
+      ],
+      ticketDetailRecommendation: {
+        ...fixtureRecommendation,
+        resolution: "approved",
+      },
+      ticketDetail: {
+        lifecycle: fixtureLifecycle({
+          phase: "recommendation-review",
+          primaryAction: "send-customer-response",
+          actions: [lifecycleAction("send-customer-response", "primary")],
+        }),
+      },
+    });
+    await app.selectFirstTicket();
+    await app.markSent();
+    await app.selectTicket("TKT-1002");
+
+    await app.refreshQueue();
+    await app.wait(30);
+
+    expect(app.el("ticketPanel").innerHTML).toContain("TKT-1002");
+    expect(app.ticketDetailRequestsFor("TKT-1001")).toBe(2);
+    expect(app.ticketDetailRequestsFor("TKT-1002")).toBe(2);
+    expect(app.el("refreshQueue").textContent).toBe("Refresh");
+  });
+
+  it("coalesces rapid authoritative refresh retries into one ticket reconciliation", async () => {
+    const app = await startApprovalDeskApp({
+      failTicketDetailOn: [2],
+      ticketDetailDelayTicks: { "TKT-1001": 20 },
+      ticketDetailRecommendation: {
+        ...fixtureRecommendation,
+        resolution: "approved",
+      },
+      ticketDetail: {
+        lifecycle: fixtureLifecycle({
+          phase: "recommendation-review",
+          primaryAction: "send-customer-response",
+          actions: [lifecycleAction("send-customer-response", "primary")],
+        }),
+      },
+    });
+    await app.selectFirstTicket();
+    await app.wait(20);
+    await app.markSent();
+
+    app.refreshQueueWithoutSettling();
+    app.refreshQueueWithoutSettling();
+    await app.wait(40);
+
+    expect(app.ticketDetailRequests()).toBe(3);
+    expect(app.el("refreshQueue").textContent).toBe("Refresh");
+    expect(app.requests.filter((request) => request.path.endsWith("/mark-sent"))).toHaveLength(1);
+  });
+
   it.each(["blocked", "completed"] as const)(
     "does not POST a %s governed recommendation rejection descriptor",
     async (availability) => {
@@ -5711,7 +5845,8 @@ describe("approvalDeskHtml", () => {
     await app.applyDiagnosisFix();
 
     expect(app.parsedResult()).toMatchObject({
-      error: "The scoped fix used stale ticket context.",
+      code: "AUTHORITATIVE_REFRESH_REQUIRED",
+      actionError: "The scoped fix used stale ticket context.",
     });
     expect(app.el("diagnosisPanel").innerHTML).toContain("The scoped fix used stale ticket context.");
   });
@@ -6732,6 +6867,9 @@ async function startApprovalDeskApp(options: {
     refreshQueue: async () => {
       elements.refreshQueue.dispatch("click");
       await settle();
+    },
+    refreshQueueWithoutSettling: () => {
+      elements.refreshQueue.dispatch("click");
     },
     approve: async () => {
       elements.approveButton.dispatch("click");

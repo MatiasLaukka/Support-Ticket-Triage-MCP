@@ -2210,7 +2210,7 @@ export const approvalDeskHtml = `<!doctype html>
         if (phase === undefined) {
           return ticket.recommendationSummary?.workflowState ?? 'active';
         }
-        if (phase === 'evaluation-needed' && ticket.recommendationSummary?.hasCustomerReply === true) {
+        if (phase === 'evaluation-needed' && ticket.recommendationSummary?.workflowState === 'customer-replied') {
           return 'customer-replied';
         }
         if (phase === 'resolved') return 'resolved';
@@ -5125,7 +5125,7 @@ export const approvalDeskHtml = `<!doctype html>
           return;
         }
         const selectedId = state.selectedTicket?.id;
-        if (selectedId === undefined || selectedId === ticketId) {
+        if (selectedId === undefined) {
           return;
         }
         await selectTicket(selectedId, {

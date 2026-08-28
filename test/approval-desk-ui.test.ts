@@ -4509,7 +4509,7 @@ describe("approvalDeskHtml", () => {
           id: "TKT-2003",
           subject: "Lifecycle customer reply",
           recommendationSummary: {
-            workflowState: "active",
+            workflowState: "customer-replied",
             hasCustomerReply: true,
             priority: "P2",
           },
@@ -4543,6 +4543,35 @@ describe("approvalDeskHtml", () => {
     expect(app.el("ticketList").children[0]!.innerHTML).toContain("Evaluation needed");
     expect(app.el("ticketList").children[0]!.className).toContain("state-customer-replied");
     expect(app.el("ticketList").children[0]!.className).toContain("lifecycle-evaluation-needed");
+  });
+
+  it("keeps an evaluation-needed ticket with only a historical reply in the active queue", async () => {
+    const app = await startApprovalDeskApp({
+      tickets: [{
+        ...fixtureTicket,
+        subject: "Re-evaluation after consumed reply",
+        recommendationSummary: {
+          workflowState: "active",
+          hasCustomerReply: true,
+          priority: "P2",
+        },
+        lifecycleSummary: {
+          phase: "evaluation-needed",
+          primaryAction: "evaluate-ticket",
+          reasonCodes: ["recommendation-rejected"],
+        },
+      }],
+    });
+
+    expect(app.el("ticketList").children).toHaveLength(1);
+    expect(app.el("ticketList").children[0]!.innerHTML).toContain("Re-evaluation after consumed reply");
+    expect(app.el("ticketList").children[0]!.className).toContain("state-active");
+    expect(app.el("ticketList").children[0]!.className).toContain("lifecycle-evaluation-needed");
+    expect(app.el("ticketList").children[0]!.className).not.toContain("state-customer-replied");
+
+    app.setQueueFilter("customer-replied");
+    expect(app.el("ticketList").children).toHaveLength(0);
+    expect(app.el("ticketList").innerHTML).toContain("No customer-replied tickets");
   });
 
   it("shows a close action after a ready-for-close response has been sent", async () => {
@@ -5226,6 +5255,61 @@ describe("approvalDeskHtml", () => {
     expect(app.metricsRequests()).toBe(metricsBefore);
     expect(app.field("category").textContent).toBe("Cancel");
     expect(app.parsedResult()).toMatchObject({ ticket: { id: "TKT-1002" } });
+    expect(app.requests.filter((request) => request.path.endsWith("/approve"))).toHaveLength(1);
+  });
+
+  it("reconciles the current ticket after an A-B-A selection race without old success UI", async () => {
+    const reviewLifecycle = fixtureLifecycle({
+      phase: "recommendation-review",
+      primaryAction: "review-recommendation",
+      actions: [lifecycleAction("review-recommendation", "primary")],
+    });
+    const responseLifecycle = fixtureLifecycle({
+      phase: "recommendation-review",
+      primaryAction: "send-customer-response",
+      actions: [lifecycleAction("send-customer-response", "primary")],
+    });
+    const app = await startApprovalDeskApp({
+      recommendationApproveDelayTicks: 30,
+      persistRecommendationApproval: true,
+      tickets: [
+        fixtureTicket,
+        { ...fixtureTicket, id: "TKT-1002", subject: "Second ticket" },
+      ],
+      ticketDetailRecommendation: fixtureRecommendation,
+      ticketDetail: { lifecycle: reviewLifecycle },
+      ticketDetailLifecycleSequence: [reviewLifecycle, reviewLifecycle, responseLifecycle],
+    });
+    await app.selectFirstTicket();
+    app.approveField("category");
+    const metricsBefore = app.metricsRequests();
+
+    app.approveWithoutSettling();
+    await app.wait(2);
+    await app.selectTicket("TKT-1002");
+    await app.selectTicket("TKT-1001");
+
+    expect(app.ticketDetailRequestsFor("TKT-1001")).toBe(2);
+    expect(app.el("actionBarTitle").textContent).toBe("Review recommendation");
+    expect(app.el("approveButton").disabled).toBe(true);
+    app.approveWithoutSettling();
+    await app.wait(2);
+    expect(app.requests.filter((request) => request.path.endsWith("/approve"))).toHaveLength(1);
+
+    await app.wait(50);
+
+    expect(app.ticketDetailRequestsFor("TKT-1001")).toBe(3);
+    expect(app.el("ticketPanel").innerHTML).toContain("TKT-1001");
+    expect(app.el("approveButton").textContent).toBe("Send");
+    expect(app.el("approveButton").disabled).toBe(false);
+    expect(app.el("editApprovalControls").hidden).toBe(true);
+    expect(app.el("startRejectButton").hidden).toBe(true);
+    expect(app.metricsRequests()).toBe(metricsBefore);
+    expect(app.parsedResult()).toMatchObject({
+      ticket: { id: "TKT-1001" },
+      latestRecommendation: { resolution: "approved" },
+      lifecycle: { primaryAction: { kind: "send-customer-response" } },
+    });
     expect(app.requests.filter((request) => request.path.endsWith("/approve"))).toHaveLength(1);
   });
 
@@ -5965,6 +6049,7 @@ async function startApprovalDeskApp(options: {
   };
   confirmResult?: boolean;
   markSentAutomaticReply?: string;
+  persistRecommendationApproval?: boolean;
   recommendation?: FixtureRecommendation;
   recommendationApproveDelayTicks?: number;
   recommendationDelayTicks?: number;
@@ -6022,6 +6107,7 @@ async function startApprovalDeskApp(options: {
   const recommendationGate = deferred<void>();
   const reconciliationDiagnosisGate = deferred<void>();
   let createdRecommendation: FixtureRecommendation | undefined;
+  let ticketDetailRecommendation = options.ticketDetailRecommendation;
   let diagnosisFixPersisted = false;
   const conversationTimeline = [
     ...(options.ticketDetail?.conversationTimeline ?? []),
@@ -6241,7 +6327,7 @@ async function startApprovalDeskApp(options: {
         recommendationHistory,
         recommendationSummary: options.ticketDetail?.recommendationSummary,
         latestRecommendation:
-          createdRecommendation ?? options.ticketDetailRecommendation,
+          createdRecommendation ?? ticketDetailRecommendation,
         operatorGuidance: options.ticketDetail?.operatorGuidance ?? defaultOperatorGuidance,
         ...(createdRecommendation !== undefined && options.recommendationLifecycle !== undefined
           ? { lifecycle: options.recommendationLifecycle }
@@ -6332,6 +6418,9 @@ async function startApprovalDeskApp(options: {
       await settle(options.recommendationApproveDelayTicks ?? 0);
       if (createdRecommendation !== undefined) {
         createdRecommendation = { ...createdRecommendation, resolution: "approved" };
+      }
+      if (options.persistRecommendationApproval === true && ticketDetailRecommendation !== undefined) {
+        ticketDetailRecommendation = { ...ticketDetailRecommendation, resolution: "approved" };
       }
       return jsonResponse({
         ticket: { ...fixtureTicket, revision: 1, category: "authentication" },

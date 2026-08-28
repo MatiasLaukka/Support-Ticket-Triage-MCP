@@ -69,9 +69,6 @@ describe("Approval Desk lifecycle completion e2e", () => {
     };
     const requestCount = (path: string): number =>
       app.requests.filter((request) => request.path === path).length;
-    const latestCustomerReply = async (): Promise<any> =>
-      (await detail()).conversationTimeline.filter((item: any) => item.kind === "customer-reply").at(-1);
-
     const assertUiMatchesLifecycle = async (
       label: string,
       options?: { refreshUi?: boolean },
@@ -157,12 +154,17 @@ describe("Approval Desk lifecycle completion e2e", () => {
         async () => clickPrimaryLifecycleControl(app, "send-customer-response"),
         /\/api\/recommendations\/[^/]+\/mark-sent$/,
       );
-      const firstAutomaticReply = await latestCustomerReply();
-      expect(firstAutomaticReply).toMatchObject({
-        kind: "customer-reply",
-        source: "demo-auto-reply",
+      const firstMarkSentResponse = app.responses
+        .filter((response) => /\/api\/recommendations\/[^/]+\/mark-sent$/.test(response.path))
+        .at(-1);
+      expect(firstMarkSentResponse?.body).toMatchObject({
+        automaticReply: {
+          after: {
+            source: "demo-auto-reply",
+          },
+        },
       });
-      expect(firstAutomaticReply.body.trim()).not.toBe("");
+      expect(firstMarkSentResponse?.body.automaticReply.after.body.trim()).not.toBe("");
       for (let attempt = 0; attempt < 8; attempt += 1) {
         if (currentLifecycle.primaryAction.kind === "evaluate-ticket") {
           currentLifecycle = await performGesture(
@@ -1017,6 +1019,7 @@ async function waitForAuthoritativeRefresh(
 async function startLiveApprovalDeskApp(baseUrl: string) {
   const elements = createElements();
   const requests: Array<{ path: string; init?: RequestInit }> = [];
+  const responses: Array<{ path: string; status: number; body: any }> = [];
   let pendingRequests = 0;
   const document = {
     createElement: () => new FakeElement(),
@@ -1027,7 +1030,9 @@ async function startLiveApprovalDeskApp(baseUrl: string) {
     pendingRequests += 1;
     try {
       const response = await fetch(`${baseUrl}${path}`, init);
-      return jsonResponse(await response.json(), response.status);
+      const body = await response.json();
+      responses.push({ path, status: response.status, body });
+      return jsonResponse(body, response.status);
     } finally {
       pendingRequests -= 1;
     }
@@ -1051,6 +1056,7 @@ async function startLiveApprovalDeskApp(baseUrl: string) {
   return {
     el: (id: string) => elements[id]!,
     requests,
+    responses,
     wait: async (milliseconds = 0) => {
       await new Promise((resolveWait) => setTimeout(resolveWait, milliseconds));
       await waitForIdle();

@@ -157,6 +157,12 @@ describe("Approval Desk lifecycle completion e2e", () => {
         async () => clickPrimaryLifecycleControl(app, "send-customer-response"),
         /\/api\/recommendations\/[^/]+\/mark-sent$/,
       );
+      const firstAutomaticReply = await latestCustomerReply();
+      expect(firstAutomaticReply).toMatchObject({
+        kind: "customer-reply",
+        source: "demo-auto-reply",
+      });
+      expect(firstAutomaticReply.body.trim()).not.toBe("");
       for (let attempt = 0; attempt < 8; attempt += 1) {
         if (currentLifecycle.primaryAction.kind === "evaluate-ticket") {
           currentLifecycle = await performGesture(

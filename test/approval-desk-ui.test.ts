@@ -5313,6 +5313,58 @@ describe("approvalDeskHtml", () => {
     expect(app.requests.filter((request) => request.path.endsWith("/approve"))).toHaveLength(1);
   });
 
+  it("waits for a pending A re-selection before reconciling an old A mutation", async () => {
+    const reviewLifecycle = fixtureLifecycle({
+      phase: "recommendation-review",
+      primaryAction: "review-recommendation",
+      actions: [lifecycleAction("review-recommendation", "primary")],
+    });
+    const responseLifecycle = fixtureLifecycle({
+      phase: "recommendation-review",
+      primaryAction: "send-customer-response",
+      actions: [lifecycleAction("send-customer-response", "primary")],
+    });
+    const app = await startApprovalDeskApp({
+      recommendationApproveDelayTicks: 20,
+      persistRecommendationApproval: true,
+      tickets: [
+        fixtureTicket,
+        { ...fixtureTicket, id: "TKT-1002", subject: "Second ticket" },
+      ],
+      ticketDetailRecommendation: fixtureRecommendation,
+      ticketDetail: { lifecycle: reviewLifecycle },
+      ticketDetailLifecycleSequence: [reviewLifecycle, reviewLifecycle, responseLifecycle],
+      ticketDetailDelayTicks: { "TKT-1001": 30 },
+    });
+    await app.selectFirstTicket();
+    await app.wait(30);
+    app.approveField("category");
+
+    app.approveWithoutSettling();
+    await app.wait(2);
+    await app.selectTicket("TKT-1002");
+    app.selectTicketWithoutSettling("TKT-1001");
+    await app.wait(35);
+
+    expect(app.el("approveButton").disabled).toBe(true);
+    app.approveWithoutSettling();
+    await app.wait(2);
+    expect(app.requests.filter((request) => request.path.endsWith("/approve"))).toHaveLength(1);
+
+    await app.wait(40);
+
+    expect(app.ticketDetailRequestsFor("TKT-1001")).toBe(3);
+    expect(app.el("ticketPanel").innerHTML).toContain("TKT-1001");
+    expect(app.el("approveButton").textContent).toBe("Send");
+    expect(app.el("approveButton").disabled).toBe(false);
+    expect(app.parsedResult()).toMatchObject({
+      ticket: { id: "TKT-1001" },
+      latestRecommendation: { resolution: "approved" },
+      lifecycle: { primaryAction: { kind: "send-customer-response" } },
+    });
+    expect(app.requests.filter((request) => request.path.endsWith("/approve"))).toHaveLength(1);
+  });
+
   it("keeps a successful governed POST successful when optional queue refresh fails", async () => {
     const app = await startApprovalDeskApp({
       failQueueAfter: 1,

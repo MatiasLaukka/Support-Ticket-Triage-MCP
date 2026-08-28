@@ -2009,6 +2009,7 @@ export const approvalDeskHtml = `<!doctype html>
         knowledgeRequestId: 0,
         ticketRequestId: 0,
         ticketSelectionToken: 0,
+        ticketSelectionRequest: null,
         evaluationPendingTicketId: null,
         governedMutationToken: null,
         nextGovernedMutationToken: 0,
@@ -4411,7 +4412,16 @@ export const approvalDeskHtml = `<!doctype html>
           .join('');
       }
 
-      async function selectTicket(id, options) {
+      function selectTicket(id, options) {
+        const promise = loadTicketSelection(id, options);
+        state.ticketSelectionRequest = {
+          ticketRequestId: state.ticketRequestId,
+          promise
+        };
+        return promise;
+      }
+
+      async function loadTicketSelection(id, options) {
         const previousTicketId = state.selectedTicket?.id;
         const newSelection = previousTicketId !== id;
         const switchingTickets = previousTicketId !== undefined && previousTicketId !== id;
@@ -5123,6 +5133,16 @@ export const approvalDeskHtml = `<!doctype html>
       async function refreshCurrentSelectionAfterMutationSelectionChange(ticketId, selectionToken, options) {
         if (state.ticketSelectionToken === selectionToken) {
           return;
+        }
+        while (state.selectedTicket === null) {
+          const selectionRequest = state.ticketSelectionRequest;
+          if (selectionRequest === null) {
+            return;
+          }
+          await selectionRequest.promise;
+          if (state.ticketSelectionRequest?.ticketRequestId === selectionRequest.ticketRequestId) {
+            break;
+          }
         }
         const selectedId = state.selectedTicket?.id;
         if (selectedId === undefined) {

@@ -2169,7 +2169,11 @@ export const approvalDeskHtml = `<!doctype html>
           const button = document.createElement('button');
           button.type = 'button';
           const workflowState = ticketWorkflowState(ticket);
-          button.className = 'ticket-button state-' + workflowState +
+          const queueState = ticketQueueFilterState(ticket);
+          const lifecycleClass = ticket.lifecycleSummary?.phase === undefined
+            ? ''
+            : ' lifecycle-' + ticket.lifecycleSummary.phase;
+          button.className = 'ticket-button state-' + queueState + lifecycleClass +
             (isSecurityTicket(ticket) ? ' risk-security' : '') +
             (state.selectedTicket?.id === ticket.id ? ' active' : '');
           button.innerHTML =
@@ -2205,6 +2209,9 @@ export const approvalDeskHtml = `<!doctype html>
         const phase = ticket.lifecycleSummary?.phase;
         if (phase === undefined) {
           return ticket.recommendationSummary?.workflowState ?? 'active';
+        }
+        if (phase === 'evaluation-needed' && ticket.recommendationSummary?.hasCustomerReply === true) {
+          return 'customer-replied';
         }
         if (phase === 'resolved') return 'resolved';
         if (phase === 'recommendation-review') return 'draft-ready';
@@ -3182,6 +3189,7 @@ export const approvalDeskHtml = `<!doctype html>
 
       function canCreateRecommendation() {
         return state.selectedTicket !== null &&
+          state.governedMutationToken === null &&
           (!isApprovedAwaitingSend() || lifecycleActionIsAvailable('evaluate-ticket'));
       }
 
@@ -4295,8 +4303,8 @@ export const approvalDeskHtml = `<!doctype html>
         if (hasLifecycleDescriptor() && lifecycleActionIsAvailable('resolve-ticket')) {
           els.closeTicketButton.hidden = false;
         }
-        els.createRecommendation.disabled = evaluationPending || !canCreateRecommendation();
-        els.createUpdatedRecommendation.disabled = evaluationPending || !shouldShowCreateUpdatedRecommendation();
+        els.createRecommendation.disabled = governedMutationPending || evaluationPending || !canCreateRecommendation();
+        els.createUpdatedRecommendation.disabled = governedMutationPending || evaluationPending || !shouldShowCreateUpdatedRecommendation();
         els.createRecommendation.textContent = evaluationPending ? 'Evaluating…' : 'Evaluate';
         els.createRecommendation.title = createRecommendationLabel();
         els.createUpdatedRecommendation.textContent = evaluationPending ? 'Evaluating…' : createUpdatedRecommendationLabel();
@@ -4661,6 +4669,9 @@ export const approvalDeskHtml = `<!doctype html>
         if (state.selectedTicket === null) {
           return;
         }
+        if (state.governedMutationToken !== null) {
+          return;
+        }
         if (hasLifecycleDescriptor() && !lifecycleActionIsAvailable('evaluate-ticket')) {
           setResult({ error: lifecycleActionReason('evaluate-ticket') || 'Evaluating this ticket is not available in the current lifecycle state.' });
           return;
@@ -4711,7 +4722,10 @@ export const approvalDeskHtml = `<!doctype html>
           state.consumedCustomerReplyTimestamp = latestCustomerReplyTimestamp();
           renderRecommendationStageControls();
           updateControls();
-          await loadQueue();
+          await loadQueue({ writeErrorToResult: false }).catch(function () {
+            // Queue freshness is useful but cannot change the outcome of a durable evaluation POST.
+            renderTicketList();
+          });
           await refreshEvidenceBestEffort();
         } catch (error) {
           if (!isCurrentTicketRequest(ticketId, ticketRequestId)) {
@@ -5106,6 +5120,19 @@ export const approvalDeskHtml = `<!doctype html>
         await evidenceRefresh;
       }
 
+      async function refreshCurrentSelectionAfterMutationSelectionChange(ticketId, selectionToken, options) {
+        if (state.ticketSelectionToken === selectionToken) {
+          return;
+        }
+        const selectedId = state.selectedTicket?.id;
+        if (selectedId === undefined || selectedId === ticketId) {
+          return;
+        }
+        await selectTicket(selectedId, {
+          waitForDiagnoses: options?.waitForDiagnoses === true
+        });
+      }
+
       async function runGovernedMutation(kind, post, options) {
         if (state.selectedTicket === null) {
           return null;
@@ -5146,6 +5173,7 @@ export const approvalDeskHtml = `<!doctype html>
             mutationError = error instanceof Error ? error : new Error('Request failed.');
           }
           if (!isCurrent()) {
+            await refreshCurrentSelectionAfterMutationSelectionChange(ticketId, selectionToken, options);
             return null;
           }
           if (mutationError === null) {
@@ -5170,6 +5198,7 @@ export const approvalDeskHtml = `<!doctype html>
             }
           }
           if (!isCurrent()) {
+            await refreshCurrentSelectionAfterMutationSelectionChange(ticketId, selectionToken, options);
             return null;
           }
           if (typeof options?.afterRefresh === 'function') {
@@ -5182,6 +5211,7 @@ export const approvalDeskHtml = `<!doctype html>
           if (typeof options?.afterSuccess === 'function') {
             await options.afterSuccess(data);
             if (!isCurrent()) {
+              await refreshCurrentSelectionAfterMutationSelectionChange(ticketId, selectionToken, options);
               return null;
             }
           }

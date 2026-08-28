@@ -4504,13 +4504,29 @@ describe("approvalDeskHtml", () => {
           subject: "Legacy draft fixture",
           recommendationSummary: { workflowState: "draft-ready", priority: "P3" },
         },
+        {
+          ...fixtureTicket,
+          id: "TKT-2003",
+          subject: "Lifecycle customer reply",
+          recommendationSummary: {
+            workflowState: "active",
+            hasCustomerReply: true,
+            priority: "P2",
+          },
+          lifecycleSummary: {
+            phase: "evaluation-needed",
+            primaryAction: "evaluate-ticket",
+            reasonCodes: ["customer-reply"],
+          },
+        },
       ],
     });
 
     expect(app.el("ticketList").children).toHaveLength(1);
     expect(app.el("ticketList").children[0]!.innerHTML).toContain("Lifecycle fix ready");
     expect(app.el("ticketList").children[0]!.innerHTML).toContain("Fix ready");
-    expect(app.el("ticketList").children[0]!.className).toContain("state-fix-ready");
+    expect(app.el("ticketList").children[0]!.className).toContain("state-active");
+    expect(app.el("ticketList").children[0]!.className).toContain("lifecycle-fix-ready");
 
     app.setQueueFilter("resolved");
     expect(app.el("ticketList").children).toHaveLength(1);
@@ -4520,6 +4536,13 @@ describe("approvalDeskHtml", () => {
     app.setQueueFilter("draft-ready");
     expect(app.el("ticketList").children).toHaveLength(1);
     expect(app.el("ticketList").children[0]!.innerHTML).toContain("Legacy draft fixture");
+
+    app.setQueueFilter("customer-replied");
+    expect(app.el("ticketList").children).toHaveLength(1);
+    expect(app.el("ticketList").children[0]!.innerHTML).toContain("Lifecycle customer reply");
+    expect(app.el("ticketList").children[0]!.innerHTML).toContain("Evaluation needed");
+    expect(app.el("ticketList").children[0]!.className).toContain("state-customer-replied");
+    expect(app.el("ticketList").children[0]!.className).toContain("lifecycle-evaluation-needed");
   });
 
   it("shows a close action after a ready-for-close response has been sent", async () => {
@@ -5164,7 +5187,7 @@ describe("approvalDeskHtml", () => {
     expect(app.requests.filter((request) => request.path.endsWith("/approve"))).toHaveLength(1);
   });
 
-  it("does not reconcile or run success UI for a governed mutation after ticket selection changes", async () => {
+  it("refreshes a new selection without reconciling old-ticket success UI", async () => {
     const app = await startApprovalDeskApp({
       recommendationApproveDelayTicks: 30,
       tickets: [
@@ -5187,13 +5210,23 @@ describe("approvalDeskHtml", () => {
     app.approveWithoutSettling();
     await app.wait(2);
     await app.selectTicket("TKT-1002");
+
+    expect(app.el("createRecommendation").disabled).toBe(true);
+    app.createRecommendationWithoutSettling();
+    await app.wait(2);
+    expect(app.requests.filter((request) =>
+      request.path === "/api/tickets/TKT-1002/recommendations",
+    )).toHaveLength(0);
+
     await app.wait(50);
 
     expect(app.el("ticketPanel").innerHTML).toContain("Second ticket");
     expect(app.ticketDetailRequests()).toBe(1);
+    expect(app.ticketDetailRequestsFor("TKT-1002")).toBe(2);
     expect(app.metricsRequests()).toBe(metricsBefore);
     expect(app.field("category").textContent).toBe("Cancel");
     expect(app.parsedResult()).toMatchObject({ ticket: { id: "TKT-1002" } });
+    expect(app.requests.filter((request) => request.path.endsWith("/approve"))).toHaveLength(1);
   });
 
   it("keeps a successful governed POST successful when optional queue refresh fails", async () => {
@@ -5542,6 +5575,34 @@ describe("approvalDeskHtml", () => {
     await app.createRecommendation();
 
     expect(app.queueRequests()).toBe(queueBefore + 1);
+  });
+
+  it("keeps a committed evaluation successful when optional queue refresh fails", async () => {
+    const app = await startApprovalDeskApp({
+      failQueueAfter: 1,
+      ticketDetail: {
+        lifecycle: fixtureLifecycle({
+          phase: "evaluation-needed",
+          primaryAction: "evaluate-ticket",
+          actions: [lifecycleAction("evaluate-ticket", "primary")],
+        }),
+      },
+      recommendationLifecycle: fixtureLifecycle({
+        phase: "recommendation-review",
+        primaryAction: "review-recommendation",
+        actions: [lifecycleAction("review-recommendation", "primary")],
+      }),
+    });
+    await app.selectFirstTicket();
+
+    await app.createRecommendation();
+
+    expect(app.requests.filter((request) => request.path.endsWith("/recommendations"))).toHaveLength(1);
+    expect(app.el("actionBarTitle").textContent).toBe("Review recommendation");
+    expect(app.el("recommendationPanel").innerHTML).toContain(
+      fixtureRecommendation.draftCustomerResponse,
+    );
+    expect(app.parsedResult()).not.toHaveProperty("error");
   });
 
   it("reports the evaluate-ticket descriptor reason when evaluation is blocked", async () => {

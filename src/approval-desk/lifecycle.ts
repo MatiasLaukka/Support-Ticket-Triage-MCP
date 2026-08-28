@@ -608,9 +608,14 @@ function fixProjection(input: {
   authoritativeDiagnosisOwner: DiagnosisContext["owner"] | undefined;
   authoritativeDiagnosisConfirmed: boolean;
 }): LifecycleView["fix"] {
-  const fixPositions = auditCausalPositions(input.audits).filter(({ event }) =>
+  const fixPositionsForTicket = auditCausalPositions(input.audits).filter(({ event }) =>
     ["platform-mitigation-available", "fix-available", "fix-ineffective"].includes(event.action as string),
   );
+  const fixPositions = input.authoritativeDiagnosisId === undefined
+    ? fixPositionsForTicket
+    : fixPositionsForTicket.filter(({ event }) =>
+        event.before.diagnosisId === input.authoritativeDiagnosisId,
+      );
   const latest = fixPositions.at(-1)?.event;
   if (latest === undefined) {
     if (

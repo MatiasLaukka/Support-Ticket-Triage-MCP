@@ -2541,6 +2541,15 @@ export const approvalDeskHtml = `<!doctype html>
         return 'Waiting for an internal platform confirmation before applying the fix.';
       }
 
+      function isNoPlatformFixVerification() {
+        return hasLifecycleDescriptor() &&
+          state.lifecycle?.phase === 'verification' &&
+          state.lifecycle?.fix?.state === 'none' &&
+          Array.isArray(state.lifecycle?.fix?.reasonCodes) &&
+          state.lifecycle.fix.reasonCodes.includes('no-platform-fix-required') &&
+          lifecycleActionIsAvailable('evaluate-ticket');
+      }
+
       function resetDiagnosisAfterCustomerReply() {
         state.diagnosisUiPhase = 'normal';
         state.diagnosisDraft = null;
@@ -3589,6 +3598,7 @@ export const approvalDeskHtml = `<!doctype html>
           state.lifecycle?.phase === 'diagnosis-review' ||
           lifecycleActionIsAvailable('review-diagnosis') ||
           lifecycleActionIsAvailable('revalidate-diagnosis') ||
+          isNoPlatformFixVerification() ||
           state.operatorGuidance?.requiredReview?.kind === 'diagnosis';
         els.diagnosisActionPanel.hidden = !hasDiagnosis || state.diagnosisUiPhase === 'normal' ||
           (state.diagnosisUiPhase === 'auto' && !autoDiagnosisPhaseEligible && !isHistoricalDiagnosisView(view));
@@ -3883,13 +3893,25 @@ export const approvalDeskHtml = `<!doctype html>
 
       function renderDecisionChips(recommendation) {
         const missing = Array.isArray(recommendation.missingEvidence) ? recommendation.missingEvidence : [];
-        return [
+        const labels = [
           'Evaluation: ' + recommendation.category,
           'Priority: ' + recommendation.priority,
           'Team: ' + recommendation.team,
-          missing.length === 0 ? 'Evidence complete' : missing.length + ' evidence items missing',
-          'Response ready'
-        ].map(chip).join('');
+          missing.length === 0 ? 'Evidence complete' : missing.length + ' evidence items missing'
+        ];
+        const responseState = state.lifecycle?.response?.state;
+        if (!hasLifecycleDescriptor()) {
+          labels.push('Response ready');
+        } else if (responseState === 'approved') {
+          labels.push('Response ready');
+        } else if (responseState === 'draft' || responseState === 'approval-required') {
+          labels.push('Response draft');
+        } else if (responseState === 'sent') {
+          labels.push('Response sent');
+        } else if (responseState === 'waiting-for-reply') {
+          labels.push('Waiting for customer');
+        }
+        return labels.map(chip).join('');
       }
 
       function decisionSummaryText(recommendation) {
@@ -5250,6 +5272,12 @@ export const approvalDeskHtml = `<!doctype html>
         if (hasLifecycleDescriptor()) {
           if (primary === 'review-diagnosis' || primary === 'revalidate-diagnosis') {
             return 'diagnosis';
+          }
+          if (phase === 'auto') {
+            const currentDiagnosis = selectedDiagnosisView();
+            if (currentDiagnosis !== null) {
+              return isDiagnosisApproved(currentDiagnosis) ? 'approved' : 'diagnosis';
+            }
           }
           if (phase === 'approved' && (primary === 'record-fix-available' || primary === 'apply-scoped-fix')) {
             return 'approved';

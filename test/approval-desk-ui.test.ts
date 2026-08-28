@@ -575,6 +575,57 @@ describe("approvalDeskHtml", () => {
     expect(app.el("diagnosisPanel").innerHTML).not.toContain('data-action="open-diagnosis-inspection"');
   });
 
+  it("returns from diagnosis history to the current authoritative diagnosis", async () => {
+    const historical = fixtureDiagnosisView({
+      id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      confidence: "likely",
+      summary: "Historical engineering theory.",
+    });
+    const current = fixtureDiagnosisView({
+      id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+      confidence: "confirmed",
+      owner: "support",
+      summary: "Current support-owned diagnosis.",
+      recommendedNextAction: "Verify the support-side correction with the customer.",
+    });
+    const currentReview = {
+      decision: "approve",
+      diagnosisId: current.originalDiagnosis.id,
+      editedDiagnosis: current.originalDiagnosis.after.diagnosis,
+    };
+    const app = await startApprovalDeskApp({
+      diagnoses: [historical, { ...current, reviews: [currentReview], latestReview: currentReview }],
+      ticketDetail: {
+        lifecycle: {
+          ...fixtureLifecycle({
+            phase: "verification",
+            primaryAction: "evaluate-ticket",
+            actions: [lifecycleAction("evaluate-ticket", "primary", ["no-platform-fix-required"])],
+          }),
+          fix: {
+            state: "none",
+            reasonCodes: ["no-platform-fix-required"],
+            diagnosisStillAuthoritative: true,
+          },
+          response: { intent: "fix-verification", state: "none" },
+        },
+      },
+    });
+
+    await app.selectFirstTicket();
+    app.selectDiagnosis(historical.originalDiagnosis.id);
+    expect(app.el("diagnosisPanel").innerHTML).toContain('data-diagnosis-phase="history"');
+
+    app.el("diagnosisPanel").dispatch("click", {
+      target: { dataset: { action: "back-to-current-diagnosis" } },
+    });
+    await app.wait(30);
+
+    expect(app.el("diagnosisPanel").innerHTML).toContain('data-diagnosis-phase="approved-diagnosis"');
+    expect(app.el("diagnosisPanel").innerHTML).toContain("Current support-owned diagnosis.");
+    expect(app.el("diagnosisPanel").innerHTML).not.toContain('data-diagnosis-phase="history"');
+  });
+
   it("refreshes the authoritative lifecycle before leaving diagnosis for the action bar", async () => {
     const app = await startApprovalDeskApp({
       ticketDetailRecommendation: fixtureRecommendation,
@@ -1305,11 +1356,15 @@ describe("approvalDeskHtml", () => {
 
     expect(app.el("actionBarTitle").textContent).toBe("Re-evaluate");
     expect(app.el("actionBarHint").textContent).toContain("Re-evaluate the ticket");
+    expect(app.el("diagnosisActionPanel").hidden).toBe(false);
+    expect(app.el("diagnosisPanel").innerHTML).toContain('data-diagnosis-phase="approved-diagnosis"');
+    expect(app.el("diagnosisPanel").innerHTML).toContain('data-action="reopen-diagnosis-evaluation"');
     expect(app.el("createUpdatedRecommendation").hidden).toBe(false);
     expect(app.el("createUpdatedRecommendation").textContent).toBe("Re-evaluate");
     expect(app.el("fixButton").hidden).toBe(true);
     expect(app.el("diagnosisPanel").innerHTML).toContain(nextStep);
     expect(app.el("diagnosisPanel").innerHTML).not.toContain('data-action="record-fix-available"');
+    expect(app.el("decisionChips").innerHTML).not.toContain("Response ready");
   });
 
   it("opens Scoped Fix from the action bar when the lifecycle permits applying it", async () => {

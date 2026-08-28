@@ -1103,6 +1103,67 @@ describe("lifecycle projection", () => {
     expect(workflow.operatorGuidance.customerNextStep).toBe(recommendedNextAction);
   });
 
+  it("does not attach an older platform fix to a newer authoritative no-platform-fix diagnosis", () => {
+    const approved = matrixRecommendation();
+    const engineeringDiagnosis = matrixDiagnosis(
+      "30000000-0000-4000-8000-000000000064",
+      "2026-06-10T09:02:00.000Z",
+      "confirmed",
+      "engineering",
+    );
+    const engineeringReview = matrixDiagnosisReview(
+      engineeringDiagnosis,
+      "approve",
+      "2026-06-10T09:03:00.000Z",
+    );
+    const oldFix = matrixAudit(
+      "70000000-0000-4000-8000-000000000064",
+      "fix-available",
+      "2026-06-10T09:04:00.000Z",
+      {
+        before: { diagnosisId: engineeringDiagnosis.id },
+        after: { fix: { status: "available" } },
+      },
+    );
+    const supportDiagnosis = matrixDiagnosis(
+      "30000000-0000-4000-8000-000000000065",
+      "2026-06-10T09:05:00.000Z",
+      "confirmed",
+      "support",
+      undefined,
+      "Verify the support-side correction with the customer.",
+    );
+    const supportReview = matrixDiagnosisReview(
+      supportDiagnosis,
+      "approve",
+      "2026-06-10T09:06:00.000Z",
+    );
+
+    const lifecycle = buildTicketLifecycleView({
+      ticket,
+      recommendations: [approved],
+      audits: [
+        matrixSubmission(approved.id),
+        matrixResponse(approved.id),
+        engineeringDiagnosis,
+        engineeringReview,
+        oldFix,
+        supportDiagnosis,
+        supportReview,
+      ],
+    });
+
+    expect(lifecycle.phase).toBe("verification");
+    expect(lifecycle.fix).toMatchObject({
+      state: "none",
+      diagnosisId: supportDiagnosis.id,
+      reasonCodes: ["no-platform-fix-required"],
+      diagnosisStillAuthoritative: true,
+    });
+    expect(lifecycle.fix.fixEventId).toBeUndefined();
+    expect(lifecycle.current.fixEventId).toBeUndefined();
+  });
+
   it("keeps engineering-owned confirmed diagnoses on the governed awaiting-fix path", () => {
     const approved = matrixRecommendation();
     const diagnosis = matrixDiagnosis(

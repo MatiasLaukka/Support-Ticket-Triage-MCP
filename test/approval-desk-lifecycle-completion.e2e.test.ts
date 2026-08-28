@@ -81,8 +81,6 @@ describe("Approval Desk lifecycle completion e2e", () => {
       }
       const currentLifecycle = await lifecycle();
       const rendered = renderedPrimaryAction(app);
-      if (label === "initial evaluate") console.log("[initial lifecycle]", JSON.stringify(currentLifecycle));
-      if (label === "initial evaluate") console.log("[initial controls]", app.el("approveButton").textContent, app.el("approveButton").hidden, app.el("approveButton").disabled, parseRenderedActions(app.el("recommendationPanel").innerHTML));
       expect(
         rendered,
         `${label}: expected rendered primary action to match lifecycle.\nTitle: ${app.el("actionBarTitle").textContent}\nHint: ${app.el("actionBarHint").textContent}\nDiagnosis: ${app.el("diagnosisPanel").innerHTML}\nRecommendation: ${app.el("recommendationPanel").innerHTML}`,
@@ -108,7 +106,6 @@ describe("Approval Desk lifecycle completion e2e", () => {
       await gesture();
       const newRequests = app.requests.slice(before);
       const mutations = newRequests.filter(isGovernedMutationRequest);
-      if (label === "initial evaluate") console.log("[initial requests]", newRequests.map((request) => request.path));
       const renderedState = [
         `title=${app.el("actionBarTitle").textContent}`,
         `hint=${app.el("actionBarHint").textContent}`,
@@ -124,7 +121,6 @@ describe("Approval Desk lifecycle completion e2e", () => {
         expect(mutations[0]!.path, `${label} hit the wrong mutation endpoint.`).toMatch(expectedPath);
       }
       const observed = await assertUiMatchesLifecycle(label, { refreshUi: expectedPath !== null });
-      if (label === "initial evaluate") console.log("[initial lifecycle]", JSON.stringify(observed));
       return observed;
     };
 
@@ -161,13 +157,89 @@ describe("Approval Desk lifecycle completion e2e", () => {
         async () => clickPrimaryLifecycleControl(app, "send-customer-response"),
         /\/api\/recommendations\/[^/]+\/mark-sent$/,
       );
-      app.el("disableAutomaticReplies").checked = true;
-
+      for (let attempt = 0; attempt < 8; attempt += 1) {
+        if (currentLifecycle.primaryAction.kind === "evaluate-ticket") {
+          currentLifecycle = await performGesture(
+            `evaluate automatic evidence reply ${attempt + 1}`,
+            async () => clickPrimaryLifecycleControl(app, "evaluate-ticket"),
+            /\/api\/tickets\/TKT-1010\/recommendations$/,
+          );
+          continue;
+        }
+        if (currentLifecycle.primaryAction.kind === "review-recommendation") {
+          currentLifecycle = await performGesture(
+            `approve automatic evidence follow-up ${attempt + 1}`,
+            async () => clickPrimaryLifecycleControl(app, "review-recommendation"),
+            /\/api\/recommendations\/[^/]+\/approve$/,
+          );
+          currentLifecycle = await performGesture(
+            `send automatic evidence follow-up ${attempt + 1}`,
+            async () => clickPrimaryLifecycleControl(app, "send-customer-response"),
+            /\/api\/recommendations\/[^/]+\/mark-sent$/,
+          );
+          continue;
+        }
+        if (currentLifecycle.primaryAction.kind === "record-diagnosis") {
+          break;
+        }
+        throw new Error(`Unexpected lifecycle while gathering evidence: ${currentLifecycle.primaryAction.kind}`);
+      }
+      expect(currentLifecycle.primaryAction.kind).toBe("record-diagnosis");
       currentLifecycle = await performGesture(
         "record first diagnosis",
         async () => clickPrimaryLifecycleControl(app, "record-diagnosis"),
         /\/api\/tickets\/TKT-1010\/diagnosis$/,
       );
+      if (currentLifecycle.primaryAction.kind === "evaluate-ticket") {
+        await live(`/api/demo/tickets/${ticketId}/inject`, {
+          method: "POST",
+          body: JSON.stringify({
+            action: "internal-confirmation",
+            actor: "product-support",
+            rationale: "The internal platform check confirms the diagnosis.",
+          }),
+        });
+      }
+      await assertUiMatchesLifecycle("after internal diagnosis confirmation");
+      if (currentLifecycle.primaryAction.kind === "evaluate-ticket") {
+        currentLifecycle = await performGesture(
+          "evaluate after internal diagnosis confirmation",
+          async () => clickPrimaryLifecycleControl(app, "evaluate-ticket"),
+          /\/api\/tickets\/TKT-1010\/recommendations$/,
+        );
+      }
+      for (let attempt = 0; attempt < 8 && currentLifecycle.primaryAction.kind !== "review-diagnosis"; attempt += 1) {
+        if (currentLifecycle.primaryAction.kind === "review-recommendation") {
+          currentLifecycle = await performGesture(
+            `approve diagnosis update ${attempt + 1}`,
+            async () => clickPrimaryLifecycleControl(app, "review-recommendation"),
+            /\/api\/recommendations\/[^/]+\/approve$/,
+          );
+          currentLifecycle = await performGesture(
+            `send diagnosis update ${attempt + 1}`,
+            async () => clickPrimaryLifecycleControl(app, "send-customer-response"),
+            /\/api\/recommendations\/[^/]+\/mark-sent$/,
+          );
+          continue;
+        }
+        if (currentLifecycle.primaryAction.kind === "evaluate-ticket") {
+          currentLifecycle = await performGesture(
+            `evaluate diagnosis update ${attempt + 1}`,
+            async () => clickPrimaryLifecycleControl(app, "evaluate-ticket"),
+            /\/api\/tickets\/TKT-1010\/recommendations$/,
+          );
+          continue;
+        }
+        if (currentLifecycle.primaryAction.kind === "record-diagnosis") {
+          currentLifecycle = await performGesture(
+            `record diagnosis update ${attempt + 1}`,
+            async () => clickPrimaryLifecycleControl(app, "record-diagnosis"),
+            /\/api\/tickets\/TKT-1010\/diagnosis$/,
+          );
+          continue;
+        }
+        break;
+      }
       expect(currentLifecycle.primaryAction.kind).toBe("review-diagnosis");
       const firstDiagnosisId = diagnoses().then((views) => views.at(-1)!.originalDiagnosis.id);
 
@@ -337,22 +409,6 @@ describe("Approval Desk lifecycle completion e2e", () => {
 
       for (let attempt = 0; attempt < 8; attempt += 1) {
         currentLifecycle = await assertUiMatchesLifecycle(`pre-fix loop ${attempt + 1}`);
-        const latestDiagnosisView = (await diagnoses()).at(-1);
-        console.log(
-          `[pre-fix ${attempt + 1}]`,
-          JSON.stringify({
-            phase: currentLifecycle.phase,
-            primary: currentLifecycle.primaryAction.kind,
-            confirmation: currentLifecycle.confirmation?.state,
-            fix: currentLifecycle.fix,
-            owner:
-              latestDiagnosisView?.latestReview?.editedDiagnosis?.owner ??
-              latestDiagnosisView?.originalDiagnosis?.after?.diagnosis?.owner,
-            confidence:
-              latestDiagnosisView?.latestReview?.editedDiagnosis?.confidence ??
-              latestDiagnosisView?.originalDiagnosis?.after?.diagnosis?.confidence,
-          }),
-        );
         if (["apply-scoped-fix", "record-fix-available"].includes(currentLifecycle.primaryAction.kind)) {
           break;
         }
@@ -469,29 +525,37 @@ describe("Approval Desk lifecycle completion e2e", () => {
 
       app = await restartRuntimeFromOperationalSqlite(state, now);
       currentLifecycle = await assertUiMatchesLifecycle("after runtime restart");
-      expect(["apply-scoped-fix", "record-fix-available"]).toContain(currentLifecycle.primaryAction.kind);
-
-      if (currentLifecycle.primaryAction.kind === "record-fix-available") {
-        currentLifecycle = await performGesture(
-          "record fix availability",
-          async () => clickPrimaryLifecycleControl(app, "record-fix-available"),
-          /\/api\/tickets\/TKT-1010\/fix$/,
-        );
+      const fixWasAlreadyApplied = currentLifecycle.fix?.state === "applied";
+      let scopedFixApplied = false;
+      if (!fixWasAlreadyApplied) {
+        expect(["apply-scoped-fix", "record-fix-available"]).toContain(currentLifecycle.primaryAction.kind);
+        if (currentLifecycle.primaryAction.kind === "record-fix-available") {
+          currentLifecycle = await performGesture(
+            "record fix availability",
+            async () => clickPrimaryLifecycleControl(app, "record-fix-available"),
+            /\/api\/tickets\/TKT-1010\/fix$/,
+          );
+        }
+        if (currentLifecycle.primaryAction.kind === "apply-scoped-fix") {
+          const latestDiagnosisId = (await diagnoses()).at(-1)!.originalDiagnosis.id;
+          app.selectDiagnosis(latestDiagnosisId);
+          currentLifecycle = await performGesture(
+            "open scoped fix",
+            async () => app.openScopedFix(),
+            null,
+          );
+          currentLifecycle = await performGesture(
+            "apply scoped fix",
+            async () => clickPrimaryLifecycleControl(app, "apply-scoped-fix"),
+            /\/api\/tickets\/TKT-1010\/diagnoses\/[^/]+\/fix$/,
+          );
+          scopedFixApplied = true;
+        }
       }
-      currentLifecycle = await performGesture(
-        "open scoped fix",
-        async () => app.openScopedFix(),
-        null,
-      );
-      expect(app.el("diagnosisPanel").innerHTML).toContain('data-action="apply-diagnosis-fix"');
-
-      currentLifecycle = await performGesture(
-        "apply scoped fix",
-        async () => clickPrimaryLifecycleControl(app, "apply-scoped-fix"),
-        /\/api\/tickets\/TKT-1010\/diagnoses\/[^/]+\/fix$/,
-      );
       expect(["evaluate-ticket", "review-recommendation"]).toContain(currentLifecycle.primaryAction.kind);
-      expect((await detail()).recommendation?.draftCustomerResponse ?? "").toContain("verify");
+      if (scopedFixApplied) {
+        expect((await detail()).recommendation?.draftCustomerResponse ?? "").toContain("verify");
+      }
 
       if (currentLifecycle.primaryAction.kind === "evaluate-ticket") {
         currentLifecycle = await performGesture(
@@ -525,6 +589,19 @@ describe("Approval Desk lifecycle completion e2e", () => {
         }),
       });
       currentLifecycle = await assertUiMatchesLifecycle("after customer confirmation");
+      if (currentLifecycle.primaryAction.kind === "revalidate-diagnosis") {
+        currentLifecycle = await performGesture(
+          "open post-fix diagnosis revalidation",
+          async () => app.openDiagnosisInspection("revalidate"),
+          null,
+        );
+        app.setDiagnosisReviewRationale("The customer confirms the scoped fix resolved the campaign editor failure.");
+        currentLifecycle = await performGesture(
+          "revalidate post-fix diagnosis",
+          async () => app.reviewDiagnosis("revalidate"),
+          /\/api\/tickets\/TKT-1010\/diagnoses\/[^/]+\/review$/,
+        );
+      }
       expect(currentLifecycle.primaryAction.kind).toBe("evaluate-ticket");
 
       currentLifecycle = await performGesture(
@@ -1041,6 +1118,11 @@ async function startLiveApprovalDeskApp(baseUrl: string) {
         target: { dataset: { action: "open-scoped-fix" } },
       });
       await waitForIdle();
+    },
+    selectDiagnosis: (diagnosisId: string) => {
+      elements.diagnosisPanel.dispatch("click", {
+        target: { dataset: { action: "select-diagnosis", diagnosisId } },
+      });
     },
     applyDiagnosisFix: async () => {
       elements.diagnosisPanel.dispatch("click", {

@@ -196,17 +196,26 @@ describe("OpenAI timeout configuration via TRIAGE_OPENAI_TIMEOUT_MS", () => {
       expect((provider as any).options?.timeoutMs).toBe(20_000);
     });
 
-    it("throws on TRIAGE_KNOWLEDGE_CANDIDATE_TIMEOUT_MS with invalid value", () => {
+    it("does not throw when TRIAGE_KNOWLEDGE_CANDIDATE_TIMEOUT_MS is invalid (falls back to default)", () => {
       expect(() => createKnowledgeCandidateDraftProviderFromEnv(
         { ...envWithTimeout, TRIAGE_KNOWLEDGE_CANDIDATE_PROVIDER: "openai", TRIAGE_KNOWLEDGE_CANDIDATE_TIMEOUT_MS: "invalid" },
-      )).toThrow(/TRIAGE_KNOWLEDGE_CANDIDATE_TIMEOUT_MS/);
+      )).not.toThrow();
+      // Invalid values fall back to default (20_000) for knowledge candidate timeout
+      expect((createKnowledgeCandidateDraftProviderFromEnv(
+        { ...envWithTimeout, TRIAGE_KNOWLEDGE_CANDIDATE_PROVIDER: "openai", TRIAGE_KNOWLEDGE_CANDIDATE_TIMEOUT_MS: "invalid" },
+      ) as any).options?.timeoutMs).toBe(20_000);
     });
 
-    it("customer response draft provider throws on invalid APPROVAL_DRAFT_TIMEOUT_MS", () => {
+    it("customer response draft provider does not throw on invalid APPROVAL_DRAFT_TIMEOUT_MS (falls back to default)", () => {
       expect(() => createCustomerResponseDraftProviderFromEnv(
         { ...envWithTimeout, APPROVAL_DRAFT_TIMEOUT_MS: "not-a-number" },
         { preferOpenAi: true },
-      )).toThrow(/APPROVAL_DRAFT_TIMEOUT_MS/);
+      )).not.toThrow();
+      // Invalid values fall back to default (20_000) for approval draft timeout
+      expect((createCustomerResponseDraftProviderFromEnv(
+        { ...envWithTimeout, APPROVAL_DRAFT_TIMEOUT_MS: "not-a-number" },
+        { preferOpenAi: true },
+      ) as any).options?.timeoutMs).toBe(20_000);
     });
 
     it("does not throw when TRIAGE_OPENAI_TIMEOUT_MS is valid large integer", () => {

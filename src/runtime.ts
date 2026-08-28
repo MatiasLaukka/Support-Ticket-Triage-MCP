@@ -31,6 +31,7 @@ import {
   acquireDemoStateUsageLease,
   type DemoStateUsageLease,
 } from "./demo-state-lease.js";
+import { parseKnowledgeCandidateTimeoutMs } from "./utils/parse-openai-timeout.js";
 
 const STARTUP_PATH_MESSAGES = {
   TRIAGE_DATA_ROOT: "TRIAGE_DATA_ROOT must not be blank.",
@@ -413,17 +414,6 @@ function isOperationalLearningOutboxStore(
   const candidate = store as Partial<OperationalLearningOutboxStore>;
   return typeof candidate.readOutbox === "function"
     && typeof candidate.listPendingOutbox === "function";
-}
-
-function parseKnowledgeCandidateTimeoutMs(value: string | undefined): number {
-  if (value === undefined || value.trim() === "") return 20_000;
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed) || parsed <= 0) {
-    throw new StartupConfigError(
-      `TRIAGE_KNOWLEDGE_CANDIDATE_TIMEOUT_MS must be a positive integer. Received: "${value}"`,
-    );
-  }
-  return Math.round(parsed);
 }
 
 function invalidMinutesSaved(): StartupConfigError {

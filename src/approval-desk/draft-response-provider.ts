@@ -29,6 +29,7 @@ import {
   buildCustomerServiceSkillContext,
 } from "./customer-service-drafting-skill.js";
 import { StartupConfigError } from "../runtime.js";
+import { parseApprovalDraftTimeoutMs } from "../utils/parse-openai-timeout.js";
 import { validateDraftQuality } from "./draft-quality-guardrails.js";
 import { buildDraftObligations, validateDraftContract } from "./draft-contract.js";
 import { makeOpenAiResponsesUrl } from "../utils/normalize-url.js";
@@ -426,19 +427,6 @@ export function createCustomerResponseDraftProviderFromEnv(
       ),
     baseUrl: env.TRIAGE_OPENAI_BASE_URL?.trim(),
   });
-}
-
-function parseApprovalDraftTimeoutMs(value: string | undefined): number {
-  if (value === undefined || value.trim() === "") {
-    return DEFAULT_OPENAI_DRAFT_TIMEOUT_MS;
-  }
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed) || parsed <= 0) {
-    throw new StartupConfigError(
-      `APPROVAL_DRAFT_TIMEOUT_MS must be a positive integer. Received: "${value}"`,
-    );
-  }
-  return Math.round(parsed);
 }
 
 export async function draftCustomerResponseWithFallback(input: {

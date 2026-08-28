@@ -5447,6 +5447,57 @@ describe("approvalDeskHtml", () => {
     expect(app.requests.filter((request) => request.path.endsWith("/mark-sent"))).toHaveLength(1);
   });
 
+  it("keeps governed mutations locked until a failed durable-success refresh is retried successfully", async () => {
+    const app = await startApprovalDeskApp({
+      failTicketDetailOn: [2, 3],
+      ticketDetailRecommendation: {
+        ...fixtureRecommendation,
+        resolution: "approved",
+      },
+      ticketDetailLifecycleSequence: [
+        fixtureLifecycle({
+          phase: "recommendation-review",
+          primaryAction: "send-customer-response",
+          actions: [lifecycleAction("send-customer-response", "primary")],
+        }),
+        fixtureLifecycle({
+          phase: "evaluation-needed",
+          primaryAction: "evaluate-ticket",
+          actions: [lifecycleAction("evaluate-ticket", "primary")],
+        }),
+      ],
+    });
+    await app.selectFirstTicket();
+
+    await app.markSent();
+
+    expect(app.requests.filter((request) => request.path.endsWith("/mark-sent"))).toHaveLength(1);
+    expect(app.parsedResult()).toMatchObject({
+      code: "AUTHORITATIVE_REFRESH_REQUIRED",
+      error: expect.stringContaining("saved"),
+    });
+    expect(app.el("refreshQueue").textContent).toBe("Retry refresh");
+    expect(app.el("createUpdatedRecommendation").disabled).toBe(true);
+
+    await app.refreshQueue();
+
+    expect(app.parsedResult()).toMatchObject({
+      code: "AUTHORITATIVE_REFRESH_REQUIRED",
+      error: expect.stringContaining("refresh"),
+    });
+    expect(app.el("refreshQueue").textContent).toBe("Retry refresh");
+    expect(app.el("createUpdatedRecommendation").disabled).toBe(true);
+    expect(app.requests.filter((request) => request.path.endsWith("/mark-sent"))).toHaveLength(1);
+
+    await app.refreshQueue();
+    await app.wait(30);
+
+    expect(app.el("refreshQueue").textContent).toBe("Refresh");
+    expect(app.el("createUpdatedRecommendation").disabled).toBe(false);
+    expect(app.ticketDetailRequests()).toBe(4);
+    expect(app.requests.filter((request) => request.path.endsWith("/mark-sent"))).toHaveLength(1);
+  });
+
   it.each(["blocked", "completed"] as const)(
     "does not POST a %s governed recommendation rejection descriptor",
     async (availability) => {
@@ -6143,6 +6194,7 @@ async function startApprovalDeskApp(options: {
   failEvidenceAfter?: number;
   failQueueAfter?: number;
   failTicketDetailAfter?: number;
+  failTicketDetailOn?: number[];
   failRecommendation?: boolean;
   recommendationFailure?: {
     status: number;
@@ -6401,8 +6453,9 @@ async function startApprovalDeskApp(options: {
     if (path === `/api/tickets/${selectedFixtureTicket.id}`) {
       const detailRequests = requests.filter((request) => request.path === path).length;
       if (
-        options.failTicketDetailAfter !== undefined &&
-        detailRequests > options.failTicketDetailAfter
+        (options.failTicketDetailAfter !== undefined &&
+          detailRequests > options.failTicketDetailAfter) ||
+        options.failTicketDetailOn?.includes(detailRequests) === true
       ) {
         return jsonResponse({ error: { message: "Ticket refresh is unavailable." } }, 503);
       }

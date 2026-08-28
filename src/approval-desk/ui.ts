@@ -2012,6 +2012,7 @@ export const approvalDeskHtml = `<!doctype html>
         ticketSelectionRequest: null,
         evaluationPendingTicketId: null,
         governedMutationToken: null,
+        governedMutationRefreshPending: null,
         nextGovernedMutationToken: 0,
         operatorGuidance: null,
         lifecycle: null,
@@ -4332,6 +4333,7 @@ export const approvalDeskHtml = `<!doctype html>
         els.createRecommendation.title = createRecommendationLabel();
         els.createUpdatedRecommendation.textContent = evaluationPending ? 'Evaluating…' : createUpdatedRecommendationLabel();
         els.createUpdatedRecommendation.title = createRecommendationLabel();
+        els.refreshQueue.textContent = state.governedMutationRefreshPending === null ? 'Refresh' : 'Retry refresh';
         els.manualRepliesButton.textContent = manualRepliesEnabled ? 'Automatic' : 'Manual';
         els.manualRepliesButton.title = manualRepliesEnabled
           ? 'Switch back to automatic customer replies'
@@ -5175,6 +5177,63 @@ export const approvalDeskHtml = `<!doctype html>
         });
       }
 
+      function reportGovernedMutationRefreshUnavailable(error) {
+        setResult({
+          code: 'AUTHORITATIVE_REFRESH_REQUIRED',
+          error: 'The action was saved, but the authoritative ticket state could not be refreshed. Use Retry refresh before taking another governed action.',
+          refreshError: error instanceof Error ? error.message : 'Ticket refresh is unavailable.'
+        });
+      }
+
+      async function finishGovernedMutationAfterRefresh(pending) {
+        const { data, isCurrent, options, selectionToken, ticketId } = pending;
+        if (!isCurrent()) {
+          await refreshCurrentSelectionAfterMutationSelectionChange(ticketId, selectionToken, options);
+          return null;
+        }
+        if (typeof options?.afterRefresh === 'function') {
+          options.afterRefresh({ data, error: null });
+        }
+        if (typeof options?.afterSuccess === 'function') {
+          await options.afterSuccess(data);
+          if (!isCurrent()) {
+            await refreshCurrentSelectionAfterMutationSelectionChange(ticketId, selectionToken, options);
+            return null;
+          }
+        }
+        setResult(data);
+        return data;
+      }
+
+      async function retryGovernedMutationRefresh() {
+        const pending = state.governedMutationRefreshPending;
+        if (pending === null) {
+          return false;
+        }
+        try {
+          await refreshGovernedMutationState({
+            ticketId: pending.ticketId,
+            waitForDiagnoses: pending.options?.waitForDiagnoses === true
+          });
+        } catch (error) {
+          reportGovernedMutationRefreshUnavailable(error);
+          updateControls();
+          return true;
+        }
+        try {
+          await finishGovernedMutationAfterRefresh(pending);
+        } finally {
+          if (state.governedMutationRefreshPending === pending) {
+            state.governedMutationRefreshPending = null;
+          }
+          if (state.governedMutationToken === pending.mutationToken) {
+            state.governedMutationToken = null;
+          }
+          updateControls();
+        }
+        return true;
+      }
+
       async function runGovernedMutation(kind, post, options) {
         if (state.selectedTicket === null) {
           return null;
@@ -5236,6 +5295,15 @@ export const approvalDeskHtml = `<!doctype html>
             });
           } catch (refreshError) {
             if (mutationError === null) {
+              state.governedMutationRefreshPending = {
+                data,
+                isCurrent,
+                mutationToken,
+                options,
+                selectionToken,
+                ticketId
+              };
+              reportGovernedMutationRefreshUnavailable(refreshError);
               return null;
             }
           }
@@ -5260,7 +5328,8 @@ export const approvalDeskHtml = `<!doctype html>
           setResult(data);
           return data;
         } finally {
-          if (state.governedMutationToken === mutationToken) {
+          if (state.governedMutationToken === mutationToken &&
+              state.governedMutationRefreshPending?.mutationToken !== mutationToken) {
             state.governedMutationToken = null;
           }
           updateControls();
@@ -6474,8 +6543,10 @@ export const approvalDeskHtml = `<!doctype html>
         });
       }
       els.refreshQueue.addEventListener('click', function () {
-        void loadQueue()
-          .then(refreshEvidenceBestEffort)
+        void retryGovernedMutationRefresh()
+          .then(function (retried) {
+            return retried ? undefined : loadQueue().then(refreshEvidenceBestEffort);
+          })
           .catch(function (error) { setResult({ error: error.message }); });
       });
       els.refreshEvidence.addEventListener('click', function () {

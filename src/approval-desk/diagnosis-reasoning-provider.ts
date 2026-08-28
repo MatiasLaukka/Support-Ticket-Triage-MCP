@@ -8,10 +8,11 @@ import {
   OpenAiTimeoutError,
   UnavailableOpenAiError,
 } from "./draft-response-provider.js";
+import { makeOpenAiResponsesUrl } from "../utils/normalize-url.js";
+import { parseOpenAiTimeoutMs } from "../utils/parse-openai-timeout.js";
 
 const DEFAULT_MODEL = "gpt-5.6-luna";
 const DEFAULT_TIMEOUT_MS = 20_000;
-const OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses";
 
 const CauseTypeSchema = z.enum([
   "configuration",
@@ -91,6 +92,7 @@ export class OpenAiDiagnosisReasoningProvider implements DiagnosisReasoningProvi
     apiKey: string;
     model?: string;
     timeoutMs?: number;
+    baseUrl?: string;
     fetch?: FetchLike;
     now?: () => number;
   }) {}
@@ -99,10 +101,12 @@ export class OpenAiDiagnosisReasoningProvider implements DiagnosisReasoningProvi
     const model = this.options.model ?? DEFAULT_MODEL;
     const now = this.options.now ?? Date.now;
     const startedAt = now();
+    const effectiveBaseUrl = makeOpenAiResponsesUrl(this.options.baseUrl);
     const envelope = await requestDiagnosis({
       apiKey: this.options.apiKey,
       model,
       timeoutMs: this.options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+      baseUrl: effectiveBaseUrl,
       fetch: this.options.fetch ?? fetch,
       input,
     });
@@ -134,9 +138,12 @@ export function createDiagnosisReasoningProviderFromEnv(
   if (!options.preferOpenAi) return undefined;
   const apiKey = env.OPENAI_API_KEY?.trim();
   if (!apiKey) return new UnavailableDiagnosisReasoningProvider();
+  const timeoutMs = parseOpenAiTimeoutMs(env.TRIAGE_OPENAI_TIMEOUT_MS);
   return new OpenAiDiagnosisReasoningProvider({
     apiKey,
     model: env.OPENAI_MODEL?.trim() || DEFAULT_MODEL,
+    baseUrl: env.TRIAGE_OPENAI_BASE_URL?.trim(),
+    timeoutMs,
   });
 }
 
@@ -144,13 +151,14 @@ async function requestDiagnosis(input: {
   apiKey: string;
   model: string;
   timeoutMs: number;
+  baseUrl: string;
   fetch: FetchLike;
   input: GptDiagnosisReasoningInput;
 }): Promise<{ outputText: string; usage?: z.infer<typeof AiUsageSchema> }> {
   const abortController = new AbortController();
   let timeout: ReturnType<typeof setTimeout> | undefined;
   const response = await Promise.race([
-    input.fetch(OPENAI_RESPONSES_URL, {
+    input.fetch(input.baseUrl, {
       method: "POST",
       headers: {
         "content-type": "application/json",

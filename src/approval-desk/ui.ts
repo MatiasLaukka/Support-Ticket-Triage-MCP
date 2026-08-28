@@ -2010,6 +2010,8 @@ export const approvalDeskHtml = `<!doctype html>
         ticketRequestId: 0,
         ticketSelectionToken: 0,
         evaluationPendingTicketId: null,
+        governedMutationToken: null,
+        nextGovernedMutationToken: 0,
         operatorGuidance: null,
         lifecycle: null,
         diagnoses: [],
@@ -2188,15 +2190,46 @@ export const approvalDeskHtml = `<!doctype html>
           return state.tickets;
         }
         return state.tickets.filter(function (ticket) {
-          return ticketWorkflowState(ticket) === state.queueFilter;
+          return ticketQueueFilterState(ticket) === state.queueFilter;
         });
       }
 
       function ticketWorkflowState(ticket) {
+        if (ticket.lifecycleSummary?.phase !== undefined) {
+          return ticket.lifecycleSummary.phase;
+        }
         return ticket.recommendationSummary?.workflowState ?? 'active';
       }
 
+      function ticketQueueFilterState(ticket) {
+        const phase = ticket.lifecycleSummary?.phase;
+        if (phase === undefined) {
+          return ticket.recommendationSummary?.workflowState ?? 'active';
+        }
+        if (phase === 'resolved') return 'resolved';
+        if (phase === 'recommendation-review') return 'draft-ready';
+        if (phase === 'waiting-for-customer') return 'waiting';
+        return 'active';
+      }
+
       function workflowStateLabel(value) {
+        const lifecycleLabels = {
+          'evaluation-needed': 'Evaluation needed',
+          'recommendation-review': 'Recommendation review',
+          'waiting-for-customer': 'Waiting for customer',
+          'diagnosis-ready': 'Diagnosis ready',
+          'diagnosis-review': 'Diagnosis review',
+          'awaiting-confirmation': 'Awaiting confirmation',
+          'awaiting-fix': 'Awaiting fix',
+          'fix-ready': 'Fix ready',
+          'verification': 'Verification',
+          'ready-for-close': 'Ready to resolve',
+          'escalated': 'Specialist review',
+          'resolved': 'Closed'
+        };
+        if (lifecycleLabels[value] !== undefined) {
+          return lifecycleLabels[value];
+        }
         if (value === 'draft-ready') {
           return 'Draft ready';
         }
@@ -3269,8 +3302,8 @@ export const approvalDeskHtml = `<!doctype html>
       function renderQueueBadges(ticket) {
         const summary = ticket.recommendationSummary ?? {};
         const priority = summary.priority ?? ticket.priority ?? 'Priority unset';
-        const supportState = summary.supportState;
-        const readyForClose = supportState === 'ready-for-close';
+        const readyForClose = ticket.lifecycleSummary?.phase === 'ready-for-close' ||
+          (ticket.lifecycleSummary === undefined && summary.supportState === 'ready-for-close');
         const workflow = readyForClose ? 'Ready to resolve' : workflowStateLabel(ticketWorkflowState(ticket));
         const label = priority + ' · ' + workflow;
         const detail = readyForClose
@@ -4233,6 +4266,7 @@ export const approvalDeskHtml = `<!doctype html>
       function updateControls() {
         const hasRecommendation = state.recommendation !== null;
         const evaluationPending = isEvaluationPendingForSelectedTicket();
+        const governedMutationPending = state.governedMutationToken !== null;
         const approvedWorkflow = isApprovedWorkflow();
         const actorPresent = els.actor.value.trim().length > 0;
         const fields = selectedFields();
@@ -4250,14 +4284,14 @@ export const approvalDeskHtml = `<!doctype html>
             (!approvedWorkflow && confirmed && hasFields && customerResponseReady) ||
             (approvedWorkflow && shouldShowMarkSentAction())
           );
-        els.approveButton.disabled = !doneReady;
+        els.approveButton.disabled = governedMutationPending || !doneReady;
         els.approveEditedButton.disabled = els.approveButton.disabled;
-        els.rejectButton.disabled = !(hasRecommendation && !approvedWorkflow && actorPresent && feedbackPresent);
-        els.startRejectButton.disabled = !(hasRecommendation && !approvedWorkflow && actorPresent);
-        els.markSentButton.disabled = !(hasRecommendation && approvedWorkflow && actorPresent && shouldShowMarkSentAction());
-        els.diagnoseButton.disabled = !(actorPresent && shouldShowDiagnoseAction());
-        els.fixButton.disabled = !(actorPresent && shouldShowFixAction());
-        els.closeTicketButton.disabled = !(actorPresent && shouldShowCloseTicketAction());
+        els.rejectButton.disabled = governedMutationPending || !(hasRecommendation && !approvedWorkflow && actorPresent && feedbackPresent);
+        els.startRejectButton.disabled = governedMutationPending || !(hasRecommendation && !approvedWorkflow && actorPresent);
+        els.markSentButton.disabled = governedMutationPending || !(hasRecommendation && approvedWorkflow && actorPresent && shouldShowMarkSentAction());
+        els.diagnoseButton.disabled = governedMutationPending || !(actorPresent && shouldShowDiagnoseAction());
+        els.fixButton.disabled = governedMutationPending || !(actorPresent && shouldShowFixAction());
+        els.closeTicketButton.disabled = governedMutationPending || !(actorPresent && shouldShowCloseTicketAction());
         if (hasLifecycleDescriptor() && lifecycleActionIsAvailable('resolve-ticket')) {
           els.closeTicketButton.hidden = false;
         }
@@ -4278,9 +4312,11 @@ export const approvalDeskHtml = `<!doctype html>
         }
       }
 
-      async function loadQueue() {
+      async function loadQueue(options) {
         els.queueStatus.textContent = 'Loading queue...';
-        const data = await requestJson('/api/tickets?limit=50');
+        const data = await requestJson('/api/tickets?limit=50', undefined, {
+          writeErrorToResult: options?.writeErrorToResult
+        });
         state.tickets = data.items ?? [];
         renderTicketList();
         setResult(data);
@@ -4423,6 +4459,9 @@ export const approvalDeskHtml = `<!doctype html>
             els.diagnosisPanel.innerHTML = '<p class="warning">Ticket could not be loaded: ' +
               escapeHtml(error instanceof Error ? error.message : 'Request failed.') + '</p>';
             setResult({ error: error instanceof Error ? error.message : 'Request failed.' });
+          }
+          if (options?.propagateError === true) {
+            throw error;
           }
           return;
         }
@@ -5053,21 +5092,25 @@ export const approvalDeskHtml = `<!doctype html>
       }
 
       async function refreshGovernedMutationState(options) {
-        const selectedId = state.selectedTicket?.id;
-        const queueRefresh = loadQueue();
+        const selectedId = options.ticketId;
+        const queueRefresh = loadQueue({ writeErrorToResult: false }).catch(function () {
+          // Queue freshness is useful but cannot change the outcome of a durable POST.
+        });
         const evidenceRefresh = refreshEvidenceBestEffort();
-        if (selectedId !== undefined) {
-          await selectTicket(selectedId, {
-            waitForDiagnoses: options?.waitForDiagnoses === true,
-            preservePresentation: options?.preservePresentation === true
-          });
-        }
+        await selectTicket(selectedId, {
+          waitForDiagnoses: options?.waitForDiagnoses === true,
+          preservePresentation: options?.preservePresentation === true,
+          propagateError: true
+        });
         await queueRefresh;
         await evidenceRefresh;
       }
 
       async function runGovernedMutation(kind, post, options) {
         if (state.selectedTicket === null) {
+          return null;
+        }
+        if (state.governedMutationToken !== null) {
           return null;
         }
         if (hasLifecycleDescriptor() && !lifecycleActionIsAvailable(kind)) {
@@ -5085,54 +5128,71 @@ export const approvalDeskHtml = `<!doctype html>
           return null;
         }
         const ticketId = state.selectedTicket.id;
+        const selectionToken = state.ticketSelectionToken;
+        const mutationToken = ++state.nextGovernedMutationToken;
+        state.governedMutationToken = mutationToken;
+        const isCurrent = function () {
+          return state.governedMutationToken === mutationToken &&
+            isCurrentTicketSelection(ticketId, selectionToken) &&
+            (typeof options?.isCurrent !== 'function' || options.isCurrent());
+        };
+        updateControls();
         let data = null;
         let mutationError = null;
         try {
-          data = await post();
-        } catch (error) {
-          mutationError = error instanceof Error ? error : new Error('Request failed.');
-        }
-        if (typeof options?.isCurrent === 'function' && !options.isCurrent()) {
-          return null;
-        }
-        if (mutationError === null) {
-          if (typeof options?.clearInlineError === 'function') {
-            options.clearInlineError();
+          try {
+            data = await post();
+          } catch (error) {
+            mutationError = error instanceof Error ? error : new Error('Request failed.');
           }
-          if (typeof options?.beforeRefreshSuccess === 'function') {
-            options.beforeRefreshSuccess(data);
-          }
-        } else if (typeof options?.setInlineError === 'function') {
-          options.setInlineError(mutationError.message, mutationError);
-        }
-        try {
-          await refreshGovernedMutationState({
-            waitForDiagnoses: options?.waitForDiagnoses === true,
-            preservePresentation: mutationError !== null && options?.preservePresentationOnError === true
-          });
-        } catch (refreshError) {
-          if (mutationError === null) {
-            throw refreshError;
-          }
-        }
-        if (typeof options?.isCurrent === 'function' && !options.isCurrent()) {
-          return null;
-        }
-        if (state.selectedTicket?.id === ticketId && typeof options?.afterRefresh === 'function') {
-          options.afterRefresh({ data, error: mutationError });
-        }
-        if (mutationError !== null) {
-          setResult({ error: mutationError.message, code: mutationError.code });
-          return null;
-        }
-        if (typeof options?.afterSuccess === 'function') {
-          await options.afterSuccess(data);
-          if (typeof options?.isCurrent === 'function' && !options.isCurrent()) {
+          if (!isCurrent()) {
             return null;
           }
+          if (mutationError === null) {
+            if (typeof options?.clearInlineError === 'function') {
+              options.clearInlineError();
+            }
+            if (typeof options?.beforeRefreshSuccess === 'function') {
+              options.beforeRefreshSuccess(data);
+            }
+          } else if (typeof options?.setInlineError === 'function') {
+            options.setInlineError(mutationError.message, mutationError);
+          }
+          try {
+            await refreshGovernedMutationState({
+              ticketId,
+              waitForDiagnoses: options?.waitForDiagnoses === true,
+              preservePresentation: mutationError !== null && options?.preservePresentationOnError === true
+            });
+          } catch (refreshError) {
+            if (mutationError === null) {
+              return null;
+            }
+          }
+          if (!isCurrent()) {
+            return null;
+          }
+          if (typeof options?.afterRefresh === 'function') {
+            options.afterRefresh({ data, error: mutationError });
+          }
+          if (mutationError !== null) {
+            setResult({ error: mutationError.message, code: mutationError.code });
+            return null;
+          }
+          if (typeof options?.afterSuccess === 'function') {
+            await options.afterSuccess(data);
+            if (!isCurrent()) {
+              return null;
+            }
+          }
+          setResult(data);
+          return data;
+        } finally {
+          if (state.governedMutationToken === mutationToken) {
+            state.governedMutationToken = null;
+          }
+          updateControls();
         }
-        setResult(data);
-        return data;
       }
 
       function presentationPhaseAfterBack(phase) {

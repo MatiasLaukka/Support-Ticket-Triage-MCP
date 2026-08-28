@@ -4474,6 +4474,54 @@ describe("approvalDeskHtml", () => {
     expect(app.el("ticketList").children).toHaveLength(5);
   });
 
+  it("uses lifecycle summaries as the queue authority and only falls back for legacy items", async () => {
+    const app = await startApprovalDeskApp({
+      tickets: [
+        {
+          ...fixtureTicket,
+          subject: "Lifecycle fix ready",
+          recommendationSummary: { workflowState: "resolved", priority: "P1" },
+          lifecycleSummary: {
+            phase: "fix-ready",
+            primaryAction: "apply-scoped-fix",
+            reasonCodes: ["fix-ready"],
+          },
+        },
+        {
+          ...fixtureTicket,
+          id: "TKT-2001",
+          subject: "Lifecycle resolved",
+          recommendationSummary: { workflowState: "active", priority: "P2" },
+          lifecycleSummary: {
+            phase: "resolved",
+            primaryAction: "none",
+            reasonCodes: ["already-completed"],
+          },
+        },
+        {
+          ...fixtureTicket,
+          id: "TKT-2002",
+          subject: "Legacy draft fixture",
+          recommendationSummary: { workflowState: "draft-ready", priority: "P3" },
+        },
+      ],
+    });
+
+    expect(app.el("ticketList").children).toHaveLength(1);
+    expect(app.el("ticketList").children[0]!.innerHTML).toContain("Lifecycle fix ready");
+    expect(app.el("ticketList").children[0]!.innerHTML).toContain("Fix ready");
+    expect(app.el("ticketList").children[0]!.className).toContain("state-fix-ready");
+
+    app.setQueueFilter("resolved");
+    expect(app.el("ticketList").children).toHaveLength(1);
+    expect(app.el("ticketList").children[0]!.innerHTML).toContain("Lifecycle resolved");
+    expect(app.el("ticketList").children[0]!.innerHTML).toContain("Closed");
+
+    app.setQueueFilter("draft-ready");
+    expect(app.el("ticketList").children).toHaveLength(1);
+    expect(app.el("ticketList").children[0]!.innerHTML).toContain("Legacy draft fixture");
+  });
+
   it("shows a close action after a ready-for-close response has been sent", async () => {
     const app = await startApprovalDeskApp({
       ticketDetailRecommendation: {
@@ -5088,6 +5136,91 @@ describe("approvalDeskHtml", () => {
     expect(app.parsedResult()).toMatchObject({
       auditEvent: { action: "recommendation-rejected" },
     });
+  });
+
+  it("keeps governed recommendation review single-flight through reconciliation", async () => {
+    const app = await startApprovalDeskApp({
+      recommendationApproveDelayTicks: 30,
+      ticketDetailRecommendation: fixtureRecommendation,
+      ticketDetail: {
+        lifecycle: fixtureLifecycle({
+          phase: "recommendation-review",
+          primaryAction: "review-recommendation",
+          actions: [lifecycleAction("review-recommendation", "primary")],
+        }),
+      },
+    });
+    await app.selectFirstTicket();
+    app.approveField("category");
+
+    app.approveWithoutSettling();
+    app.approveWithoutSettling();
+    await app.wait(2);
+
+    expect(app.requests.filter((request) => request.path.endsWith("/approve"))).toHaveLength(1);
+    expect(app.el("approveButton").disabled).toBe(true);
+
+    await app.wait(50);
+    expect(app.requests.filter((request) => request.path.endsWith("/approve"))).toHaveLength(1);
+  });
+
+  it("does not reconcile or run success UI for a governed mutation after ticket selection changes", async () => {
+    const app = await startApprovalDeskApp({
+      recommendationApproveDelayTicks: 30,
+      tickets: [
+        fixtureTicket,
+        { ...fixtureTicket, id: "TKT-1002", subject: "Second ticket" },
+      ],
+      ticketDetailRecommendation: fixtureRecommendation,
+      ticketDetail: {
+        lifecycle: fixtureLifecycle({
+          phase: "recommendation-review",
+          primaryAction: "review-recommendation",
+          actions: [lifecycleAction("review-recommendation", "primary")],
+        }),
+      },
+    });
+    await app.selectFirstTicket();
+    app.approveField("category");
+    const metricsBefore = app.metricsRequests();
+
+    app.approveWithoutSettling();
+    await app.wait(2);
+    await app.selectTicket("TKT-1002");
+    await app.wait(50);
+
+    expect(app.el("ticketPanel").innerHTML).toContain("Second ticket");
+    expect(app.ticketDetailRequests()).toBe(1);
+    expect(app.metricsRequests()).toBe(metricsBefore);
+    expect(app.field("category").textContent).toBe("Cancel");
+    expect(app.parsedResult()).toMatchObject({ ticket: { id: "TKT-1002" } });
+  });
+
+  it("keeps a successful governed POST successful when optional queue refresh fails", async () => {
+    const app = await startApprovalDeskApp({
+      failQueueAfter: 1,
+      ticketDetailRecommendation: {
+        ...fixtureRecommendation,
+        resolution: "approved",
+      },
+      ticketDetail: {
+        lifecycle: fixtureLifecycle({
+          phase: "recommendation-review",
+          primaryAction: "send-customer-response",
+          actions: [lifecycleAction("send-customer-response", "primary")],
+        }),
+      },
+    });
+    await app.selectFirstTicket();
+
+    await app.markSent();
+
+    expect(app.ticketDetailRequests()).toBe(2);
+    expect(app.parsedResult()).toMatchObject({
+      auditEvent: { action: "customer-response-sent" },
+    });
+    expect(app.parsedResult()).not.toHaveProperty("error");
+    expect(app.requests.filter((request) => request.path.endsWith("/mark-sent"))).toHaveLength(1);
   });
 
   it.each(["blocked", "completed"] as const)(
@@ -5756,6 +5889,7 @@ async function startApprovalDeskApp(options: {
   deferRecommendation?: boolean;
   deferReconciliationDiagnosis?: boolean;
   failEvidenceAfter?: number;
+  failQueueAfter?: number;
   failTicketDetailAfter?: number;
   failRecommendation?: boolean;
   recommendationFailure?: {
@@ -5771,8 +5905,12 @@ async function startApprovalDeskApp(options: {
   confirmResult?: boolean;
   markSentAutomaticReply?: string;
   recommendation?: FixtureRecommendation;
+  recommendationApproveDelayTicks?: number;
   recommendationDelayTicks?: number;
-  tickets?: Array<typeof fixtureTicket & { recommendationSummary?: Record<string, unknown> }>;
+  tickets?: Array<typeof fixtureTicket & {
+    recommendationSummary?: Record<string, unknown>;
+    lifecycleSummary?: Record<string, unknown>;
+  }>;
   ticketDetailRecommendation?: FixtureRecommendation;
   ticketDetail?: {
     conversationTimeline?: Array<Record<string, unknown>>;
@@ -5877,6 +6015,12 @@ async function startApprovalDeskApp(options: {
       return options.fetchOverride(path, init);
     }
     if (path === "/api/tickets?limit=50") {
+      const queueRequests = requests.filter(
+        (request) => request.path === "/api/tickets?limit=50",
+      ).length;
+      if (options.failQueueAfter !== undefined && queueRequests > options.failQueueAfter) {
+        return jsonResponse({ error: { message: "Queue refresh is unavailable." } }, 503);
+      }
       return jsonResponse({ items: tickets, total: tickets.length });
     }
     if (path === "/api/metrics") {
@@ -6124,6 +6268,7 @@ async function startApprovalDeskApp(options: {
       }, 201);
     }
     if (path === "/api/recommendations/11111111-1111-4111-8111-111111111111/approve") {
+      await settle(options.recommendationApproveDelayTicks ?? 0);
       if (createdRecommendation !== undefined) {
         createdRecommendation = { ...createdRecommendation, resolution: "approved" };
       }
@@ -6203,6 +6348,8 @@ async function startApprovalDeskApp(options: {
     queueRequests: () =>
       requests.filter((request) => request.path === "/api/tickets?limit=50")
         .length,
+    metricsRequests: () =>
+      requests.filter((request) => request.path === "/api/metrics").length,
     diagnosisRequests: () =>
       requests.filter((request) => request.path === `/api/tickets/${selectedFixtureTicket.id}/diagnoses`)
         .length,
@@ -6278,7 +6425,10 @@ async function startApprovalDeskApp(options: {
     },
     approve: async () => {
       elements.approveButton.dispatch("click");
-      await settle(10);
+      await settle(30);
+    },
+    approveWithoutSettling: () => {
+      elements.approveButton.dispatch("click");
     },
     editDiagnosisDraft: (value: string) => {
       elements.diagnosisPanel.dispatch("input", {
@@ -6386,7 +6536,7 @@ async function startApprovalDeskApp(options: {
       elements.recommendationPanel.dispatch("click", {
         target: { dataset: { action: "mark-sent" } },
       });
-      await settle();
+      await settle(30);
     },
   };
 }

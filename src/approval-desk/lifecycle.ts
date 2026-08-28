@@ -222,6 +222,7 @@ export function buildTicketLifecycleView(input: WorkflowLifecycleInput): Lifecyc
     authoritativeDiagnosisId: authoritative?.diagnosisId,
     authoritativeDiagnosisOwner: authoritative?.diagnosis.owner,
     authoritativeDiagnosisConfirmed: authoritative?.diagnosis.confidence === "confirmed",
+    currentKnownEventId: recommendation?.knownEventId ?? undefined,
   });
   const phase = phaseForLifecycle({
     ticket: input.ticket,
@@ -607,6 +608,7 @@ function fixProjection(input: {
   authoritativeDiagnosisId: string | undefined;
   authoritativeDiagnosisOwner: DiagnosisContext["owner"] | undefined;
   authoritativeDiagnosisConfirmed: boolean;
+  currentKnownEventId: string | undefined;
 }): LifecycleView["fix"] {
   const fixPositionsForTicket = auditCausalPositions(input.audits).filter(({ event }) =>
     ["platform-mitigation-available", "fix-available", "fix-ineffective"].includes(event.action as string),
@@ -614,7 +616,14 @@ function fixProjection(input: {
   const fixPositions = input.authoritativeDiagnosisId === undefined
     ? fixPositionsForTicket
     : fixPositionsForTicket.filter(({ event }) =>
-        event.before.diagnosisId === input.authoritativeDiagnosisId,
+        event.before.diagnosisId === input.authoritativeDiagnosisId ||
+        (
+          event.action === "platform-mitigation-available" &&
+          input.authoritativeDiagnosisConfirmed &&
+          diagnosisRequiresPlatformFix(input.authoritativeDiagnosisOwner) &&
+          input.currentKnownEventId !== undefined &&
+          (event.before.eventId === input.currentKnownEventId || event.after.eventId === input.currentKnownEventId)
+        ),
       );
   const latest = fixPositions.at(-1)?.event;
   if (latest === undefined) {

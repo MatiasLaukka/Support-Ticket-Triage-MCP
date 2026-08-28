@@ -1188,4 +1188,55 @@ describe("lifecycle projection", () => {
       availability: "primary",
     });
   });
+
+  it("correlates a production-shaped platform mitigation through the current known event", () => {
+    const knownEventId = "EVT-2026-06-10-WEBHOOK-LATENCY";
+    const approved = matrixRecommendation({
+      knownEventId,
+      supportState: "waiting-on-platform-fix",
+    });
+    const diagnosis = matrixDiagnosis(
+      "30000000-0000-4000-8000-000000000066",
+      "2026-06-10T09:02:00.000Z",
+      "confirmed",
+      "engineering",
+    );
+    const review = matrixDiagnosisReview(diagnosis);
+    const mitigation = matrixAudit(
+      "70000000-0000-4000-8000-000000000066",
+      "platform-mitigation-available",
+      "2026-06-10T09:04:00.000Z",
+      {
+        before: { eventId: knownEventId, status: "active" },
+        after: { eventId: knownEventId, status: "available" },
+      },
+    );
+
+    const lifecycle = buildTicketLifecycleView({
+      ticket,
+      recommendations: [approved],
+      audits: [
+        matrixSubmission(approved.id),
+        matrixResponse(approved.id),
+        diagnosis,
+        review,
+        mitigation,
+      ],
+    });
+
+    expect(lifecycle.phase).toBe("fix-ready");
+    expect(lifecycle.fix).toMatchObject({
+      state: "available",
+      diagnosisId: diagnosis.id,
+      fixEventId: mitigation.id,
+      diagnosisStillAuthoritative: true,
+    });
+    expect(lifecycle.primaryAction).toMatchObject({
+      kind: "apply-scoped-fix",
+      availability: "primary",
+    });
+    expect(lifecycle.actions).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "apply-scoped-fix", availability: "primary" }),
+    ]));
+  });
 });

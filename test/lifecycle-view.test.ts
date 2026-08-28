@@ -466,6 +466,46 @@ describe("lifecycle projection", () => {
     expect(lifecycle.current.recommendationId).toBe(recommendation.id);
   });
 
+  it("keeps an approved current recommendation on the send path until its response is sent", () => {
+    const approvedRecommendation = TriageRecommendationSchema.parse({
+      ...recommendation,
+      resolution: "approved",
+    });
+    const submitted = AuditEventSchema.parse({
+      id: "20000000-0000-4000-8000-000000000011",
+      timestamp: approvedRecommendation.createdAt,
+      actor: "support",
+      action: "recommendation-submitted",
+      ticketId: ticket.id,
+      recommendationId: approvedRecommendation.id,
+      before: {},
+      after: {},
+      rationale: approvedRecommendation.rationale,
+      knowledgeArticleIds: [],
+      result: "success",
+    });
+
+    const lifecycle = buildTicketLifecycleView({
+      ticket,
+      recommendations: [approvedRecommendation],
+      audits: [submitted],
+    });
+
+    expect(lifecycle.phase).toBe("recommendation-review");
+    expect(lifecycle.primaryAction).toMatchObject({
+      kind: "send-customer-response",
+      availability: "primary",
+    });
+    expect(lifecycle.actions).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: "send-customer-response",
+        availability: "primary",
+      }),
+    ]));
+    expect(lifecycle.response.state).toBe("approved");
+    expect(lifecycle.current.recommendationId).toBe(approvedRecommendation.id);
+  });
+
   it("uses the same lifecycle builder for legacy and operational empty snapshots", () => {
     const legacy = buildTicketWorkflowReadModel({
       ticket,
@@ -766,6 +806,47 @@ describe("lifecycle projection", () => {
     ]));
     expect(workflow.operatorGuidance.nextAction).toBe("evaluate-ticket");
     expect(workflow.operatorGuidance.requiredReview).toBeUndefined();
+  });
+
+  it("does not carry an older sent-response summary onto a newer pending recommendation", () => {
+    const firstRecommendation = matrixRecommendation({
+      id: "10000000-0000-4000-8000-000000000070",
+      resolution: "approved",
+      createdAt: "2026-06-10T09:00:00.000Z",
+    });
+    const secondRecommendation = matrixRecommendation({
+      id: "10000000-0000-4000-8000-000000000071",
+      resolution: "pending",
+      supportState: "information-received",
+      createdAt: "2026-06-10T09:03:00.000Z",
+    });
+    const reply = matrixAudit(
+      "60000000-0000-4000-8000-000000000070",
+      "customer-reply-received",
+      "2026-06-10T09:02:00.000Z",
+      {
+        after: { body: "Here is the requested evidence." },
+      },
+    );
+    const workflow = buildTicketWorkflowReadModel({
+      ticket,
+      recommendations: [firstRecommendation, secondRecommendation],
+      audits: [
+        matrixSubmission(firstRecommendation.id, firstRecommendation.createdAt),
+        matrixResponse(firstRecommendation.id, "2026-06-10T09:01:00.000Z"),
+        reply,
+        matrixSubmission(secondRecommendation.id, secondRecommendation.createdAt),
+      ],
+    });
+
+    expect(workflow.recommendationSummary).toMatchObject({
+      latestRecommendationId: secondRecommendation.id,
+      latestResolution: "pending",
+      workflowState: "draft-ready",
+      hasPendingRecommendation: true,
+      hasSentResponse: false,
+    });
+    expect(workflow.recommendationSummary.latestSentAt).toBeUndefined();
   });
 
   it.each([

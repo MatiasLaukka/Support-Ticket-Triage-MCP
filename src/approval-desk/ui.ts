@@ -2907,7 +2907,9 @@ export const approvalDeskHtml = `<!doctype html>
 
       async function reviewSelectedDiagnosis(decision) {
         const view = selectedDiagnosisView();
-        const draft = diagnosisDraftForView(view);
+        const draft = decision === 'revalidate' && view?.latestReview !== null && view?.latestReview !== undefined
+          ? JSON.parse(JSON.stringify(view.latestReview.editedDiagnosis))
+          : diagnosisDraftForView(view);
         if (state.selectedTicket === null || view === null || draft === null) {
           state.diagnosisReviewError = 'The diagnosis review could not be prepared. Reload the ticket and try again.';
           renderDiagnosisPanel();
@@ -2930,8 +2932,8 @@ export const approvalDeskHtml = `<!doctype html>
         const mutationToken = beginDiagnosisMutation(ticketId, diagnosisId);
         const body = {
           decision,
-          sourceTicketRevision: view.sourceTicketRevision,
-          sourceConversationWatermark: view.sourceConversationWatermark,
+          sourceTicketRevision: state.lifecycle?.current.ticketRevision ?? view.sourceTicketRevision,
+          sourceConversationWatermark: state.lifecycle?.current.conversationWatermark ?? view.sourceConversationWatermark,
           editedDiagnosis: draft,
           actor: els.actor.value.trim() || 'approval-desk'
         };
@@ -3420,7 +3422,8 @@ export const approvalDeskHtml = `<!doctype html>
         const hasRecommendation = state.recommendation !== null;
         const approvedWorkflow = isApprovedWorkflow();
         const requiredReview = state.operatorGuidance?.requiredReview;
-        const reviewGateActive = requiredReview !== undefined;
+        const reviewGateActive = requiredReview !== undefined ||
+          (hasLifecycleDescriptor() && state.lifecycle?.primaryAction?.kind === 'review-recommendation');
         const waitingForReply = isTaskDoneWaitingForReply();
         const customerReplyReady = latestUnconsumedCustomerReply() !== null;
         const closeReady = shouldShowCloseTicketAction();
@@ -4459,15 +4462,21 @@ export const approvalDeskHtml = `<!doctype html>
             renderRecommendationStageControls();
           }
         });
+        const refreshedRecommendationApproved =
+          state.recommendation?.resolution === 'approved' ||
+          state.selectedTicket?.recommendationSummary?.latestResolution === 'approved' ||
+          state.lifecycle?.primaryAction?.kind === 'send-customer-response';
         state.stage = state.recommendation === null
           ? 'empty'
-          : isApprovedWorkflow()
+          : refreshedRecommendationApproved
             ? 'approved'
             : 'draft';
         renderTicketList();
         renderTicket();
         renderConversationContext();
         renderRecommendation();
+        renderRecommendationStageControls();
+        updateControls();
         setResult(data);
         if (options?.waitForDiagnoses === true) {
           await diagnosisLoad;

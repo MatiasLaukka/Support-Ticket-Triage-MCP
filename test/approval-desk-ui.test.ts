@@ -4860,7 +4860,7 @@ describe("approvalDeskHtml", () => {
       actions: [lifecycleAction("review-recommendation", "primary", ["operator-review"])],
     });
     const sendLifecycle = fixtureLifecycle({
-      phase: "response-ready",
+      phase: "recommendation-review",
       primaryAction: "send-customer-response",
       actions: [lifecycleAction("send-customer-response", "primary", ["recommendation-approved"])],
     });
@@ -4869,6 +4869,8 @@ describe("approvalDeskHtml", () => {
       ticketDetailLifecycleSequence: [reviewLifecycle, sendLifecycle],
     });
     await app.selectFirstTicket();
+
+    expect(app.el("approveButton").textContent).toBe("Review");
 
     await app.approve();
 

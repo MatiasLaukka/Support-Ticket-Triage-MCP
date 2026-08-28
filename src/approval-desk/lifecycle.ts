@@ -22,6 +22,7 @@ import {
   auditCausalPositions,
   auditPositionForEvent,
   compareAuditCausalOrder,
+  hasCustomerReplyAfterRecommendation,
   latestAuditPosition,
   latestRecommendationSubmissionPosition,
   type AuditCausalPosition,
@@ -296,6 +297,9 @@ function phaseForLifecycle(input: {
   }
   if (input.guidance.stage === "ready-for-close") return "ready-for-close";
   if (input.recommendation?.resolution === "pending") return "recommendation-review";
+  if (currentRecommendationAwaitingSend(input.recommendation, input.audits)) {
+    return "recommendation-review";
+  }
   if (input.guidance.stage === "waiting-customer") return "waiting-for-customer";
   // A fresh evaluation with complete evidence is the handoff that records the
   // next diagnosis. The previous diagnosis may still project an ambiguous or
@@ -344,6 +348,39 @@ function isAuditNewerThanRecommendation(
     return compareAuditCausalOrder(eventPosition, recommendationSubmission) > 0;
   }
   return compareIsoInstants(event.timestamp, recommendation.createdAt) > 0;
+}
+
+function currentRecommendationAwaitingSend(
+  recommendation: TriageRecommendation | undefined,
+  audits: readonly AuditEvent[],
+): boolean {
+  return recommendation?.resolution === "approved" &&
+    latestSentResponsePositionForRecommendation(audits, recommendation.id) === undefined &&
+    !hasLifecycleProgressAfterRecommendation(recommendation, audits) &&
+    !hasCustomerReplyAfterRecommendation(audits, recommendation);
+}
+
+function hasLifecycleProgressAfterRecommendation(
+  recommendation: TriageRecommendation,
+  audits: readonly AuditEvent[],
+): boolean {
+  const latestPostRecommendationLifecycleEvent = latestAuditPosition(
+    audits,
+    (event) =>
+      event.action === "diagnosis-completed" ||
+      event.action === "diagnosis-reviewed" ||
+      event.action === "diagnosis-invalidated" ||
+      event.action === "diagnostic-escalated" ||
+      event.action === "fix-available" ||
+      event.action === "fix-ineffective" ||
+      event.action === "platform-mitigation-available",
+  );
+  return latestPostRecommendationLifecycleEvent !== undefined &&
+    isAuditNewerThanRecommendation(
+      latestPostRecommendationLifecycleEvent.event,
+      recommendation,
+      audits,
+    );
 }
 
 function primaryActionForPhase(input: {
@@ -642,7 +679,9 @@ function responseProjection(input: {
     return { intent, state: "waiting-for-reply" };
   }
   if (input.recommendation?.resolution === "pending") return { intent, state: "approval-required" };
-  if (input.recommendation?.resolution === "approved" && latestSent === undefined) return { intent, state: "approved" };
+  if (currentRecommendationAwaitingSend(input.recommendation, input.audits)) {
+    return { intent, state: "approved" };
+  }
   return { intent, state: "none" };
 }
 
@@ -682,4 +721,16 @@ function conversationWatermarkFromAudits(audits: readonly AuditEvent[]): Custome
   return latest === undefined
     ? { state: "none" }
     : { state: "reply", timestamp: latest.event.timestamp, id: latest.event.id };
+}
+
+function latestSentResponsePositionForRecommendation(
+  audits: readonly AuditEvent[],
+  recommendationId: string,
+): AuditCausalPosition | undefined {
+  return latestAuditPosition(
+    audits,
+    (event) =>
+      event.action === "customer-response-sent" &&
+      event.recommendationId === recommendationId,
+  );
 }

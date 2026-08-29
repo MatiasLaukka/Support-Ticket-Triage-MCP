@@ -22,13 +22,13 @@ describe("Approval Desk lifecycle completion e2e", () => {
       readFileSync(resolve("data/seed/tickets.json"), "utf8"),
     ) as Array<Record<string, any>>;
     const seedTicket = seed.find((ticket) => ticket.id === ticketId)!;
-    Object.assign(seedTicket, {
-      subject: "Campaign editor is blank",
-      description: "The campaign editor stays blank after opening a campaign.",
-      category: "performance",
+    expect(seedTicket).toMatchObject({
+      subject: "Problem",
+      description: "It does not work.",
+      category: "other",
       priority: "P3",
-      team: "product",
-      tags: [...(seedTicket.tags as string[]), "performance"],
+      team: "support",
+      tags: ["ambiguous", "missing-information"],
     });
     await writeFile(seedPath, JSON.stringify(seed), "utf8");
 
@@ -130,6 +130,14 @@ describe("Approval Desk lifecycle completion e2e", () => {
       app.setQueueFilter("all");
       await app.wait(200);
       await app.selectTicket(ticketId);
+      expect((await detail()).ticket).toMatchObject({
+        subject: "Problem",
+        description: "It does not work.",
+        category: "other",
+        priority: "P3",
+        team: "support",
+        tags: ["ambiguous", "missing-information"],
+      });
       await assertUiMatchesLifecycle("initial selection");
 
       let currentLifecycle = await performGesture(
@@ -166,6 +174,9 @@ describe("Approval Desk lifecycle completion e2e", () => {
         },
       });
       expect(firstMarkSentResponse?.body.automaticReply.after.body.trim()).not.toBe("");
+      expect(firstMarkSentResponse?.body.automaticReply.after.body.toLowerCase()).toContain(
+        "campaign editor",
+      );
       for (let attempt = 0; attempt < 8; attempt += 1) {
         if (currentLifecycle.primaryAction.kind === "evaluate-ticket") {
           currentLifecycle = await performGesture(
@@ -194,6 +205,11 @@ describe("Approval Desk lifecycle completion e2e", () => {
         throw new Error(`Unexpected lifecycle while gathering evidence: ${currentLifecycle.primaryAction.kind}`);
       }
       expect(currentLifecycle.primaryAction.kind).toBe("record-diagnosis");
+      expect((await detail()).ticket).toMatchObject({
+        category: "performance",
+        priority: "P3",
+        team: "product",
+      });
       currentLifecycle = await performGesture(
         "record first diagnosis",
         async () => clickPrimaryLifecycleControl(app, "record-diagnosis"),

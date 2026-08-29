@@ -6009,6 +6009,61 @@ describe("approvalDeskHtml", () => {
     expect(approvalDeskHtml).not.toContain(">Complete evidence<");
     expect(approvalDeskHtml).not.toContain(">Platform-fix context<");
   });
+
+  it.each([
+    { phase: "evaluation-needed", primary: "evaluate-ticket", title: "Re-evaluate", control: "createUpdatedRecommendation" },
+    { phase: "recommendation-review", primary: "review-recommendation", title: "Review recommendation", control: "approveButton", recommendation: {} },
+    { phase: "recommendation-review", primary: "send-customer-response", title: "Send response", control: "approveButton", recommendation: { resolution: "approved" } },
+    { phase: "diagnosis-ready", primary: "record-diagnosis", title: "Diagnose ticket", control: "diagnoseButton" },
+    { phase: "diagnosis-review", primary: "review-diagnosis", title: "Review diagnosis", diagnosis: {} },
+    { phase: "diagnosis-review", primary: "revalidate-diagnosis", title: "Revalidate diagnosis", diagnosis: { stale: true } },
+    { phase: "awaiting-fix", primary: "record-fix-available", title: "Fix available", control: "fixButton", diagnosis: { confidence: "confirmed" } },
+    { phase: "fix-ready", primary: "apply-scoped-fix", title: "Scoped fix", control: "fixButton", diagnosis: { confidence: "confirmed" } },
+    { phase: "ready-for-close", primary: "resolve-ticket", title: "Ready to resolve", control: "closeTicketButton" },
+    { phase: "waiting-for-customer", primary: "none", title: "Waiting for customer" },
+    { phase: "escalated", primary: "specialist-review", title: "Specialist review required" },
+    { phase: "resolved", primary: "none", title: "Resolved" },
+  ] as const)("keeps the action bar aligned with every lifecycle primary action: $primary", async (scenario) => {
+    const diagnosis = scenario.diagnosis === undefined
+      ? undefined
+      : (() => {
+          const view = fixtureDiagnosisView(scenario.diagnosis);
+          return scenario.primary === "awaiting-fix" || scenario.primary === "apply-scoped-fix"
+            ? {
+                ...view,
+                reviews: [{ decision: "approve", diagnosisId: view.originalDiagnosis.id, editedDiagnosis: view.originalDiagnosis.after.diagnosis }],
+                latestReview: { decision: "approve", diagnosisId: view.originalDiagnosis.id, editedDiagnosis: view.originalDiagnosis.after.diagnosis },
+              }
+            : view;
+        })();
+    const recommendation = scenario.recommendation === undefined
+      ? undefined
+      : { ...fixtureRecommendation, ...scenario.recommendation };
+    const app = await startApprovalDeskApp({
+      diagnoses: diagnosis === undefined ? [] : [diagnosis],
+      ticketDetailRecommendation: recommendation,
+      ticketDetail: {
+        lifecycle: fixtureLifecycle({
+          phase: scenario.phase,
+          primaryAction: scenario.primary,
+          actions: [lifecycleAction(scenario.primary, "primary")],
+        }),
+      },
+    });
+    await app.selectFirstTicket();
+
+    expect(app.el("actionBarTitle").textContent).toBe(scenario.title);
+    expect(app.el("actionBarHint").textContent).not.toContain("Response ready");
+    if (scenario.control !== undefined) {
+      expect(app.el(scenario.control).hidden).toBe(false);
+    }
+    if (["review-diagnosis", "revalidate-diagnosis"].includes(scenario.primary)) {
+      expect(app.el("diagnosisPanel").innerHTML).toContain('data-action="open-diagnosis-inspection"');
+    }
+    if (["waiting-for-customer", "escalated", "resolved"].includes(scenario.phase)) {
+      expect(app.el("actionBarTitle").textContent).not.toBe("Response ready");
+    }
+  });
 });
 
 const fixtureTicket = {

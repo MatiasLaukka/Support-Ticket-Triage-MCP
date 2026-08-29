@@ -4097,6 +4097,18 @@ export const approvalDeskHtml = `<!doctype html>
       function lifecyclePrimaryActionPresentation() {
         if (!hasLifecycleDescriptor()) return null;
         const primary = state.lifecycle?.primaryAction?.kind;
+        if (primary === 'review-recommendation') {
+          return {
+            title: 'Review recommendation',
+            hint: 'Review the new evaluation before continuing.'
+          };
+        }
+        if (primary === 'send-customer-response') {
+          return {
+            title: 'Send response',
+            hint: 'Send the approved response to the customer.'
+          };
+        }
         if (primary === 'evaluate-ticket') {
           return state.lifecycle?.phase === 'awaiting-confirmation'
             ? {

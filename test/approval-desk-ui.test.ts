@@ -6028,7 +6028,7 @@ describe("approvalDeskHtml", () => {
       ? undefined
       : (() => {
           const view = fixtureDiagnosisView(scenario.diagnosis);
-          return scenario.primary === "awaiting-fix" || scenario.primary === "apply-scoped-fix"
+          return ["awaiting-fix", "apply-scoped-fix"].includes(String(scenario.primary))
             ? {
                 ...view,
                 reviews: [{ decision: "approve", diagnosisId: view.originalDiagnosis.id, editedDiagnosis: view.originalDiagnosis.after.diagnosis }],

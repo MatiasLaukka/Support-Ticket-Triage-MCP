@@ -575,6 +575,57 @@ describe("approvalDeskHtml", () => {
     expect(app.el("diagnosisPanel").innerHTML).not.toContain('data-action="open-diagnosis-inspection"');
   });
 
+  it("returns from diagnosis history to the current authoritative diagnosis", async () => {
+    const historical = fixtureDiagnosisView({
+      id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      confidence: "likely",
+      summary: "Historical engineering theory.",
+    });
+    const current = fixtureDiagnosisView({
+      id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+      confidence: "confirmed",
+      owner: "support",
+      summary: "Current support-owned diagnosis.",
+      recommendedNextAction: "Verify the support-side correction with the customer.",
+    });
+    const currentReview = {
+      decision: "approve",
+      diagnosisId: current.originalDiagnosis.id,
+      editedDiagnosis: current.originalDiagnosis.after.diagnosis,
+    };
+    const app = await startApprovalDeskApp({
+      diagnoses: [historical, { ...current, reviews: [currentReview], latestReview: currentReview }],
+      ticketDetail: {
+        lifecycle: {
+          ...fixtureLifecycle({
+            phase: "verification",
+            primaryAction: "evaluate-ticket",
+            actions: [lifecycleAction("evaluate-ticket", "primary", ["no-platform-fix-required"])],
+          }),
+          fix: {
+            state: "none",
+            reasonCodes: ["no-platform-fix-required"],
+            diagnosisStillAuthoritative: true,
+          },
+          response: { intent: "fix-verification", state: "none" },
+        },
+      },
+    });
+
+    await app.selectFirstTicket();
+    app.selectDiagnosis(historical.originalDiagnosis.id);
+    expect(app.el("diagnosisPanel").innerHTML).toContain('data-diagnosis-phase="history"');
+
+    app.el("diagnosisPanel").dispatch("click", {
+      target: { dataset: { action: "back-to-current-diagnosis" } },
+    });
+    await app.wait(30);
+
+    expect(app.el("diagnosisPanel").innerHTML).toContain('data-diagnosis-phase="approved-diagnosis"');
+    expect(app.el("diagnosisPanel").innerHTML).toContain("Current support-owned diagnosis.");
+    expect(app.el("diagnosisPanel").innerHTML).not.toContain('data-diagnosis-phase="history"');
+  });
+
   it("refreshes the authoritative lifecycle before leaving diagnosis for the action bar", async () => {
     const app = await startApprovalDeskApp({
       ticketDetailRecommendation: fixtureRecommendation,
@@ -623,8 +674,8 @@ describe("approvalDeskHtml", () => {
 
     await app.selectFirstTicket();
 
-    expect(app.el("actionBarTitle").textContent).toBe("Further investigation required");
-    expect(app.el("actionBarHint").textContent).toContain("No governed operator action is available");
+    expect(app.el("actionBarTitle").textContent).toBe("Specialist review required");
+    expect(app.el("actionBarHint").textContent).toContain("Specialist review");
     expect(app.el("createUpdatedRecommendation").hidden).toBe(true);
     expect(app.el("diagnoseButton").hidden).toBe(true);
     expect(app.el("fixButton").hidden).toBe(true);
@@ -670,10 +721,12 @@ describe("approvalDeskHtml", () => {
     await app.selectFirstTicket();
     app.openDiagnosisInspection();
     app.backToDiagnosis();
+    await app.wait(30);
 
     expect(app.el("diagnosisPanel").innerHTML).toContain('data-diagnosis-phase="diagnosis"');
 
     app.backToNormalActionBar();
+    await app.wait(30);
 
     expect(app.el("diagnosisActionPanel").hidden).toBe(true);
     expect(app.el("diagnoseButton").hidden).toBe(false);
@@ -709,7 +762,7 @@ describe("approvalDeskHtml", () => {
     const panel = app.el("diagnosisPanel");
     expect(panel.innerHTML).toContain('data-diagnosis-phase="diagnosis"');
     expect(panel.innerHTML).not.toContain("Revalidate");
-    expect(panel.innerHTML).toContain(">Next<");
+    expect(panel.innerHTML).toContain(">Review<");
     expect(panel.innerHTML).not.toContain('data-diagnosis-phase="inspection"');
     expect(panel.innerHTML).not.toContain('data-diagnosis-phase="scoped-fix"');
 
@@ -723,6 +776,7 @@ describe("approvalDeskHtml", () => {
     expect(panel.innerHTML).not.toContain("<details");
 
     app.backToDiagnosis();
+    await app.wait(30);
     expect(panel.innerHTML).toContain('data-diagnosis-phase="diagnosis"');
 
     app.openDiagnosisInspection();
@@ -732,7 +786,7 @@ describe("approvalDeskHtml", () => {
     expect(panel.innerHTML).not.toContain('data-diagnosis-phase="diagnosis"');
     expect(panel.innerHTML).not.toContain('data-diagnosis-phase="inspection"');
     expect(panel.innerHTML).toContain("Edit");
-    expect(panel.innerHTML).toContain("Next");
+    expect(panel.innerHTML).toContain("Open Scoped Fix");
     expect(panel.innerHTML).not.toContain('type="checkbox"');
     expect(panel.innerHTML).not.toContain("<details");
 
@@ -1034,7 +1088,7 @@ describe("approvalDeskHtml", () => {
     expect(app.el("diagnosisPanel").innerHTML).toContain(
       "An ambiguous or escalated diagnosis cannot become authoritative.",
     );
-    expect(app.el("diagnosisPanel").innerHTML).toContain('data-diagnosis-phase="inspection"');
+    expect(app.el("diagnosisPanel").innerHTML).toContain('data-diagnosis-phase="diagnosis"');
   });
 
   it("guides ambiguous diagnoses to clarification instead of offering impossible approval", async () => {
@@ -1068,14 +1122,14 @@ describe("approvalDeskHtml", () => {
     await app.selectFirstTicket();
 
     expect(app.el("diagnosisPanel").innerHTML).toContain("Approval is unavailable");
-    expect(app.el("diagnosisPanel").innerHTML).toContain("Ask for clarification");
+    expect(app.el("diagnosisPanel").innerHTML).toContain("Clarify");
     expect(app.el("diagnosisPanel").innerHTML).not.toContain('data-action="open-diagnosis-inspection"');
     expect(app.el("diagnosisPanel").innerHTML).toContain("Try the editor in a private window.");
 
     app.openDiagnosisInspection();
 
     expect(app.el("diagnosisPanel").innerHTML).not.toContain('data-decision="approve"');
-    expect(app.el("diagnosisPanel").innerHTML).toContain("Ask for clarification");
+    expect(app.el("diagnosisPanel").innerHTML).toContain("Clarify");
     expect(app.el("diagnosisPanel").innerHTML).toContain("Share any browser console loading error.");
   });
 
@@ -1148,6 +1202,7 @@ describe("approvalDeskHtml", () => {
     expect(app.el("diagnosisPanel").innerHTML).not.toContain('data-action="open-diagnosis-inspection"');
 
     app.backToNormalActionBar();
+    await app.wait(30);
     expect(app.el("actionBarTitle").textContent).not.toBe("Response ready");
     expect(app.el("createUpdatedRecommendation").hidden).toBe(false);
 
@@ -1183,6 +1238,7 @@ describe("approvalDeskHtml", () => {
     expect(app.el("diagnosisPanel").innerHTML).toContain('data-action="back-to-normal-action-bar"');
 
     app.backToNormalActionBar();
+    await app.wait(30);
     expect(app.el("diagnosisActionPanel").hidden).toBe(true);
     expect(app.el("diagnoseButton").hidden).toBe(false);
   });
@@ -1251,6 +1307,64 @@ describe("approvalDeskHtml", () => {
     });
     await app.wait(10);
     expect(app.requests.some((request) => request.path === "/api/tickets/TKT-1001/fix")).toBe(true);
+  });
+
+  it.each([
+    {
+      owner: "customer" as const,
+      nextStep: "Ask the customer to confirm whether the issue still reproduces.",
+    },
+    {
+      owner: "support" as const,
+      nextStep: "Verify the documented support-side action, then confirm the outcome.",
+    },
+  ])("keeps the Action Bar on re-evaluation for a confirmed $owner diagnosis with no platform fix", async ({ owner, nextStep }) => {
+    const view = fixtureDiagnosisView({
+      confidence: "confirmed",
+      owner,
+      recommendedNextAction: nextStep,
+    });
+    const review = {
+      decision: "approve",
+      diagnosisId: view.originalDiagnosis.id,
+      editedDiagnosis: view.originalDiagnosis.after.diagnosis,
+    };
+    const app = await startApprovalDeskApp({
+      ticketDetailRecommendation: {
+        ...fixtureRecommendation,
+        resolution: "approved",
+      },
+      diagnoses: [{ ...view, reviews: [review], latestReview: review }],
+      ticketDetail: {
+        lifecycle: {
+          ...fixtureLifecycle({
+            phase: "verification",
+            primaryAction: "evaluate-ticket",
+            actions: [lifecycleAction("evaluate-ticket", "primary", ["no-platform-fix-required"])],
+          }),
+          fix: {
+            state: "none",
+            reasonCodes: ["no-platform-fix-required"],
+            diagnosisStillAuthoritative: true,
+          },
+          response: { intent: "fix-verification", state: "none" },
+        },
+      },
+    });
+
+    await app.selectFirstTicket();
+
+    expect(app.el("actionBarTitle").textContent).toBe("Re-evaluate");
+    expect(app.el("actionBarHint").textContent).toContain("Re-evaluate the ticket");
+    expect(app.el("diagnosisActionPanel").hidden).toBe(false);
+    expect(app.el("diagnosisPanel").innerHTML).toContain('data-diagnosis-phase="approved-diagnosis"');
+    expect(app.el("diagnosisPanel").innerHTML).toContain('data-action="reopen-diagnosis-evaluation"');
+    expect(app.el("createUpdatedRecommendation").hidden).toBe(false);
+    expect(app.el("createUpdatedRecommendation").textContent).toBe("Re-evaluate");
+    expect(app.el("fixButton").hidden).toBe(true);
+    expect(app.el("diagnosisPanel").innerHTML).toContain(nextStep);
+    expect(app.el("diagnosisPanel").innerHTML).not.toContain('data-action="record-fix-available"');
+    expect(app.el("decisionChips").innerHTML).not.toContain("Response ready");
   });
 
   it("opens Scoped Fix from the action bar when the lifecycle permits applying it", async () => {
@@ -1596,7 +1710,7 @@ describe("approvalDeskHtml", () => {
     expect(app.parsedResult()).not.toEqual(expect.objectContaining({ error: "Diagnosis fix is unavailable." }));
   });
 
-  it("keeps a later same-diagnosis review result when an earlier review succeeds last", async () => {
+  it("renders the authoritative refreshed diagnosis when same-diagnosis reviews resolve out of order", async () => {
     const earlierDiagnosis = fixtureDiagnosisView({ summary: "Earlier review result." });
     const laterDiagnosis = fixtureDiagnosisView({ summary: "Later review result." });
     const app = await startApprovalDeskApp({
@@ -1623,9 +1737,8 @@ describe("approvalDeskHtml", () => {
     await app.reviewDiagnosis("approve");
     await app.wait(50);
 
-    expect(app.el("diagnosisPanel").innerHTML).toContain("Later review result.");
-    expect(app.el("diagnosisPanel").innerHTML).not.toContain("Earlier review result.");
-    expect(app.parsedResult()).toMatchObject({ auditEvent: { action: "later-review" } });
+    expect(app.el("diagnosisPanel").innerHTML).toContain("Earlier review result.");
+    expect(app.el("diagnosisPanel").innerHTML).not.toContain("Later review result.");
   });
 
   it("keeps a later scoped-fix result when an earlier same-diagnosis review fails last", async () => {
@@ -2149,8 +2262,8 @@ describe("approvalDeskHtml", () => {
     );
     expect(app.requests.filter((request) => request.path.endsWith("/customer-replies")))
       .toHaveLength(1);
-    expect(app.ticketDetailRequests()).toBeGreaterThanOrEqual(4);
-    expect(app.queueRequests()).toBeGreaterThanOrEqual(3);
+    expect(app.ticketDetailRequests()).toBeGreaterThanOrEqual(3);
+    expect(app.queueRequests()).toBeGreaterThanOrEqual(2);
     expect(app.evidenceRequests()).toBeGreaterThanOrEqual(3);
   });
 
@@ -2627,7 +2740,7 @@ describe("approvalDeskHtml", () => {
     expect(app.evidenceRequests()).toBe(2);
   });
 
-  it("shows an automatic customer reply in a chat bubble above the action bar after done", async () => {
+  it("shows an automatic customer reply in a chat bubble above the action bar after send", async () => {
     const app = await startApprovalDeskApp({
       markSentAutomaticReply:
         "The endpoint URL is https://hooks.example.test/webhooks/orders, the delivery ID is deliv_7788, raw body handling has not changed since yesterday, the last failed attempt was at 2026-06-10 09:12 UTC, and the endpoint returned HTTP 401 before the retry succeeded.",
@@ -2639,6 +2752,7 @@ describe("approvalDeskHtml", () => {
     await app.selectFirstTicket();
     await app.createRecommendation();
     await app.approve();
+    await app.markSent();
 
     expect(app.el("actionBarTitle").textContent).toBe("Customer replied");
     expect(app.el("customerReplyFocus").hidden).toBe(false);
@@ -2678,6 +2792,7 @@ describe("approvalDeskHtml", () => {
 
     await app.createRecommendation();
     await app.approve();
+    await app.markSent();
 
     const sentRequest = app.requests.find((request) =>
       request.path.endsWith("/mark-sent"),
@@ -3256,8 +3371,8 @@ describe("approvalDeskHtml", () => {
 
     await app.selectFirstTicket();
 
-    expect(app.el("actionBarTitle").textContent).toBe("Further investigation required");
-    expect(app.el("actionBarHint").textContent).toContain("No governed operator action");
+    expect(app.el("actionBarTitle").textContent).toBe("Waiting for customer");
+    expect(app.el("actionBarHint").textContent).toContain("Waiting for the customer");
     expect(app.el("approveButton").hidden).toBe(true);
     expect(app.el("reviewDraftButton").hidden).toBe(true);
   });
@@ -3357,7 +3472,7 @@ describe("approvalDeskHtml", () => {
     expect(app.el("approveButton").textContent).toBe("Send");
   });
 
-  it("marks the task done by approving the evaluated response and sending it", async () => {
+  it("requires a second explicit gesture to send an approved evaluated response", async () => {
     const app = await startApprovalDeskApp();
     await app.selectFirstTicket();
     await app.createRecommendation();
@@ -3367,13 +3482,19 @@ describe("approvalDeskHtml", () => {
     const approvalRequest = app.requests.find((request) =>
       request.path.endsWith("/approve"),
     );
-    const sentRequest = app.requests.find((request) =>
-      request.path.endsWith("/mark-sent"),
-    );
     expect(JSON.parse(String(approvalRequest?.init?.body))).toMatchObject({
       approvedFields: ["category", "priority", "team", "tags", "customerResponse"],
       editedCustomerResponse: fixtureRecommendation.draftCustomerResponse,
     });
+    expect(
+      app.requests.some((request) => request.path.endsWith("/mark-sent")),
+    ).toBe(false);
+
+    await app.markSent();
+
+    const sentRequest = app.requests.find((request) =>
+      request.path.endsWith("/mark-sent"),
+    );
     expect(JSON.parse(String(sentRequest?.init?.body))).toMatchObject({
       ticketId: "TKT-1001",
       actor: "approval-desk",
@@ -3711,7 +3832,7 @@ describe("approvalDeskHtml", () => {
     app.approveField("category");
     app.el("confirmApproval").checked = true;
     await app.approve();
-    expect(app.evidenceRequests()).toBe(3);
+    expect(app.evidenceRequests()).toBe(4);
 
     const rejectionApp = await startApprovalDeskApp();
     await rejectionApp.selectFirstTicket();
@@ -3989,7 +4110,7 @@ describe("approvalDeskHtml", () => {
     );
   });
 
-  it("rejects the prior recommendation only after a successful evaluation still reports it pending", async () => {
+  it("does not auto-reject the prior recommendation after a replacement evaluation", async () => {
     const app = await startApprovalDeskApp({
       ticketDetailRecommendation: fixtureRecommendation,
       confirmResult: true,
@@ -4013,7 +4134,7 @@ describe("approvalDeskHtml", () => {
       request.path.endsWith("/reject"),
     );
     expect(evaluationIndex).toBeGreaterThanOrEqual(0);
-    expect(rejectionIndex).toBeGreaterThan(evaluationIndex);
+    expect(rejectionIndex).toBe(-1);
     expect(app.el("recommendationPanel").innerHTML).toContain(
       "A replacement recommendation from the latest evaluation.",
     );
@@ -4061,7 +4182,7 @@ describe("approvalDeskHtml", () => {
     expect(app.el("categoryOverride").value).toBe("authentication");
     expect(
       app.requests.some((request) => request.path.endsWith("/mark-sent")),
-    ).toBe(true);
+    ).toBe(false);
   });
 
   it("keeps an existing approved response in done-ready state until sent", async () => {
@@ -4408,6 +4529,106 @@ describe("approvalDeskHtml", () => {
     expect(app.el("ticketList").children).toHaveLength(5);
   });
 
+  it("uses lifecycle summaries as the queue authority and only falls back for legacy items", async () => {
+    const app = await startApprovalDeskApp({
+      tickets: [
+        {
+          ...fixtureTicket,
+          subject: "Lifecycle fix ready",
+          recommendationSummary: { workflowState: "resolved", priority: "P1" },
+          lifecycleSummary: {
+            phase: "fix-ready",
+            primaryAction: "apply-scoped-fix",
+            reasonCodes: ["fix-ready"],
+          },
+        },
+        {
+          ...fixtureTicket,
+          id: "TKT-2001",
+          subject: "Lifecycle resolved",
+          recommendationSummary: { workflowState: "active", priority: "P2" },
+          lifecycleSummary: {
+            phase: "resolved",
+            primaryAction: "none",
+            reasonCodes: ["already-completed"],
+          },
+        },
+        {
+          ...fixtureTicket,
+          id: "TKT-2002",
+          subject: "Legacy draft fixture",
+          recommendationSummary: { workflowState: "draft-ready", priority: "P3" },
+        },
+        {
+          ...fixtureTicket,
+          id: "TKT-2003",
+          subject: "Lifecycle customer reply",
+          recommendationSummary: {
+            workflowState: "customer-replied",
+            hasCustomerReply: true,
+            priority: "P2",
+          },
+          lifecycleSummary: {
+            phase: "evaluation-needed",
+            primaryAction: "evaluate-ticket",
+            reasonCodes: ["customer-reply"],
+          },
+        },
+      ],
+    });
+
+    expect(app.el("ticketList").children).toHaveLength(1);
+    expect(app.el("ticketList").children[0]!.innerHTML).toContain("Lifecycle fix ready");
+    expect(app.el("ticketList").children[0]!.innerHTML).toContain("Fix ready");
+    expect(app.el("ticketList").children[0]!.className).toContain("state-active");
+    expect(app.el("ticketList").children[0]!.className).toContain("lifecycle-fix-ready");
+
+    app.setQueueFilter("resolved");
+    expect(app.el("ticketList").children).toHaveLength(1);
+    expect(app.el("ticketList").children[0]!.innerHTML).toContain("Lifecycle resolved");
+    expect(app.el("ticketList").children[0]!.innerHTML).toContain("Closed");
+
+    app.setQueueFilter("draft-ready");
+    expect(app.el("ticketList").children).toHaveLength(1);
+    expect(app.el("ticketList").children[0]!.innerHTML).toContain("Legacy draft fixture");
+
+    app.setQueueFilter("customer-replied");
+    expect(app.el("ticketList").children).toHaveLength(1);
+    expect(app.el("ticketList").children[0]!.innerHTML).toContain("Lifecycle customer reply");
+    expect(app.el("ticketList").children[0]!.innerHTML).toContain("Evaluation needed");
+    expect(app.el("ticketList").children[0]!.className).toContain("state-customer-replied");
+    expect(app.el("ticketList").children[0]!.className).toContain("lifecycle-evaluation-needed");
+  });
+
+  it("keeps an evaluation-needed ticket with only a historical reply in the active queue", async () => {
+    const app = await startApprovalDeskApp({
+      tickets: [{
+        ...fixtureTicket,
+        subject: "Re-evaluation after consumed reply",
+        recommendationSummary: {
+          workflowState: "active",
+          hasCustomerReply: true,
+          priority: "P2",
+        },
+        lifecycleSummary: {
+          phase: "evaluation-needed",
+          primaryAction: "evaluate-ticket",
+          reasonCodes: ["recommendation-rejected"],
+        },
+      }],
+    });
+
+    expect(app.el("ticketList").children).toHaveLength(1);
+    expect(app.el("ticketList").children[0]!.innerHTML).toContain("Re-evaluation after consumed reply");
+    expect(app.el("ticketList").children[0]!.className).toContain("state-active");
+    expect(app.el("ticketList").children[0]!.className).toContain("lifecycle-evaluation-needed");
+    expect(app.el("ticketList").children[0]!.className).not.toContain("state-customer-replied");
+
+    app.setQueueFilter("customer-replied");
+    expect(app.el("ticketList").children).toHaveLength(0);
+    expect(app.el("ticketList").innerHTML).toContain("No customer-replied tickets");
+  });
+
   it("shows a close action after a ready-for-close response has been sent", async () => {
     const app = await startApprovalDeskApp({
       ticketDetailRecommendation: {
@@ -4458,12 +4679,1390 @@ describe("approvalDeskHtml", () => {
     });
   });
 
+  it("keeps ambiguous inspection read-only while exposing lifecycle clarification evidence", async () => {
+    const view = fixtureDiagnosisView({ confidence: "likely" });
+    view.originalDiagnosis.after.diagnosis = {
+      ...view.originalDiagnosis.after.diagnosis,
+      diagnosticState: { state: "ambiguous" },
+    } as typeof view.originalDiagnosis.after.diagnosis;
+    const app = await startApprovalDeskApp({
+      diagnoses: [view],
+      ticketDetail: {
+        lifecycle: {
+          ...fixtureLifecycle({
+            phase: "evaluation-needed",
+            primaryAction: "evaluate-ticket",
+            actions: [
+              lifecycleAction("evaluate-ticket", "primary", ["diagnosis-ambiguous"]),
+              lifecycleAction("review-diagnosis", "blocked", ["diagnosis-ambiguous"]),
+              lifecycleAction("revalidate-diagnosis", "blocked", ["diagnosis-ambiguous"]),
+              lifecycleAction("reject-diagnosis", "blocked", ["diagnosis-ambiguous"]),
+            ],
+          }),
+          diagnosticInvestigation: {
+            state: "ambiguous",
+            hypotheses: [],
+            evidenceToRequest: ["Share the browser console loading error."],
+          },
+        },
+      },
+    });
+
+    await app.selectFirstTicket();
+    app.openDiagnosisInspection();
+
+    const inspection = app.el("diagnosisPanel").innerHTML;
+    expect(inspection).toContain('data-diagnosis-phase="inspection"');
+    expect(inspection).toContain("Share the browser console loading error.");
+    expect(inspection).toContain('data-action="reopen-diagnosis-evaluation"');
+    expect(inspection).not.toContain('data-action="review-diagnosis"');
+    expect(inspection).not.toContain('data-action="open-diagnosis-inspection"');
+    expect(inspection).not.toContain('data-decision="approve"');
+  });
+
+  it("uses the record-diagnosis descriptor even when the legacy summary says customer-replied", async () => {
+    const app = await startApprovalDeskApp({
+      ticketDetailRecommendation: { ...fixtureRecommendation, resolution: "approved" },
+      ticketDetail: {
+        recommendationSummary: {
+          workflowState: "customer-replied",
+          latestRecommendationId: fixtureRecommendation.id,
+          latestResolution: "approved",
+          hasSentResponse: true,
+          hasCustomerReply: true,
+        },
+        lifecycle: fixtureLifecycle({
+          phase: "diagnosis-ready",
+          primaryAction: "record-diagnosis",
+          actions: [lifecycleAction("record-diagnosis", "primary", ["evidence-complete"])],
+        }),
+      },
+    });
+
+    await app.selectFirstTicket();
+
+    expect(app.el("diagnoseButton").hidden).toBe(false);
+    expect(app.el("diagnoseButton").disabled).toBe(false);
+    expect(app.el("createUpdatedRecommendation").hidden).toBe(true);
+  });
+
+  it("does not execute a blocked scoped-fix control and opens it only from an available descriptor", async () => {
+    const diagnosis = fixtureDiagnosisView({ confidence: "confirmed" });
+    const approved = {
+      decision: "approve",
+      diagnosisId: diagnosis.originalDiagnosis.id,
+      editedDiagnosis: diagnosis.originalDiagnosis.after.diagnosis,
+    };
+    const blocked = await startApprovalDeskApp({
+      diagnoses: [{ ...diagnosis, reviews: [approved], latestReview: approved }],
+      ticketDetail: {
+        lifecycle: fixtureLifecycle({
+          phase: "evaluation-needed",
+          primaryAction: "evaluate-ticket",
+          actions: [
+            lifecycleAction("evaluate-ticket", "primary"),
+            lifecycleAction("apply-scoped-fix", "blocked", ["fix-not-ready"]),
+          ],
+        }),
+      },
+    });
+    await blocked.selectFirstTicket();
+    await blocked.click("fixButton");
+
+    expect(blocked.el("fixButton").hidden).toBe(true);
+    expect(blocked.requests.some((request) => request.path === "/api/tickets/TKT-1001/fix")).toBe(false);
+
+    const available = await startApprovalDeskApp({
+      diagnoses: [{ ...diagnosis, reviews: [approved], latestReview: approved }],
+      ticketDetail: {
+        lifecycle: fixtureLifecycle({
+          phase: "fix-ready",
+          primaryAction: "apply-scoped-fix",
+          actions: [lifecycleAction("apply-scoped-fix", "primary", ["fix-ready"])],
+        }),
+      },
+    });
+    await available.selectFirstTicket();
+    expect(available.el("fixButton").hidden).toBe(false);
+    await available.click("fixButton");
+
+    expect(available.el("diagnosisPanel").innerHTML).toContain('data-diagnosis-phase="scoped-fix"');
+  });
+
+  it("uses Resolve, never Close, for the ready-for-close lifecycle action", async () => {
+    const app = await startApprovalDeskApp({
+      ticketDetail: {
+        lifecycle: fixtureLifecycle({
+          phase: "ready-for-close",
+          primaryAction: "resolve-ticket",
+          actions: [lifecycleAction("resolve-ticket", "primary", ["response-sent"])],
+        }),
+      },
+    });
+
+    await app.selectFirstTicket();
+
+    expect(app.el("closeTicketButton").hidden).toBe(false);
+    expect(app.el("closeTicketButton").textContent).toBe("Resolve");
+    expect(app.el("closeTicketButton").textContent).not.toContain("Close");
+  });
+
+  it("does not expose inspection clarification when evaluation is blocked by the lifecycle", async () => {
+    const app = await startApprovalDeskApp({
+      diagnoses: [fixtureDiagnosisView()],
+      ticketDetail: {
+        lifecycle: fixtureLifecycle({
+          phase: "diagnosis-review",
+          primaryAction: "none",
+          actions: [
+            lifecycleAction("none", "primary", ["operator-review"]),
+            lifecycleAction("review-diagnosis", "blocked", ["operator-review"]),
+            lifecycleAction("evaluate-ticket", "blocked", ["evidence-pending"]),
+          ],
+        }),
+      },
+    });
+
+    await app.selectFirstTicket();
+    app.openDiagnosisInspection();
+
+    const inspection = app.el("diagnosisPanel").innerHTML;
+    expect(inspection).not.toContain('data-action="reopen-diagnosis-evaluation"');
+    expect(inspection).not.toContain('data-action="review-diagnosis"');
+  });
+
+  it("does not fall back to demo fix mutations when a lifecycle descriptor has no fix action", async () => {
+    const diagnosis = fixtureDiagnosisView({ confidence: "confirmed" });
+    const approved = {
+      decision: "approve",
+      diagnosisId: diagnosis.originalDiagnosis.id,
+      editedDiagnosis: diagnosis.originalDiagnosis.after.diagnosis,
+    };
+    const app = await startApprovalDeskApp({
+      diagnoses: [{ ...diagnosis, reviews: [approved], latestReview: approved }],
+      ticketDetail: {
+        lifecycle: fixtureLifecycle({
+          phase: "waiting-for-customer",
+          primaryAction: "none",
+          actions: [lifecycleAction("none", "primary", ["customer-confirmation-pending"])],
+        }),
+      },
+    });
+
+    await app.selectFirstTicket();
+    app.openApprovedDiagnosis();
+
+    const panel = app.el("diagnosisPanel").innerHTML;
+    expect(panel).not.toContain('data-action="simulate-confirmation"');
+    expect(panel).not.toContain('data-action="prepare-diagnosis-response"');
+    expect(panel).not.toContain('data-action="simulate-solution"');
+  });
+
+  it.each([
+    ["review-diagnosis", "Review"],
+    ["revalidate-diagnosis", "Revalidate"],
+  ])("reopens the refreshed %s lifecycle action after Back without generic response controls", async (primaryAction, label) => {
+    const diagnosis = fixtureDiagnosisView({ stale: primaryAction === "revalidate-diagnosis" });
+    const app = await startApprovalDeskApp({
+      diagnoses: [diagnosis],
+      ticketDetailLifecycleSequence: [
+        fixtureLifecycle({
+          phase: "fix-ready",
+          primaryAction: "apply-scoped-fix",
+          actions: [lifecycleAction("apply-scoped-fix", "primary", ["fix-ready"])],
+        }),
+        fixtureLifecycle({
+          phase: "diagnosis-review",
+          primaryAction,
+          actions: [lifecycleAction(primaryAction, "primary", ["operator-review"])],
+        }),
+      ],
+    });
+
+    await app.selectFirstTicket();
+    app.openApprovedDiagnosis();
+    app.backToNormalActionBar();
+    await app.wait(30);
+
+    expect(app.el("diagnosisPanel").innerHTML).toContain('data-diagnosis-phase="diagnosis"');
+    expect(app.el("diagnosisPanel").innerHTML).toContain(label);
+    expect(app.el("reviewDraftButton").hidden).toBe(true);
+    expect(app.el("approveButton").hidden).toBe(true);
+  });
+
+  it("prioritizes the ready-to-resolve lifecycle title and hint over an open diagnosis", async () => {
+    const diagnosis = fixtureDiagnosisView({ confidence: "confirmed" });
+    const approved = {
+      decision: "approve",
+      diagnosisId: diagnosis.originalDiagnosis.id,
+      editedDiagnosis: diagnosis.originalDiagnosis.after.diagnosis,
+    };
+    const app = await startApprovalDeskApp({
+      diagnoses: [{ ...diagnosis, reviews: [approved], latestReview: approved }],
+      ticketDetail: {
+        lifecycle: fixtureLifecycle({
+          phase: "ready-for-close",
+          primaryAction: "resolve-ticket",
+          actions: [lifecycleAction("resolve-ticket", "primary", ["response-sent"])],
+        }),
+      },
+    });
+
+    await app.selectFirstTicket();
+
+    expect(app.el("actionBarTitle").textContent).toBe("Ready to resolve");
+    expect(app.el("actionBarHint").textContent).toContain("Resolve");
+    expect(app.el("actionBarTitle").textContent).not.toBe("Diagnosis");
+  });
+
+  it.each([
+    ["resolved", "none", "Resolved", "resolved"],
+    ["waiting-for-customer", "none", "Waiting for customer", "customer"],
+    ["escalated", "specialist-review", "Specialist review required", "specialist"],
+  ])("explains the %s no-action lifecycle phase without generic response-ready copy", async (phase, action, title, hint) => {
+    const app = await startApprovalDeskApp({
+      ticketDetail: {
+        lifecycle: fixtureLifecycle({
+          phase,
+          primaryAction: action,
+          actions: [lifecycleAction(action, "primary", ["phase-explanation"])],
+        }),
+      },
+    });
+
+    await app.selectFirstTicket();
+
+    expect(app.el("actionBarTitle").textContent).toBe(title);
+    expect(app.el("actionBarHint").textContent.toLowerCase()).toContain(hint);
+    expect(app.el("actionBarHint").textContent).not.toContain("Response ready");
+    expect(app.el("actionBarHint").textContent).not.toBe("");
+  });
+
+  it("reconciles each Back transition before exposing the lifecycle-backed opener", async () => {
+    const app = await startApprovalDeskApp({
+      diagnoses: [fixtureDiagnosisView()],
+      ticketDetailLifecycleSequence: [
+        fixtureLifecycle({
+          phase: "diagnosis-review",
+          primaryAction: "review-diagnosis",
+          actions: [lifecycleAction("review-diagnosis", "primary")],
+        }),
+        fixtureLifecycle({
+          phase: "diagnosis-review",
+          primaryAction: "review-diagnosis",
+          actions: [lifecycleAction("review-diagnosis", "primary")],
+        }),
+        fixtureLifecycle({
+          phase: "evaluation-needed",
+          primaryAction: "evaluate-ticket",
+          actions: [lifecycleAction("evaluate-ticket", "primary", ["diagnosis-rejected"])],
+        }),
+      ],
+    });
+
+    await app.selectFirstTicket();
+    app.openDiagnosisInspection();
+    app.backToDiagnosis();
+    await app.wait(30);
+
+    expect(app.ticketDetailRequests()).toBeGreaterThanOrEqual(2);
+    expect(app.el("diagnosisPanel").innerHTML).toContain('data-diagnosis-phase="diagnosis"');
+
+    app.backToNormalActionBar();
+    await app.wait(30);
+
+    expect(app.ticketDetailRequests()).toBeGreaterThanOrEqual(3);
+    expect(app.el("diagnosisActionPanel").hidden).toBe(true);
+    expect(app.el("createUpdatedRecommendation").hidden).toBe(false);
+    expect(app.el("createUpdatedRecommendation").textContent).toBe("Evaluate");
+  });
+
+  it("renders an older rejected diagnosis read-only without reclaiming the current lifecycle action bar", async () => {
+    const rejected = fixtureDiagnosisView({ id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", summary: "Rejected historical theory." });
+    const rejectedReview = {
+      decision: "reject",
+      diagnosisId: rejected.originalDiagnosis.id,
+      editedDiagnosis: rejected.originalDiagnosis.after.diagnosis,
+    };
+    const current = fixtureDiagnosisView({ id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", summary: "Current diagnosis." });
+    const app = await startApprovalDeskApp({
+      diagnoses: [{ ...rejected, reviews: [rejectedReview], latestReview: rejectedReview }, current],
+      ticketDetail: {
+        lifecycle: fixtureLifecycle({
+          phase: "evaluation-needed",
+          primaryAction: "evaluate-ticket",
+          actions: [lifecycleAction("evaluate-ticket", "primary", ["diagnosis-rejected"])],
+        }),
+      },
+    });
+
+    await app.selectFirstTicket();
+    expect(app.el("createUpdatedRecommendation").hidden).toBe(false);
+
+    app.selectDiagnosis(rejected.originalDiagnosis.id);
+
+    expect(app.el("diagnosisPanel").innerHTML).toContain('data-diagnosis-phase="history"');
+    expect(app.el("diagnosisPanel").innerHTML).toContain("Rejected historical theory.");
+    expect(app.el("diagnosisPanel").innerHTML).not.toContain('data-action="review-diagnosis"');
+    expect(app.el("createUpdatedRecommendation").hidden).toBe(false);
+    expect(app.el("createUpdatedRecommendation").textContent).toBe("Evaluate");
+  });
+
+  it("requires separate approval and send gestures with authoritative reconciliation between them", async () => {
+    const reviewLifecycle = fixtureLifecycle({
+      phase: "recommendation-review",
+      primaryAction: "review-recommendation",
+      actions: [lifecycleAction("review-recommendation", "primary", ["operator-review"])],
+    });
+    const sendLifecycle = fixtureLifecycle({
+      phase: "recommendation-review",
+      primaryAction: "send-customer-response",
+      actions: [lifecycleAction("send-customer-response", "primary", ["recommendation-approved"])],
+    });
+    const app = await startApprovalDeskApp({
+      ticketDetailRecommendation: fixtureRecommendation,
+      ticketDetailLifecycleSequence: [reviewLifecycle, sendLifecycle],
+    });
+    await app.selectFirstTicket();
+
+    expect(app.el("approveButton").textContent).toBe("Review");
+
+    await app.approve();
+
+    expect(app.requests.filter((request) => request.path.endsWith("/approve"))).toHaveLength(1);
+    expect(app.requests.filter((request) => request.path.endsWith("/mark-sent"))).toHaveLength(0);
+    expect(app.ticketDetailRequests()).toBe(2);
+    expect(app.el("approveButton").textContent).toBe("Send");
+
+    await app.approve();
+
+    expect(app.requests.filter((request) => request.path.endsWith("/approve"))).toHaveLength(1);
+    expect(app.requests.filter((request) => request.path.endsWith("/mark-sent"))).toHaveLength(1);
+  });
+
+  it.each(["blocked", "completed"] as const)(
+    "does not POST a %s governed recommendation review descriptor",
+    async (availability) => {
+      const app = await startApprovalDeskApp({
+        ticketDetailRecommendation: fixtureRecommendation,
+        ticketDetail: {
+          lifecycle: fixtureLifecycle({
+            phase: "evaluation-needed",
+            primaryAction: "evaluate-ticket",
+            actions: [
+              lifecycleAction("evaluate-ticket", "primary"),
+              lifecycleAction("review-recommendation", availability, ["review-not-available"]),
+            ],
+          }),
+        },
+      });
+      await app.selectFirstTicket();
+
+      await app.approve();
+
+      expect(app.requests.some((request) => request.path.endsWith("/approve"))).toBe(false);
+      expect(app.requests.some((request) => request.path.endsWith("/mark-sent"))).toBe(false);
+      expect(app.parsedResult()).toMatchObject({ error: expect.stringContaining("Review not available") });
+    },
+  );
+
+  it.each([
+    ["approve", "review-diagnosis"],
+    ["reject", "reject-diagnosis"],
+    ["revalidate", "revalidate-diagnosis"],
+  ] as const)(
+    "reconciles ticket, diagnoses, lifecycle, guidance, and conversation after diagnosis %s",
+    async (decision, actionKind) => {
+      const diagnosis = fixtureDiagnosisView({ stale: decision === "revalidate" });
+      const app = await startApprovalDeskApp({
+        diagnoses: [diagnosis],
+        ticketDetail: {
+          lifecycle: fixtureLifecycle({
+            phase: "diagnosis-review",
+            primaryAction: actionKind,
+            actions: [lifecycleAction(actionKind, "primary")],
+          }),
+        },
+      });
+      await app.selectFirstTicket();
+      const detailBefore = app.ticketDetailRequests();
+      const diagnosesBefore = app.diagnosisRequests();
+      const queueBefore = app.queueRequests();
+      const evidenceBefore = app.evidenceRequests();
+
+      await app.reviewDiagnosis(decision);
+
+      const reviewRequests = app.requests.filter((request) => request.path.endsWith("/review"));
+      expect(reviewRequests).toHaveLength(1);
+      expect(JSON.parse(String(reviewRequests[0]?.init?.body))).toMatchObject({ decision });
+      expect(app.ticketDetailRequests()).toBe(detailBefore + 1);
+      expect(app.diagnosisRequests()).toBe(diagnosesBefore + 1);
+      expect(app.queueRequests()).toBe(queueBefore + 1);
+      expect(app.evidenceRequests()).toBe(evidenceBefore + 1);
+    },
+  );
+
+  it("refreshes durable state and keeps a stale diagnosis-review error inline", async () => {
+    const app = await startApprovalDeskApp({
+      diagnoses: [fixtureDiagnosisView()],
+      diagnosisReviewPlans: {
+        "TKT-1001": [{
+          error: "The diagnosis review used stale ticket context.",
+          status: 409,
+          code: "STALE_TICKET_CONTEXT",
+        }],
+      },
+      ticketDetailLifecycleSequence: [
+        fixtureLifecycle({
+          phase: "diagnosis-review",
+          primaryAction: "review-diagnosis",
+          actions: [lifecycleAction("review-diagnosis", "primary")],
+        }),
+        fixtureLifecycle({
+          phase: "evaluation-needed",
+          primaryAction: "evaluate-ticket",
+          actions: [lifecycleAction("evaluate-ticket", "primary", ["stale-context"])],
+        }),
+      ],
+    });
+    await app.selectFirstTicket();
+    app.openDiagnosisInspection();
+    const detailBefore = app.ticketDetailRequests();
+    const diagnosesBefore = app.diagnosisRequests();
+    const queueBefore = app.queueRequests();
+    const evidenceBefore = app.evidenceRequests();
+
+    await app.reviewDiagnosis("approve");
+    await app.wait(30);
+
+    expect(app.ticketDetailRequests()).toBe(detailBefore + 1);
+    expect(app.diagnosisRequests()).toBe(diagnosesBefore + 1);
+    expect(app.queueRequests()).toBe(queueBefore + 1);
+    expect(app.evidenceRequests()).toBe(evidenceBefore + 1);
+    expect(app.el("diagnosisPanel").innerHTML).toContain("The diagnosis review used stale ticket context.");
+    expect(app.el("diagnosisPanel").innerHTML).not.toContain('data-diagnosis-phase="inspection"');
+    expect(app.el("actionBarTitle").textContent).toBe("Re-evaluate");
+  });
+
+  it("does not advertise a replacement evaluation as successful when the canonical refresh fails", async () => {
+    const app = await startApprovalDeskApp({
+      ticketDetailRecommendation: fixtureRecommendation,
+      failTicketDetailAfter: 1,
+    });
+    await app.selectFirstTicket();
+
+    await app.createRecommendation();
+
+    expect(app.parsedResult()).toMatchObject({
+      error: "Ticket refresh is unavailable.",
+    });
+    expect(app.el("createRecommendation").disabled).toBe(false);
+    expect(app.el("createRecommendation").textContent).toBe("Evaluate");
+  });
+
+  it("reconciles send-customer-response from authoritative refresh data", async () => {
+    const app = await startApprovalDeskApp({
+      ticketDetailRecommendation: {
+        ...fixtureRecommendation,
+        resolution: "approved",
+      },
+      ticketDetail: {
+        lifecycle: fixtureLifecycle({
+          phase: "response-ready",
+          primaryAction: "send-customer-response",
+          actions: [lifecycleAction("send-customer-response", "primary", ["recommendation-approved"])],
+        }),
+      },
+    });
+    await app.selectFirstTicket();
+    const detailBefore = app.ticketDetailRequests();
+    const queueBefore = app.queueRequests();
+    const evidenceBefore = app.evidenceRequests();
+
+    await app.markSent();
+
+    expect(app.requests.filter((request) => request.path.endsWith("/mark-sent"))).toHaveLength(1);
+    expect(app.ticketDetailRequests()).toBe(detailBefore + 1);
+    expect(app.queueRequests()).toBe(queueBefore + 1);
+    expect(app.evidenceRequests()).toBe(evidenceBefore + 1);
+  });
+
+  it.each(["blocked", "completed"] as const)(
+    "does not POST a %s send-customer-response descriptor",
+    async (availability) => {
+      const app = await startApprovalDeskApp({
+        ticketDetailRecommendation: {
+          ...fixtureRecommendation,
+          resolution: "approved",
+        },
+        ticketDetail: {
+          lifecycle: fixtureLifecycle({
+            phase: "recommendation-review",
+            primaryAction: "review-recommendation",
+            actions: [
+              lifecycleAction("review-recommendation", "primary"),
+              lifecycleAction("send-customer-response", availability, ["response-not-ready"]),
+            ],
+          }),
+        },
+      });
+      await app.selectFirstTicket();
+
+      await app.markSent();
+
+      expect(app.requests.some((request) => request.path.endsWith("/mark-sent"))).toBe(false);
+      expect(app.parsedResult()).toMatchObject({ error: expect.stringContaining("Response not ready") });
+    },
+  );
+
+  it("reconciles recommendation rejection through authoritative refresh data", async () => {
+    const app = await startApprovalDeskApp({
+      ticketDetailRecommendation: fixtureRecommendation,
+      ticketDetail: {
+        lifecycle: fixtureLifecycle({
+          phase: "recommendation-review",
+          primaryAction: "review-recommendation",
+          actions: [lifecycleAction("review-recommendation", "primary", ["operator-review"])],
+        }),
+      },
+    });
+    await app.selectFirstTicket();
+    app.el("startRejectButton").dispatch("click");
+    app.el("feedback").value = "Needs better evidence.";
+    app.el("feedback").dispatch("input");
+    const detailBefore = app.ticketDetailRequests();
+    const queueBefore = app.queueRequests();
+    const evidenceBefore = app.evidenceRequests();
+
+    await app.reject();
+
+    expect(app.requests.filter((request) => request.path.endsWith("/reject"))).toHaveLength(1);
+    expect(app.ticketDetailRequests()).toBe(detailBefore + 1);
+    expect(app.queueRequests()).toBe(queueBefore + 1);
+    expect(app.evidenceRequests()).toBe(evidenceBefore + 1);
+    expect(app.parsedResult()).toMatchObject({
+      auditEvent: { action: "recommendation-rejected" },
+    });
+  });
+
+  it("keeps governed recommendation review single-flight through reconciliation", async () => {
+    const app = await startApprovalDeskApp({
+      recommendationApproveDelayTicks: 30,
+      ticketDetailRecommendation: fixtureRecommendation,
+      ticketDetail: {
+        lifecycle: fixtureLifecycle({
+          phase: "recommendation-review",
+          primaryAction: "review-recommendation",
+          actions: [lifecycleAction("review-recommendation", "primary")],
+        }),
+      },
+    });
+    await app.selectFirstTicket();
+    app.approveField("category");
+
+    app.approveWithoutSettling();
+    app.approveWithoutSettling();
+    await app.wait(2);
+
+    expect(app.requests.filter((request) => request.path.endsWith("/approve"))).toHaveLength(1);
+    expect(app.el("approveButton").disabled).toBe(true);
+
+    await app.wait(50);
+    expect(app.requests.filter((request) => request.path.endsWith("/approve"))).toHaveLength(1);
+  });
+
+  it("refreshes a new selection without reconciling old-ticket success UI", async () => {
+    const app = await startApprovalDeskApp({
+      recommendationApproveDelayTicks: 30,
+      tickets: [
+        fixtureTicket,
+        { ...fixtureTicket, id: "TKT-1002", subject: "Second ticket" },
+      ],
+      ticketDetailRecommendation: fixtureRecommendation,
+      ticketDetail: {
+        lifecycle: fixtureLifecycle({
+          phase: "recommendation-review",
+          primaryAction: "review-recommendation",
+          actions: [lifecycleAction("review-recommendation", "primary")],
+        }),
+      },
+    });
+    await app.selectFirstTicket();
+    app.approveField("category");
+    const metricsBefore = app.metricsRequests();
+
+    app.approveWithoutSettling();
+    await app.wait(2);
+    await app.selectTicket("TKT-1002");
+
+    expect(app.el("createRecommendation").disabled).toBe(true);
+    app.createRecommendationWithoutSettling();
+    await app.wait(2);
+    expect(app.requests.filter((request) =>
+      request.path === "/api/tickets/TKT-1002/recommendations",
+    )).toHaveLength(0);
+
+    await app.wait(50);
+
+    expect(app.el("ticketPanel").innerHTML).toContain("Second ticket");
+    expect(app.ticketDetailRequests()).toBe(1);
+    expect(app.ticketDetailRequestsFor("TKT-1002")).toBe(2);
+    expect(app.metricsRequests()).toBe(metricsBefore);
+    expect(app.field("category").textContent).toBe("Cancel");
+    expect(app.parsedResult()).toMatchObject({ ticket: { id: "TKT-1002" } });
+    expect(app.requests.filter((request) => request.path.endsWith("/approve"))).toHaveLength(1);
+  });
+
+  it("reconciles the current ticket after an A-B-A selection race without old success UI", async () => {
+    const reviewLifecycle = fixtureLifecycle({
+      phase: "recommendation-review",
+      primaryAction: "review-recommendation",
+      actions: [lifecycleAction("review-recommendation", "primary")],
+    });
+    const responseLifecycle = fixtureLifecycle({
+      phase: "recommendation-review",
+      primaryAction: "send-customer-response",
+      actions: [lifecycleAction("send-customer-response", "primary")],
+    });
+    const app = await startApprovalDeskApp({
+      recommendationApproveDelayTicks: 30,
+      persistRecommendationApproval: true,
+      tickets: [
+        fixtureTicket,
+        { ...fixtureTicket, id: "TKT-1002", subject: "Second ticket" },
+      ],
+      ticketDetailRecommendation: fixtureRecommendation,
+      ticketDetail: { lifecycle: reviewLifecycle },
+      ticketDetailLifecycleSequence: [reviewLifecycle, reviewLifecycle, responseLifecycle],
+    });
+    await app.selectFirstTicket();
+    app.approveField("category");
+    const metricsBefore = app.metricsRequests();
+
+    app.approveWithoutSettling();
+    await app.wait(2);
+    await app.selectTicket("TKT-1002");
+    await app.selectTicket("TKT-1001");
+
+    expect(app.ticketDetailRequestsFor("TKT-1001")).toBe(2);
+    expect(app.el("actionBarTitle").textContent).toBe("Review recommendation");
+    expect(app.el("approveButton").disabled).toBe(true);
+    app.approveWithoutSettling();
+    await app.wait(2);
+    expect(app.requests.filter((request) => request.path.endsWith("/approve"))).toHaveLength(1);
+
+    await app.wait(50);
+
+    expect(app.ticketDetailRequestsFor("TKT-1001")).toBe(3);
+    expect(app.el("ticketPanel").innerHTML).toContain("TKT-1001");
+    expect(app.el("approveButton").textContent).toBe("Send");
+    expect(app.el("approveButton").disabled).toBe(false);
+    expect(app.el("editApprovalControls").hidden).toBe(true);
+    expect(app.el("startRejectButton").hidden).toBe(true);
+    expect(app.metricsRequests()).toBe(metricsBefore);
+    expect(app.parsedResult()).toMatchObject({
+      ticket: { id: "TKT-1001" },
+      latestRecommendation: { resolution: "approved" },
+      lifecycle: { primaryAction: { kind: "send-customer-response" } },
+    });
+    expect(app.requests.filter((request) => request.path.endsWith("/approve"))).toHaveLength(1);
+  });
+
+  it("waits for a pending A re-selection before reconciling an old A mutation", async () => {
+    const reviewLifecycle = fixtureLifecycle({
+      phase: "recommendation-review",
+      primaryAction: "review-recommendation",
+      actions: [lifecycleAction("review-recommendation", "primary")],
+    });
+    const responseLifecycle = fixtureLifecycle({
+      phase: "recommendation-review",
+      primaryAction: "send-customer-response",
+      actions: [lifecycleAction("send-customer-response", "primary")],
+    });
+    const app = await startApprovalDeskApp({
+      recommendationApproveDelayTicks: 20,
+      persistRecommendationApproval: true,
+      tickets: [
+        fixtureTicket,
+        { ...fixtureTicket, id: "TKT-1002", subject: "Second ticket" },
+      ],
+      ticketDetailRecommendation: fixtureRecommendation,
+      ticketDetail: { lifecycle: reviewLifecycle },
+      ticketDetailLifecycleSequence: [reviewLifecycle, reviewLifecycle, responseLifecycle],
+      ticketDetailDelayTicks: { "TKT-1001": 30 },
+    });
+    await app.selectFirstTicket();
+    await app.wait(30);
+    app.approveField("category");
+
+    app.approveWithoutSettling();
+    await app.wait(2);
+    await app.selectTicket("TKT-1002");
+    app.selectTicketWithoutSettling("TKT-1001");
+    await app.wait(35);
+
+    expect(app.el("approveButton").disabled).toBe(true);
+    app.approveWithoutSettling();
+    await app.wait(2);
+    expect(app.requests.filter((request) => request.path.endsWith("/approve"))).toHaveLength(1);
+
+    await app.wait(40);
+
+    expect(app.ticketDetailRequestsFor("TKT-1001")).toBe(3);
+    expect(app.el("ticketPanel").innerHTML).toContain("TKT-1001");
+    expect(app.el("approveButton").textContent).toBe("Send");
+    expect(app.el("approveButton").disabled).toBe(false);
+    expect(app.parsedResult()).toMatchObject({
+      ticket: { id: "TKT-1001" },
+      latestRecommendation: { resolution: "approved" },
+      lifecycle: { primaryAction: { kind: "send-customer-response" } },
+    });
+    expect(app.requests.filter((request) => request.path.endsWith("/approve"))).toHaveLength(1);
+  });
+
+  it("keeps a successful governed POST successful when optional queue refresh fails", async () => {
+    const app = await startApprovalDeskApp({
+      failQueueAfter: 1,
+      ticketDetailRecommendation: {
+        ...fixtureRecommendation,
+        resolution: "approved",
+      },
+      ticketDetail: {
+        lifecycle: fixtureLifecycle({
+          phase: "recommendation-review",
+          primaryAction: "send-customer-response",
+          actions: [lifecycleAction("send-customer-response", "primary")],
+        }),
+      },
+    });
+    await app.selectFirstTicket();
+
+    await app.markSent();
+
+    expect(app.ticketDetailRequests()).toBe(2);
+    expect(app.parsedResult()).toMatchObject({
+      auditEvent: { action: "customer-response-sent" },
+    });
+    expect(app.parsedResult()).not.toHaveProperty("error");
+    expect(app.requests.filter((request) => request.path.endsWith("/mark-sent"))).toHaveLength(1);
+  });
+
+  it("keeps governed mutations locked until a failed durable-success refresh is retried successfully", async () => {
+    const app = await startApprovalDeskApp({
+      failTicketDetailOn: [2, 3],
+      ticketDetailRecommendation: {
+        ...fixtureRecommendation,
+        resolution: "approved",
+      },
+      ticketDetailLifecycleSequence: [
+        fixtureLifecycle({
+          phase: "recommendation-review",
+          primaryAction: "send-customer-response",
+          actions: [lifecycleAction("send-customer-response", "primary")],
+        }),
+        fixtureLifecycle({
+          phase: "evaluation-needed",
+          primaryAction: "evaluate-ticket",
+          actions: [lifecycleAction("evaluate-ticket", "primary")],
+        }),
+      ],
+    });
+    await app.selectFirstTicket();
+
+    await app.markSent();
+
+    expect(app.requests.filter((request) => request.path.endsWith("/mark-sent"))).toHaveLength(1);
+    expect(app.parsedResult()).toMatchObject({
+      code: "AUTHORITATIVE_REFRESH_REQUIRED",
+      error: expect.stringContaining("saved"),
+    });
+    expect(app.el("refreshQueue").textContent).toBe("Retry refresh");
+    expect(app.el("createUpdatedRecommendation").disabled).toBe(true);
+
+    await app.refreshQueue();
+
+    expect(app.parsedResult()).toMatchObject({
+      code: "AUTHORITATIVE_REFRESH_REQUIRED",
+      error: expect.stringContaining("refresh"),
+    });
+    expect(app.el("refreshQueue").textContent).toBe("Retry refresh");
+    expect(app.el("createUpdatedRecommendation").disabled).toBe(true);
+    expect(app.requests.filter((request) => request.path.endsWith("/mark-sent"))).toHaveLength(1);
+
+    await app.refreshQueue();
+    await app.wait(30);
+
+    expect(app.el("refreshQueue").textContent).toBe("Refresh");
+    expect(app.el("createUpdatedRecommendation").disabled).toBe(false);
+    expect(app.ticketDetailRequests()).toBe(4);
+    expect(app.requests.filter((request) => request.path.endsWith("/mark-sent"))).toHaveLength(1);
+  });
+
+  it("keeps a failed diagnosis review locked when its authoritative refresh also fails", async () => {
+    const app = await startApprovalDeskApp({
+      diagnoses: [fixtureDiagnosisView()],
+      diagnosisReviewPlans: {
+        "TKT-1001": [{
+          error: "The diagnosis review used stale ticket context.",
+          status: 409,
+          code: "STALE_TICKET_CONTEXT",
+        }],
+      },
+      failTicketDetailOn: [2],
+      ticketDetail: {
+        lifecycle: fixtureLifecycle({
+          phase: "diagnosis-review",
+          primaryAction: "review-diagnosis",
+          actions: [lifecycleAction("review-diagnosis", "primary")],
+        }),
+      },
+    });
+    await app.selectFirstTicket();
+    app.openDiagnosisInspection();
+
+    await app.reviewDiagnosis("approve");
+
+    expect(app.parsedResult()).toMatchObject({
+      code: "AUTHORITATIVE_REFRESH_REQUIRED",
+      error: expect.stringContaining("authoritative ticket state"),
+    });
+    expect(app.el("diagnosisPanel").innerHTML).toContain("The diagnosis review used stale ticket context.");
+    expect(app.el("refreshQueue").textContent).toBe("Retry refresh");
+
+    app.openDiagnosisInspection();
+    expect(app.el("diagnosisPanel").innerHTML).toContain('data-decision="approve" disabled');
+    await app.reviewDiagnosis("approve");
+
+    expect(app.requests.filter((request) => request.path.endsWith("/review"))).toHaveLength(1);
+  });
+
+  it("retries a failed diagnosis review refresh without reposting or losing the domain error", async () => {
+    const app = await startApprovalDeskApp({
+      diagnoses: [fixtureDiagnosisView()],
+      diagnosisReviewPlans: {
+        "TKT-1001": [{
+          error: "The diagnosis review used stale ticket context.",
+          status: 409,
+          code: "STALE_TICKET_CONTEXT",
+        }],
+      },
+      failTicketDetailOn: [2],
+      ticketDetail: {
+        lifecycle: fixtureLifecycle({
+          phase: "diagnosis-review",
+          primaryAction: "review-diagnosis",
+          actions: [lifecycleAction("review-diagnosis", "primary")],
+        }),
+      },
+    });
+    await app.selectFirstTicket();
+    app.openDiagnosisInspection();
+
+    await app.reviewDiagnosis("approve");
+    await app.refreshQueue();
+    await app.wait(30);
+
+    expect(app.el("refreshQueue").textContent).toBe("Refresh");
+    expect(app.el("diagnosisPanel").innerHTML).toContain("The diagnosis review used stale ticket context.");
+    expect(app.parsedResult()).toMatchObject({
+      error: "The diagnosis review used stale ticket context.",
+      code: "STALE_TICKET_CONTEXT",
+    });
+    expect(app.requests.filter((request) => request.path.endsWith("/review"))).toHaveLength(1);
+  });
+
+  it("retries authoritative refresh against the current selection instead of the stale mutation ticket", async () => {
+    const app = await startApprovalDeskApp({
+      failTicketDetailOn: [2],
+      tickets: [
+        fixtureTicket,
+        { ...fixtureTicket, id: "TKT-1002", subject: "Second ticket" },
+      ],
+      ticketDetailRecommendation: {
+        ...fixtureRecommendation,
+        resolution: "approved",
+      },
+      ticketDetail: {
+        lifecycle: fixtureLifecycle({
+          phase: "recommendation-review",
+          primaryAction: "send-customer-response",
+          actions: [lifecycleAction("send-customer-response", "primary")],
+        }),
+      },
+    });
+    await app.selectFirstTicket();
+    await app.markSent();
+    await app.selectTicket("TKT-1002");
+
+    await app.refreshQueue();
+    await app.wait(30);
+
+    expect(app.el("ticketPanel").innerHTML).toContain("TKT-1002");
+    expect(app.ticketDetailRequestsFor("TKT-1001")).toBe(2);
+    expect(app.ticketDetailRequestsFor("TKT-1002")).toBe(2);
+    expect(app.el("refreshQueue").textContent).toBe("Refresh");
+  });
+
+  it("coalesces rapid authoritative refresh retries into one ticket reconciliation", async () => {
+    const app = await startApprovalDeskApp({
+      failTicketDetailOn: [2],
+      ticketDetailDelayTicks: { "TKT-1001": 20 },
+      ticketDetailRecommendation: {
+        ...fixtureRecommendation,
+        resolution: "approved",
+      },
+      ticketDetail: {
+        lifecycle: fixtureLifecycle({
+          phase: "recommendation-review",
+          primaryAction: "send-customer-response",
+          actions: [lifecycleAction("send-customer-response", "primary")],
+        }),
+      },
+    });
+    await app.selectFirstTicket();
+    await app.wait(20);
+    await app.markSent();
+
+    app.refreshQueueWithoutSettling();
+    app.refreshQueueWithoutSettling();
+    await app.wait(40);
+
+    expect(app.ticketDetailRequests()).toBe(3);
+    expect(app.el("refreshQueue").textContent).toBe("Refresh");
+    expect(app.requests.filter((request) => request.path.endsWith("/mark-sent"))).toHaveLength(1);
+  });
+
+  it.each(["blocked", "completed"] as const)(
+    "does not POST a %s governed recommendation rejection descriptor",
+    async (availability) => {
+      const app = await startApprovalDeskApp({
+        ticketDetailRecommendation: fixtureRecommendation,
+        ticketDetail: {
+          lifecycle: fixtureLifecycle({
+            phase: "evaluation-needed",
+            primaryAction: "evaluate-ticket",
+            actions: [
+              lifecycleAction("evaluate-ticket", "primary"),
+              lifecycleAction("review-recommendation", availability, ["review-not-available"]),
+            ],
+          }),
+        },
+      });
+      await app.selectFirstTicket();
+      app.el("startRejectButton").dispatch("click");
+      app.el("feedback").value = "Needs better evidence.";
+      app.el("feedback").dispatch("input");
+
+      await app.reject();
+
+      expect(app.requests.some((request) => request.path.endsWith("/reject"))).toBe(false);
+      expect(app.parsedResult()).toMatchObject({ error: expect.stringContaining("Review not available") });
+    },
+  );
+
+  it("refreshes durable state and does not advertise recommendation rejection success when reconciliation fails", async () => {
+    const app = await startApprovalDeskApp({
+      ticketDetailRecommendation: fixtureRecommendation,
+      ticketDetail: {
+        lifecycle: fixtureLifecycle({
+          phase: "recommendation-review",
+          primaryAction: "review-recommendation",
+          actions: [lifecycleAction("review-recommendation", "primary", ["operator-review"])],
+        }),
+      },
+      recommendationRejectFailure: {
+        status: 409,
+        code: "STALE_TICKET_CONTEXT",
+        message: "The recommendation review used stale ticket context.",
+      },
+      ticketDetailLifecycleSequence: [
+        fixtureLifecycle({
+          phase: "recommendation-review",
+          primaryAction: "review-recommendation",
+          actions: [lifecycleAction("review-recommendation", "primary", ["operator-review"])],
+        }),
+        fixtureLifecycle({
+          phase: "evaluation-needed",
+          primaryAction: "evaluate-ticket",
+          actions: [lifecycleAction("evaluate-ticket", "primary", ["stale-context"])],
+        }),
+      ],
+    });
+    await app.selectFirstTicket();
+    app.el("startRejectButton").dispatch("click");
+    app.el("feedback").value = "Needs better evidence.";
+    app.el("feedback").dispatch("input");
+    const detailBefore = app.ticketDetailRequests();
+    const queueBefore = app.queueRequests();
+    const evidenceBefore = app.evidenceRequests();
+
+    await app.reject();
+
+    expect(app.ticketDetailRequests()).toBe(detailBefore + 1);
+    expect(app.queueRequests()).toBe(queueBefore + 1);
+    expect(app.evidenceRequests()).toBe(evidenceBefore + 1);
+    expect(app.parsedResult()).toMatchObject({
+      error: "The recommendation review used stale ticket context.",
+      code: "STALE_TICKET_CONTEXT",
+    });
+  });
+
+  it("reconciles record-diagnosis from refreshed authoritative detail", async () => {
+    const app = await startApprovalDeskApp({
+      ticketDetail: {
+        lifecycle: fixtureLifecycle({
+          phase: "diagnosis-ready",
+          primaryAction: "record-diagnosis",
+          actions: [lifecycleAction("record-diagnosis", "primary", ["evidence-complete"])],
+        }),
+      },
+    });
+    await app.selectFirstTicket();
+    const detailBefore = app.ticketDetailRequests();
+    const diagnosesBefore = app.diagnosisRequests();
+    const queueBefore = app.queueRequests();
+    const evidenceBefore = app.evidenceRequests();
+
+    await app.click("diagnoseButton");
+
+    expect(app.requests.filter((request) => request.path.endsWith("/diagnosis"))).toHaveLength(1);
+    expect(app.ticketDetailRequests()).toBe(detailBefore + 1);
+    expect(app.diagnosisRequests()).toBe(diagnosesBefore + 1);
+    expect(app.queueRequests()).toBe(queueBefore + 1);
+    expect(app.evidenceRequests()).toBe(evidenceBefore + 1);
+  });
+
+  it.each(["blocked", "completed"] as const)(
+    "does not POST a %s record-diagnosis descriptor",
+    async (availability) => {
+      const app = await startApprovalDeskApp({
+        ticketDetail: {
+          lifecycle: fixtureLifecycle({
+            phase: "evaluation-needed",
+            primaryAction: "evaluate-ticket",
+            actions: [
+              lifecycleAction("evaluate-ticket", "primary"),
+              lifecycleAction("record-diagnosis", availability, ["diagnosis-not-ready"]),
+            ],
+          }),
+        },
+      });
+      await app.selectFirstTicket();
+
+      await app.click("diagnoseButton");
+
+      expect(app.requests.some((request) => request.path.endsWith("/diagnosis"))).toBe(false);
+      expect(app.parsedResult()).toMatchObject({ error: expect.stringContaining("Diagnosis not ready") });
+    },
+  );
+
+  it("reconciles record-fix and reopens scoped-fix from refreshed lifecycle detail", async () => {
+    const diagnosis = fixtureDiagnosisView({ confidence: "confirmed" });
+    const approved = {
+      decision: "approve",
+      diagnosisId: diagnosis.originalDiagnosis.id,
+      editedDiagnosis: diagnosis.originalDiagnosis.after.diagnosis,
+    };
+    const app = await startApprovalDeskApp({
+      diagnoses: [{ ...diagnosis, reviews: [approved], latestReview: approved }],
+      ticketDetailLifecycleSequence: [
+        fixtureLifecycle({
+          phase: "awaiting-fix",
+          primaryAction: "record-fix-available",
+          actions: [lifecycleAction("record-fix-available", "primary", ["fix-not-available"])],
+        }),
+        fixtureLifecycle({
+          phase: "fix-ready",
+          primaryAction: "apply-scoped-fix",
+          actions: [lifecycleAction("apply-scoped-fix", "primary", ["fix-ready"])],
+        }),
+      ],
+    });
+    await app.selectFirstTicket();
+    const detailBefore = app.ticketDetailRequests();
+    const diagnosesBefore = app.diagnosisRequests();
+    const queueBefore = app.queueRequests();
+    const evidenceBefore = app.evidenceRequests();
+
+    await app.click("fixButton");
+
+    expect(app.requests.filter((request) => request.path === "/api/tickets/TKT-1001/fix")).toHaveLength(1);
+    expect(app.ticketDetailRequests()).toBe(detailBefore + 1);
+    expect(app.diagnosisRequests()).toBe(diagnosesBefore + 1);
+    expect(app.queueRequests()).toBe(queueBefore + 1);
+    expect(app.evidenceRequests()).toBe(evidenceBefore + 1);
+    expect(app.el("diagnosisPanel").innerHTML).toContain('data-diagnosis-phase="scoped-fix"');
+  });
+
+  it.each(["blocked", "completed"] as const)(
+    "does not POST a %s record-fix descriptor",
+    async (availability) => {
+      const app = await startApprovalDeskApp({
+        ticketDetail: {
+          lifecycle: fixtureLifecycle({
+            phase: "evaluation-needed",
+            primaryAction: "evaluate-ticket",
+            actions: [
+              lifecycleAction("evaluate-ticket", "primary"),
+              lifecycleAction("record-fix-available", availability, ["fix-not-available"]),
+            ],
+          }),
+        },
+      });
+      await app.selectFirstTicket();
+
+      await app.click("fixButton");
+
+      expect(app.requests.some((request) => request.path === "/api/tickets/TKT-1001/fix")).toBe(false);
+      expect(app.parsedResult()).toMatchObject({ error: expect.stringContaining("Fix not available") });
+    },
+  );
+
+  it("preserves a scoped-fix inline error when reconciliation also fails", async () => {
+    const diagnosis = fixtureDiagnosisView({ confidence: "confirmed" });
+    const approved = {
+      decision: "approve",
+      diagnosisId: diagnosis.originalDiagnosis.id,
+      editedDiagnosis: diagnosis.originalDiagnosis.after.diagnosis,
+    };
+    const app = await startApprovalDeskApp({
+      diagnoses: [{ ...diagnosis, reviews: [approved], latestReview: approved }],
+      ticketDetail: {
+        lifecycle: fixtureLifecycle({
+          phase: "fix-ready",
+          primaryAction: "apply-scoped-fix",
+          actions: [lifecycleAction("apply-scoped-fix", "primary", ["fix-ready"])],
+        }),
+      },
+      diagnosisFixPlans: {
+        "TKT-1001": [{ error: "The scoped fix used stale ticket context." }],
+      },
+      failTicketDetailAfter: 1,
+    });
+    await app.selectFirstTicket();
+    app.openScopedFix();
+
+    await app.applyDiagnosisFix();
+
+    expect(app.parsedResult()).toMatchObject({
+      code: "AUTHORITATIVE_REFRESH_REQUIRED",
+      actionError: "The scoped fix used stale ticket context.",
+    });
+    expect(app.el("diagnosisPanel").innerHTML).toContain("The scoped fix used stale ticket context.");
+  });
+
+  it("reconciles resolve-ticket from refreshed authoritative detail", async () => {
+    const app = await startApprovalDeskApp({
+      ticketDetail: {
+        lifecycle: fixtureLifecycle({
+          phase: "ready-for-close",
+          primaryAction: "resolve-ticket",
+          actions: [lifecycleAction("resolve-ticket", "primary", ["response-sent"])],
+        }),
+      },
+    });
+    await app.selectFirstTicket();
+    const detailBefore = app.ticketDetailRequests();
+    const diagnosesBefore = app.diagnosisRequests();
+    const queueBefore = app.queueRequests();
+    const evidenceBefore = app.evidenceRequests();
+
+    await app.click("closeTicketButton");
+
+    expect(app.requests.filter((request) => request.path === "/api/tickets/TKT-1001/close")).toHaveLength(1);
+    expect(app.ticketDetailRequests()).toBe(detailBefore + 1);
+    expect(app.diagnosisRequests()).toBe(diagnosesBefore + 1);
+    expect(app.queueRequests()).toBe(queueBefore + 1);
+    expect(app.evidenceRequests()).toBe(evidenceBefore + 1);
+  });
+
+  it.each(["blocked", "completed"] as const)(
+    "does not POST a %s resolve-ticket descriptor",
+    async (availability) => {
+      const app = await startApprovalDeskApp({
+        ticketDetail: {
+          lifecycle: fixtureLifecycle({
+            phase: "verification",
+            primaryAction: "evaluate-ticket",
+            actions: [
+              lifecycleAction("evaluate-ticket", "primary"),
+              lifecycleAction("resolve-ticket", availability, ["not-ready-for-close"]),
+            ],
+          }),
+        },
+      });
+      await app.selectFirstTicket();
+
+      await app.click("closeTicketButton");
+
+      expect(app.requests.some((request) => request.path === "/api/tickets/TKT-1001/close")).toBe(false);
+      expect(app.parsedResult()).toMatchObject({ error: expect.stringContaining("Not ready for close") });
+    },
+  );
+
+  it("keeps a double-clicked evaluation single-flight and renders the reconciled lifecycle", async () => {
+    const app = await startApprovalDeskApp({
+      deferRecommendation: true,
+      ticketDetail: {
+        lifecycle: fixtureLifecycle({
+          phase: "evaluation-needed",
+          primaryAction: "evaluate-ticket",
+          actions: [lifecycleAction("evaluate-ticket", "primary")],
+        }),
+      },
+      recommendationLifecycle: fixtureLifecycle({
+        phase: "recommendation-review",
+        primaryAction: "review-recommendation",
+        actions: [lifecycleAction("review-recommendation", "primary")],
+      }),
+    });
+    await app.selectFirstTicket();
+
+    app.createRecommendationWithoutSettling();
+    app.createRecommendationWithoutSettling();
+    await app.wait(2);
+    expect(app.requests.filter((request) => request.path.endsWith("/recommendations"))).toHaveLength(1);
+
+    app.releaseRecommendation();
+    await app.wait(40);
+
+    expect(app.requests.filter((request) => request.path.endsWith("/recommendations"))).toHaveLength(1);
+    expect(app.el("actionBarTitle").textContent).toBe("Review recommendation");
+    expect(app.el("recommendationPanel").innerHTML).toContain(fixtureRecommendation.draftCustomerResponse);
+  });
+
+  it("refreshes the queue read model after evaluation reconciliation", async () => {
+    const app = await startApprovalDeskApp({
+      ticketDetail: {
+        lifecycle: fixtureLifecycle({
+          phase: "evaluation-needed",
+          primaryAction: "evaluate-ticket",
+          actions: [lifecycleAction("evaluate-ticket", "primary")],
+        }),
+      },
+      recommendationLifecycle: fixtureLifecycle({
+        phase: "recommendation-review",
+        primaryAction: "review-recommendation",
+        actions: [lifecycleAction("review-recommendation", "primary")],
+      }),
+    });
+    await app.selectFirstTicket();
+    const queueBefore = app.queueRequests();
+
+    await app.createRecommendation();
+
+    expect(app.queueRequests()).toBe(queueBefore + 1);
+  });
+
+  it("keeps a committed evaluation successful when optional queue refresh fails", async () => {
+    const app = await startApprovalDeskApp({
+      failQueueAfter: 1,
+      ticketDetail: {
+        lifecycle: fixtureLifecycle({
+          phase: "evaluation-needed",
+          primaryAction: "evaluate-ticket",
+          actions: [lifecycleAction("evaluate-ticket", "primary")],
+        }),
+      },
+      recommendationLifecycle: fixtureLifecycle({
+        phase: "recommendation-review",
+        primaryAction: "review-recommendation",
+        actions: [lifecycleAction("review-recommendation", "primary")],
+      }),
+    });
+    await app.selectFirstTicket();
+
+    await app.createRecommendation();
+
+    expect(app.requests.filter((request) => request.path.endsWith("/recommendations"))).toHaveLength(1);
+    expect(app.el("actionBarTitle").textContent).toBe("Review recommendation");
+    expect(app.el("recommendationPanel").innerHTML).toContain(
+      fixtureRecommendation.draftCustomerResponse,
+    );
+    expect(app.parsedResult()).not.toHaveProperty("error");
+  });
+
+  it("reports the evaluate-ticket descriptor reason when evaluation is blocked", async () => {
+    const app = await startApprovalDeskApp({
+      ticketDetail: {
+        lifecycle: fixtureLifecycle({
+          phase: "diagnosis-review",
+          primaryAction: "none",
+          actions: [
+            lifecycleAction("none", "primary", ["operator-review"]),
+            lifecycleAction("evaluate-ticket", "blocked", ["evidence-pending"]),
+          ],
+        }),
+      },
+    });
+    await app.selectFirstTicket();
+
+    await app.createRecommendation();
+
+    expect(app.parsedResult()).toMatchObject({ error: "evidence pending." });
+  });
+
   it("uses customer-friendly predicted reply labels instead of fixture names", () => {
     expect(approvalDeskHtml).toContain("All requested evidence");
     expect(approvalDeskHtml).toContain("Fix verification details");
     expect(approvalDeskHtml).toContain("Customer says it works");
     expect(approvalDeskHtml).not.toContain(">Complete evidence<");
     expect(approvalDeskHtml).not.toContain(">Platform-fix context<");
+  });
+
+  it.each([
+    { phase: "evaluation-needed", primary: "evaluate-ticket", title: "Re-evaluate", control: "createUpdatedRecommendation" },
+    { phase: "recommendation-review", primary: "review-recommendation", title: "Review recommendation", control: "approveButton", recommendation: {} },
+    { phase: "recommendation-review", primary: "send-customer-response", title: "Send response", control: "approveButton", recommendation: { resolution: "approved" } },
+    { phase: "diagnosis-ready", primary: "record-diagnosis", title: "Diagnose ticket", control: "diagnoseButton" },
+    { phase: "diagnosis-review", primary: "review-diagnosis", title: "Review diagnosis", diagnosis: {} },
+    { phase: "diagnosis-review", primary: "revalidate-diagnosis", title: "Revalidate diagnosis", diagnosis: { stale: true } },
+    { phase: "awaiting-fix", primary: "record-fix-available", title: "Fix available", control: "fixButton", diagnosis: { confidence: "confirmed" } },
+    { phase: "fix-ready", primary: "apply-scoped-fix", title: "Scoped fix", control: "fixButton", diagnosis: { confidence: "confirmed" } },
+    { phase: "ready-for-close", primary: "resolve-ticket", title: "Ready to resolve", control: "closeTicketButton" },
+    { phase: "waiting-for-customer", primary: "none", title: "Waiting for customer" },
+    { phase: "escalated", primary: "specialist-review", title: "Specialist review required" },
+    { phase: "resolved", primary: "none", title: "Resolved" },
+  ] as const)("keeps the action bar aligned with every lifecycle primary action: $primary", async (scenario) => {
+    const diagnosis = scenario.diagnosis === undefined
+      ? undefined
+      : (() => {
+          const view = fixtureDiagnosisView(scenario.diagnosis);
+          return ["awaiting-fix", "apply-scoped-fix"].includes(String(scenario.primary))
+            ? {
+                ...view,
+                reviews: [{ decision: "approve", diagnosisId: view.originalDiagnosis.id, editedDiagnosis: view.originalDiagnosis.after.diagnosis }],
+                latestReview: { decision: "approve", diagnosisId: view.originalDiagnosis.id, editedDiagnosis: view.originalDiagnosis.after.diagnosis },
+              }
+            : view;
+        })();
+    const recommendation = scenario.recommendation === undefined
+      ? undefined
+      : { ...fixtureRecommendation, ...scenario.recommendation };
+    const app = await startApprovalDeskApp({
+      diagnoses: diagnosis === undefined ? [] : [diagnosis],
+      ticketDetailRecommendation: recommendation,
+      ticketDetail: {
+        lifecycle: fixtureLifecycle({
+          phase: scenario.phase,
+          primaryAction: scenario.primary,
+          actions: [lifecycleAction(scenario.primary, "primary")],
+        }),
+      },
+    });
+    await app.selectFirstTicket();
+
+    expect(app.el("actionBarTitle").textContent).toBe(scenario.title);
+    expect(app.el("actionBarHint").textContent).not.toContain("Response ready");
+    if (scenario.control !== undefined) {
+      expect(app.el(scenario.control).hidden).toBe(false);
+    }
+    if (["review-diagnosis", "revalidate-diagnosis"].includes(scenario.primary)) {
+      expect(app.el("diagnosisPanel").innerHTML).toContain('data-action="open-diagnosis-inspection"');
+    }
+    if (["waiting-for-customer", "escalated", "resolved"].includes(scenario.phase)) {
+      expect(app.el("actionBarTitle").textContent).not.toBe("Response ready");
+    }
   });
 });
 
@@ -4673,15 +6272,23 @@ const fixtureConversationTimeline = [
   },
 ];
 
-function fixtureDiagnosisView(options: { stale?: boolean; id?: string; summary?: string; confidence?: "likely" | "confirmed" } = {}) {
+function fixtureDiagnosisView(options: {
+  stale?: boolean;
+  id?: string;
+  summary?: string;
+  confidence?: "likely" | "confirmed";
+  owner?: "engineering" | "support" | "customer";
+  recommendedNextAction?: string;
+} = {}) {
   const diagnosis = {
     status: "completed",
     causeType: "platform-delay",
     customerSafeSummary: options.summary ?? "Checkout event processing is delayed.",
     evidenceUsed: ["request trace", "affected timestamp"],
     confidence: options.confidence ?? "confirmed",
-    owner: "engineering",
-    recommendedNextAction: "Apply the reviewed platform fix when it is available.",
+    owner: options.owner ?? "engineering",
+    recommendedNextAction:
+      options.recommendedNextAction ?? "Apply the reviewed platform fix when it is available.",
     doNotSay: ["Do not expose internal diagnostics."],
   };
   return {
@@ -4727,6 +6334,8 @@ type FixtureRecommendation = Omit<typeof fixtureRecommendation, "classificationS
 type DiagnosisMutationPlan = {
   delayTicks?: number;
   error?: string;
+  status?: number;
+  code?: string;
   diagnoses?: Array<Record<string, unknown>>;
   auditEvent?: Record<string, unknown>;
   auditEvents?: Array<Record<string, unknown>>;
@@ -4773,17 +6382,30 @@ async function startApprovalDeskApp(options: {
   deferRecommendation?: boolean;
   deferReconciliationDiagnosis?: boolean;
   failEvidenceAfter?: number;
+  failQueueAfter?: number;
+  failTicketDetailAfter?: number;
+  failTicketDetailOn?: number[];
   failRecommendation?: boolean;
   recommendationFailure?: {
     status: number;
     code?: string;
     message: string;
   };
+  recommendationRejectFailure?: {
+    status: number;
+    code?: string;
+    message: string;
+  };
   confirmResult?: boolean;
   markSentAutomaticReply?: string;
+  persistRecommendationApproval?: boolean;
   recommendation?: FixtureRecommendation;
+  recommendationApproveDelayTicks?: number;
   recommendationDelayTicks?: number;
-  tickets?: Array<typeof fixtureTicket & { recommendationSummary?: Record<string, unknown> }>;
+  tickets?: Array<typeof fixtureTicket & {
+    recommendationSummary?: Record<string, unknown>;
+    lifecycleSummary?: Record<string, unknown>;
+  }>;
   ticketDetailRecommendation?: FixtureRecommendation;
   ticketDetail?: {
     conversationTimeline?: Array<Record<string, unknown>>;
@@ -4817,20 +6439,68 @@ async function startApprovalDeskApp(options: {
   const elements = createElements();
   const requests: Array<{ path: string; init?: RequestInit }> = [];
   const recommendation = options.recommendation ?? fixtureRecommendation;
-  const tickets = options.tickets ?? [fixtureTicket];
+  const tickets = options.tickets ?? [{
+    ...fixtureTicket,
+    customer: { ...fixtureTicket.customer },
+    requester: { ...fixtureTicket.requester },
+    tags: [...fixtureTicket.tags],
+    sla: { ...fixtureTicket.sla },
+    relatedTicketIds: [...fixtureTicket.relatedTicketIds],
+  }];
   const selectedFixtureTicket = tickets[0]!;
   const defaultOperatorGuidance = { nextAction: "evaluate-ticket" };
   const metrics = { pendingRecommendations: 0, queueDepth: 1 };
   const diagnosisReviewRequestCounts = new Map<string, number>();
   const diagnosisFixRequestCounts = new Map<string, number>();
+  const diagnosisState = new Map<string, Array<Record<string, unknown>>>();
   const recommendationGate = deferred<void>();
   const reconciliationDiagnosisGate = deferred<void>();
   let createdRecommendation: FixtureRecommendation | undefined;
+  let ticketDetailRecommendation = options.ticketDetailRecommendation;
   let diagnosisFixPersisted = false;
   const conversationTimeline = [
     ...(options.ticketDetail?.conversationTimeline ?? []),
   ];
   let ticketDetailLifecycleRequestCount = 0;
+  const initialDiagnoses = options.diagnosesByTicket ?? { [selectedFixtureTicket.id]: options.diagnoses ?? [] };
+  for (const [ticketId, diagnoses] of Object.entries(initialDiagnoses)) {
+    diagnosisState.set(ticketId, JSON.parse(JSON.stringify(diagnoses)));
+  }
+
+  function diagnosesForTicket(ticketId: string) {
+    return diagnosisState.get(ticketId) ?? [];
+  }
+
+  function updateDiagnosisReviewState(ticketId: string, path: string, init?: RequestInit) {
+    const requestBody = JSON.parse(String(init?.body ?? "{}")) as {
+      decision?: string;
+      editedDiagnosis?: Record<string, unknown>;
+    };
+    const currentDiagnoses = diagnosesForTicket(ticketId);
+    const diagnosisId = /\/diagnoses\/([^/]+)\/review$/.exec(path)?.[1] ?? null;
+    const nextReview = {
+      decision: requestBody.decision,
+      diagnosisId,
+      editedDiagnosis: requestBody.editedDiagnosis,
+    };
+    const updatedDiagnoses = currentDiagnoses.map((diagnosis) => {
+      const originalDiagnosisId = String((diagnosis as { originalDiagnosis?: { id?: string } }).originalDiagnosis?.id ?? "");
+      if (originalDiagnosisId !== diagnosisId) {
+        return diagnosis;
+      }
+      const existingReviews = Array.isArray((diagnosis as { reviews?: unknown[] }).reviews)
+        ? (diagnosis as { reviews?: unknown[] }).reviews!
+        : [];
+      return {
+        ...diagnosis,
+        stale: requestBody.decision === "revalidate" ? false : (diagnosis as { stale?: boolean }).stale,
+        reviews: [...existingReviews, nextReview],
+        latestReview: nextReview,
+      };
+    });
+    diagnosisState.set(ticketId, updatedDiagnoses);
+    return updatedDiagnoses;
+  }
   const document = {
     createElement: () => new FakeElement(),
     getElementById: (id: string) => elements[id],
@@ -4841,6 +6511,12 @@ async function startApprovalDeskApp(options: {
       return options.fetchOverride(path, init);
     }
     if (path === "/api/tickets?limit=50") {
+      const queueRequests = requests.filter(
+        (request) => request.path === "/api/tickets?limit=50",
+      ).length;
+      if (options.failQueueAfter !== undefined && queueRequests > options.failQueueAfter) {
+        return jsonResponse({ error: { message: "Queue refresh is unavailable." } }, 503);
+      }
       return jsonResponse({ items: tickets, total: tickets.length });
     }
     if (path === "/api/metrics") {
@@ -4893,7 +6569,7 @@ async function startApprovalDeskApp(options: {
         return jsonResponse({ error: { message: "Diagnosis review is unavailable." } }, 503);
       }
       return jsonResponse({
-        diagnoses: options.diagnosesByTicket?.[ticketId] ?? options.diagnoses ?? [],
+        diagnoses: diagnosesForTicket(ticketId),
       });
     }
     const diagnosisReview = /^\/api\/tickets\/(TKT-\d{4})\/diagnoses\/[^/]+\/review$/.exec(path);
@@ -4904,14 +6580,16 @@ async function startApprovalDeskApp(options: {
       const plan = options.diagnosisReviewPlans?.[ticketId]?.[requestIndex];
       await settle(plan?.delayTicks ?? options.diagnosisReviewDelayTicks?.[ticketId] ?? 0);
       if (plan?.error !== undefined) {
-        return jsonResponse({ error: { message: plan.error } }, 503);
+        return jsonResponse({ error: { message: plan.error, code: plan.code } }, plan.status ?? 503);
       }
       if (options.diagnosisReviewFailures?.includes(ticketId) === true) {
         return jsonResponse({ error: { message: "Diagnosis review is unavailable." } }, 503);
       }
+      const nextDiagnoses = plan?.diagnoses ?? updateDiagnosisReviewState(ticketId, path, init);
+      diagnosisState.set(ticketId, JSON.parse(JSON.stringify(nextDiagnoses)));
       return jsonResponse({
         auditEvent: plan?.auditEvent ?? { action: "diagnosis-reviewed" },
-        diagnoses: plan?.diagnoses ?? options.diagnosesByTicket?.[ticketId] ?? options.diagnoses ?? [],
+        diagnoses: nextDiagnoses,
       }, 201);
     }
     const diagnosisFix = /^\/api\/tickets\/(TKT-\d{4})\/diagnoses\/[^/]+\/fix$/.exec(path);
@@ -4963,6 +6641,14 @@ async function startApprovalDeskApp(options: {
       }
     }
     if (path === `/api/tickets/${selectedFixtureTicket.id}`) {
+      const detailRequests = requests.filter((request) => request.path === path).length;
+      if (
+        (options.failTicketDetailAfter !== undefined &&
+          detailRequests > options.failTicketDetailAfter) ||
+        options.failTicketDetailOn?.includes(detailRequests) === true
+      ) {
+        return jsonResponse({ error: { message: "Ticket refresh is unavailable." } }, 503);
+      }
       await settle(options.ticketDetailDelayTicks?.[selectedFixtureTicket.id] ?? 0);
       const lifecycleSequence = options.ticketDetailLifecycleSequence;
       const lifecycle = lifecycleSequence === undefined
@@ -4991,7 +6677,7 @@ async function startApprovalDeskApp(options: {
         recommendationHistory,
         recommendationSummary: options.ticketDetail?.recommendationSummary,
         latestRecommendation:
-          createdRecommendation ?? options.ticketDetailRecommendation,
+          createdRecommendation ?? ticketDetailRecommendation,
         operatorGuidance: options.ticketDetail?.operatorGuidance ?? defaultOperatorGuidance,
         ...(createdRecommendation !== undefined && options.recommendationLifecycle !== undefined
           ? { lifecycle: options.recommendationLifecycle }
@@ -5079,12 +6765,27 @@ async function startApprovalDeskApp(options: {
       }, 201);
     }
     if (path === "/api/recommendations/11111111-1111-4111-8111-111111111111/approve") {
+      await settle(options.recommendationApproveDelayTicks ?? 0);
+      if (createdRecommendation !== undefined) {
+        createdRecommendation = { ...createdRecommendation, resolution: "approved" };
+      }
+      if (options.persistRecommendationApproval === true && ticketDetailRecommendation !== undefined) {
+        ticketDetailRecommendation = { ...ticketDetailRecommendation, resolution: "approved" };
+      }
       return jsonResponse({
         ticket: { ...fixtureTicket, revision: 1, category: "authentication" },
         auditEvent: { action: "recommendation-approved" },
       });
     }
     if (path === "/api/recommendations/11111111-1111-4111-8111-111111111111/reject") {
+      if (options.recommendationRejectFailure !== undefined) {
+        return jsonResponse({
+          error: {
+            code: options.recommendationRejectFailure.code,
+            message: options.recommendationRejectFailure.message,
+          },
+        }, options.recommendationRejectFailure.status);
+      }
       return jsonResponse({
         auditEvent: { action: "recommendation-rejected" },
       });
@@ -5147,6 +6848,11 @@ async function startApprovalDeskApp(options: {
     queueRequests: () =>
       requests.filter((request) => request.path === "/api/tickets?limit=50")
         .length,
+    metricsRequests: () =>
+      requests.filter((request) => request.path === "/api/metrics").length,
+    diagnosisRequests: () =>
+      requests.filter((request) => request.path === `/api/tickets/${selectedFixtureTicket.id}/diagnoses`)
+        .length,
     ticketDetailRequests: () =>
       requests.filter((request) => request.path === `/api/tickets/${selectedFixtureTicket.id}`)
         .length,
@@ -5206,7 +6912,7 @@ async function startApprovalDeskApp(options: {
     },
     click: async (id: string) => {
       elements[id]!.dispatch("click");
-      await settle(10);
+      await settle(30);
     },
     createRecommendationWithoutSettling: () => {
       elements.createRecommendation.dispatch("click");
@@ -5217,9 +6923,15 @@ async function startApprovalDeskApp(options: {
       elements.refreshQueue.dispatch("click");
       await settle();
     },
+    refreshQueueWithoutSettling: () => {
+      elements.refreshQueue.dispatch("click");
+    },
     approve: async () => {
       elements.approveButton.dispatch("click");
-      await settle(10);
+      await settle(30);
+    },
+    approveWithoutSettling: () => {
+      elements.approveButton.dispatch("click");
     },
     editDiagnosisDraft: (value: string) => {
       elements.diagnosisPanel.dispatch("input", {
@@ -5233,7 +6945,7 @@ async function startApprovalDeskApp(options: {
       elements.diagnosisPanel.dispatch("click", {
         target: { dataset: { action: "review-diagnosis", decision } },
       });
-      await settle(10);
+      await settle(30);
     },
     refreshSelectedTicket: async (id: string) => {
       const button = elements.ticketList.children.find((item) => item.innerHTML.includes(id));
@@ -5313,7 +7025,7 @@ async function startApprovalDeskApp(options: {
       elements.diagnosisPanel.dispatch("click", {
         target: { dataset: { action: "apply-diagnosis-fix" } },
       });
-      await settle(10);
+      await settle(30);
     },
     openManualReplies: async () => {
       elements.manualRepliesButton.dispatch("click");
@@ -5321,13 +7033,13 @@ async function startApprovalDeskApp(options: {
     },
     reject: async () => {
       elements.rejectButton.dispatch("click");
-      await settle();
+      await settle(30);
     },
     markSent: async () => {
       elements.recommendationPanel.dispatch("click", {
         target: { dataset: { action: "mark-sent" } },
       });
-      await settle();
+      await settle(30);
     },
   };
 }

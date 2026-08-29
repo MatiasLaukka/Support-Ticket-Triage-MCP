@@ -33,6 +33,7 @@ import {
   listReusableApproved,
   type ReusableKnowledgeResult,
 } from "../src/knowledge-evolution/reusable-context.js";
+import { automaticReplyForTicket } from "../src/approval-desk/automatic-customer-replies.js";
 import {
   EVIDENCE_PARITY,
   requestIdKnowledgeObject,
@@ -909,6 +910,102 @@ describe("createApprovalDeskHttpServer", () => {
     });
   });
 
+  it("includes lifecycle summaries in mixed queue responses and aligns them with detail lifecycles", async () => {
+    const { deps, json } = await startFixture();
+
+    await recordCurrentDiagnosis(deps, "TKT-1003");
+    const fixReadyDiagnosis = await recordCurrentDiagnosis(deps, "TKT-1001");
+    await approveLatestDiagnosis(deps, "TKT-1001");
+    await deps.audits.append(AuditEventSchema.parse({
+      id: "92000000-0000-4000-8000-000000000001",
+      timestamp: "2026-06-10T09:04:00.000Z",
+      actor: "product-support",
+      action: "platform-mitigation-available",
+      ticketId: "TKT-1001",
+      before: { diagnosisId: fixReadyDiagnosis.id },
+      after: {
+        eventId: "EVT-2026-06-10-WEBHOOK-LATENCY",
+        status: "available",
+      },
+      rationale: "The scoped platform mitigation is now available.",
+      knowledgeArticleIds: [],
+      result: "success",
+    }));
+
+    await seedReadyToCloseWorkflow(deps, "TKT-1007");
+    await seedReadyToCloseWorkflow(deps, "TKT-1002", {
+      recommendationId: "88888888-8888-4888-8888-888888888889",
+      submissionAuditId: "88888888-8888-4888-8888-888888888891",
+      sentAuditId: "88888888-8888-4888-8888-888888888892",
+    });
+    const closeResolved = await json("/api/tickets/TKT-1002/close", {
+      method: "POST",
+      body: JSON.stringify({ actor: "matias-reviewer" }),
+    });
+    expect(closeResolved.status, JSON.stringify(closeResolved.body)).toBe(200);
+
+    const list = await json("/api/tickets?limit=20");
+    expect(list.status).toBe(200);
+
+    const expectedSummaries = new Map([
+      ["TKT-1005", { phase: "evaluation-needed", primaryAction: "evaluate-ticket" }],
+      ["TKT-1003", { phase: "diagnosis-review", primaryAction: "review-diagnosis" }],
+      ["TKT-1001", { phase: "fix-ready", primaryAction: "apply-scoped-fix" }],
+      ["TKT-1007", { phase: "ready-for-close", primaryAction: "resolve-ticket" }],
+      ["TKT-1002", { phase: "resolved", primaryAction: "none" }],
+    ] as const);
+
+    const detailResponses = await Promise.all(
+      [...expectedSummaries.keys()].map(async (ticketId) => [
+        ticketId,
+        await json(`/api/tickets/${ticketId}`),
+      ] as const),
+    );
+    const detailByTicket = new Map(
+      detailResponses.map(([ticketId, detail]) => {
+        expect(detail.status, JSON.stringify(detail.body)).toBe(200);
+        return [ticketId, detail.body] as const;
+      }),
+    );
+
+    for (const [ticketId, expected] of expectedSummaries) {
+      const item = list.body.items.find((ticket: any) => ticket.id === ticketId);
+      expect(item).toBeDefined();
+      expect(item.lifecycleSummary).toMatchObject({
+        phase: expect.any(String),
+        primaryAction: expect.any(String),
+        reasonCodes: expect.any(Array),
+      });
+      expect(item.lifecycleSummary).toMatchObject(expected);
+
+      const detail = detailByTicket.get(ticketId)!;
+      expect(item.lifecycleSummary).toEqual({
+        phase: detail.lifecycle.phase,
+        primaryAction: detail.lifecycle.primaryAction.kind,
+        reasonCodes: detail.lifecycle.primaryAction.reasonCodes,
+      });
+    }
+
+    expect(
+      list.body.items.find((ticket: any) => ticket.id === "TKT-1001")?.lifecycleSummary,
+    ).toMatchObject({
+      phase: "fix-ready",
+      primaryAction: "apply-scoped-fix",
+    });
+    expect(
+      list.body.items.find((ticket: any) => ticket.id === "TKT-1007")?.lifecycleSummary,
+    ).toMatchObject({
+      phase: "ready-for-close",
+      primaryAction: "resolve-ticket",
+    });
+    expect(
+      list.body.items.find((ticket: any) => ticket.id === "TKT-1002")?.lifecycleSummary,
+    ).toMatchObject({
+      phase: "resolved",
+      primaryAction: "none",
+    });
+  });
+
   it("includes latest recommendation in ticket detail responses", async () => {
     const { json } = await startFixture();
     const created = await json("/api/tickets/TKT-1005/recommendations", {
@@ -1629,6 +1726,157 @@ describe("createApprovalDeskHttpServer", () => {
       primaryAction: { kind: "record-diagnosis", availability: "primary" },
     });
   });
+
+  it("removes each supplied TKT-1001 evidence requirement across two automatic reply rounds", async () => {
+    const { json } = await startFixture();
+
+    const first = await json("/api/tickets/TKT-1001/recommendations", {
+      method: "POST",
+      body: JSON.stringify({ actor: "approval-desk" }),
+    });
+
+    expect(first.status).toBe(201);
+    expect(first.body.recommendation.missingEvidence.map((item: any) => item.id)).toEqual([
+      "store-url",
+      "profile-email",
+      "event-id",
+      "request-id",
+      "api-response-status",
+    ]);
+
+    const firstSent = await approveAndSendWithAutomaticReply(
+      json,
+      "TKT-1001",
+      first.body.recommendation,
+    );
+    expect(firstSent.body.automaticReply.after.body).toContain(
+      "The affected store is https://store.example.test",
+    );
+    expect(firstSent.body.automaticReply.after.body).toContain(
+      "One affected profile is customer@example.test",
+    );
+
+    const second = await json("/api/tickets/TKT-1001/recommendations", {
+      method: "POST",
+      body: JSON.stringify({ actor: "approval-desk" }),
+    });
+
+    expect(second.status).toBe(201);
+    expect(second.body.recommendation.supportState).toBe("information-received");
+    expect(second.body.recommendation.missingEvidence.map((item: any) => item.id)).toEqual([
+      "event-id",
+      "request-id",
+      "api-response-status",
+    ]);
+    expect(second.body.recommendation.providedEvidence.map((item: any) => item.id)).toEqual(
+      expect.arrayContaining(["store-url", "profile-email"]),
+    );
+
+    const secondSent = await approveAndSendWithAutomaticReply(
+      json,
+      "TKT-1001",
+      second.body.recommendation,
+    );
+    expect(secondSent.body.automaticReply.after.body).toContain(
+      "The event ID is evt_checkout_7788 at 2026-06-10 09:15 UTC",
+    );
+    expect(secondSent.body.automaticReply.after.body).toContain(
+      "The request ID is req_12345",
+    );
+    expect(secondSent.body.automaticReply.after.body).toContain(
+      "The API response status is 202 accepted",
+    );
+
+    const third = await json("/api/tickets/TKT-1001/recommendations", {
+      method: "POST",
+      body: JSON.stringify({ actor: "approval-desk" }),
+    });
+
+    expect(third.status).toBe(201);
+    expect(third.body.recommendation.missingEvidence).toEqual([]);
+    expect(third.body.recommendation.supportState).toBe("waiting-on-platform-fix");
+  });
+
+  it("removes the seeded first-round evidence IDs that the automatic reply actually supplies", async () => {
+    const { deps, json } = await startFixture();
+    const scenarios: Array<{
+      ticket: Ticket;
+      recommendation: { id: string; draftCustomerResponse: string; missingEvidence?: Array<{ id: string }> };
+      expectedAutomaticReply: string;
+      expectedSuppliedIds: string[];
+    }> = [];
+
+    let offset = 0;
+    while (true) {
+      const page = await deps.tickets.list({ offset, limit: 64 });
+      for (const ticket of page.items) {
+        const created = await json(`/api/tickets/${ticket.id}/recommendations`, {
+          method: "POST",
+          body: JSON.stringify({ actor: "approval-desk" }),
+        });
+        expect(created.status, `Expected evaluation for ${ticket.id}.`).toBe(201);
+
+        const recommendation = TriageRecommendationSchema.parse(created.body.recommendation);
+        if ((recommendation.missingEvidence?.length ?? 0) === 0) {
+          continue;
+        }
+
+        const expectedAutomaticReply = automaticReplyForTicket({
+          ticket,
+          recommendation,
+          auditsBeforeSent: await deps.audits.list(ticket.id),
+        });
+        expect(
+          expectedAutomaticReply,
+          `Expected a deterministic first-round automatic reply for ${ticket.id}.`,
+        ).toBeDefined();
+
+        scenarios.push({
+          ticket,
+          recommendation,
+          expectedAutomaticReply: expectedAutomaticReply!,
+          expectedSuppliedIds: firstRoundAutomaticEvidenceIds(recommendation),
+        });
+      }
+
+      offset += page.items.length;
+      if (offset >= page.total || page.items.length === 0) {
+        break;
+      }
+    }
+
+    expect(scenarios.length).toBeGreaterThan(0);
+
+    for (const scenario of scenarios) {
+      const sent = await approveAndSendWithAutomaticReply(
+        json,
+        scenario.ticket.id,
+        scenario.recommendation,
+      );
+      const automaticReplyBody = sent.body.automaticReply.after.body;
+
+      expect(automaticReplyBody).toBe(scenario.expectedAutomaticReply);
+      expect(automaticReplyBody).not.toContain("example-");
+
+      const next = await json(`/api/tickets/${scenario.ticket.id}/recommendations`, {
+        method: "POST",
+        body: JSON.stringify({ actor: "approval-desk" }),
+      });
+      expect(next.status).toBe(201);
+
+      const nextRecommendation = TriageRecommendationSchema.parse(next.body.recommendation);
+      const nextMissingIds = new Set(
+        (nextRecommendation.missingEvidence ?? []).map(({ id }) => id),
+      );
+
+      for (const evidenceId of scenario.expectedSuppliedIds) {
+        expect(
+          nextMissingIds.has(evidenceId),
+          `${scenario.ticket.id} should stop missing ${evidenceId} after its automatic reply is sent.`,
+        ).toBe(false);
+      }
+    }
+  }, 40000);
 
   it("records diagnosis only after a done response with complete evidence", async () => {
     const { deps, json } = await startFixture();
@@ -2867,6 +3115,15 @@ describe("createApprovalDeskHttpServer", () => {
       body: JSON.stringify({ actor: "approval-desk", aiPreference: "gpt-preferred" }),
     });
     expect(reevaluated.status).toBe(201);
+    expect(reevaluated.body.recommendation.supportState).toBe("needs-information");
+    expect(reevaluated.body.recommendation.missingEvidence.map((item: any) => item.id)).toEqual([
+      "campaign-name",
+      "failure-timestamp",
+      "browser-session-details",
+      "affected-scope",
+      "problem-summary",
+      "reproduction-steps",
+    ]);
     expect(observedRejectedDiagnoses).toHaveLength(1);
     expect(observedRejectedDiagnoses[0]).toMatchObject({
       causeType: original.causeType,
@@ -2888,6 +3145,8 @@ describe("createApprovalDeskHttpServer", () => {
       body: JSON.stringify({ actor: "approval-desk" }),
     });
     expect(nextCycle.status).toBe(201);
+    expect(nextCycle.body.recommendation.supportState).toBe("waiting-on-platform-fix");
+    expect(nextCycle.body.recommendation.missingEvidence).toEqual([]);
     expect(nextCycle.body.lifecycle).toMatchObject({
       phase: "recommendation-review",
       primaryAction: { kind: "review-recommendation", availability: "primary" },
@@ -4646,10 +4905,19 @@ async function ticketRevision(
 async function seedReadyToCloseWorkflow(
   deps: Awaited<ReturnType<typeof createRuntimeDependencies>>,
   ticketId: Ticket["id"],
+  ids: {
+    recommendationId: string;
+    submissionAuditId: string;
+    sentAuditId: string;
+  } = {
+    recommendationId: "88888888-8888-4888-8888-888888888888",
+    submissionAuditId: "88888888-8888-4888-8888-888888888889",
+    sentAuditId: "88888888-8888-4888-8888-888888888890",
+  },
 ): Promise<void> {
   const ticket = await deps.tickets.get(ticketId);
   const recommendation = TriageRecommendationSchema.parse({
-    id: "88888888-8888-4888-8888-888888888888",
+    id: ids.recommendationId,
     ticketId,
     sourceRevision: ticket.revision,
     category: "incident",
@@ -4673,7 +4941,7 @@ async function seedReadyToCloseWorkflow(
   });
   await deps.recommendations.create(recommendation);
   await deps.audits.append(AuditEventSchema.parse({
-    id: "88888888-8888-4888-8888-888888888889",
+    id: ids.submissionAuditId,
     timestamp: "2026-06-10T09:00:00.000Z",
     actor: "approval-desk",
     action: "recommendation-submitted",
@@ -4686,7 +4954,7 @@ async function seedReadyToCloseWorkflow(
     result: "success",
   }));
   await deps.audits.append(AuditEventSchema.parse({
-    id: "88888888-8888-4888-8888-888888888890",
+    id: ids.sentAuditId,
     timestamp: "2026-06-10T09:01:00.000Z",
     actor: "matias-reviewer",
     action: "customer-response-sent",
@@ -4796,6 +5064,49 @@ async function approveAndSend(
     }),
   });
   expect(sent.status).toBe(200);
+}
+
+async function approveAndSendWithAutomaticReply(
+  json: Awaited<ReturnType<typeof startFixture>>["json"],
+  ticketId: string,
+  recommendation: { id: string; draftCustomerResponse: string },
+): Promise<{ status: number; body: any; response: Response }> {
+  const approved = await json(`/api/recommendations/${recommendation.id}/approve`, {
+    method: "POST",
+    body: JSON.stringify({
+      ticketId,
+      expectedRevision: await ticketRevision(json, ticketId),
+      approvedFields: ["customerResponse"],
+      editedCustomerResponse: recommendation.draftCustomerResponse,
+      actor: "matias-reviewer",
+      confirm: true,
+    }),
+  });
+  expect(approved.status).toBe(200);
+  const sent = await json(`/api/recommendations/${recommendation.id}/mark-sent`, {
+    method: "POST",
+    body: JSON.stringify({
+      ticketId,
+      actor: "matias-reviewer",
+    }),
+  });
+  expect(sent.status).toBe(200);
+  expect(sent.body.automaticReply).toBeDefined();
+  return sent;
+}
+
+function firstRoundAutomaticEvidenceIds(
+  recommendation: {
+    missingEvidence?: ReadonlyArray<{ id: string }>;
+  },
+): string[] {
+  const missingEvidence = recommendation.missingEvidence ?? [];
+
+  // First-round automatic replies intentionally send only the first subset when the
+  // request asks for more than three evidence items; later rounds are covered elsewhere.
+  return (missingEvidence.length > 3 ? missingEvidence.slice(0, 2) : missingEvidence).map(
+    ({ id }: { id: string }) => id,
+  );
 }
 
 async function createDiagnosedPlatformDelayTicket(

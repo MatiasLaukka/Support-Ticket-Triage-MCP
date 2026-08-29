@@ -13,14 +13,18 @@ import type { CustomerReplyWatermark, DiagnosisContext } from "../triage-service
 import {
   diagnosisContextFromAudit,
 } from "./diagnostic-workflow.js";
+import { compareIsoInstants } from "../iso-instant.js";
 import {
   isDiagnosisStale,
   latestStrictDiagnosisReviewRecord,
 } from "./diagnosis-review.js";
 import {
   auditCausalPositions,
+  auditPositionForEvent,
   compareAuditCausalOrder,
+  hasCustomerReplyAfterRecommendation,
   latestAuditPosition,
+  latestRecommendationSubmissionPosition,
   type AuditCausalPosition,
 } from "./workflow-causal-context.js";
 import {
@@ -216,11 +220,15 @@ export function buildTicketLifecycleView(input: WorkflowLifecycleInput): Lifecyc
     audits: input.audits,
     diagnosis,
     authoritativeDiagnosisId: authoritative?.diagnosisId,
+    authoritativeDiagnosisOwner: authoritative?.diagnosis.owner,
+    authoritativeDiagnosisConfirmed: authoritative?.diagnosis.confidence === "confirmed",
+    currentKnownEventId: recommendation?.knownEventId ?? undefined,
   });
   const phase = phaseForLifecycle({
     ticket: input.ticket,
     recommendation,
     guidance,
+    latestDiagnosis,
     diagnosis,
     diagnosticInvestigation,
     confirmation,
@@ -269,6 +277,7 @@ function phaseForLifecycle(input: {
   ticket: Ticket;
   recommendation: TriageRecommendation | undefined;
   guidance: OperatorGuidance;
+  latestDiagnosis: AuditEvent | undefined;
   diagnosis: LifecycleView["diagnosis"];
   diagnosticInvestigation: LifecycleView["diagnosticInvestigation"];
   confirmation: LifecycleView["confirmation"];
@@ -276,15 +285,23 @@ function phaseForLifecycle(input: {
   audits: readonly AuditEvent[];
 }): LifecyclePhase {
   if (input.ticket.status === "resolved") return "resolved";
+  const rejectedOrInvalidated = input.diagnosis.state === "invalidated" ||
+    input.diagnosis.state === "rejected";
+  if (rejectedOrInvalidated) {
+    if (isAuditNewerThanRecommendation(input.latestDiagnosis, input.recommendation, input.audits)) {
+      return "evaluation-needed";
+    }
+    if (input.recommendation?.resolution === "pending") return "recommendation-review";
+  }
   if (input.guidance.stage === "escalated" || input.diagnosticInvestigation.state === "escalated") {
     return "escalated";
   }
   if (input.guidance.stage === "ready-for-close") return "ready-for-close";
   if (input.recommendation?.resolution === "pending") return "recommendation-review";
-  if (input.guidance.stage === "waiting-customer") return "waiting-for-customer";
-  if (input.diagnosis.state === "invalidated" || input.diagnosis.state === "rejected") {
-    return "evaluation-needed";
+  if (currentRecommendationAwaitingSend(input.recommendation, input.audits)) {
+    return "recommendation-review";
   }
+  if (input.guidance.stage === "waiting-customer") return "waiting-for-customer";
   // A fresh evaluation with complete evidence is the handoff that records the
   // next diagnosis. The previous diagnosis may still project an ambiguous or
   // insufficient diagnostic snapshot, but it is historical once the newer
@@ -300,7 +317,8 @@ function phaseForLifecycle(input: {
     if (input.confirmation.state === "awaiting-evidence" || input.confirmation.state === "awaiting-internal-verification") {
       return "awaiting-confirmation";
     }
-    if (input.fix.state === "awaiting" || input.fix.state === "none") return "awaiting-fix";
+    if (input.fix.state === "awaiting") return "awaiting-fix";
+    if (input.fix.state === "none") return "verification";
     if (input.fix.state === "available" || input.fix.state === "ready-to-apply") return "fix-ready";
     if (input.fix.state === "applied" || input.fix.state === "verification-pending" || input.fix.state === "ineffective") {
       return input.fix.state === "ineffective" && input.fix.diagnosisStillAuthoritative
@@ -313,6 +331,57 @@ function phaseForLifecycle(input: {
     return "evaluation-needed";
   }
   return "evaluation-needed";
+}
+
+function isAuditNewerThanRecommendation(
+  event: AuditEvent | undefined,
+  recommendation: TriageRecommendation | undefined,
+  audits: readonly AuditEvent[],
+): boolean {
+  if (event === undefined) return false;
+  if (recommendation === undefined) return true;
+  const eventPosition = auditPositionForEvent(audits, event);
+  const recommendationSubmission = latestRecommendationSubmissionPosition(
+    audits,
+    recommendation.id,
+  );
+  if (eventPosition !== undefined && recommendationSubmission !== undefined) {
+    return compareAuditCausalOrder(eventPosition, recommendationSubmission) > 0;
+  }
+  return compareIsoInstants(event.timestamp, recommendation.createdAt) > 0;
+}
+
+function currentRecommendationAwaitingSend(
+  recommendation: TriageRecommendation | undefined,
+  audits: readonly AuditEvent[],
+): boolean {
+  return recommendation?.resolution === "approved" &&
+    latestSentResponsePositionForRecommendation(audits, recommendation.id) === undefined &&
+    !hasLifecycleProgressAfterRecommendation(recommendation, audits) &&
+    !hasCustomerReplyAfterRecommendation(audits, recommendation);
+}
+
+function hasLifecycleProgressAfterRecommendation(
+  recommendation: TriageRecommendation,
+  audits: readonly AuditEvent[],
+): boolean {
+  const latestPostRecommendationLifecycleEvent = latestAuditPosition(
+    audits,
+    (event) =>
+      event.action === "diagnosis-completed" ||
+      event.action === "diagnosis-reviewed" ||
+      event.action === "diagnosis-invalidated" ||
+      event.action === "diagnostic-escalated" ||
+      event.action === "fix-available" ||
+      event.action === "fix-ineffective" ||
+      event.action === "platform-mitigation-available",
+  );
+  return latestPostRecommendationLifecycleEvent !== undefined &&
+    isAuditNewerThanRecommendation(
+      latestPostRecommendationLifecycleEvent.event,
+      recommendation,
+      audits,
+    );
 }
 
 function primaryActionForPhase(input: {
@@ -406,7 +475,9 @@ function lifecycleActionsForPhase(input: {
       add("record-fix-available", "completed", ["fix-already-available"]);
       break;
     case "verification":
-      add("record-fix-ineffective", "available", ["fix-verification-available"]);
+      if (input.fix.state !== "none") {
+        add("record-fix-ineffective", "available", ["fix-verification-available"]);
+      }
       break;
     case "ready-for-close":
       add("send-customer-response", "completed", ["response-already-sent"]);
@@ -429,16 +500,35 @@ function reasonCodesForPhase(input: {
   confirmation: LifecycleView["confirmation"];
   fix: LifecycleView["fix"];
 }): string[] {
+  if (input.phase === "waiting-for-customer") return ["awaiting-customer-reply"];
+  if (input.phase === "escalated") return ["specialist-review-required"];
   const reasons: string[] = [];
   if (input.confirmation.state === "awaiting-evidence") reasons.push("missing-evidence");
   if (input.confirmation.state === "awaiting-internal-verification") reasons.push("diagnosis-not-confirmed");
   if (input.diagnosis.state === "rejected") reasons.push("diagnosis-rejected");
   if (input.diagnosis.state === "stale") reasons.push("diagnosis-stale");
   if (input.diagnosis.state === "invalidated") reasons.push("diagnosis-invalidated");
+  if (input.fix.state === "none" && input.fix.reasonCodes.includes("no-platform-fix-required")) {
+    reasons.push("no-platform-fix-required");
+  }
   if (input.fix.state === "awaiting") reasons.push("fix-not-available");
   if (input.fix.state === "ineffective") reasons.push("fix-ineffective");
   if (input.phase === "evaluation-needed" && reasons.length === 0) reasons.push("evaluation-required");
   if (reasons.length === 0 && input.phase === "resolved") reasons.push("already-completed");
+  if (reasons.length === 0) {
+    const phaseReasonCodes: Partial<Record<LifecyclePhase, string>> = {
+      "recommendation-review": "recommendation-approval-required",
+      "waiting-for-customer": "awaiting-customer-reply",
+      "diagnosis-ready": "diagnosis-ready",
+      "diagnosis-review": "diagnosis-not-approved",
+      "fix-ready": "fix-ready",
+      verification: "fix-verification-required",
+      "ready-for-close": "ready-for-close",
+      escalated: "specialist-review-required",
+    };
+    const phaseReasonCode = phaseReasonCodes[input.phase];
+    if (phaseReasonCode !== undefined) reasons.push(phaseReasonCode);
+  }
   return reasons;
 }
 
@@ -516,12 +606,39 @@ function fixProjection(input: {
   audits: readonly AuditEvent[];
   diagnosis: LifecycleView["diagnosis"];
   authoritativeDiagnosisId: string | undefined;
+  authoritativeDiagnosisOwner: DiagnosisContext["owner"] | undefined;
+  authoritativeDiagnosisConfirmed: boolean;
+  currentKnownEventId: string | undefined;
 }): LifecycleView["fix"] {
-  const fixPositions = auditCausalPositions(input.audits).filter(({ event }) =>
+  const fixPositionsForTicket = auditCausalPositions(input.audits).filter(({ event }) =>
     ["platform-mitigation-available", "fix-available", "fix-ineffective"].includes(event.action as string),
   );
+  const fixPositions = input.authoritativeDiagnosisId === undefined
+    ? fixPositionsForTicket
+    : fixPositionsForTicket.filter(({ event }) =>
+        event.before.diagnosisId === input.authoritativeDiagnosisId ||
+        (
+          event.action === "platform-mitigation-available" &&
+          input.authoritativeDiagnosisConfirmed &&
+          diagnosisRequiresPlatformFix(input.authoritativeDiagnosisOwner) &&
+          input.currentKnownEventId !== undefined &&
+          (event.before.eventId === input.currentKnownEventId || event.after.eventId === input.currentKnownEventId)
+        ),
+      );
   const latest = fixPositions.at(-1)?.event;
   if (latest === undefined) {
+    if (
+      input.authoritativeDiagnosisId !== undefined &&
+      input.authoritativeDiagnosisConfirmed &&
+      !diagnosisRequiresPlatformFix(input.authoritativeDiagnosisOwner)
+    ) {
+      return {
+        state: "none",
+        diagnosisId: input.authoritativeDiagnosisId,
+        reasonCodes: ["no-platform-fix-required"],
+        diagnosisStillAuthoritative: input.diagnosis.state === "approved",
+      };
+    }
     return {
       state: input.authoritativeDiagnosisId === undefined ? "none" : "awaiting",
       ...(input.authoritativeDiagnosisId === undefined ? {} : { diagnosisId: input.authoritativeDiagnosisId }),
@@ -552,6 +669,12 @@ function fixProjection(input: {
   };
 }
 
+function diagnosisRequiresPlatformFix(
+  owner: DiagnosisContext["owner"] | undefined,
+): boolean {
+  return owner === undefined || owner === "engineering" || owner === "integration-partner";
+}
+
 function responseProjection(input: {
   phase: LifecyclePhase;
   recommendation: TriageRecommendation | undefined;
@@ -570,7 +693,9 @@ function responseProjection(input: {
     return { intent, state: "waiting-for-reply" };
   }
   if (input.recommendation?.resolution === "pending") return { intent, state: "approval-required" };
-  if (input.recommendation?.resolution === "approved" && latestSent === undefined) return { intent, state: "approved" };
+  if (currentRecommendationAwaitingSend(input.recommendation, input.audits)) {
+    return { intent, state: "approved" };
+  }
   return { intent, state: "none" };
 }
 
@@ -610,4 +735,16 @@ function conversationWatermarkFromAudits(audits: readonly AuditEvent[]): Custome
   return latest === undefined
     ? { state: "none" }
     : { state: "reply", timestamp: latest.event.timestamp, id: latest.event.id };
+}
+
+function latestSentResponsePositionForRecommendation(
+  audits: readonly AuditEvent[],
+  recommendationId: string,
+): AuditCausalPosition | undefined {
+  return latestAuditPosition(
+    audits,
+    (event) =>
+      event.action === "customer-response-sent" &&
+      event.recommendationId === recommendationId,
+  );
 }

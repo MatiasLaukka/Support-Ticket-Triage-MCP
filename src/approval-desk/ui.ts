@@ -2008,7 +2008,13 @@ export const approvalDeskHtml = `<!doctype html>
         knowledgeJourneyState: 'idle',
         knowledgeRequestId: 0,
         ticketRequestId: 0,
+        ticketSelectionToken: 0,
+        ticketSelectionRequest: null,
         evaluationPendingTicketId: null,
+        governedMutationToken: null,
+        governedMutationRefreshPending: null,
+        governedMutationRefreshRetry: null,
+        nextGovernedMutationToken: 0,
         operatorGuidance: null,
         lifecycle: null,
         diagnoses: [],
@@ -2166,7 +2172,11 @@ export const approvalDeskHtml = `<!doctype html>
           const button = document.createElement('button');
           button.type = 'button';
           const workflowState = ticketWorkflowState(ticket);
-          button.className = 'ticket-button state-' + workflowState +
+          const queueState = ticketQueueFilterState(ticket);
+          const lifecycleClass = ticket.lifecycleSummary?.phase === undefined
+            ? ''
+            : ' lifecycle-' + ticket.lifecycleSummary.phase;
+          button.className = 'ticket-button state-' + queueState + lifecycleClass +
             (isSecurityTicket(ticket) ? ' risk-security' : '') +
             (state.selectedTicket?.id === ticket.id ? ' active' : '');
           button.innerHTML =
@@ -2187,15 +2197,49 @@ export const approvalDeskHtml = `<!doctype html>
           return state.tickets;
         }
         return state.tickets.filter(function (ticket) {
-          return ticketWorkflowState(ticket) === state.queueFilter;
+          return ticketQueueFilterState(ticket) === state.queueFilter;
         });
       }
 
       function ticketWorkflowState(ticket) {
+        if (ticket.lifecycleSummary?.phase !== undefined) {
+          return ticket.lifecycleSummary.phase;
+        }
         return ticket.recommendationSummary?.workflowState ?? 'active';
       }
 
+      function ticketQueueFilterState(ticket) {
+        const phase = ticket.lifecycleSummary?.phase;
+        if (phase === undefined) {
+          return ticket.recommendationSummary?.workflowState ?? 'active';
+        }
+        if (phase === 'evaluation-needed' && ticket.recommendationSummary?.workflowState === 'customer-replied') {
+          return 'customer-replied';
+        }
+        if (phase === 'resolved') return 'resolved';
+        if (phase === 'recommendation-review') return 'draft-ready';
+        if (phase === 'waiting-for-customer') return 'waiting';
+        return 'active';
+      }
+
       function workflowStateLabel(value) {
+        const lifecycleLabels = {
+          'evaluation-needed': 'Evaluation needed',
+          'recommendation-review': 'Recommendation review',
+          'waiting-for-customer': 'Waiting for customer',
+          'diagnosis-ready': 'Diagnosis ready',
+          'diagnosis-review': 'Diagnosis review',
+          'awaiting-confirmation': 'Awaiting confirmation',
+          'awaiting-fix': 'Awaiting fix',
+          'fix-ready': 'Fix ready',
+          'verification': 'Verification',
+          'ready-for-close': 'Ready to resolve',
+          'escalated': 'Specialist review',
+          'resolved': 'Closed'
+        };
+        if (lifecycleLabels[value] !== undefined) {
+          return lifecycleLabels[value];
+        }
         if (value === 'draft-ready') {
           return 'Draft ready';
         }
@@ -2480,6 +2524,16 @@ export const approvalDeskHtml = `<!doctype html>
             state.operatorGuidance.reason.trim() !== '') {
           return state.operatorGuidance.reason;
         }
+        if (
+          hasLifecycleDescriptor() &&
+          state.lifecycle?.fix?.state === 'none' &&
+          Array.isArray(state.lifecycle?.fix?.reasonCodes) &&
+          state.lifecycle.fix.reasonCodes.includes('no-platform-fix-required') &&
+          typeof current?.recommendedNextAction === 'string' &&
+          current.recommendedNextAction.trim() !== ''
+        ) {
+          return current.recommendedNextAction;
+        }
         if (current?.confidence !== 'confirmed') {
           return 'The likely diagnosis needs more evidence before a fix can be applied.';
         }
@@ -2487,6 +2541,15 @@ export const approvalDeskHtml = `<!doctype html>
           return 'Send the diagnosis update before applying a fix.';
         }
         return 'Waiting for an internal platform confirmation before applying the fix.';
+      }
+
+      function isNoPlatformFixVerification() {
+        return hasLifecycleDescriptor() &&
+          state.lifecycle?.phase === 'verification' &&
+          state.lifecycle?.fix?.state === 'none' &&
+          Array.isArray(state.lifecycle?.fix?.reasonCodes) &&
+          state.lifecycle.fix.reasonCodes.includes('no-platform-fix-required') &&
+          lifecycleActionIsAvailable('evaluate-ticket');
       }
 
       function resetDiagnosisAfterCustomerReply() {
@@ -2514,6 +2577,10 @@ export const approvalDeskHtml = `<!doctype html>
         return state.ticketRequestId === requestId && state.selectedTicket?.id === ticketId;
       }
 
+      function isCurrentTicketSelection(ticketId, selectionToken) {
+        return state.ticketSelectionToken === selectionToken && state.selectedTicket?.id === ticketId;
+      }
+
       function isCurrentDiagnosisRequest(ticketId, diagnosisId, requestId) {
         return isCurrentTicketRequest(ticketId, requestId) &&
           selectedDiagnosisView()?.originalDiagnosis?.id === diagnosisId;
@@ -2530,8 +2597,8 @@ export const approvalDeskHtml = `<!doctype html>
         return nextToken;
       }
 
-      function isCurrentDiagnosisMutation(ticketId, diagnosisId, requestId, mutationToken) {
-        return isCurrentDiagnosisRequest(ticketId, diagnosisId, requestId) &&
+      function isCurrentDiagnosisMutation(ticketId, diagnosisId, selectionToken, mutationToken) {
+        return isCurrentTicketSelection(ticketId, selectionToken) &&
           state.diagnosisMutationTokens[diagnosisMutationKey(ticketId, diagnosisId)] === mutationToken;
       }
 
@@ -2703,7 +2770,7 @@ export const approvalDeskHtml = `<!doctype html>
           ? '<button type="button" class="secondary" data-action="open-diagnosis-inspection" data-review-decision="revalidate">Revalidate</button>'
           : '';
         const reEvaluateControl = diagnosisClarification !== null && lifecycleMutationAvailable('evaluate-ticket')
-          ? '<button type="button" class="secondary" data-action="reopen-diagnosis-evaluation">Ask for clarification</button>'
+          ? '<button type="button" class="secondary" data-action="reopen-diagnosis-evaluation">Clarify</button>'
           : (diagnosisRejected || diagnosisNeedsFreshEvaluation(view)) && lifecycleMutationAvailable('evaluate-ticket')
             ? '<button type="button" class="secondary" data-action="reopen-diagnosis-evaluation">Re-evaluate</button>'
           : '';
@@ -2713,7 +2780,7 @@ export const approvalDeskHtml = `<!doctype html>
         const diagnosisNextControl = diagnosisRejected || diagnosisNeedsFreshEvaluation(view) || diagnosisClarification !== null ||
           !lifecycleMutationAvailable('review-diagnosis')
           ? ''
-          : '<button type="button" class="secondary" data-action="open-diagnosis-inspection">Next</button>';
+          : '<button type="button" class="secondary" data-action="open-diagnosis-inspection">Review</button>';
         const diagnosisClarificationNotice = diagnosisClarification === null
           ? ''
           : '<div class="warning diagnosis-clarification" role="status"><strong>Approval is unavailable.</strong><p>' + escapeHtml(diagnosisClarification.message) + '</p>' +
@@ -2729,6 +2796,7 @@ export const approvalDeskHtml = `<!doctype html>
             '<header><h4>Diagnosis</h4><span class="meta">Review the diagnosis before continuing.</span></header>' +
             stale +
             diagnosisClarificationNotice +
+            diagnosisReviewError +
             '<div class="diagnosis-review-grid">' +
               originalTheoryPanel +
               '<div class="card"><h4>Current diagnosis</h4>' +
@@ -2747,13 +2815,18 @@ export const approvalDeskHtml = `<!doctype html>
             '</div>' +
           '</section>'
           : '';
-        const inspectionReviewControl = diagnosisClarification !== null ||
-          !lifecycleMutationAvailable(state.diagnosisReviewDecision === 'revalidate' ? 'revalidate-diagnosis' : 'review-diagnosis')
-          ? '<button type="button" class="secondary" data-action="reopen-diagnosis-evaluation">Ask for clarification</button>'
-          : '<button type="button" data-action="review-diagnosis" data-decision="' + (state.diagnosisReviewDecision === 'revalidate' ? 'revalidate' : 'approve') + '">' + (state.diagnosisReviewDecision === 'revalidate' ? 'Revalidate' : 'Approve') + '</button>';
+        const inspectionReviewKind = state.diagnosisReviewDecision === 'revalidate' ? 'revalidate-diagnosis' : 'review-diagnosis';
+        const inspectionReviewAvailable = lifecycleMutationAvailable(inspectionReviewKind);
+        const inspectionClarifyAvailable = lifecycleMutationAvailable('evaluate-ticket');
+        const inspectionMutationDisabled = state.governedMutationToken === null ? '' : ' disabled';
+        const inspectionReviewControl = diagnosisClarification !== null || !inspectionReviewAvailable
+          ? inspectionClarifyAvailable
+            ? '<button type="button" class="secondary" data-action="reopen-diagnosis-evaluation"' + inspectionMutationDisabled + '>Clarify</button>'
+            : '<span class="diagnosis-fix-waiting" role="status">' + escapeHtml(lifecycleActionReason('evaluate-ticket') || lifecycleActionReason(inspectionReviewKind) || 'No governed inspection action is available.') + '</span>'
+          : '<button type="button" data-action="review-diagnosis" data-decision="' + (state.diagnosisReviewDecision === 'revalidate' ? 'revalidate' : 'approve') + '"' + inspectionMutationDisabled + '>' + (state.diagnosisReviewDecision === 'revalidate' ? 'Revalidate' : 'Approve') + '</button>';
         const inspectionRejectControl = diagnosisClarification !== null || !lifecycleMutationAvailable('reject-diagnosis')
           ? ''
-          : '<button type="button" class="danger" data-action="review-diagnosis" data-decision="reject">Reject</button>';
+          : '<button type="button" class="danger" data-action="review-diagnosis" data-decision="reject"' + inspectionMutationDisabled + '>Reject</button>';
         const inspectionIntro = current.confidence === 'confirmed'
           ? 'This diagnosis is confirmed. Inspect the drafted fields, review them, and approve to continue to the scoped fix.'
           : 'This diagnosis is likely, not confirmed. Review the drafted fields, then gather more evidence and evaluate again if the theory is not ready.';
@@ -2779,20 +2852,31 @@ export const approvalDeskHtml = `<!doctype html>
         const fixAvailabilityReady = hasLifecycleDescriptor()
           ? lifecycleActionIsAvailable('record-fix-available')
           : shouldShowFixAction();
-        const approvedNextControl = scopedFixReady
-          ? '<button type="button" data-action="open-scoped-fix">Next</button>'
+        const lifecycleApprovedNextControl = scopedFixReady
+          ? '<button type="button" data-action="open-scoped-fix">Open Scoped Fix</button>'
           : fixAvailabilityReady
             ? '<button type="button" class="accent-action" data-action="record-fix-available">Fix</button>'
-          : canReevaluateCurrentDiagnosis()
-            ? '<button type="button" class="secondary" data-action="reopen-diagnosis-evaluation">Re-evaluate</button>'
-            : current.confidence !== 'confirmed'
-              ? '<button type="button" class="secondary" data-action="simulate-confirmation">Simulate confirmation</button>'
-            : diagnosisResponsePending
-              ? '<button type="button" class="secondary" data-action="prepare-diagnosis-response">Prepare response</button>'
-              : '<button type="button" class="accent-action" data-action="simulate-solution">Simulate solution</button>';
+            : lifecycleActionIsAvailable('evaluate-ticket')
+              ? '<button type="button" class="secondary" data-action="reopen-diagnosis-evaluation">Re-evaluate</button>'
+              : '<span class="diagnosis-fix-waiting" role="status">' + escapeHtml(lifecycleActionReason('apply-scoped-fix') || lifecycleActionReason('record-fix-available') || lifecycleActionReason('evaluate-ticket') || 'No governed next action is available.') + '</span>';
+        const legacyApprovedNextControl = scopedFixReady
+          ? '<button type="button" data-action="open-scoped-fix">Open Scoped Fix</button>'
+          : fixAvailabilityReady
+            ? '<button type="button" class="accent-action" data-action="record-fix-available">Fix</button>'
+            : canReevaluateCurrentDiagnosis()
+              ? '<button type="button" class="secondary" data-action="reopen-diagnosis-evaluation">Re-evaluate</button>'
+              : current.confidence !== 'confirmed'
+                ? '<button type="button" class="secondary" data-action="simulate-confirmation">Simulate confirmation</button>'
+                : diagnosisResponsePending
+                  ? '<button type="button" class="secondary" data-action="prepare-diagnosis-response">Prepare response</button>'
+                  : '<button type="button" class="accent-action" data-action="simulate-solution">Simulate solution</button>';
+        const approvedNextControl = hasLifecycleDescriptor()
+          ? lifecycleApprovedNextControl
+          : legacyApprovedNextControl;
         const approvedPhase = !historicalDiagnosis && effectivePhase === 'approved'
           ? '<section class="diagnosis-phase-panel" data-diagnosis-phase="approved-diagnosis" aria-label="Approved diagnosis">' +
               '<header><h4>Approved diagnosis</h4><span class="meta">' + escapeHtml(confirmedDiagnosis ? 'Follow the next governed lifecycle step.' : 'More evidence is needed before a fix can be applied.') + '</span></header>' +
+              diagnosisReviewError +
               '<div class="card diagnosis-approved-summary"><h4>Current diagnosis</h4>' +
                 diagnosisStatusChips(current) +
                 '<p>' + escapeHtml(current.customerSafeSummary ?? 'No approved diagnosis summary is available.') + '</p>' +
@@ -2821,7 +2905,11 @@ export const approvalDeskHtml = `<!doctype html>
               '<div class="diagnosis-impact-candidate"><strong>Source ticket: ' + escapeHtml(ticketId) + ' (included)</strong></div>' +
               '<label class="diagnosis-fix-rationale"><span class="diagnosis-fix-rationale-label">Why does this fix apply?</span><textarea data-impact-field="rationale" placeholder="Explain why the reviewed diagnosis applies to this ticket.">' + escapeHtml(fixRationale) + '</textarea></label>' +
               (state.diagnosisFixError === null ? '' : '<p class="diagnosis-fix-error" role="alert"><strong>Fix could not be applied.</strong> ' + escapeHtml(state.diagnosisFixError) + '</p>') +
-              '<div class="diagnosis-phase-actions"><button type="button" class="secondary" data-action="back-to-approved-diagnosis">Back</button><button type="button" class="accent-action" data-action="apply-diagnosis-fix"' + (state.diagnosisFixPending ? ' disabled' : '') + '>' + (state.diagnosisFixPending ? 'Applying…' : 'Fix') + '</button></div>' +
+              '<div class="diagnosis-phase-actions"><button type="button" class="secondary" data-action="back-to-approved-diagnosis">Back</button>' +
+                (lifecycleMutationAvailable('apply-scoped-fix')
+                  ? '<button type="button" class="accent-action" data-action="apply-diagnosis-fix"' + (state.diagnosisFixPending ? ' disabled' : '') + '>' + (state.diagnosisFixPending ? 'Applying…' : 'Fix') + '</button>'
+                  : '<span class="diagnosis-fix-waiting" role="status">' + escapeHtml(lifecycleActionReason('apply-scoped-fix') || 'The scoped fix is not available in the current lifecycle state.') + '</span>') +
+              '</div>' +
               results +
             '</section>'
           : '';
@@ -2872,7 +2960,9 @@ export const approvalDeskHtml = `<!doctype html>
 
       async function reviewSelectedDiagnosis(decision) {
         const view = selectedDiagnosisView();
-        const draft = diagnosisDraftForView(view);
+        const draft = decision === 'revalidate' && view?.latestReview !== null && view?.latestReview !== undefined
+          ? JSON.parse(JSON.stringify(view.latestReview.editedDiagnosis))
+          : diagnosisDraftForView(view);
         if (state.selectedTicket === null || view === null || draft === null) {
           state.diagnosisReviewError = 'The diagnosis review could not be prepared. Reload the ticket and try again.';
           renderDiagnosisPanel();
@@ -2891,77 +2981,96 @@ export const approvalDeskHtml = `<!doctype html>
         }
         const ticketId = state.selectedTicket.id;
         const diagnosisId = view.originalDiagnosis.id;
-        const ticketRequestId = state.ticketRequestId;
+        const ticketSelectionToken = state.ticketSelectionToken;
         const mutationToken = beginDiagnosisMutation(ticketId, diagnosisId);
         const body = {
           decision,
-          sourceTicketRevision: view.sourceTicketRevision,
-          sourceConversationWatermark: view.sourceConversationWatermark,
+          sourceTicketRevision: state.lifecycle?.current.ticketRevision ?? view.sourceTicketRevision,
+          sourceConversationWatermark: state.lifecycle?.current.conversationWatermark ?? view.sourceConversationWatermark,
           editedDiagnosis: draft,
           actor: els.actor.value.trim() || 'approval-desk'
         };
         if (state.diagnosisReviewRationale.trim() !== '') {
           body.rationale = state.diagnosisReviewRationale.trim();
         }
-        let data;
-        try {
-          data = await requestJson('/api/tickets/' + encodeURIComponent(ticketId) + '/diagnoses/' + encodeURIComponent(diagnosisId) + '/review', {
+        if (!hasLifecycleDescriptor()) {
+          let data;
+          try {
+            data = await requestJson('/api/tickets/' + encodeURIComponent(ticketId) + '/diagnoses/' + encodeURIComponent(diagnosisId) + '/review', {
+              method: 'POST',
+              body: JSON.stringify(body)
+            }, { writeErrorToResult: false });
+          } catch (error) {
+            if (isCurrentDiagnosisMutation(ticketId, diagnosisId, ticketSelectionToken, mutationToken)) {
+              state.diagnosisReviewError = error instanceof Error ? error.message : 'The diagnosis review request failed.';
+              try {
+                await refreshSelectedTicketQueueAndEvidence({ waitForDiagnoses: true });
+              } catch (_) {
+                // Preserve the inline domain failure when refresh reconciliation is unavailable.
+              }
+              renderDiagnosisPanel();
+              setResult({ error: error instanceof Error ? error.message : 'Request failed.' });
+            }
+            return;
+          }
+          if (!isCurrentDiagnosisMutation(ticketId, diagnosisId, ticketSelectionToken, mutationToken)) {
+            return;
+          }
+          state.diagnosisReviewError = null;
+          state.diagnosisDraft = null;
+          state.diagnosisDraftId = null;
+          state.diagnosisReviewRationale = '';
+          state.diagnosisReviewDecision = null;
+          state.diagnosisImpact = { rationale: '', selectedTicketIds: [], ticketReasons: {} };
+          state.diagnosisFixResults = [];
+          state.diagnosisUiPhase = 'auto';
+          await refreshSelectedTicketQueueAndEvidence({ waitForDiagnoses: true });
+          setResult(data);
+          return;
+        }
+        await runGovernedMutation(mutationKind, async function () {
+          return requestJson('/api/tickets/' + encodeURIComponent(ticketId) + '/diagnoses/' + encodeURIComponent(diagnosisId) + '/review', {
             method: 'POST',
             body: JSON.stringify(body)
           }, { writeErrorToResult: false });
-        } catch (error) {
-          if (isCurrentDiagnosisMutation(ticketId, diagnosisId, ticketRequestId, mutationToken)) {
-            const message = error instanceof Error ? error.message : 'The diagnosis review request failed.';
-            try {
-              await selectTicket(ticketId, { waitForDiagnoses: true });
-            } catch (_) {
-              // Preserve the original domain failure when reconciliation is unavailable.
-            }
-            if (state.selectedTicket?.id === ticketId) {
-              state.diagnosisUiPhase = 'inspection';
-              state.diagnosisReviewError = message;
-              renderDiagnosisPanel();
-            }
-            setResult({ error: error instanceof Error ? error.message : 'Request failed.' });
-            if (state.selectedTicket?.id === ticketId) {
-              renderDiagnosisPanel();
-            }
+        }, {
+          waitForDiagnoses: true,
+          isCurrent: function () {
+            return isCurrentDiagnosisMutation(ticketId, diagnosisId, ticketSelectionToken, mutationToken);
+          },
+          setInlineError: function (message) {
+            state.diagnosisReviewError = message;
+          },
+          clearInlineError: function () {
+            state.diagnosisReviewError = null;
+          },
+          render: function () {
+            renderDiagnosisPanel();
+          },
+          beforeRefreshSuccess: function () {
+            state.diagnosisDraft = null;
+            state.diagnosisDraftId = null;
+            state.diagnosisReviewRationale = '';
+            state.diagnosisReviewDecision = null;
+            state.diagnosisImpact = { rationale: '', selectedTicketIds: [], ticketReasons: {} };
+            state.diagnosisFixResults = [];
+          },
+          afterRefresh: function () {
+            renderDiagnosisPanel();
+            renderRecommendationStageControls();
+            updateControls();
           }
-          return;
-        }
-        if (!isCurrentDiagnosisMutation(ticketId, diagnosisId, ticketRequestId, mutationToken)) {
-          return;
-        }
-        adoptLifecycle(data);
-        state.diagnosisReviewError = null;
-        state.diagnoses = Array.isArray(data.diagnoses) ? data.diagnoses : state.diagnoses;
-        state.diagnosisDraft = null;
-        state.diagnosisDraftId = null;
-        state.diagnosisReviewRationale = '';
-        state.diagnosisReviewDecision = null;
-        state.diagnosisImpact = { rationale: '', selectedTicketIds: [], ticketReasons: {} };
-        state.diagnosisFixResults = [];
-        const resultingLifecycle = data.lifecycle;
-        state.diagnosisUiPhase = resultingLifecycle === undefined
-          ? (decision === 'approve' ? 'approved' : 'diagnosis')
-          : resultingLifecycle.diagnosis?.state === 'approved'
-            ? 'approved'
-            : resultingLifecycle.phase === 'diagnosis-review'
-              ? 'diagnosis'
-              : 'normal';
-        renderDiagnosisPanel();
-        renderRecommendationStageControls();
-        setResult(data);
+        });
       }
 
       async function applySelectedDiagnosisFix() {
         const view = selectedDiagnosisView();
-        if (state.selectedTicket === null || view === null) {
+        if (state.selectedTicket === null || view === null || !lifecycleMutationAvailable('apply-scoped-fix')) {
           return;
         }
         const ticketId = state.selectedTicket.id;
         const diagnosisId = view.originalDiagnosis.id;
-        const ticketRequestId = state.ticketRequestId;
+        const ticketSelectionToken = state.ticketSelectionToken;
         const mutationToken = beginDiagnosisMutation(ticketId, diagnosisId);
         const actor = els.actor.value.trim() || 'approval-desk';
         const selectedTicketIds = Array.isArray(state.diagnosisImpact.selectedTicketIds)
@@ -2976,9 +3085,54 @@ export const approvalDeskHtml = `<!doctype html>
         state.diagnosisFixError = null;
         state.diagnosisFixPending = true;
         renderDiagnosisPanel();
-        let data;
-        try {
-          data = await requestJson('/api/tickets/' + encodeURIComponent(ticketId) + '/diagnoses/' + encodeURIComponent(diagnosisId) + '/fix', {
+        if (!hasLifecycleDescriptor()) {
+          let data;
+          try {
+            data = await requestJson('/api/tickets/' + encodeURIComponent(ticketId) + '/diagnoses/' + encodeURIComponent(diagnosisId) + '/fix', {
+              method: 'POST',
+              body: JSON.stringify({
+                actor,
+                impactSet: {
+                  actor,
+                  rationale: impactRationale,
+                  tickets: impactTicketIds.map(function (impactTicketId) {
+                    return {
+                      ticketId: impactTicketId,
+                      reason: impactTicketId === ticketId
+                        ? sourceReason
+                        : state.diagnosisImpact.ticketReasons?.[impactTicketId] ?? ''
+                    };
+                  })
+                }
+              })
+            }, { writeErrorToResult: false });
+          } catch (error) {
+            if (isCurrentDiagnosisMutation(ticketId, diagnosisId, ticketSelectionToken, mutationToken)) {
+              state.diagnosisFixPending = false;
+              state.diagnosisFixError = error instanceof Error ? error.message : 'The scoped fix request failed.';
+              renderDiagnosisPanel();
+              setResult({ error: error instanceof Error ? error.message : 'Request failed.' });
+            }
+            return;
+          }
+          if (!isCurrentDiagnosisMutation(ticketId, diagnosisId, ticketSelectionToken, mutationToken)) {
+            return;
+          }
+          adoptLifecycle(data);
+          state.diagnosisFixPending = false;
+          state.diagnosisFixError = null;
+          state.diagnosisFixResults = Array.isArray(data.auditEvents) ? data.auditEvents : [];
+          state.diagnosisImpact = { rationale: '', selectedTicketIds: [], ticketReasons: {} };
+          state.diagnosisDraft = null;
+          state.diagnosisDraftId = null;
+          state.diagnosisReviewRationale = '';
+          state.diagnosisUiPhase = 'normal';
+          await refreshSelectedTicketQueueAndEvidence({ waitForDiagnoses: true });
+          setResult(data);
+          return;
+        }
+        await runGovernedMutation('apply-scoped-fix', async function () {
+          return requestJson('/api/tickets/' + encodeURIComponent(ticketId) + '/diagnoses/' + encodeURIComponent(diagnosisId) + '/fix', {
             method: 'POST',
             body: JSON.stringify({
               actor,
@@ -2996,29 +3150,40 @@ export const approvalDeskHtml = `<!doctype html>
               }
             })
           }, { writeErrorToResult: false });
-        } catch (error) {
-          if (isCurrentDiagnosisMutation(ticketId, diagnosisId, ticketRequestId, mutationToken)) {
+        }, {
+          waitForDiagnoses: true,
+          isCurrent: function () {
+            return isCurrentDiagnosisMutation(ticketId, diagnosisId, ticketSelectionToken, mutationToken);
+          },
+          setInlineError: function (message) {
             state.diagnosisFixPending = false;
-            state.diagnosisFixError = error instanceof Error ? error.message : 'The scoped fix request failed.';
+            state.diagnosisFixError = message;
+          },
+          clearInlineError: function () {
+            state.diagnosisFixError = null;
+          },
+          beforeRefreshSuccess: function (data) {
+            state.diagnosisFixPending = false;
+            state.diagnosisFixResults = Array.isArray(data.auditEvents) ? data.auditEvents : [];
+            state.diagnosisImpact = { rationale: '', selectedTicketIds: [], ticketReasons: {} };
+            state.diagnosisDraft = null;
+            state.diagnosisDraftId = null;
+            state.diagnosisReviewRationale = '';
+            state.diagnosisUiPhase = 'normal';
+          },
+          preservePresentationOnError: true,
+          afterRefresh: function (result) {
+            if (result.error !== null) {
+              state.diagnosisUiPhase = 'fix';
+            } else if (state.selectedTicket?.id === ticketId &&
+                (state.lifecycle?.primaryAction?.kind === 'apply-scoped-fix' || lifecycleActionIsAvailable('apply-scoped-fix'))) {
+              state.diagnosisUiPhase = 'fix';
+            }
             renderDiagnosisPanel();
-            setResult({ error: error instanceof Error ? error.message : 'Request failed.' });
+            renderRecommendationStageControls();
+            updateControls();
           }
-          return;
-        }
-        if (!isCurrentDiagnosisMutation(ticketId, diagnosisId, ticketRequestId, mutationToken)) {
-          return;
-        }
-        adoptLifecycle(data);
-        state.diagnosisFixPending = false;
-        state.diagnosisFixError = null;
-        state.diagnosisFixResults = Array.isArray(data.auditEvents) ? data.auditEvents : [];
-        state.diagnosisImpact = { rationale: '', selectedTicketIds: [], ticketReasons: {} };
-        state.diagnosisDraft = null;
-        state.diagnosisDraftId = null;
-        state.diagnosisReviewRationale = '';
-        state.diagnosisUiPhase = 'normal';
-        await refreshSelectedTicketQueueAndEvidence({ waitForDiagnoses: true });
-        setResult(data);
+        });
       }
 
       function createRecommendationLabel() {
@@ -3037,6 +3202,7 @@ export const approvalDeskHtml = `<!doctype html>
 
       function canCreateRecommendation() {
         return state.selectedTicket !== null &&
+          state.governedMutationToken === null &&
           (!isApprovedAwaitingSend() || lifecycleActionIsAvailable('evaluate-ticket'));
       }
 
@@ -3157,8 +3323,8 @@ export const approvalDeskHtml = `<!doctype html>
       function renderQueueBadges(ticket) {
         const summary = ticket.recommendationSummary ?? {};
         const priority = summary.priority ?? ticket.priority ?? 'Priority unset';
-        const supportState = summary.supportState;
-        const readyForClose = supportState === 'ready-for-close';
+        const readyForClose = ticket.lifecycleSummary?.phase === 'ready-for-close' ||
+          (ticket.lifecycleSummary === undefined && summary.supportState === 'ready-for-close');
         const workflow = readyForClose ? 'Ready to resolve' : workflowStateLabel(ticketWorkflowState(ticket));
         const label = priority + ' · ' + workflow;
         const detail = readyForClose
@@ -3310,7 +3476,8 @@ export const approvalDeskHtml = `<!doctype html>
         const hasRecommendation = state.recommendation !== null;
         const approvedWorkflow = isApprovedWorkflow();
         const requiredReview = state.operatorGuidance?.requiredReview;
-        const reviewGateActive = requiredReview !== undefined;
+        const reviewGateActive = requiredReview !== undefined ||
+          (hasLifecycleDescriptor() && state.lifecycle?.primaryAction?.kind === 'review-recommendation');
         const waitingForReply = isTaskDoneWaitingForReply();
         const customerReplyReady = latestUnconsumedCustomerReply() !== null;
         const closeReady = shouldShowCloseTicketAction();
@@ -3352,10 +3519,10 @@ export const approvalDeskHtml = `<!doctype html>
           (diagnosisActionReady || fixActionReady || ['diagnosis-review', 'awaiting-confirmation', 'awaiting-fix', 'fix-ready', 'verification'].includes(state.lifecycle?.phase));
         const lifecycleNoAction = hasLifecycleDescriptor() &&
           ['none', 'specialist-review'].includes(state.lifecycle?.primaryAction?.kind);
-        const suppressGenericActions = historicalDiagnosis || phaseOwnsWorkflowActions || lifecycleNoAction;
+        const suppressGenericActions = phaseOwnsWorkflowActions || lifecycleNoAction;
         const workflowActionReady = shouldShowCreateUpdatedRecommendation() || diagnosisActionReady || fixActionReady || closeReady;
         els.setupControls.hidden = hasRecommendation;
-        els.decisionControls.hidden = historicalDiagnosis || (phaseOwnsWorkflowActions && !phaseControlsVisible) || (!hasRecommendation && !diagnosisActionReady && !fixActionReady) || (waitingForReply && !workflowActionReady) || state.stage === 'approval' || state.stage === 'reject';
+        els.decisionControls.hidden = (phaseOwnsWorkflowActions && !phaseControlsVisible) || (!hasRecommendation && !diagnosisActionReady && !fixActionReady) || (waitingForReply && !workflowActionReady) || state.stage === 'approval' || state.stage === 'reject';
         els.editApprovalControls.hidden = !(hasRecommendation && state.stage === 'approval');
         els.rejectControls.hidden = !(hasRecommendation && state.stage === 'reject');
         els.replyControls.hidden = !shouldShowReplyControls();
@@ -3383,10 +3550,14 @@ export const approvalDeskHtml = `<!doctype html>
         // mutation; keep it visible even while a readable diagnosis remains
         // open in the presentation column.
         els.closeTicketButton.hidden = !closeReady;
+        els.closeTicketButton.textContent = 'Resolve';
+        els.closeTicketButton.title = 'Resolve ticket';
         els.approveButton.hidden = suppressGenericActions || !hasRecommendation || shouldShowCreateUpdatedRecommendation() || closeReady ||
           (approvedWorkflow && isCurrentRecommendationSent());
         const primaryActionLabel = reviewGateActive
           ? 'Review'
+          : hasLifecycleDescriptor() && state.lifecycle?.primaryAction?.kind === 'send-customer-response'
+            ? 'Send'
           : isCollectingEvidenceWorkflow()
             ? 'Send'
             : 'Done';
@@ -3395,8 +3566,10 @@ export const approvalDeskHtml = `<!doctype html>
         els.approveButton.title = reviewGateActive
           ? 'Review the required diagnosis or pattern action before continuing'
           : primaryActionLabel === 'Send'
-            ? 'Approve and send the evidence request to the customer'
-          : 'Mark task done';
+            ? hasLifecycleDescriptor() && state.lifecycle?.primaryAction?.kind === 'send-customer-response'
+              ? 'Send the approved response to the customer'
+              : 'Approve and send the evidence request to the customer'
+            : 'Mark task done';
         els.startRejectButton.hidden = suppressGenericActions || !hasRecommendation || approvedWorkflow || closeReady || reviewGateActive;
         els.backToRecommendation.hidden = !(hasRecommendation && state.stage === 'approval');
         els.decisionChips.hidden = confirmedDiagnosisPresentation;
@@ -3428,6 +3601,7 @@ export const approvalDeskHtml = `<!doctype html>
           state.lifecycle?.phase === 'diagnosis-review' ||
           lifecycleActionIsAvailable('review-diagnosis') ||
           lifecycleActionIsAvailable('revalidate-diagnosis') ||
+          isNoPlatformFixVerification() ||
           state.operatorGuidance?.requiredReview?.kind === 'diagnosis';
         els.diagnosisActionPanel.hidden = !hasDiagnosis || state.diagnosisUiPhase === 'normal' ||
           (state.diagnosisUiPhase === 'auto' && !autoDiagnosisPhaseEligible && !isHistoricalDiagnosisView(view));
@@ -3508,11 +3682,13 @@ export const approvalDeskHtml = `<!doctype html>
       }
 
       function actionBarTitle() {
-        if (hasLifecycleDescriptor() && state.lifecycle?.phase === 'resolved') {
-          return 'Resolved';
+        const noActionPresentation = lifecycleNoActionPresentation();
+        if (noActionPresentation !== null) {
+          return noActionPresentation.title;
         }
-        if (hasLifecycleDescriptor() && ['none', 'specialist-review'].includes(state.lifecycle?.primaryAction?.kind)) {
-          return 'Further investigation required';
+        const lifecyclePresentation = lifecyclePrimaryActionPresentation();
+        if (lifecyclePresentation !== null) {
+          return lifecyclePresentation.title;
         }
         if (state.diagnosisUiPhase === 'inspection') {
           return 'Inspection';
@@ -3532,7 +3708,7 @@ export const approvalDeskHtml = `<!doctype html>
           (state.diagnosisUiPhase === 'normal' || state.diagnosisUiPhase === 'auto')) {
           return state.lifecycle?.phase === 'awaiting-confirmation'
             ? 'Waiting for confirmation'
-            : 'Diagnosis update needed';
+            : 'Re-evaluate';
         }
         if (state.diagnosisUiPhase !== 'normal' && selectedDiagnosisView() !== null) {
           return 'Diagnosis';
@@ -3580,14 +3756,16 @@ export const approvalDeskHtml = `<!doctype html>
       }
 
       function actionBarHint() {
+        const noActionPresentation = lifecycleNoActionPresentation();
+        if (noActionPresentation !== null) {
+          return noActionPresentation.hint;
+        }
+        const lifecyclePresentation = lifecyclePrimaryActionPresentation();
+        if (lifecyclePresentation !== null) {
+          return lifecyclePresentation.hint;
+        }
         if (isHistoricalDiagnosisSelection()) {
           return 'Viewing a historical diagnosis. Return to the current diagnosis to continue.';
-        }
-        if (hasLifecycleDescriptor() && state.lifecycle?.phase === 'resolved') {
-          return 'No governed operator action is available; this ticket is resolved.';
-        }
-        if (hasLifecycleDescriptor() && ['none', 'specialist-review'].includes(state.lifecycle?.primaryAction?.kind)) {
-          return 'No governed operator action is available in this state. Further investigation is required.';
         }
         if (hasLifecycleDescriptor() && state.lifecycle?.phase === 'recommendation-review') {
           return 'Review the new evaluation before continuing.';
@@ -3718,13 +3896,25 @@ export const approvalDeskHtml = `<!doctype html>
 
       function renderDecisionChips(recommendation) {
         const missing = Array.isArray(recommendation.missingEvidence) ? recommendation.missingEvidence : [];
-        return [
+        const labels = [
           'Evaluation: ' + recommendation.category,
           'Priority: ' + recommendation.priority,
           'Team: ' + recommendation.team,
-          missing.length === 0 ? 'Evidence complete' : missing.length + ' evidence items missing',
-          'Response ready'
-        ].map(chip).join('');
+          missing.length === 0 ? 'Evidence complete' : missing.length + ' evidence items missing'
+        ];
+        const responseState = state.lifecycle?.response?.state;
+        if (!hasLifecycleDescriptor()) {
+          labels.push('Response ready');
+        } else if (responseState === 'approved') {
+          labels.push('Response ready');
+        } else if (responseState === 'draft' || responseState === 'approval-required') {
+          labels.push('Response draft');
+        } else if (responseState === 'sent') {
+          labels.push('Response sent');
+        } else if (responseState === 'waiting-for-reply') {
+          labels.push('Waiting for customer');
+        }
+        return labels.map(chip).join('');
       }
 
       function decisionSummaryText(recommendation) {
@@ -3756,7 +3946,8 @@ export const approvalDeskHtml = `<!doctype html>
       function shouldShowMarkSentAction() {
         const summary = state.selectedTicket?.recommendationSummary ?? {};
         const approved = state.recommendation?.resolution === 'approved' || summary.latestResolution === 'approved';
-        return approved && !isCurrentRecommendationSent();
+        return (approved || state.lifecycle?.primaryAction?.kind === 'send-customer-response') &&
+          !isCurrentRecommendationSent();
       }
 
       function shouldShowCreateUpdatedRecommendation() {
@@ -3800,7 +3991,7 @@ export const approvalDeskHtml = `<!doctype html>
         return state.operatorGuidance?.requiredReview !== undefined;
       }
 
-      function lifecycleAction(kind) {
+      function lifecycleActionDescriptor(kind) {
         if (state.lifecycle?.primaryAction?.kind === kind) {
           return state.lifecycle.primaryAction;
         }
@@ -3810,8 +4001,15 @@ export const approvalDeskHtml = `<!doctype html>
       }
 
       function lifecycleActionIsAvailable(kind) {
-        const action = lifecycleAction(kind);
+        const action = lifecycleActionDescriptor(kind);
         return action !== null && (action.availability === 'primary' || action.availability === 'available');
+      }
+
+      function lifecycleActionReason(kind) {
+        const action = lifecycleActionDescriptor(kind);
+        return action === null || !Array.isArray(action.reasonCodes) || action.reasonCodes.length === 0
+          ? ''
+          : action.reasonCodes.map(humanizeIdentifier).join('. ') + '.';
       }
 
       function lifecycleMutationAvailable(kind) {
@@ -3867,6 +4065,100 @@ export const approvalDeskHtml = `<!doctype html>
           isTaskDoneWaitingForReply();
       }
 
+      function lifecycleNoActionPresentation() {
+        if (!hasLifecycleDescriptor()) return null;
+        if (state.lifecycle?.phase === 'resolved') {
+          return {
+            title: 'Resolved',
+            hint: 'This ticket is resolved. No governed operator action is available.'
+          };
+        }
+        if (state.lifecycle?.phase === 'waiting-for-customer') {
+          return {
+            title: 'Waiting for customer',
+            hint: 'Waiting for the customer to provide the requested evidence or reply.'
+          };
+        }
+        if (state.lifecycle?.phase === 'escalated' || state.lifecycle?.primaryAction?.kind === 'specialist-review') {
+          return {
+            title: 'Specialist review required',
+            hint: 'Specialist review is required before another governed action can proceed.'
+          };
+        }
+        if (state.lifecycle?.primaryAction?.kind === 'none') {
+          return {
+            title: 'Further investigation required',
+            hint: lifecycleActionReason('none') || 'No governed operator action is available in this state. Further investigation is required.'
+          };
+        }
+        return null;
+      }
+
+      function lifecyclePrimaryActionPresentation() {
+        if (!hasLifecycleDescriptor()) return null;
+        const primary = state.lifecycle?.primaryAction?.kind;
+        if (primary === 'review-recommendation') {
+          return {
+            title: 'Review recommendation',
+            hint: 'Review the new evaluation before continuing.'
+          };
+        }
+        if (primary === 'send-customer-response') {
+          return {
+            title: 'Send response',
+            hint: 'Send the approved response to the customer.'
+          };
+        }
+        if (primary === 'evaluate-ticket') {
+          return state.lifecycle?.phase === 'awaiting-confirmation'
+            ? {
+                title: 'Waiting for confirmation',
+                hint: 'Evaluate the current confirmation evidence before continuing.'
+              }
+            : {
+                title: 'Re-evaluate',
+                hint: 'Re-evaluate the ticket after clarification or the rejected diagnosis.'
+              };
+        }
+        if (primary === 'review-diagnosis') {
+          return {
+            title: 'Review diagnosis',
+            hint: 'Review the current diagnosis before continuing.'
+          };
+        }
+        if (primary === 'revalidate-diagnosis') {
+          return {
+            title: 'Revalidate diagnosis',
+            hint: 'Revalidate the diagnosis against the current ticket evidence.'
+          };
+        }
+        if (primary === 'record-diagnosis') {
+          return {
+            title: 'Diagnose ticket',
+            hint: 'Record the governed diagnosis before continuing.'
+          };
+        }
+        if (primary === 'record-fix-available') {
+          return {
+            title: 'Fix available',
+            hint: 'Record the governed fix before preparing the customer update.'
+          };
+        }
+        if (primary === 'apply-scoped-fix') {
+          return {
+            title: 'Scoped fix',
+            hint: 'Apply the reviewed scoped fix to the current ticket.'
+          };
+        }
+        if (primary === 'resolve-ticket') {
+          return {
+            title: 'Ready to resolve',
+            hint: 'Customer confirmation is recorded. Resolve preserves the audit trail.'
+          };
+        }
+        return null;
+      }
+
       function renderCustomerReplyFocus() {
         const latestReply = latestUnconsumedCustomerReply();
         if (latestReply === null) {
@@ -3877,6 +4169,10 @@ export const approvalDeskHtml = `<!doctype html>
       }
 
       function shouldShowReplyControls() {
+        if (hasLifecycleDescriptor() &&
+            ['review-diagnosis', 'revalidate-diagnosis', 'record-diagnosis', 'record-fix-available', 'apply-scoped-fix', 'resolve-ticket', 'none', 'specialist-review'].includes(state.lifecycle?.primaryAction?.kind)) {
+          return false;
+        }
         return state.selectedTicket !== null &&
           !hasRequiredReviewGate() &&
           !shouldShowCloseTicketAction() &&
@@ -4016,6 +4312,7 @@ export const approvalDeskHtml = `<!doctype html>
       function updateControls() {
         const hasRecommendation = state.recommendation !== null;
         const evaluationPending = isEvaluationPendingForSelectedTicket();
+        const governedMutationPending = state.governedMutationToken !== null;
         const approvedWorkflow = isApprovedWorkflow();
         const actorPresent = els.actor.value.trim().length > 0;
         const fields = selectedFields();
@@ -4033,23 +4330,25 @@ export const approvalDeskHtml = `<!doctype html>
             (!approvedWorkflow && confirmed && hasFields && customerResponseReady) ||
             (approvedWorkflow && shouldShowMarkSentAction())
           );
-        els.approveButton.disabled = !doneReady;
+        els.approveButton.disabled = governedMutationPending || !doneReady;
         els.approveEditedButton.disabled = els.approveButton.disabled;
-        els.rejectButton.disabled = !(hasRecommendation && !approvedWorkflow && actorPresent && feedbackPresent);
-        els.startRejectButton.disabled = !(hasRecommendation && !approvedWorkflow && actorPresent);
-        els.markSentButton.disabled = !(hasRecommendation && approvedWorkflow && actorPresent && shouldShowMarkSentAction());
-        els.diagnoseButton.disabled = !(actorPresent && shouldShowDiagnoseAction());
-        els.fixButton.disabled = !(actorPresent && shouldShowFixAction());
-        els.closeTicketButton.disabled = !(actorPresent && shouldShowCloseTicketAction());
+        els.rejectButton.disabled = governedMutationPending || !(hasRecommendation && !approvedWorkflow && actorPresent && feedbackPresent);
+        els.startRejectButton.disabled = governedMutationPending || !(hasRecommendation && !approvedWorkflow && actorPresent);
+        els.markSentButton.disabled = governedMutationPending || !(hasRecommendation && approvedWorkflow && actorPresent && shouldShowMarkSentAction());
+        els.diagnoseButton.disabled = governedMutationPending || !(actorPresent && shouldShowDiagnoseAction());
+        els.fixButton.disabled = governedMutationPending || !(actorPresent && shouldShowFixAction());
+        els.closeTicketButton.disabled = governedMutationPending || !(actorPresent && shouldShowCloseTicketAction());
         if (hasLifecycleDescriptor() && lifecycleActionIsAvailable('resolve-ticket')) {
           els.closeTicketButton.hidden = false;
         }
-        els.createRecommendation.disabled = evaluationPending || !canCreateRecommendation();
-        els.createUpdatedRecommendation.disabled = evaluationPending || !shouldShowCreateUpdatedRecommendation();
+        els.createRecommendation.disabled = governedMutationPending || evaluationPending || !canCreateRecommendation();
+        els.createUpdatedRecommendation.disabled = governedMutationPending || evaluationPending || !shouldShowCreateUpdatedRecommendation();
         els.createRecommendation.textContent = evaluationPending ? 'Evaluating…' : 'Evaluate';
         els.createRecommendation.title = createRecommendationLabel();
         els.createUpdatedRecommendation.textContent = evaluationPending ? 'Evaluating…' : createUpdatedRecommendationLabel();
         els.createUpdatedRecommendation.title = createRecommendationLabel();
+        els.refreshQueue.textContent = state.governedMutationRefreshPending === null ? 'Refresh' : 'Retry refresh';
+        els.refreshQueue.disabled = state.governedMutationRefreshRetry !== null;
         els.manualRepliesButton.textContent = manualRepliesEnabled ? 'Automatic' : 'Manual';
         els.manualRepliesButton.title = manualRepliesEnabled
           ? 'Switch back to automatic customer replies'
@@ -4061,9 +4360,11 @@ export const approvalDeskHtml = `<!doctype html>
         }
       }
 
-      async function loadQueue() {
+      async function loadQueue(options) {
         els.queueStatus.textContent = 'Loading queue...';
-        const data = await requestJson('/api/tickets?limit=50');
+        const data = await requestJson('/api/tickets?limit=50', undefined, {
+          writeErrorToResult: options?.writeErrorToResult
+        });
         state.tickets = data.items ?? [];
         renderTicketList();
         setResult(data);
@@ -4150,11 +4451,23 @@ export const approvalDeskHtml = `<!doctype html>
           .join('');
       }
 
-      async function selectTicket(id, options) {
+      function selectTicket(id, options) {
+        const promise = loadTicketSelection(id, options);
+        state.ticketSelectionRequest = {
+          ticketRequestId: state.ticketRequestId,
+          promise
+        };
+        return promise;
+      }
+
+      async function loadTicketSelection(id, options) {
         const previousTicketId = state.selectedTicket?.id;
         const newSelection = previousTicketId !== id;
         const switchingTickets = previousTicketId !== undefined && previousTicketId !== id;
         const ticketRequestId = ++state.ticketRequestId;
+        if (newSelection) {
+          state.ticketSelectionToken += 1;
+        }
         if (newSelection) {
           resetDiagnosisInteraction();
           state.diagnoses = [];
@@ -4204,6 +4517,9 @@ export const approvalDeskHtml = `<!doctype html>
               escapeHtml(error instanceof Error ? error.message : 'Request failed.') + '</p>';
             setResult({ error: error instanceof Error ? error.message : 'Request failed.' });
           }
+          if (options?.propagateError === true) {
+            throw error;
+          }
           return;
         }
         if (state.ticketRequestId !== ticketRequestId) {
@@ -4242,15 +4558,21 @@ export const approvalDeskHtml = `<!doctype html>
             renderRecommendationStageControls();
           }
         });
+        const refreshedRecommendationApproved =
+          state.recommendation?.resolution === 'approved' ||
+          state.selectedTicket?.recommendationSummary?.latestResolution === 'approved' ||
+          state.lifecycle?.primaryAction?.kind === 'send-customer-response';
         state.stage = state.recommendation === null
           ? 'empty'
-          : isApprovedWorkflow()
+          : refreshedRecommendationApproved
             ? 'approved'
             : 'draft';
         renderTicketList();
         renderTicket();
         renderConversationContext();
         renderRecommendation();
+        renderRecommendationStageControls();
+        updateControls();
         setResult(data);
         if (options?.waitForDiagnoses === true) {
           await diagnosisLoad;
@@ -4396,6 +4718,13 @@ export const approvalDeskHtml = `<!doctype html>
         if (state.selectedTicket === null) {
           return;
         }
+        if (state.governedMutationToken !== null) {
+          return;
+        }
+        if (hasLifecycleDescriptor() && !lifecycleActionIsAvailable('evaluate-ticket')) {
+          setResult({ error: lifecycleActionReason('evaluate-ticket') || 'Evaluating this ticket is not available in the current lifecycle state.' });
+          return;
+        }
         const ticketId = state.selectedTicket.id;
         let ticketRequestId = state.ticketRequestId;
         const actor = els.actor.value.trim() || 'approval-desk';
@@ -4413,9 +4742,8 @@ export const approvalDeskHtml = `<!doctype html>
         const replacePendingRecommendation =
           state.recommendation?.resolution === 'pending' &&
           !hasCustomerReplyAfterCurrentRecommendation();
-        const recommendationToReplace = replacePendingRecommendation ? state.recommendation : null;
         if (replacePendingRecommendation) {
-          const confirmed = confirm('This ticket already has a pending recommendation. Create a new one and mark the old one superseded?');
+          const confirmed = confirm('This ticket already has a pending recommendation. Create a new one?');
           if (!confirmed) {
             return;
           }
@@ -4434,40 +4762,19 @@ export const approvalDeskHtml = `<!doctype html>
           if (!isCurrentTicketRequest(ticketId, ticketRequestId)) {
             return;
           }
-          // A completed re-evaluation starts a fresh diagnosis review cycle.
-          // Clear the prior phase/selection so the newly loaded diagnosis is
-          // rendered instead of leaving the operator in the normal response bar.
           resetDiagnosisInteraction();
-          state.recommendation = data.recommendation;
-          state.stage = 'draft';
-          state.consumedCustomerReplyTimestamp = latestCustomerReplyTimestamp();
-          markSelectedTicketWorkflow(data.recommendation, 'draft-ready');
-          renderRecommendation();
-          setResult(data);
           const reconciledRequestId = await selectTicket(ticketId, { waitForDiagnoses: true });
           if (reconciledRequestId === undefined || !isCurrentTicketRequest(ticketId, reconciledRequestId)) {
             return;
           }
           ticketRequestId = reconciledRequestId;
-          if (
-            recommendationToReplace !== null &&
-            isRecommendationStillPending(recommendationToReplace.id)
-          ) {
-            await rejectRecommendationById(
-              recommendationToReplace.id,
-              ticketId,
-              actor,
-              'Superseded by a new recommendation from the Approval Desk.'
-            );
-            if (!isCurrentTicketRequest(ticketId, ticketRequestId)) {
-              return;
-            }
-            const replacementRequestId = await selectTicket(ticketId, { waitForDiagnoses: true });
-            if (replacementRequestId === undefined || !isCurrentTicketRequest(ticketId, replacementRequestId)) {
-              return;
-            }
-            ticketRequestId = replacementRequestId;
-          }
+          state.consumedCustomerReplyTimestamp = latestCustomerReplyTimestamp();
+          renderRecommendationStageControls();
+          updateControls();
+          await loadQueue({ writeErrorToResult: false }).catch(function () {
+            // Queue freshness is useful but cannot change the outcome of a durable evaluation POST.
+            renderTicketList();
+          });
           await refreshEvidenceBestEffort();
         } catch (error) {
           if (!isCurrentTicketRequest(ticketId, ticketRequestId)) {
@@ -4510,35 +4817,68 @@ export const approvalDeskHtml = `<!doctype html>
         if (Object.keys(fieldOverrides).length > 0) {
           body.fieldOverrides = fieldOverrides;
         }
-        const approvedRecommendation = state.recommendation;
-        const data = await requestJson('/api/recommendations/' + encodeURIComponent(state.recommendation.id) + '/approve', {
-          method: 'POST',
-          body: JSON.stringify(body)
+        if (!hasLifecycleDescriptor()) {
+          const approvedRecommendation = state.recommendation;
+          const data = await requestJson('/api/recommendations/' + encodeURIComponent(state.recommendation.id) + '/approve', {
+            method: 'POST',
+            body: JSON.stringify(body)
+          });
+          state.recommendation = { ...approvedRecommendation, resolution: 'approved' };
+          state.stage = 'approved';
+          state.selectedTicket = withRecommendationSummary(data.ticket, state.recommendation, 'draft-ready');
+          replaceTicket(state.selectedTicket);
+          resetApprovalControls();
+          renderTicket();
+          renderTicketList();
+          renderRecommendation();
+          await loadMetrics(data);
+          await refreshEvidenceBestEffort();
+          return;
+        }
+        await runGovernedMutation('review-recommendation', async function () {
+          return requestJson('/api/recommendations/' + encodeURIComponent(state.recommendation.id) + '/approve', {
+            method: 'POST',
+            body: JSON.stringify(body)
+          }, { writeErrorToResult: false });
+        }, {
+          waitForDiagnoses: true,
+          afterSuccess: async function (data) {
+            resetApprovalControls();
+            await loadMetrics(data);
+          }
         });
-        state.recommendation = { ...approvedRecommendation, resolution: 'approved' };
-        state.stage = 'approved';
-        state.selectedTicket = withRecommendationSummary(data.ticket, state.recommendation, 'draft-ready');
-        replaceTicket(state.selectedTicket);
-        resetApprovalControls();
-        renderTicket();
-        renderTicketList();
-        renderRecommendation();
-        await loadMetrics(data);
-        await refreshEvidenceBestEffort();
       }
 
       async function rejectRecommendation() {
         if (state.recommendation === null || state.selectedTicket === null) {
           return;
         }
-        const data = await rejectCurrentRecommendation(els.feedback.value.trim());
-        markSelectedTicketActive();
-        resetRecommendationState();
-        renderTicket();
-        renderTicketList();
-        renderRecommendation();
-        await loadMetrics(data);
-        await refreshEvidenceBestEffort();
+        const feedback = els.feedback.value.trim();
+        if (!hasLifecycleDescriptor()) {
+          const data = await rejectCurrentRecommendation(feedback);
+          markSelectedTicketActive();
+          resetRecommendationState();
+          renderTicket();
+          renderTicketList();
+          renderRecommendation();
+          await loadMetrics(data);
+          await refreshEvidenceBestEffort();
+          return;
+        }
+        await runGovernedMutation('review-recommendation', async function () {
+          return rejectCurrentRecommendation(feedback);
+        }, {
+          waitForDiagnoses: true,
+          blockedMessage: 'Recommendation review is not available in the current lifecycle state.',
+          afterSuccess: async function (data) {
+            markSelectedTicketActive();
+            resetRecommendationState();
+            renderTicket();
+            renderTicketList();
+            renderRecommendation();
+            await loadMetrics(data);
+          }
+        });
       }
 
       async function rejectCurrentRecommendation(feedback) {
@@ -4591,83 +4931,72 @@ export const approvalDeskHtml = `<!doctype html>
         if (state.recommendation === null || state.selectedTicket === null) {
           return;
         }
-        const recommendationToComplete = state.recommendation;
-        const ticketId = state.selectedTicket.id;
-        const actor = els.actor.value.trim() || 'approval-desk';
-        if (!isApprovedWorkflow()) {
-          const approvedFields = selectedFields();
-          const body = {
-            ticketId,
-            expectedRevision: recommendationToComplete.sourceRevision,
-            approvedFields,
-            actor,
-            confirm: true
-          };
-          if (approvedFields.includes('customerResponse')) {
-            body.editedCustomerResponse = els.editedCustomerResponse.value.trim();
-          }
-          const fieldOverrides = collectFieldOverrides(approvedFields);
-          if (Object.keys(fieldOverrides).length > 0) {
-            body.fieldOverrides = fieldOverrides;
-          }
-          const approvalData = await requestJson('/api/recommendations/' + encodeURIComponent(recommendationToComplete.id) + '/approve', {
-            method: 'POST',
-            body: JSON.stringify(body)
-          });
-          state.recommendation = { ...recommendationToComplete, resolution: 'approved' };
-          state.stage = 'approved';
-          state.selectedTicket = withRecommendationSummary(approvalData.ticket, state.recommendation, 'draft-ready');
-          replaceTicket(state.selectedTicket);
-          resetApprovalControls();
-        }
-        if (!isCurrentRecommendationSentFor(recommendationToComplete.id)) {
-          const sentData = await requestJson('/api/recommendations/' + encodeURIComponent(recommendationToComplete.id) + '/mark-sent', {
-            method: 'POST',
-            body: JSON.stringify({
-              ticketId,
-              actor,
-              automaticReplyEnabled: !els.disableAutomaticReplies.checked
-            })
-          });
-          els.replyComposer.open = false;
-          setResult(sentData);
-          await refreshSelectedTicketQueueAndEvidence();
-          await loadMetrics(sentData);
+        if (isApprovedWorkflow()) {
+          await markResponseSent();
           return;
         }
-        renderTicket();
-        renderTicketList();
-        renderRecommendation();
+        await approveRecommendation();
       }
 
       async function markResponseSent() {
         if (state.recommendation === null || state.selectedTicket === null) {
           return;
         }
-        const data = await requestJson('/api/recommendations/' + encodeURIComponent(state.recommendation.id) + '/mark-sent', {
-          method: 'POST',
-          body: JSON.stringify({
-            ticketId: state.selectedTicket.id,
-            actor: els.actor.value.trim() || 'approval-desk',
-            automaticReplyEnabled: !els.disableAutomaticReplies.checked
-          })
+        if (!hasLifecycleDescriptor()) {
+          const data = await requestJson('/api/recommendations/' + encodeURIComponent(state.recommendation.id) + '/mark-sent', {
+            method: 'POST',
+            body: JSON.stringify({
+              ticketId: state.selectedTicket.id,
+              actor: els.actor.value.trim() || 'approval-desk',
+              automaticReplyEnabled: !els.disableAutomaticReplies.checked
+            })
+          });
+          setResult(data);
+          await refreshSelectedTicketQueueAndEvidence();
+          return;
+        }
+        await runGovernedMutation('send-customer-response', async function () {
+          return requestJson('/api/recommendations/' + encodeURIComponent(state.recommendation.id) + '/mark-sent', {
+            method: 'POST',
+            body: JSON.stringify({
+              ticketId: state.selectedTicket.id,
+              actor: els.actor.value.trim() || 'approval-desk',
+              automaticReplyEnabled: !els.disableAutomaticReplies.checked
+            })
+          }, { writeErrorToResult: false });
+        }, {
+          waitForDiagnoses: true,
+          afterSuccess: function () {
+            els.replyComposer.open = false;
+          }
         });
-        setResult(data);
-        await refreshSelectedTicketQueueAndEvidence();
       }
 
       async function recordDiagnosis() {
         if (state.selectedTicket === null) {
           return;
         }
-        const data = await requestJson('/api/tickets/' + encodeURIComponent(state.selectedTicket.id) + '/diagnosis', {
-          method: 'POST',
-          body: JSON.stringify({
-            actor: els.actor.value.trim() || 'approval-desk'
-          })
+        if (!hasLifecycleDescriptor()) {
+          const data = await requestJson('/api/tickets/' + encodeURIComponent(state.selectedTicket.id) + '/diagnosis', {
+            method: 'POST',
+            body: JSON.stringify({
+              actor: els.actor.value.trim() || 'approval-desk'
+            })
+          });
+          setResult(data);
+          await refreshSelectedTicketQueueAndEvidence();
+          return;
+        }
+        await runGovernedMutation('record-diagnosis', async function () {
+          return requestJson('/api/tickets/' + encodeURIComponent(state.selectedTicket.id) + '/diagnosis', {
+            method: 'POST',
+            body: JSON.stringify({
+              actor: els.actor.value.trim() || 'approval-desk'
+            })
+          }, { writeErrorToResult: false });
+        }, {
+          waitForDiagnoses: true
         });
-        setResult(data);
-        await refreshSelectedTicketQueueAndEvidence();
       }
 
       async function recordFix() {
@@ -4675,36 +5004,74 @@ export const approvalDeskHtml = `<!doctype html>
           return;
         }
         const ticketId = state.selectedTicket.id;
-        const data = await requestJson('/api/tickets/' + encodeURIComponent(ticketId) + '/fix', {
-          method: 'POST',
-          body: JSON.stringify({
-            actor: els.actor.value.trim() || 'approval-desk'
-          })
-        });
-        setResult(data);
-        state.diagnosisUiPhase = 'normal';
-        await refreshSelectedTicketQueueAndEvidence();
-        if (state.selectedTicket?.id === ticketId &&
-            lifecycleActionIsAvailable('apply-scoped-fix')) {
-          state.diagnosisUiPhase = 'fix';
-          renderDiagnosisPanel();
-          renderRecommendationStageControls();
-          updateControls();
+        if (!hasLifecycleDescriptor()) {
+          const data = await requestJson('/api/tickets/' + encodeURIComponent(ticketId) + '/fix', {
+            method: 'POST',
+            body: JSON.stringify({
+              actor: els.actor.value.trim() || 'approval-desk'
+            })
+          });
+          setResult(data);
+          state.diagnosisUiPhase = 'normal';
+          await refreshSelectedTicketQueueAndEvidence();
+          if (state.selectedTicket?.id === ticketId &&
+              lifecycleActionIsAvailable('apply-scoped-fix')) {
+            state.diagnosisUiPhase = 'fix';
+            renderDiagnosisPanel();
+            renderRecommendationStageControls();
+            updateControls();
+          }
+          return;
         }
+        await runGovernedMutation('record-fix-available', async function () {
+          return requestJson('/api/tickets/' + encodeURIComponent(ticketId) + '/fix', {
+            method: 'POST',
+            body: JSON.stringify({
+              actor: els.actor.value.trim() || 'approval-desk'
+            })
+          }, { writeErrorToResult: false });
+        }, {
+          waitForDiagnoses: true,
+          beforeRefreshSuccess: function () {
+            state.diagnosisUiPhase = 'normal';
+          },
+          afterRefresh: function (result) {
+            if (result.error === null && state.selectedTicket?.id === ticketId &&
+                (state.lifecycle?.primaryAction?.kind === 'apply-scoped-fix' || lifecycleActionIsAvailable('apply-scoped-fix'))) {
+              state.diagnosisUiPhase = 'fix';
+            }
+            renderDiagnosisPanel();
+            renderRecommendationStageControls();
+            updateControls();
+          }
+        });
       }
 
       async function closeTicket() {
         if (state.selectedTicket === null) {
           return;
         }
-        const data = await requestJson('/api/tickets/' + encodeURIComponent(state.selectedTicket.id) + '/close', {
-          method: 'POST',
-          body: JSON.stringify({
-            actor: els.actor.value.trim() || 'approval-desk'
-          })
+        if (!hasLifecycleDescriptor()) {
+          const data = await requestJson('/api/tickets/' + encodeURIComponent(state.selectedTicket.id) + '/close', {
+            method: 'POST',
+            body: JSON.stringify({
+              actor: els.actor.value.trim() || 'approval-desk'
+            })
+          });
+          setResult(data);
+          await refreshSelectedTicketQueueAndEvidence();
+          return;
+        }
+        await runGovernedMutation('resolve-ticket', async function () {
+          return requestJson('/api/tickets/' + encodeURIComponent(state.selectedTicket.id) + '/close', {
+            method: 'POST',
+            body: JSON.stringify({
+              actor: els.actor.value.trim() || 'approval-desk'
+            })
+          }, { writeErrorToResult: false });
+        }, {
+          waitForDiagnoses: true
         });
-        setResult(data);
-        await refreshSelectedTicketQueueAndEvidence();
       }
 
       async function persistDemoCustomerReply(value) {
@@ -4780,18 +5147,325 @@ export const approvalDeskHtml = `<!doctype html>
         await refreshEvidenceBestEffort();
       }
 
-      function refreshAfterPresentationBack(phase) {
+      function governedMutationUnavailableMessage(kind, fallbackMessage) {
+        const message = lifecycleActionReason(kind) || fallbackMessage || 'This action is not available in the current lifecycle state.';
+        return message.length === 0
+          ? message
+          : message.charAt(0).toUpperCase() + message.slice(1);
+      }
+
+      async function refreshGovernedMutationState(options) {
+        const selectedId = options.ticketId;
+        const queueRefresh = loadQueue({ writeErrorToResult: false }).catch(function () {
+          // Queue freshness is useful but cannot change the outcome of a durable POST.
+        });
+        const evidenceRefresh = refreshEvidenceBestEffort();
+        await selectTicket(selectedId, {
+          waitForDiagnoses: options?.waitForDiagnoses === true,
+          preservePresentation: options?.preservePresentation === true,
+          propagateError: true
+        });
+        await queueRefresh;
+        await evidenceRefresh;
+      }
+
+      async function refreshCurrentSelectionAfterMutationSelectionChange(ticketId, selectionToken, options, refreshOptions) {
+        if (state.ticketSelectionToken === selectionToken) {
+          return;
+        }
+        while (state.selectedTicket === null) {
+          const selectionRequest = state.ticketSelectionRequest;
+          if (selectionRequest === null) {
+            return;
+          }
+          await selectionRequest.promise;
+          if (state.ticketSelectionRequest?.ticketRequestId === selectionRequest.ticketRequestId) {
+            break;
+          }
+        }
+        const selectedId = state.selectedTicket?.id;
+        if (selectedId === undefined) {
+          return;
+        }
+        await selectTicket(selectedId, {
+          waitForDiagnoses: options?.waitForDiagnoses === true,
+          propagateError: refreshOptions?.propagateError === true
+        });
+      }
+
+      async function refreshCurrentSelectionForGovernedRetry(pending) {
+        await refreshCurrentSelectionAfterMutationSelectionChange(
+          pending.ticketId,
+          pending.selectionToken,
+          pending.options,
+          { propagateError: true }
+        );
+        if (state.selectedTicket === null) {
+          throw new Error('The current ticket selection could not be refreshed.');
+        }
+      }
+
+      function reportGovernedMutationRefreshUnavailable(error, pending) {
+        const mutationFailed = pending?.mutationError !== null && pending?.mutationError !== undefined;
+        setResult({
+          code: 'AUTHORITATIVE_REFRESH_REQUIRED',
+          error: mutationFailed
+            ? 'The action failed, and the authoritative ticket state could not be refreshed. Use Retry refresh before taking another governed action.'
+            : 'The action was saved, but the authoritative ticket state could not be refreshed. Use Retry refresh before taking another governed action.',
+          refreshError: error instanceof Error ? error.message : 'Ticket refresh is unavailable.',
+          ...(mutationFailed
+            ? {
+                actionError: pending.mutationError.message,
+                actionErrorCode: pending.mutationError.code
+              }
+            : {})
+        });
+      }
+
+      async function finishGovernedMutationAfterRefresh(pending, refreshOptions) {
+        const { data, isCurrent, mutationError, options, selectionToken, ticketId } = pending;
+        if (!isCurrent()) {
+          if (refreshOptions?.propagateSelectionError === true) {
+            await refreshCurrentSelectionForGovernedRetry(pending);
+          } else {
+            await refreshCurrentSelectionAfterMutationSelectionChange(ticketId, selectionToken, options);
+          }
+          return null;
+        }
+        if (typeof options?.afterRefresh === 'function') {
+          options.afterRefresh({ data, error: mutationError });
+        }
+        if (mutationError !== null) {
+          setResult({ error: mutationError.message, code: mutationError.code });
+          return null;
+        }
+        if (typeof options?.afterSuccess === 'function') {
+          await options.afterSuccess(data);
+          if (!isCurrent()) {
+            if (refreshOptions?.propagateSelectionError === true) {
+              await refreshCurrentSelectionForGovernedRetry(pending);
+            } else {
+              await refreshCurrentSelectionAfterMutationSelectionChange(ticketId, selectionToken, options);
+            }
+            return null;
+          }
+        }
+        setResult(data);
+        return data;
+      }
+
+      async function reconcileGovernedMutationRefresh(pending) {
+        try {
+          const stillOnMutationSelection = state.ticketSelectionToken === pending.selectionToken &&
+            state.selectedTicket?.id === pending.ticketId;
+          if (stillOnMutationSelection) {
+            await refreshGovernedMutationState({
+              ticketId: pending.ticketId,
+              waitForDiagnoses: pending.options?.waitForDiagnoses === true,
+              preservePresentation: pending.mutationError !== null && pending.options?.preservePresentationOnError === true
+            });
+            if (!pending.isCurrent()) {
+              await refreshCurrentSelectionForGovernedRetry(pending);
+            } else {
+              await finishGovernedMutationAfterRefresh(pending, { propagateSelectionError: true });
+            }
+          } else {
+            const queueRefresh = loadQueue({ writeErrorToResult: false }).catch(function () {
+              // Queue freshness is optional; ticket detail remains authoritative.
+            });
+            const evidenceRefresh = refreshEvidenceBestEffort();
+            await refreshCurrentSelectionForGovernedRetry(pending);
+            await queueRefresh;
+            await evidenceRefresh;
+          }
+        } catch (error) {
+          reportGovernedMutationRefreshUnavailable(error, pending);
+          updateControls();
+          return;
+        }
+        if (state.governedMutationRefreshPending === pending) {
+          state.governedMutationRefreshPending = null;
+        }
+        if (state.governedMutationToken === pending.mutationToken) {
+          state.governedMutationToken = null;
+        }
+        updateControls();
+        if (typeof pending.options?.render === 'function') {
+          pending.options.render();
+        }
+      }
+
+      async function retryGovernedMutationRefresh() {
+        const pending = state.governedMutationRefreshPending;
+        if (pending === null) {
+          return false;
+        }
+        if (state.governedMutationRefreshRetry !== null) {
+          await state.governedMutationRefreshRetry;
+          return true;
+        }
+        const retry = reconcileGovernedMutationRefresh(pending);
+        state.governedMutationRefreshRetry = retry;
+        updateControls();
+        try {
+          await retry;
+        } finally {
+          if (state.governedMutationRefreshRetry === retry) {
+            state.governedMutationRefreshRetry = null;
+          }
+          updateControls();
+        }
+        return true;
+      }
+
+      async function runGovernedMutation(kind, post, options) {
+        if (state.selectedTicket === null) {
+          return null;
+        }
+        if (state.governedMutationToken !== null) {
+          return null;
+        }
+        if (hasLifecycleDescriptor() && !lifecycleActionIsAvailable(kind)) {
+          const message = governedMutationUnavailableMessage(kind, options?.blockedMessage);
+          if (typeof options?.setInlineError === 'function') {
+            options.setInlineError(message);
+          }
+          if (typeof options?.render === 'function') {
+            options.render();
+          }
+          setResult({ error: message });
+          return null;
+        }
+        if (typeof options?.isCurrent === 'function' && !options.isCurrent()) {
+          return null;
+        }
+        const ticketId = state.selectedTicket.id;
+        const selectionToken = state.ticketSelectionToken;
+        const mutationToken = ++state.nextGovernedMutationToken;
+        state.governedMutationToken = mutationToken;
+        const isCurrent = function () {
+          return state.governedMutationToken === mutationToken &&
+            isCurrentTicketSelection(ticketId, selectionToken) &&
+            (typeof options?.isCurrent !== 'function' || options.isCurrent());
+        };
+        updateControls();
+        let data = null;
+        let mutationError = null;
+        try {
+          try {
+            data = await post();
+          } catch (error) {
+            mutationError = error instanceof Error ? error : new Error('Request failed.');
+          }
+          if (!isCurrent()) {
+            await refreshCurrentSelectionAfterMutationSelectionChange(ticketId, selectionToken, options);
+            return null;
+          }
+          if (mutationError === null) {
+            if (typeof options?.clearInlineError === 'function') {
+              options.clearInlineError();
+            }
+            if (typeof options?.beforeRefreshSuccess === 'function') {
+              options.beforeRefreshSuccess(data);
+            }
+          } else if (typeof options?.setInlineError === 'function') {
+            options.setInlineError(mutationError.message, mutationError);
+          }
+          try {
+            await refreshGovernedMutationState({
+              ticketId,
+              waitForDiagnoses: options?.waitForDiagnoses === true,
+              preservePresentation: mutationError !== null && options?.preservePresentationOnError === true
+            });
+          } catch (refreshError) {
+            state.governedMutationRefreshPending = {
+              data,
+              isCurrent,
+              mutationError,
+              mutationToken,
+              options,
+              selectionToken,
+              ticketId
+            };
+            if (typeof options?.render === 'function') {
+              options.render();
+            } else if (typeof options?.afterRefresh === 'function') {
+              options.afterRefresh({ data, error: mutationError });
+            }
+            reportGovernedMutationRefreshUnavailable(refreshError, state.governedMutationRefreshPending);
+            return null;
+          }
+          if (!isCurrent()) {
+            await refreshCurrentSelectionAfterMutationSelectionChange(ticketId, selectionToken, options);
+            return null;
+          }
+          if (typeof options?.afterRefresh === 'function') {
+            options.afterRefresh({ data, error: mutationError });
+          }
+          if (mutationError !== null) {
+            setResult({ error: mutationError.message, code: mutationError.code });
+            return null;
+          }
+          if (typeof options?.afterSuccess === 'function') {
+            await options.afterSuccess(data);
+            if (!isCurrent()) {
+              await refreshCurrentSelectionAfterMutationSelectionChange(ticketId, selectionToken, options);
+              return null;
+            }
+          }
+          setResult(data);
+          return data;
+        } finally {
+          let releasedMutationLock = false;
+          if (state.governedMutationToken === mutationToken &&
+              state.governedMutationRefreshPending?.mutationToken !== mutationToken) {
+            state.governedMutationToken = null;
+            releasedMutationLock = true;
+          }
+          updateControls();
+          if (releasedMutationLock && typeof options?.render === 'function') {
+            options.render();
+          }
+        }
+      }
+
+      function presentationPhaseAfterBack(phase) {
+        const primary = state.lifecycle?.primaryAction?.kind;
+        if (hasLifecycleDescriptor()) {
+          if (primary === 'review-diagnosis' || primary === 'revalidate-diagnosis') {
+            return 'diagnosis';
+          }
+          if (phase === 'auto') {
+            const currentDiagnosis = selectedDiagnosisView();
+            if (currentDiagnosis !== null) {
+              return isDiagnosisApproved(currentDiagnosis) ? 'approved' : 'diagnosis';
+            }
+          }
+          if (phase === 'approved' && (primary === 'record-fix-available' || primary === 'apply-scoped-fix')) {
+            return 'approved';
+          }
+          return 'normal';
+        }
+        if (phase === 'normal') return 'normal';
+        if (phase === 'approved') return primary === 'record-fix-available' || primary === 'apply-scoped-fix'
+          ? 'approved'
+          : 'auto';
+        if (phase === 'diagnosis') return ['review-diagnosis', 'revalidate-diagnosis'].includes(primary)
+          ? 'diagnosis'
+          : 'auto';
+        return 'auto';
+      }
+
+      async function refreshAfterPresentationBack(phase) {
         const ticketId = state.selectedTicket?.id;
         state.selectedDiagnosisId = null;
-        state.diagnosisUiPhase = phase;
+        if (ticketId === undefined) return;
+        await refreshSelectedTicketQueueAndEvidence({ waitForDiagnoses: true, preservePresentation: true });
+        if (state.selectedTicket?.id !== ticketId) return;
+        state.diagnosisUiPhase = presentationPhaseAfterBack(phase);
         renderDiagnosisPanel();
         renderRecommendationStageControls();
         updateControls();
-        if (ticketId === undefined) return;
-        void refreshSelectedTicketQueueAndEvidence({ waitForDiagnoses: true, preservePresentation: true })
-          .catch(function (error) {
-            setResult({ error: error instanceof Error ? error.message : 'The ticket lifecycle could not be refreshed.' });
-          });
       }
 
       function resetRecommendationState() {
@@ -4900,7 +5574,8 @@ export const approvalDeskHtml = `<!doctype html>
       function isApprovedWorkflow() {
         return state.stage === 'approved' ||
           state.recommendation?.resolution === 'approved' ||
-          state.selectedTicket?.recommendationSummary?.latestResolution === 'approved';
+          state.selectedTicket?.recommendationSummary?.latestResolution === 'approved' ||
+          state.lifecycle?.primaryAction?.kind === 'send-customer-response';
       }
 
       function isCollectingEvidenceWorkflow() {
@@ -5877,15 +6552,16 @@ export const approvalDeskHtml = `<!doctype html>
           void createRecommendation().catch(function (error) { setResult({ error: error.message }); });
         }
         if (action === 'back-to-diagnosis') {
-          refreshAfterPresentationBack('diagnosis');
+          void refreshAfterPresentationBack('diagnosis').catch(function (error) { setResult({ error: error.message }); });
         }
         if (action === 'back-to-current-diagnosis') {
-          refreshAfterPresentationBack('auto');
+          void refreshAfterPresentationBack('auto').catch(function (error) { setResult({ error: error.message }); });
         }
         if (action === 'back-to-approved-diagnosis') {
-          refreshAfterPresentationBack('approved');
+          void refreshAfterPresentationBack('approved').catch(function (error) { setResult({ error: error.message }); });
         }
         if (action === 'open-scoped-fix') {
+          if (!lifecycleMutationAvailable('apply-scoped-fix')) return;
           state.diagnosisUiPhase = 'fix';
           renderDiagnosisPanel();
           renderRecommendationStageControls();
@@ -5898,7 +6574,7 @@ export const approvalDeskHtml = `<!doctype html>
           updateControls();
         }
         if (action === 'back-to-normal-action-bar') {
-          refreshAfterPresentationBack('normal');
+          void refreshAfterPresentationBack('normal').catch(function (error) { setResult({ error: error.message }); });
         }
         if (action === 'prepare-diagnosis-response') {
           state.diagnosisUiPhase = 'normal';
@@ -5960,8 +6636,10 @@ export const approvalDeskHtml = `<!doctype html>
         });
       }
       els.refreshQueue.addEventListener('click', function () {
-        void loadQueue()
-          .then(refreshEvidenceBestEffort)
+        void retryGovernedMutationRefresh()
+          .then(function (retried) {
+            return retried ? undefined : loadQueue().then(refreshEvidenceBestEffort);
+          })
           .catch(function (error) { setResult({ error: error.message }); });
       });
       els.refreshEvidence.addEventListener('click', function () {

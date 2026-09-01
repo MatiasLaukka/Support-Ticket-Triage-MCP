@@ -249,8 +249,8 @@ describe("evaluation oracle foundation", () => {
 
     expect(first).toEqual(second);
     expect(first).toMatchObject({
-      scenarioCount: 16,
-      ambiguousClassificationCount: 8,
+      scenarioCount: 22,
+      ambiguousClassificationCount: 9,
       missingRationales: [],
     });
     expect(first.familyCoverage).toMatchObject({
@@ -265,6 +265,7 @@ describe("evaluation oracle foundation", () => {
     });
     expect(first.duplicateHeavyGroups).toEqual([
       { contrastGroup: "campaign-processing-scope", count: 2, ticketIds: ["TKT-1009", "TKT-1021"] },
+      { contrastGroup: "event-ingestion-delay", count: 2, ticketIds: ["TKT-1001", "TKT-1002"] },
       { contrastGroup: "webhook-delivery-delay", count: 2, ticketIds: ["TKT-1028", "TKT-1029"] },
     ]);
   });
@@ -331,7 +332,7 @@ describe("evaluation oracle foundation", () => {
 
   it("keeps the oracle fixture file network-free and parseable as the published contract", async () => {
     const raw = JSON.parse(await readFile(resolve("data/seed/evaluation-oracles.json"), "utf8")) as unknown[];
-    expect(raw).toHaveLength(16);
+    expect(raw).toHaveLength(22);
     expect(raw.every((entry) => typeof entry === "object" && entry !== null)).toBe(true);
     const loaded = await loadEvaluationOracles();
     expect(new Set(loaded.map(({ ticketId }) => ticketId)).size).toBe(loaded.length);
@@ -664,6 +665,84 @@ describe("evaluation oracle foundation", () => {
         },
       ],
       acceptableProblemClasses: ["data-integrity"],
+    });
+  });
+
+  it("publishes the expanded human-reviewed taxonomy oracle set", async () => {
+    const oracles = await loadEvaluationOracles();
+    const taxonomyByTicket = Object.fromEntries(
+      oracles
+        .filter(({ taxonomy }) => taxonomy !== undefined)
+        .map(({ ticketId, taxonomy }) => [ticketId, taxonomy]),
+    );
+
+    expect(taxonomyByTicket).toMatchObject({
+      "TKT-1002": {
+        acceptablePrimaryProductSurfaces: [
+          { domain: "developer-platform", area: "event-ingestion" },
+        ],
+        acceptableProblemClasses: ["degraded-performance"],
+      },
+      "TKT-1004": {
+        acceptablePrimaryProductSurfaces: [
+          { domain: "security", area: "credentials-secrets" },
+        ],
+        acceptableProblemClasses: ["security"],
+      },
+      "TKT-1007": {
+        acceptablePrimaryProductSurfaces: [
+          { domain: "integrations", area: "webhooks" },
+        ],
+        acceptableProblemClasses: ["configuration"],
+      },
+      "TKT-1009": {
+        acceptablePrimaryProductSurfaces: [
+          { domain: "messaging", area: "campaigns" },
+        ],
+        acceptableProblemClasses: ["degraded-performance"],
+      },
+      "TKT-1015": {
+        acceptablePrimaryProductSurfaces: [
+          { domain: "customer-data", area: "profiles" },
+        ],
+        acceptableProblemClasses: ["data-integrity"],
+      },
+      "TKT-1018": {
+        acceptablePrimaryProductSurfaces: [
+          { domain: "integrations", area: "shopify" },
+        ],
+        acceptableProblemClasses: ["data-integrity"],
+      },
+      "TKT-1019": {
+        acceptablePrimaryProductSurfaces: [
+          { domain: "security", area: "key-management" },
+        ],
+        acceptableProblemClasses: ["security"],
+      },
+      "TKT-1020": {
+        acceptablePrimaryProductSurfaces: [
+          { domain: "integrations", area: "shopify" },
+        ],
+        acceptableProblemClasses: ["degraded-performance"],
+      },
+      "TKT-1023": {
+        acceptablePrimaryProductSurfaces: [
+          { domain: "customer-data", area: "consent" },
+        ],
+        acceptableProblemClasses: ["data-integrity"],
+      },
+      "TKT-1025": {
+        acceptablePrimaryProductSurfaces: [
+          { domain: "customer-data", area: "consent" },
+        ],
+        acceptableProblemClasses: ["feature-request"],
+      },
+      "TKT-1028": {
+        acceptablePrimaryProductSurfaces: [
+          { domain: "integrations", area: "webhooks" },
+        ],
+        acceptableProblemClasses: ["degraded-performance"],
+      },
     });
   });
 

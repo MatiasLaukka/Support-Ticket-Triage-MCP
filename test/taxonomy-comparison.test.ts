@@ -32,6 +32,22 @@ import type {
   EvaluationOracle,
 } from "../src/evaluation-oracle.js";
 
+const reviewedTaxonomyTicketIds = [
+  "TKT-1002",
+  "TKT-1004",
+  "TKT-1007",
+  "TKT-1009",
+  "TKT-1015",
+  "TKT-1017",
+  "TKT-1018",
+  "TKT-1019",
+  "TKT-1020",
+  "TKT-1023",
+  "TKT-1025",
+  "TKT-1028",
+  "TKT-1030",
+] as const;
+
 async function loadSeedTicket(
   ticketId: string,
 ): Promise<Ticket> {
@@ -99,6 +115,30 @@ async function comparisonCase(
 }
 
 describe("taxonomy inference comparison", () => {
+  it("includes every reviewed taxonomy oracle and excludes abstention-boundary tickets", async () => {
+    const report =
+      await runTaxonomyInferenceCommand({
+        cwd: resolve("."),
+        mode: "offline",
+      });
+
+    const evaluatedTicketIds =
+      report.deterministic.results
+        .map(({ ticketId }) => ticketId)
+        .sort();
+
+    expect(evaluatedTicketIds).toEqual(reviewedTaxonomyTicketIds);
+
+    for (const ticketId of [
+      "TKT-1005",
+      "TKT-1022",
+      "TKT-1026",
+      "TKT-1027",
+    ]) {
+      expect(evaluatedTicketIds).not.toContain(ticketId);
+    }
+  });
+
   it("runs the deterministic lane offline without invoking fetch", async () => {
     const fetchSpy =
       vi.spyOn(globalThis, "fetch");
@@ -400,61 +440,27 @@ describe("taxonomy inference comparison", () => {
   it("keeps the command offline by default and constructs a GPT provider only in live mode", async () => {
     const reason = vi.fn<
       TaxonomyReasoningProvider["reason"]
-    >(async (input) => {
-      if (input.ticket.id === "TKT-1017") {
-        return {
-          candidate: {
-            primaryProductSurface: {
-              domain: "messaging",
-              area: "sms",
-            },
-            secondaryProductSurfaces: [],
-            problemClasses: [
-              "expected-behavior",
-            ],
+    >(async () => {
+      return {
+        candidate: {
+          primaryProductSurface: {
+            domain: "messaging",
+            area: "sms",
           },
+          secondaryProductSurfaces: [],
+          problemClasses: [
+            "expected-behavior",
+          ],
+        },
 
-          rationale:
-            "Quiet-hour behavior belongs to SMS.",
+        rationale:
+          "Controlled valid taxonomy output for live orchestration.",
 
-          telemetry: {
-            model: "test-live-model",
-            latencyMs: 1,
-          },
-        };
-      }
-
-      if (input.ticket.id === "TKT-1030") {
-        return {
-          candidate: {
-            primaryProductSurface: {
-              domain: "customer-data",
-              area: "consent",
-            },
-            secondaryProductSurfaces: [
-              {
-                domain: "messaging",
-                area: "sms",
-              },
-            ],
-            problemClasses: [
-              "data-integrity",
-            ],
-          },
-
-          rationale:
-            "The failure concerns persisted consent state.",
-
-          telemetry: {
-            model: "test-live-model",
-            latencyMs: 1,
-          },
-        };
-      }
-
-      throw new Error(
-        `Unexpected taxonomy ticket ${input.ticket.id}.`,
-      );
+        telemetry: {
+          model: "test-live-model",
+          latencyMs: 1,
+        },
+      };
     });
 
     const createLiveProvider = vi.fn(
@@ -485,11 +491,8 @@ describe("taxonomy inference comparison", () => {
     expect(
       offline.deterministic.results.map(
         ({ ticketId }) => ticketId,
-      ),
-    ).toEqual([
-      "TKT-1017",
-      "TKT-1030",
-    ]);
+      ).sort(),
+    ).toEqual(reviewedTaxonomyTicketIds);
 
     const live =
       await runTaxonomyInferenceCommand({
@@ -505,15 +508,14 @@ describe("taxonomy inference comparison", () => {
       .toHaveBeenCalledTimes(1);
 
     expect(reason)
-      .toHaveBeenCalledTimes(2);
+      .toHaveBeenCalledTimes(
+        reviewedTaxonomyTicketIds.length,
+      );
 
     expect(live.gpt).toMatchObject({
       lane: "gpt",
-      evaluatedCaseCount: 2,
-      primarySurfaceAccuracy: 1,
-      problemClassAccuracy: 1,
-      fullTaxonomyAccuracy: 1,
-      abstentionRate: 0,
+      evaluatedCaseCount:
+        reviewedTaxonomyTicketIds.length,
     });
   });
 
@@ -549,7 +551,8 @@ describe("taxonomy inference comparison", () => {
     expect(report).toMatchObject({
       deterministic: {
         lane: "deterministic",
-        evaluatedCaseCount: 2,
+        evaluatedCaseCount:
+          reviewedTaxonomyTicketIds.length,
       },
       gpt: null,
     });

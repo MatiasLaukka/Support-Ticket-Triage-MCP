@@ -926,13 +926,13 @@ async function createRecommendation(
       responseStyle: body.responseStyle,
       classificationProvider:
         options.classificationReasoningProvider ??
-        createClassificationReasoningProviderFromEnv(process.env, {
+        createClassificationReasoningProviderFromEnv(deps.env, {
           preferOpenAi: body.aiPreference === "gpt-preferred" ||
-            process.env.APPROVAL_DRAFT_PROVIDER === "openai",
+            deps.env.APPROVAL_DRAFT_PROVIDER === "openai",
         }),
       draftProvider:
         options.draftProvider ??
-        createCustomerResponseDraftProviderFromEnv(process.env, {
+        createCustomerResponseDraftProviderFromEnv(deps.env, {
           responseStyle: body.responseStyle,
           preferOpenAi: body.aiPreference === "gpt-preferred",
         }),

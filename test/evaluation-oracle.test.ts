@@ -8,6 +8,8 @@ import {
   loadEvaluationOracles,
   scoreEvaluationOracle,
   scoreExpectedOutcomeCompatibility,
+  scoreTaxonomyOracle,
+  type EvaluationOracle,
 } from "../src/evaluation-oracle.js";
 import {
   ExpectedOutcomeSchema,
@@ -548,17 +550,62 @@ describe("evaluation oracle foundation", () => {
   });
 
   it("publishes reviewed taxonomy ground truth for the SMS quiet-hours case", async () => {
-  const oracles = await loadEvaluationOracles();
-  const oracle = oracles.find(({ ticketId }) => ticketId === "TKT-1017")!;
+    const oracles = await loadEvaluationOracles();
+    const oracle = oracles.find(({ ticketId }) => ticketId === "TKT-1017")!;
 
-  expect(oracle.taxonomy).toEqual({
-    acceptablePrimaryProductSurfaces: [
-      {
-        domain: "messaging",
-        area: "sms",
-      },
-    ],
-    acceptableProblemClasses: ["expected-behavior"],
+    expect(oracle.taxonomy).toEqual({
+      acceptablePrimaryProductSurfaces: [
+        {
+          domain: "messaging",
+          area: "sms",
+        },
+      ],
+      acceptableProblemClasses: ["expected-behavior"],
+    });
+  });
+
+  it("scores taxonomy surface and problem class independently", () => {
+    const expectation: NonNullable<EvaluationOracle["taxonomy"]> = {
+      acceptablePrimaryProductSurfaces: [
+        { domain: "customer-data", area: "consent" },
+      ],
+      acceptableProblemClasses: ["data-integrity"],
+    };
+
+    expect(
+      scoreTaxonomyOracle(expectation, {
+        primaryProductSurface: {
+          domain: "customer-data",
+          area: "consent",
+        },
+        problemClasses: ["defect"],
+      }),
+    ).toEqual({
+      primarySurfacePass: true,
+      problemClassPass: false,
+      taxonomyPass: false,
+      abstained: false,
+    });
+  });
+
+  it("treats a null primary surface as an abstention and taxonomy failure", () => {
+    const expectation: NonNullable<EvaluationOracle["taxonomy"]> = {
+      acceptablePrimaryProductSurfaces: [
+        { domain: "messaging", area: "sms" },
+      ],
+      acceptableProblemClasses: ["expected-behavior"],
+    };
+
+    expect(
+      scoreTaxonomyOracle(expectation, {
+        primaryProductSurface: null,
+        problemClasses: [],
+      }),
+    ).toEqual({
+      primarySurfacePass: false,
+      problemClassPass: false,
+      taxonomyPass: false,
+      abstained: true,
     });
   });
 

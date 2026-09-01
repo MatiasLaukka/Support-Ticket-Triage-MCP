@@ -6,6 +6,8 @@ import {
 } from "./domain.js";
 
 import {
+  PROBLEM_CLASSES,
+  PRODUCT_SURFACE_AREAS,
   ProblemClassSchema,
   ProductSurfaceSchema,
 } from "./diagnostic-taxonomy.js";
@@ -370,6 +372,31 @@ function taxonomyIssueFields(
   ].sort();
 }
 
+const productSurfaceJsonSchemas =
+  Object.entries(PRODUCT_SURFACE_AREAS)
+    .map(([domain, areas]) => ({
+      type: "object",
+
+      additionalProperties: false,
+
+      properties: {
+        domain: {
+          type: "string",
+          enum: [domain],
+        },
+
+        area: {
+          type: "string",
+          enum: [...areas],
+        },
+      },
+
+      required: [
+        "domain",
+        "area",
+      ],
+    }));
+
 const taxonomyReasoningJsonSchema = {
   type: "object",
 
@@ -378,26 +405,7 @@ const taxonomyReasoningJsonSchema = {
   properties: {
     primaryProductSurface: {
       anyOf: [
-        {
-          type: "object",
-
-          additionalProperties: false,
-
-          properties: {
-            domain: {
-              type: "string",
-            },
-
-            area: {
-              type: "string",
-            },
-          },
-
-          required: [
-            "domain",
-            "area",
-          ],
-        },
+        ...productSurfaceJsonSchemas,
 
         {
           type: "null",
@@ -409,24 +417,8 @@ const taxonomyReasoningJsonSchema = {
       type: "array",
 
       items: {
-        type: "object",
-
-        additionalProperties: false,
-
-        properties: {
-          domain: {
-            type: "string",
-          },
-
-          area: {
-            type: "string",
-          },
-        },
-
-        required: [
-          "domain",
-          "area",
-        ],
+        anyOf:
+          productSurfaceJsonSchemas,
       },
     },
 
@@ -435,6 +427,7 @@ const taxonomyReasoningJsonSchema = {
 
       items: {
         type: "string",
+        enum: [...PROBLEM_CLASSES],
       },
     },
 

@@ -19,6 +19,12 @@ import {
   type Ticket,
 } from "../src/domain.js";
 
+import {
+  PROBLEM_CLASSES,
+  PRODUCT_SURFACE_AREAS,
+  ProductSurfaceSchema,
+} from "../src/diagnostic-taxonomy.js";
+
 async function loadSeedTicket(ticketId: string): Promise<Ticket> {
   const tickets = TicketSchema.array().parse(
     JSON.parse(
@@ -63,6 +69,177 @@ async function providerInput() {
 }
 
 describe("OpenAiTaxonomyReasoningProvider", () => {
+  it("sends the exact canonical taxonomy in the strict structured-output schema", async () => {
+    const fetch = vi.fn(
+      async (_url: string, _init: unknown) => ({
+        ok: true,
+        status: 200,
+        text: async () =>
+          JSON.stringify({
+            output: [
+              {
+                content: [
+                  {
+                    type: "output_text",
+                    text: JSON.stringify({
+                      primaryProductSurface: null,
+                      secondaryProductSurfaces: [],
+                      problemClasses: [],
+                      rationale:
+                        "The available ticket evidence does not support a taxonomy label.",
+                    }),
+                  },
+                ],
+              },
+            ],
+          }),
+      }),
+    );
+
+    const provider =
+      new OpenAiTaxonomyReasoningProvider({
+        apiKey: "sk-test",
+        fetch,
+      });
+
+    await provider.reason(
+      await providerInput(),
+    );
+
+    const firstRequest =
+      fetch.mock.calls[0]![1] as {
+        body: string;
+      };
+
+    const request = JSON.parse(firstRequest.body) as {
+      text: {
+        format: {
+          strict: boolean;
+          schema: {
+            type: string;
+            properties: {
+              primaryProductSurface: {
+                anyOf: Array<Record<string, unknown>>;
+              };
+              secondaryProductSurfaces: {
+                type: string;
+                items: {
+                  anyOf: Array<Record<string, unknown>>;
+                };
+              };
+              problemClasses: {
+                type: string;
+                items: {
+                  type: string;
+                  enum: string[];
+                };
+              };
+            };
+          };
+        };
+      };
+    };
+
+    const schema = request.text.format.schema;
+
+    const areasByDomain = (
+      branches: Array<Record<string, unknown>>,
+    ) => Object.fromEntries(
+      branches
+        .filter(({ type }) => type === "object")
+        .map((branch) => {
+          const properties = branch.properties as
+            | {
+                domain?: { enum?: string[] };
+                area?: { enum?: string[] };
+              }
+            | undefined;
+
+          return [
+            properties?.domain?.enum?.[0] ??
+              "unconstrained-domain",
+            properties?.area?.enum ?? [],
+          ];
+        }),
+    );
+
+    expect(request.text.format.strict).toBe(true);
+    expect(schema.type).toBe("object");
+
+    expect(
+      areasByDomain(
+        schema.properties.primaryProductSurface.anyOf,
+      ),
+    ).toEqual(PRODUCT_SURFACE_AREAS);
+
+    expect(
+      schema.properties.primaryProductSurface.anyOf,
+    ).toContainEqual({ type: "null" });
+
+    expect(
+      schema.properties.secondaryProductSurfaces.type,
+    ).toBe("array");
+
+    expect(
+      areasByDomain(
+        schema.properties.secondaryProductSurfaces.items.anyOf,
+      ),
+    ).toEqual(PRODUCT_SURFACE_AREAS);
+
+    expect(
+      schema.properties.problemClasses,
+    ).toEqual({
+      type: "array",
+      items: {
+        type: "string",
+        enum: PROBLEM_CLASSES,
+      },
+    });
+
+    for (const [domain, areas] of
+      Object.entries(PRODUCT_SURFACE_AREAS)) {
+      for (const area of areas) {
+        expect(
+          ProductSurfaceSchema.safeParse({
+            domain,
+            area,
+          }).success,
+        ).toBe(true);
+      }
+    }
+
+    const primarySurfaceBranches =
+      schema.properties.primaryProductSurface.anyOf;
+
+    const permitsSurface = (
+      domain: string,
+      area: string,
+    ) => primarySurfaceBranches.some((branch) => {
+      if (branch.type !== "object") {
+        return false;
+      }
+
+      const properties = branch.properties as {
+        domain: { enum: string[] };
+        area: { enum: string[] };
+      };
+
+      return properties.domain.enum.includes(domain) &&
+        properties.area.enum.includes(area);
+    });
+
+    expect(
+      permitsSurface("integrations", "webhooks"),
+    ).toBe(true);
+
+    expect(
+      permitsSurface("billing", "webhooks"),
+    ).toBe(false);
+
+    expect(JSON.stringify(schema))
+      .not.toContain('"oneOf"');
+  });
+
   it("returns a strict semantic taxonomy candidate with telemetry", async () => {
     const fetch = vi.fn(
       async (_url: string, _init: unknown) => ({

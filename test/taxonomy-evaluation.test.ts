@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   evaluateTaxonomyLane,
+  observeTaxonomyBoundaryCases,
 } from "../src/taxonomy-evaluation.js";
 
 import {
@@ -220,7 +221,97 @@ describe("taxonomy lane evaluation", () => {
         ],
         },
     ]);
-});
+  });
+
+  it("observes boundary candidates without attaching scored expectations or pass-fail fields", () => {
+    const partialCandidate = TaxonomyInferenceCandidateSchema.parse({
+      primaryProductSurface: {
+        domain: "automation",
+        area: "scheduling",
+      },
+      secondaryProductSurfaces: [
+        {
+          domain: "messaging",
+          area: "campaigns",
+        },
+      ],
+      problemClasses: [],
+    });
+    const abstainingCandidate = TaxonomyInferenceCandidateSchema.parse({
+      primaryProductSurface: null,
+      secondaryProductSurfaces: [],
+      problemClasses: [],
+    });
+
+    expect(
+      observeTaxonomyBoundaryCases([
+        {
+          ticketId: "TKT-PARTIAL",
+          outcome: {
+            status: "candidate",
+            candidate: partialCandidate,
+          },
+        },
+        {
+          ticketId: "TKT-ABSTAINING",
+          outcome: {
+            status: "candidate",
+            candidate: abstainingCandidate,
+          },
+        },
+        {
+          ticketId: "TKT-UNAVAILABLE",
+          outcome: {
+            status: "provider-unavailable",
+            reason: "timeout",
+            statusCode: null,
+          },
+        },
+        {
+          ticketId: "TKT-REJECTED",
+          outcome: {
+            status: "rejected-taxonomy",
+            stage: "reasoning-fields",
+            fields: ["problemClasses.0"],
+          },
+        },
+      ]),
+    ).toEqual([
+      {
+        ticketId: "TKT-PARTIAL",
+        outcome: {
+          status: "candidate",
+          candidate: partialCandidate,
+          abstained: false,
+        },
+      },
+      {
+        ticketId: "TKT-ABSTAINING",
+        outcome: {
+          status: "candidate",
+          candidate: abstainingCandidate,
+          abstained: true,
+        },
+      },
+      {
+        ticketId: "TKT-UNAVAILABLE",
+        outcome: {
+          status: "provider-unavailable",
+          reason: "timeout",
+          statusCode: null,
+        },
+      },
+      {
+        ticketId: "TKT-REJECTED",
+        outcome: {
+          status: "rejected-taxonomy",
+          stage: "reasoning-fields",
+          fields: ["problemClasses.0"],
+        },
+      },
+    ]);
+  });
+
   it("reports null metrics when no taxonomy candidates were scored", () => {
     const expectation: NonNullable<
         EvaluationOracle["taxonomy"]

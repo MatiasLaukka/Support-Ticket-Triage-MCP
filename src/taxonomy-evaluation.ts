@@ -29,6 +29,24 @@ export type TaxonomyLaneEvaluationOutcome =
       fields: readonly string[];
     };
 
+export interface TaxonomyBoundaryObservationCase {
+  ticketId: string;
+  outcome: TaxonomyLaneEvaluationOutcome;
+}
+
+export type TaxonomyBoundaryObservationOutcome =
+  | {
+      status: "candidate";
+      candidate: TaxonomyInferenceCandidate;
+      abstained: boolean;
+    }
+  | Exclude<TaxonomyLaneEvaluationOutcome, { status: "candidate" }>;
+
+export interface TaxonomyBoundaryObservation {
+  ticketId: string;
+  outcome: TaxonomyBoundaryObservationOutcome;
+}
+
 export interface TaxonomyLaneEvaluationCase {
   ticketId: string;
 
@@ -84,6 +102,20 @@ export interface TaxonomyLaneEvaluationReport {
   abstentionRate: number | null;
 
   results: readonly TaxonomyLaneEvaluationResult[];
+}
+
+export function observeTaxonomyBoundaryCases(
+  cases: readonly TaxonomyBoundaryObservationCase[],
+): readonly TaxonomyBoundaryObservation[] {
+  return cases.map(({ ticketId, outcome }) => ({
+    ticketId,
+    outcome: outcome.status === "candidate"
+      ? {
+          ...outcome,
+          abstained: outcome.candidate.primaryProductSurface === null,
+        }
+      : outcome,
+  }));
 }
 
 export function evaluateTaxonomyLane(input: {

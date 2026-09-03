@@ -12,10 +12,14 @@ import {
 
 import {
   TicketSchema,
+  type Ticket,
 } from "../src/domain.js";
 
 import {
   evaluateTaxonomyLane,
+  observeTaxonomyBoundaryCases,
+  type TaxonomyBoundaryObservation,
+  type TaxonomyLaneEvaluationOutcome,
   type TaxonomyLaneEvaluationReport,
 } from "../src/taxonomy-evaluation.js";
 
@@ -41,7 +45,15 @@ import type {
 
 export type TaxonomyInferenceEvaluationMode =
   | "offline"
-  | "live";
+  | "live"
+  | "live-boundaries";
+
+export const TAXONOMY_ABSTENTION_BOUNDARY_TICKET_IDS = [
+  "TKT-1005",
+  "TKT-1027",
+  "TKT-1022",
+  "TKT-1026",
+] as const;
 
 export function parseTaxonomyInferenceArgs(
   args: readonly string[],
@@ -57,8 +69,15 @@ export function parseTaxonomyInferenceArgs(
     return "live";
   }
 
+  if (
+    args.length === 1 &&
+    args[0] === "--live-boundaries"
+  ) {
+    return "live-boundaries";
+  }
+
   throw new Error(
-    "Unknown taxonomy inference argument. Use no flags or --live.",
+    "Unknown taxonomy inference argument. Use no flags, --live, or --live-boundaries.",
   );
 }
 
@@ -72,15 +91,27 @@ export interface TaxonomyInferenceComparisonCase {
   inferenceInput: TaxonomyInferenceInput;
 }
 
+export interface TaxonomyInferenceBoundaryCase {
+  ticketId: string;
+  inferenceInput: TaxonomyInferenceInput;
+}
+
 export interface TaxonomyInferenceComparisonReport {
   deterministic: TaxonomyLaneEvaluationReport;
   gpt: TaxonomyLaneEvaluationReport | null;
+  abstentionBoundaries: {
+    deterministic: readonly TaxonomyBoundaryObservation[];
+    gpt: readonly TaxonomyBoundaryObservation[] | null;
+  };
 }
 
 export async function evaluateTaxonomyInference(input: {
   cases: readonly TaxonomyInferenceComparisonCase[];
+  abstentionBoundaryCases?: readonly TaxonomyInferenceBoundaryCase[];
   gptProvider?: TaxonomyReasoningProvider;
+  includeScoredGpt?: boolean;
 }): Promise<TaxonomyInferenceComparisonReport> {
+  const abstentionBoundaryCases = input.abstentionBoundaryCases ?? [];
   const deterministic =
     evaluateTaxonomyLane({
       lane: "deterministic",
@@ -106,8 +137,19 @@ export async function evaluateTaxonomyInference(input: {
       ),
     });
 
+  const deterministicBoundaryObservations = observeTaxonomyBoundaryCases(
+    abstentionBoundaryCases.map(({ ticketId, inferenceInput }) => ({
+      ticketId,
+      outcome: {
+        status: "candidate" as const,
+        candidate: inferTaxonomyDeterministically(inferenceInput),
+      },
+    })),
+  );
+
   const gpt =
-    input.gptProvider === undefined
+    input.gptProvider === undefined ||
+    input.includeScoredGpt === false
       ? null
       : evaluateTaxonomyLane({
         lane: "gpt",
@@ -119,71 +161,92 @@ export async function evaluateTaxonomyInference(input: {
               expectation,
               inferenceInput,
             }) => {
-              try {
-                const execution =
-                  await input.gptProvider!.reason(
-                    inferenceInput,
-                  );
-
-                return {
-                  ticketId,
-                  expectation,
-
-                  outcome: {
-                    status: "candidate" as const,
-                    candidate:
-                      execution.candidate,
-                  },
-                };
-              } catch (error) {
-                if (
-                  error instanceof
-                  TaxonomyReasoningProviderUnavailableError
-                ) {
-                  return {
-                    ticketId,
-                    expectation,
-
-                    outcome: {
-                      status:
-                        "provider-unavailable" as const,
-                      reason:
-                        error.reason,
-                      statusCode:
-                        error.statusCode,
-                    },
-                  };
-                }
-
-                if (
-                  error instanceof
-                  InvalidTaxonomySchemaError
-                ) {
-                  return {
-                    ticketId,
-                    expectation,
-
-                    outcome: {
-                      status:
-                        "rejected-taxonomy" as const,
-                      stage:
-                        error.stage,
-                      fields:
-                        error.fields,
-                    },
-                  };
-                }
-
-                throw error;
-              }
+              return {
+                ticketId,
+                expectation,
+                outcome: await runTaxonomyProviderOutcome(
+                  input.gptProvider!,
+                  inferenceInput,
+                ),
+              };
             },
           ),
         ),
       });
 
+  const gptBoundaryObservations = input.gptProvider === undefined
+    ? null
+    : observeTaxonomyBoundaryCases(
+        await Promise.all(
+          abstentionBoundaryCases.map(
+            async ({ ticketId, inferenceInput }) => ({
+              ticketId,
+              outcome: await runTaxonomyProviderOutcome(
+                input.gptProvider!,
+                inferenceInput,
+              ),
+            }),
+          ),
+        ),
+      );
+
   return {
     deterministic,
     gpt,
+    abstentionBoundaries: {
+      deterministic: deterministicBoundaryObservations,
+      gpt: gptBoundaryObservations,
+    },
+  };
+}
+
+async function runTaxonomyProviderOutcome(
+  provider: TaxonomyReasoningProvider,
+  inferenceInput: TaxonomyInferenceInput,
+): Promise<TaxonomyLaneEvaluationOutcome> {
+  try {
+    const execution = await provider.reason(inferenceInput);
+    return {
+      status: "candidate",
+      candidate: execution.candidate,
+    };
+  } catch (error) {
+    if (error instanceof TaxonomyReasoningProviderUnavailableError) {
+      return {
+        status: "provider-unavailable",
+        reason: error.reason,
+        statusCode: error.statusCode,
+      };
+    }
+
+    if (error instanceof InvalidTaxonomySchemaError) {
+      return {
+        status: "rejected-taxonomy",
+        stage: error.stage,
+        fields: error.fields,
+      };
+    }
+
+    throw error;
+  }
+}
+
+function buildTaxonomyInferenceInput(ticket: Ticket): TaxonomyInferenceInput {
+  const conversationContext = buildConversationContextForTicket({
+    ticket,
+    customerReplies: [],
+    previousSupportResponses: [],
+  });
+  const classification = classifyTicketFromContext(conversationContext);
+
+  return {
+    ticket,
+    conversationText: conversationContext.classificationText,
+    deterministicClassification: {
+      category: classification.category,
+      team: classification.team,
+      priority: classification.priority,
+    },
   };
 }
 
@@ -271,18 +334,6 @@ export async function runTaxonomyInferenceCommand(input: {
       );
     }
 
-    const conversationContext =
-      buildConversationContextForTicket({
-        ticket,
-        customerReplies: [],
-        previousSupportResponses: [],
-      });
-
-    const classification =
-      classifyTicketFromContext(
-        conversationContext,
-      );
-
     cases.push({
       ticketId:
         oracle.ticketId,
@@ -290,29 +341,26 @@ export async function runTaxonomyInferenceCommand(input: {
       expectation:
         oracle.taxonomy,
 
-      inferenceInput: {
-        ticket,
-
-        conversationText:
-          conversationContext.classificationText,
-
-        deterministicClassification: {
-          category:
-            classification.category,
-
-          team:
-            classification.team,
-
-          priority:
-            classification.priority,
-        },
-      },
+      inferenceInput: buildTaxonomyInferenceInput(ticket),
     });
   }
+
+  const abstentionBoundaryCases: TaxonomyInferenceBoundaryCase[] =
+    TAXONOMY_ABSTENTION_BOUNDARY_TICKET_IDS.map((ticketId) => {
+      const ticket = ticketsById.get(ticketId);
+      if (ticket === undefined) {
+        throw new Error(`Missing seed ticket ${ticketId}.`);
+      }
+      return {
+        ticketId,
+        inferenceInput: buildTaxonomyInferenceInput(ticket),
+      };
+    });
 
   if (input.mode === "offline") {
     return evaluateTaxonomyInference({
       cases,
+      abstentionBoundaryCases,
     });
   }
 
@@ -328,7 +376,10 @@ export async function runTaxonomyInferenceCommand(input: {
 
   return evaluateTaxonomyInference({
     cases,
+    abstentionBoundaryCases,
     gptProvider,
+    includeScoredGpt:
+      input.mode !== "live-boundaries",
   });
 }
 

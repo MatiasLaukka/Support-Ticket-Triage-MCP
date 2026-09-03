@@ -1,92 +1,123 @@
 import { z } from "zod";
 
-export const ProductDomainSchema = z.enum([
-  "customer-data",
-  "messaging",
-  "automation",
-  "integrations",
-  "developer-platform",
-  "catalog",
-  "identity-access",
-  "billing",
-  "security",
-]);
+export const PRODUCT_SURFACE_AREAS = {
+  "customer-data": [
+    "profiles",
+    "segments",
+    "consent",
+    "imports",
+    "exports",
+  ],
+  messaging: [
+    "campaigns",
+    "email",
+    "sms",
+    "push",
+    "templates",
+  ],
+  automation: [
+    "flows",
+    "triggers",
+    "filters",
+    "scheduling",
+    "actions",
+  ],
+  integrations: [
+    "shopify",
+    "magento",
+    "woocommerce",
+    "salesforce",
+    "webhooks",
+    "custom-connectors",
+  ],
+  "developer-platform": [
+    "http-api",
+    "mcp",
+    "api-keys",
+    "sdk",
+    "event-ingestion",
+  ],
+  catalog: [
+    "products",
+    "product-feeds",
+    "coupons",
+    "inventory",
+    "field-mapping",
+  ],
+  "identity-access": [
+    "login",
+    "sso",
+    "users",
+    "roles-permissions",
+    "sessions",
+    "account-recovery",
+  ],
+  billing: [
+    "subscription",
+    "plans-entitlements",
+    "invoices",
+    "payments",
+    "refunds",
+    "credits",
+    "payment-methods",
+  ],
+  security: [
+    "credentials-secrets",
+    "key-management",
+    "audit-log",
+    "access-policies",
+    "security-settings",
+  ],
+} as const;
 
-const CustomerDataAreaSchema = z.enum([
-  "profiles",
-  "segments",
-  "consent",
-  "imports",
-  "exports",
-]);
+type CanonicalProductDomain =
+  keyof typeof PRODUCT_SURFACE_AREAS;
 
-const MessagingAreaSchema = z.enum([
-  "campaigns",
-  "email",
-  "sms",
-  "push",
-  "templates",
-]);
+const PRODUCT_DOMAINS = Object.keys(
+  PRODUCT_SURFACE_AREAS,
+) as [
+  CanonicalProductDomain,
+  ...CanonicalProductDomain[],
+];
 
-const AutomationAreaSchema = z.enum([
-  "flows",
-  "triggers",
-  "filters",
-  "scheduling",
-  "actions",
-]);
+export const ProductDomainSchema =
+  z.enum(PRODUCT_DOMAINS);
 
-const IntegrationsAreaSchema = z.enum([
-  "shopify",
-  "magento",
-  "woocommerce",
-  "salesforce",
-  "webhooks",
-  "custom-connectors",
-]);
+const CustomerDataAreaSchema = z.enum(
+  PRODUCT_SURFACE_AREAS["customer-data"],
+);
 
-const DeveloperPlatformAreaSchema = z.enum([
-  "http-api",
-  "mcp",
-  "api-keys",
-  "sdk",
-  "event-ingestion",
-]);
+const MessagingAreaSchema = z.enum(
+  PRODUCT_SURFACE_AREAS.messaging,
+);
 
-const CatalogAreaSchema = z.enum([
-  "products",
-  "product-feeds",
-  "coupons",
-  "inventory",
-  "field-mapping",
-]);
+const AutomationAreaSchema = z.enum(
+  PRODUCT_SURFACE_AREAS.automation,
+);
 
-const IdentityAccessAreaSchema = z.enum([
-  "login",
-  "sso",
-  "users",
-  "roles-permissions",
-  "sessions",
-  "account-recovery",
-]);
+const IntegrationsAreaSchema = z.enum(
+  PRODUCT_SURFACE_AREAS.integrations,
+);
 
-const BillingAreaSchema = z.enum([
-  "subscription",
-  "plans-entitlements",
-  "invoices",
-  "payments",
-  "refunds",
-  "credits",
-  "payment-methods",
-]);
+const DeveloperPlatformAreaSchema = z.enum(
+  PRODUCT_SURFACE_AREAS["developer-platform"],
+);
 
-const SecurityAreaSchema = z.enum([
-  "credentials-secrets",
-  "key-management",
-  "audit-log",
-  "access-policies",
-  "security-settings",
-]);
+const CatalogAreaSchema = z.enum(
+  PRODUCT_SURFACE_AREAS.catalog,
+);
+
+const IdentityAccessAreaSchema = z.enum(
+  PRODUCT_SURFACE_AREAS["identity-access"],
+);
+
+const BillingAreaSchema = z.enum(
+  PRODUCT_SURFACE_AREAS.billing,
+);
+
+const SecurityAreaSchema = z.enum(
+  PRODUCT_SURFACE_AREAS.security,
+);
 
 export const ProductSurfaceSchema = z.discriminatedUnion("domain", [
   z
@@ -153,7 +184,7 @@ export const ProductSurfaceSchema = z.discriminatedUnion("domain", [
     .strict(),
 ]);
 
-export const ProblemClassSchema = z.enum([
+export const PROBLEM_CLASSES = [
   "defect",
   "outage",
   "degraded-performance",
@@ -163,7 +194,10 @@ export const ProblemClassSchema = z.enum([
   "expected-behavior",
   "security",
   "feature-request",
-]);
+] as const;
+
+export const ProblemClassSchema =
+  z.enum(PROBLEM_CLASSES);
 
 export const DiagnosticTaxonomyBasisSchema = z
   .object({

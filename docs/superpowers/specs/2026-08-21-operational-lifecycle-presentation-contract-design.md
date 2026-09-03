@@ -1,6 +1,9 @@
 # Operational Lifecycle Presentation Contract Design
 
-**Status:** Approved for implementation
+**Status:** Implemented
+
+The approved design has been implemented on `main`; this document remains the
+design record for the lifecycle projection and its authority boundary.
 **Date:** 2026-08-21
 
 ## Goal

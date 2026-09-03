@@ -1719,4 +1719,25 @@ describe("shared lifecycle blockers", () => {
         "No further diagnostic action is required from you right now; support will update you after specialist review.",
     });
   });
+
+  it("returns evaluation guidance when the latest diagnosis is invalidated", () => {
+    const input = confirmedEngineeringDiagnosisWorkflow();
+    const diagnosis = input.audits.find(
+      (event) => event.action === "diagnosis-completed",
+    );
+    expect(diagnosis).toBeDefined();
+    input.audits = [
+      ...input.audits,
+      audit("diagnosis-invalidated", "2026-06-10T09:04:00.000Z", {
+        before: { diagnosisId: diagnosis!.id },
+        after: { diagnosisInvalidated: true },
+      }),
+    ];
+
+    expect(buildOperatorGuidance(input)).toMatchObject({
+      nextAction: "evaluate-ticket",
+      approval: { required: false, fields: [] },
+    });
+    expect(buildOperatorGuidance(input).requiredReview).toBeUndefined();
+  });
 });

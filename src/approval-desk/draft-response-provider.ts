@@ -28,14 +28,16 @@ import {
   buildCustomerServiceDraftingInstructions,
   buildCustomerServiceSkillContext,
 } from "./customer-service-drafting-skill.js";
+import { StartupConfigError } from "../runtime.js";
+import { parseApprovalDraftTimeoutMs } from "../utils/parse-openai-timeout.js";
 import { validateDraftQuality } from "./draft-quality-guardrails.js";
 import { buildDraftObligations, validateDraftContract } from "./draft-contract.js";
+import { makeOpenAiResponsesUrl } from "../utils/normalize-url.js";
 
 const DEFAULT_OPENAI_MODEL = "gpt-5.6-luna";
 const DEFAULT_OPENAI_DRAFT_TIMEOUT_MS = 20_000;
 export const DEFAULT_SUPPORT_COMPANY_NAME = "Northstar Marketing Support";
 const DEFAULT_SUPPORT_ACTOR = "Support Team";
-const OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses";
 const DraftProviderSchema = z.enum(["deterministic", "openai"]);
 const DraftTelemetrySchema = AiExecutionTraceSchema.shape.drafting.pick({
   model: true,
@@ -229,6 +231,7 @@ export class OpenAiCustomerResponseDraftProvider
       model?: string;
       responseStyle?: DraftCustomerResponseStyleInput;
       timeoutMs?: number;
+      baseUrl?: string;
       fetch?: FetchLike;
       now?: () => number;
     },
@@ -266,10 +269,11 @@ export class OpenAiCustomerResponseDraftProvider
     const startedAt = now();
     const fetchImpl = this.options.fetch ?? fetch;
     const timeoutMs = this.options.timeoutMs ?? DEFAULT_OPENAI_DRAFT_TIMEOUT_MS;
+    const effectiveBaseUrl = makeOpenAiResponsesUrl(this.options.baseUrl);
     const abortController = new AbortController();
     let timeout: ReturnType<typeof setTimeout> | undefined;
     const response = await Promise.race([
-      fetchImpl(OPENAI_RESPONSES_URL, {
+      fetchImpl(effectiveBaseUrl, {
         method: "POST",
         headers: {
           "content-type": "application/json",
@@ -421,26 +425,17 @@ export function createCustomerResponseDraftProviderFromEnv(
     return new UnavailableOpenAiDraftProvider();
   }
 
-    return new OpenAiCustomerResponseDraftProvider({
+  return new OpenAiCustomerResponseDraftProvider({
     apiKey,
     model: env.OPENAI_MODEL?.trim() || DEFAULT_OPENAI_MODEL,
-    timeoutMs: parseOpenAiDraftTimeoutMs(env.APPROVAL_DRAFT_TIMEOUT_MS),
+    timeoutMs: parseApprovalDraftTimeoutMs(env.APPROVAL_DRAFT_TIMEOUT_MS),
     responseStyle:
       options.responseStyle ??
       DraftCustomerResponseStyleInputSchema.default("auto").parse(
         env.APPROVAL_RESPONSE_STYLE,
       ),
+    baseUrl: env.TRIAGE_OPENAI_BASE_URL?.trim(),
   });
-}
-
-function parseOpenAiDraftTimeoutMs(value: string | undefined): number {
-  if (value === undefined || value.trim() === "") {
-    return DEFAULT_OPENAI_DRAFT_TIMEOUT_MS;
-  }
-  const parsed = Number(value);
-  return Number.isFinite(parsed) && parsed > 0
-    ? Math.round(parsed)
-    : DEFAULT_OPENAI_DRAFT_TIMEOUT_MS;
 }
 
 export async function draftCustomerResponseWithFallback(input: {

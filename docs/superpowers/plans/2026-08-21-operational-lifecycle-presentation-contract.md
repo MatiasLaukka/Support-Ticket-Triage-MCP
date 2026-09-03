@@ -1,8 +1,14 @@
 # Operational Lifecycle Presentation Contract Implementation Plan
 
-**Status:** Approved for implementation
+**Status:** Implemented
 **Design:** `docs/superpowers/specs/2026-08-21-operational-lifecycle-presentation-contract-design.md`
 **Branch:** `codex/operational-lifecycle-presentation-contract`
+
+The implementation is now on `main`. The lifecycle projection, shared
+operational/legacy read path, mutation envelopes, recovery commands, Approval
+Desk authority migration, demo injectors, and regression coverage described
+below are present in the repository. The branch line above is retained as the
+historical implementation branch.
 
 ## Objective
 

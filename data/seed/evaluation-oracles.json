@@ -27,6 +27,17 @@
       "requiredArticleIds": ["sms-compliance"],
       "relevantArticleIds": []
     },
+    "taxonomy": {
+      "acceptablePrimaryProductSurfaces": [
+     {
+      "domain": "messaging",
+      "area": "sms"
+      }
+      ],
+      "acceptableProblemClasses": [
+      "expected-behavior"
+      ]
+    },
     "knownCause": {
       "expectation": "plausible"
     },
@@ -45,6 +56,15 @@
     "knowledge": {
       "requiredArticleIds": ["webhook-signature-validation"],
       "relevantArticleIds": ["webhook-signature-validation"]
+    },
+    "taxonomy": {
+      "acceptablePrimaryProductSurfaces": [
+        {
+          "domain": "integrations",
+          "area": "webhooks"
+        }
+      ],
+      "acceptableProblemClasses": ["degraded-performance"]
     },
     "knownCause": {
       "expectation": "plausible",
@@ -100,6 +120,15 @@
       "requiredArticleIds": ["campaign-send-failures"],
       "relevantArticleIds": []
     },
+    "taxonomy": {
+      "acceptablePrimaryProductSurfaces": [
+        {
+          "domain": "messaging",
+          "area": "campaigns"
+        }
+      ],
+      "acceptableProblemClasses": ["degraded-performance"]
+    },
     "family": "campaign-processing",
     "contrastGroup": "campaign-processing-scope",
     "labelRationale": "A single campaign stuck preparing establishes significant degraded campaign processing but does not establish an API-owned fault or a broad P1 incident."
@@ -150,6 +179,15 @@
       "requiredArticleIds": ["profile-sync-issues"],
       "relevantArticleIds": []
     },
+    "taxonomy": {
+      "acceptablePrimaryProductSurfaces": [
+        {
+          "domain": "customer-data",
+          "area": "profiles"
+        }
+      ],
+      "acceptableProblemClasses": ["data-integrity"]
+    },
     "family": "profile-data",
     "labelRationale": "Duplicate profiles created by CSV import are a profile/data-integrity problem, not an account-access problem."
   },
@@ -164,6 +202,15 @@
     "knowledge": {
       "requiredArticleIds": ["shopify-integration-sync"],
       "relevantArticleIds": ["coupon-catalog-sync"]
+    },
+    "taxonomy": {
+      "acceptablePrimaryProductSurfaces": [
+        {
+          "domain": "integrations",
+          "area": "shopify"
+        }
+      ],
+      "acceptableProblemClasses": ["degraded-performance"]
     },
     "family": "shopify-catalog",
     "labelRationale": "A six-hour Shopify-to-catalog delay is both an integration-boundary and degraded-performance symptom until import history identifies the responsible subsystem."
@@ -211,6 +258,15 @@
       "requiredArticleIds": ["profile-sync-issues"],
       "relevantArticleIds": []
     },
+    "taxonomy": {
+      "acceptablePrimaryProductSurfaces": [
+        {
+          "domain": "customer-data",
+          "area": "consent"
+        }
+      ],
+      "acceptableProblemClasses": ["data-integrity"]
+    },
     "family": "consent-sync",
     "labelRationale": "Email consent values not reflecting API updates concern the API/profile update path, not authentication. SMS compliance is not supported by this ticket."
   },
@@ -257,7 +313,164 @@
       "requiredArticleIds": ["sms-compliance", "profile-sync-issues"],
       "relevantArticleIds": []
     },
+    "taxonomy": {
+      "acceptablePrimaryProductSurfaces": [
+        {
+          "domain": "customer-data",
+          "area": "consent"
+        }
+      ],
+      "acceptableProblemClasses": [
+        "data-integrity"
+      ]
+    },
     "family": "consent-sync",
     "labelRationale": "A STOP opt-out not being reflected in profile eligibility is a consent/profile-state problem, not account access. Initial support ownership is appropriate until evidence identifies SMS processing, profile state, or campaign eligibility as the failing subsystem."
+  },
+  {
+    "ticketId": "TKT-1002",
+    "classification": {
+      "acceptableCategories": ["incident"],
+      "acceptableTeams": ["incident-response"],
+      "acceptablePriorities": ["P1"],
+      "requiredEscalations": ["outage", "sla"]
+    },
+    "knowledge": {
+      "requiredArticleIds": ["event-tracking-debugging", "shopify-integration-sync"],
+      "relevantArticleIds": ["event-tracking-debugging", "shopify-integration-sync"]
+    },
+    "taxonomy": {
+      "acceptablePrimaryProductSurfaces": [
+        {
+          "domain": "developer-platform",
+          "area": "event-ingestion"
+        }
+      ],
+      "acceptableProblemClasses": ["degraded-performance"]
+    },
+    "family": "outage",
+    "contrastGroup": "event-ingestion-delay",
+    "labelRationale": "Accepted checkout and order events arriving about 45 minutes late support event ingestion as the primary surface and degraded performance as the reviewed problem class."
+  },
+  {
+    "ticketId": "TKT-1004",
+    "classification": {
+      "acceptableCategories": ["security"],
+      "acceptableTeams": ["security"],
+      "acceptablePriorities": ["P1"],
+      "requiredEscalations": ["security", "missing-information"]
+    },
+    "knowledge": {
+      "requiredArticleIds": ["security-incident-response"],
+      "relevantArticleIds": ["security-incident-response"]
+    },
+    "taxonomy": {
+      "acceptablePrimaryProductSurfaces": [
+        {
+          "domain": "security",
+          "area": "credentials-secrets"
+        }
+      ],
+      "acceptableProblemClasses": ["security"]
+    },
+    "family": "security",
+    "labelRationale": "Possible exposure of a private API key in shared logs supports credentials and secrets as the primary surface and security as the reviewed problem class."
+  },
+  {
+    "ticketId": "TKT-1007",
+    "classification": {
+      "acceptableCategories": ["integration"],
+      "acceptableTeams": ["integrations"],
+      "acceptablePriorities": ["P2"],
+      "requiredEscalations": []
+    },
+    "knowledge": {
+      "requiredArticleIds": ["webhook-signature-validation"],
+      "relevantArticleIds": ["webhook-signature-validation"]
+    },
+    "taxonomy": {
+      "acceptablePrimaryProductSurfaces": [
+        {
+          "domain": "integrations",
+          "area": "webhooks"
+        }
+      ],
+      "acceptableProblemClasses": ["configuration"]
+    },
+    "family": "webhooks",
+    "contrastGroup": "webhook-signature-failure",
+    "labelRationale": "HMAC verification failing after signing-secret rotation supports webhooks as the primary surface and configuration as the reviewed problem class."
+  },
+  {
+    "ticketId": "TKT-1018",
+    "classification": {
+      "acceptableCategories": ["integration"],
+      "acceptableTeams": ["integrations"],
+      "acceptablePriorities": ["P3"],
+      "requiredEscalations": []
+    },
+    "knowledge": {
+      "requiredArticleIds": ["shopify-integration-sync"],
+      "relevantArticleIds": ["shopify-integration-sync"]
+    },
+    "taxonomy": {
+      "acceptablePrimaryProductSurfaces": [
+        {
+          "domain": "integrations",
+          "area": "shopify"
+        }
+      ],
+      "acceptableProblemClasses": ["data-integrity"]
+    },
+    "family": "shopify-catalog",
+    "labelRationale": "A completed Shopify sync omitting a custom product field supports Shopify as the primary surface and data integrity as the reviewed problem class."
+  },
+  {
+    "ticketId": "TKT-1019",
+    "classification": {
+      "acceptableCategories": ["security"],
+      "acceptableTeams": ["security"],
+      "acceptablePriorities": ["P1"],
+      "requiredEscalations": ["security", "missing-information"]
+    },
+    "knowledge": {
+      "requiredArticleIds": ["security-incident-response"],
+      "relevantArticleIds": ["security-incident-response"]
+    },
+    "taxonomy": {
+      "acceptablePrimaryProductSurfaces": [
+        {
+          "domain": "security",
+          "area": "key-management"
+        }
+      ],
+      "acceptableProblemClasses": ["security"]
+    },
+    "family": "security",
+    "labelRationale": "An unrecognized private key in audit history supports key management as the primary surface and security as the reviewed problem class."
+  },
+  {
+    "ticketId": "TKT-1025",
+    "classification": {
+      "acceptableCategories": ["feature-request"],
+      "acceptableTeams": ["product"],
+      "acceptablePriorities": ["P3", "P4"],
+      "requiredEscalations": []
+    },
+    "knowledge": {
+      "requiredArticleIds": ["sms-compliance", "segmentation-audience-rules"],
+      "relevantArticleIds": ["sms-compliance", "segmentation-audience-rules"]
+    },
+    "taxonomy": {
+      "acceptablePrimaryProductSurfaces": [
+        {
+          "domain": "customer-data",
+          "area": "consent"
+        }
+      ],
+      "acceptableProblemClasses": ["feature-request"]
+    },
+    "family": "consent",
+    "labelRationale": "The request for reusable regional consent-rule templates supports consent as the primary surface and feature request as the reviewed problem class."
   }
 ]

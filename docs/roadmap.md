@@ -13,6 +13,14 @@ than feature sprawl.
 4. Add a short architecture video or walkthrough script only if it stays
    synthetic and repeatable.
 
+The operational lifecycle presentation-contract slice is complete. The
+Approval Desk and MCP now consume the same backend-owned lifecycle projection,
+mutation envelopes return refreshed guidance and lifecycle state, and the
+recovery commands (`record_fix_ineffective` and `invalidate_diagnosis`) are
+covered by the shared service and transport tests. Future work below should
+extend the existing authority boundary rather than introduce another lifecycle
+state model.
+
 ## More Realistic Support Scenarios
 
 Add 5-8 messy synthetic merchant tickets that stress the workflow:

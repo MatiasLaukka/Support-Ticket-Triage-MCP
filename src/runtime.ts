@@ -31,6 +31,7 @@ import {
   acquireDemoStateUsageLease,
   type DemoStateUsageLease,
 } from "./demo-state-lease.js";
+import { parseKnowledgeCandidateTimeoutMs } from "./utils/parse-openai-timeout.js";
 
 const STARTUP_PATH_MESSAGES = {
   TRIAGE_DATA_ROOT: "TRIAGE_DATA_ROOT must not be blank.",
@@ -155,6 +156,7 @@ export function createKnowledgeCandidateDraftProviderFromEnv(
   return createOpenAiKnowledgeCandidateDraftProvider({
     apiKey: env.OPENAI_API_KEY,
     model: env.TRIAGE_KNOWLEDGE_CANDIDATE_MODEL?.trim() || env.OPENAI_MODEL?.trim(),
+    baseUrl: env.TRIAGE_OPENAI_BASE_URL?.trim(),
     timeoutMs: parseKnowledgeCandidateTimeoutMs(env.TRIAGE_KNOWLEDGE_CANDIDATE_TIMEOUT_MS),
   });
 }
@@ -412,12 +414,6 @@ function isOperationalLearningOutboxStore(
   const candidate = store as Partial<OperationalLearningOutboxStore>;
   return typeof candidate.readOutbox === "function"
     && typeof candidate.listPendingOutbox === "function";
-}
-
-function parseKnowledgeCandidateTimeoutMs(value: string | undefined): number {
-  if (value === undefined || value.trim() === "") return 20_000;
-  const parsed = Number(value);
-  return Number.isFinite(parsed) && parsed > 0 ? Math.round(parsed) : 20_000;
 }
 
 function invalidMinutesSaved(): StartupConfigError {

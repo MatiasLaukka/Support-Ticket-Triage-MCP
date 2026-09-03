@@ -37,7 +37,10 @@ Evolve support handling from checklist-driven, one-pass triage into an evidence-
 
 - Evidence readiness is separate from confidence in the current `DiagnosisContext`, and persisted `diagnosticState` snapshots represent multiple plausible campaign-editor candidates, bounded attempts, evidence requests, and specialist routing. The broader candidate/refutation model still needs more diagnostic families.
 - The workflow exposes `diagnosis-ready`, `diagnosis-recorded`, `fix-ready`, `verification`, and `escalated` stages. Ambiguity is a first-class fix/close blocker; targeted evidence is shown while ambiguity is bounded, then specialist review becomes a stop/handoff state with no new autonomous question.
-- Fix verification re-enters evaluation through the workflow, but the terminal conditions are encoded mainly through recommendation lifecycle rules rather than a dedicated verification state/result.
+- Fix verification re-enters evaluation through the workflow. The shared
+  lifecycle projection now exposes an explicit `verification` phase and
+  `ready-for-close` transition while keeping the persisted event history as
+  the authority; this is a projection, not a second state machine.
 - The triaging Skill now requires workflow reads, full conversation evaluation, approval, and stopping at specialist handoff without using GPT next-step text as agent instructions. `operatorGuidance.nextAction`, evidence, blockers, and approval fields remain the only operational authority.
 
 ### Remaining opportunities

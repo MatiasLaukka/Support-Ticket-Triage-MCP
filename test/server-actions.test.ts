@@ -667,7 +667,7 @@ const lifecycleBlockerCases: Array<{
       await approveLatestDiagnosis(fixture);
     },
   },
-{
+  {
     name: "fix rejects a duplicate fix for the latest diagnosis",
     tool: "mark_fix_available",
     message: "A fix has already been recorded for the latest diagnosis.",

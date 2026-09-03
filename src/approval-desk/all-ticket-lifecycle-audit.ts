@@ -4,6 +4,7 @@ import type {
   TriageRecommendation,
 } from "../domain.js";
 import { TriageRecommendationSchema } from "../domain.js";
+import { buildTicketLifecycleView } from "./lifecycle.js";
 import { diagnosisContextForTicket } from "./diagnostic-workflow.js";
 import { buildApprovalDeskRecommendationInput } from "./recommendation-builder.js";
 import { buildOperatorGuidance } from "./workflow-guidance.js";
@@ -25,6 +26,9 @@ export interface SeedTicketLifecycleObservation {
   diagnosisOutcome: "confirmed" | "likely" | "escalated";
   operatorStage: ReturnType<typeof buildOperatorGuidance>["stage"];
   operatorNextAction: ReturnType<typeof buildOperatorGuidance>["nextAction"];
+  lifecyclePhase: ReturnType<typeof buildTicketLifecycleView>["phase"];
+  lifecyclePrimaryAction: ReturnType<typeof buildTicketLifecycleView>["primaryAction"]["kind"];
+  lifecycleActions: ReturnType<typeof buildTicketLifecycleView>["actions"];
   lifecycleGate: "evidence-required" | "evidence-complete" | "known-cause" | "known-event-with-evidence";
   lifecycleInvariantMismatches: string[];
   classificationMismatches: string[];
@@ -89,6 +93,11 @@ function observeTicket(
     recommendations: [recommendation],
     audits: [],
   });
+  const lifecycle = buildTicketLifecycleView({
+    ticket,
+    recommendations: [recommendation],
+    audits: [],
+  });
 
   const missingEvidence = (recommendation.missingEvidence ?? []).map(({ label }) => label);
   const lifecycleGate = missingEvidence.length > 0
@@ -102,6 +111,7 @@ function observeTicket(
     ticket,
     recommendation,
     guidance,
+    lifecycle,
     missingEvidence,
   });
 
@@ -120,6 +130,9 @@ function observeTicket(
       : diagnosis.confidence,
     operatorStage: guidance.stage,
     operatorNextAction: guidance.nextAction,
+    lifecyclePhase: lifecycle.phase,
+    lifecyclePrimaryAction: lifecycle.primaryAction.kind,
+    lifecycleActions: lifecycle.actions,
     lifecycleGate,
     lifecycleInvariantMismatches,
     classificationMismatches: compareClassification(recommendation, outcome, oracle),
@@ -130,6 +143,7 @@ function lifecycleInvariantFailures(input: {
   ticket: Ticket;
   recommendation: TriageRecommendation;
   guidance: ReturnType<typeof buildOperatorGuidance>;
+  lifecycle: ReturnType<typeof buildTicketLifecycleView>;
   missingEvidence: readonly string[];
 }): string[] {
   const failures: string[] = [];
@@ -147,6 +161,18 @@ function lifecycleInvariantFailures(input: {
   }
   if (input.ticket.status === "resolved" && input.guidance.nextAction !== "none") {
     failures.push("resolved tickets must not expose another operator action");
+  }
+  if (!input.lifecycle.actions.some((action) =>
+    action.kind === input.lifecycle.primaryAction.kind &&
+    action.availability === "primary"
+  )) {
+    failures.push("lifecycle primary action must include a primary descriptor");
+  }
+  if (
+    input.lifecycle.primaryAction.kind === "none" &&
+    !["waiting-for-customer", "resolved"].includes(input.lifecycle.phase)
+  ) {
+    failures.push("only waiting-for-customer or resolved lifecycles may use none as the primary action");
   }
   return failures;
 }

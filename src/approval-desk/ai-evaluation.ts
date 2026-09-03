@@ -171,26 +171,43 @@ async function runClassificationStage(input: {
         })
       : skipped("skipped");
   }
-
   try {
     const {
       classificationConfidence: _classificationConfidence,
-      ...providerClassification
+        ...providerClassification
     } = input.baseline;
-    const execution = await input.classificationProvider.reason({
-      ticket: input.ticket,
-      conversationContext: input.conversationContext,
-      deterministicClassification: providerClassification,
-      excludedDiagnosis: input.rejectedDiagnosis,
-    });
-    const advice = advisoryAdvice({
-      reasoning: execution.reasoning,
-      allKnowledgeArticles: input.allKnowledgeArticles,
-    });
-    const finalClassification = classifyTicketFromContext(
-      input.conversationContext,
-      advice.acceptedSignals,
+
+    const baselineKnowledgeArticleIds = new Set(
+      input.baseline.knowledgeArticleIds,
     );
+
+    const knowledgeArticles = input.allKnowledgeArticles
+      .filter((article) => baselineKnowledgeArticleIds.has(article.id))
+      .map(({ id, title, tags, body }) => ({
+        id,
+        title,
+        tags,
+        body,
+    }));
+
+    const execution = await input.classificationProvider.reason({
+        ticket: input.ticket,
+        conversationContext: input.conversationContext,
+        deterministicClassification: providerClassification,
+        knowledgeArticles,
+        excludedDiagnosis: input.rejectedDiagnosis,
+    });
+
+    const advice = advisoryAdvice({
+        reasoning: execution.reasoning,
+        allKnowledgeArticles: input.allKnowledgeArticles,
+    });
+
+    const finalClassification = classifyTicketFromContext(
+        input.conversationContext,
+        advice.acceptedSignals,
+    );
+
     return {
       acceptedSignals: advice.acceptedSignals,
       trace: {
@@ -208,8 +225,8 @@ async function runClassificationStage(input: {
           finalClassification,
         ),
         finalOutcome: finalOutcomeFromClassification(finalClassification),
-      },
-    };
+    },
+  };
   } catch (error) {
     return skipped("fallback", classifyAiFailure(error));
   }

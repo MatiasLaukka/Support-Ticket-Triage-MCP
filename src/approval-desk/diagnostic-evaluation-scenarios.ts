@@ -10,12 +10,16 @@ import {
 import type { KnowledgeObject } from "../knowledge-evolution/domain.js";
 import { loadExpectedOutcomes } from "./recommendation-builder.js";
 import type { DiagnosticEvaluationScenario } from "./diagnostic-evaluation.js";
+import { loadEvaluationOracles } from "../evaluation-oracle.js";
 
 export async function loadDiagnosticEvaluationScenarios(): Promise<
   DiagnosticEvaluationScenario[]
 > {
   const outcomes = await loadExpectedOutcomes(
     resolve("data/seed/expected-outcomes.json"),
+  );
+  const oracles = new Map(
+    (await loadEvaluationOracles()).map((oracle) => [oracle.ticketId, oracle]),
   );
   const tickets = await loadTickets();
   const ticket = (id: string) => tickets.get(id)!;
@@ -42,7 +46,7 @@ export async function loadDiagnosticEvaluationScenarios(): Promise<
     requiredEscalations: ["diagnostic-ambiguity"],
   };
 
-  return [
+  const scenarios: DiagnosticEvaluationScenario[] = [
     {
       id: "ordinary-outage-triage", family: "evidence", ticket: ticket("TKT-1001"), outcome: outcomes.get("TKT-1001"),
       expected: { category: "incident", knownCause: null, knownEventId: null, supportState: "needs-information", mustStopAtApproval: true },
@@ -95,6 +99,10 @@ export async function loadDiagnosticEvaluationScenarios(): Promise<
       expected: { category: "integration", knownEventId: null, mustStopAtApproval: true },
     },
   ];
+  return scenarios.map((scenario) => {
+    const oracle = oracles.get(scenario.ticket.id);
+    return oracle === undefined ? scenario : { ...scenario, oracle };
+  });
 }
 
 export function approvedKnowledgeEvolutionScenarios(): DiagnosticEvaluationScenario[] {

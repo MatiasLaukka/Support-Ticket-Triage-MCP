@@ -39,6 +39,7 @@ import {
   latestDiagnosisAudit,
   type OperatorGuidance,
 } from "./workflow-guidance.js";
+import type { EvaluationOracle } from "../evaluation-oracle.js";
 import {
   customerRepliesFromAudits,
   latestSupportResponseFromAudits,
@@ -152,7 +153,15 @@ export async function runAiComparisonEvaluation(input: {
     if (aiExecutionTrace === undefined) {
       throw new Error("AI evaluation must record an execution trace.");
     }
-    const expected = scenario.outcome === undefined
+    const expected = scenario.oracle !== undefined
+      ? {
+          category: scenario.oracle.classification.acceptableCategories[0]!,
+          team: scenario.oracle.classification.acceptableTeams[0]!,
+          priority: scenario.oracle.classification.acceptablePriorities[0]!,
+          knowledgeArticleIds: scenario.oracle.knowledge.requiredArticleIds,
+          escalationReasons: scenario.oracle.classification.requiredEscalations,
+        }
+      : scenario.outcome === undefined
       ? baseline
       : {
           category: scenario.outcome.category,
@@ -167,6 +176,7 @@ export async function runAiComparisonEvaluation(input: {
       scenario.outcome === undefined
         ? undefined
         : scenario.outcome.acceptablePriorities.includes(recommendation.priority),
+      scenario.oracle,
     );
     const baselineAgreement = compareClassification(recommendation, baseline);
     const contract = responseQualityContracts[scenario.id];
@@ -386,18 +396,23 @@ function compareClassification(
   recommendation: Omit<SubmitRecommendationInput, "submittedAt">,
   expected: AiComparisonClassification,
   priorityMatches = recommendation.priority === expected.priority,
+  oracle?: EvaluationOracle,
 ): AiComparisonAgreement {
-  const category = recommendation.category === expected.category;
-  const team = recommendation.team === expected.team;
-  const priority = priorityMatches;
-  const knowledgeArticleIds = sameMembers(
-    recommendation.knowledgeArticleIds,
-    expected.knowledgeArticleIds,
-  );
-  const escalationReasons = sameMembers(
-    recommendation.escalationReasons ?? [],
-    expected.escalationReasons,
-  );
+  const category = oracle === undefined
+    ? recommendation.category === expected.category
+    : oracle.classification.acceptableCategories.includes(recommendation.category);
+  const team = oracle === undefined
+    ? recommendation.team === expected.team
+    : oracle.classification.acceptableTeams.includes(recommendation.team);
+  const priority = oracle === undefined
+    ? priorityMatches
+    : oracle.classification.acceptablePriorities.includes(recommendation.priority);
+  const knowledgeArticleIds = oracle === undefined
+    ? sameMembers(recommendation.knowledgeArticleIds, expected.knowledgeArticleIds)
+    : oracle.knowledge.requiredArticleIds.every((articleId) => recommendation.knowledgeArticleIds.includes(articleId));
+  const escalationReasons = oracle === undefined
+    ? sameMembers(recommendation.escalationReasons ?? [], expected.escalationReasons)
+    : oracle.classification.requiredEscalations.every((reason) => recommendation.escalationReasons?.includes(reason));
   return {
     category,
     team,

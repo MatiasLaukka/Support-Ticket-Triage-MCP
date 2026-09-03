@@ -173,7 +173,7 @@ async function requestReasoning(input: {
       signal: abortController.signal,
       body: JSON.stringify({
         model: input.model,
-        instructions: "Classify the support ticket using only the provided context. If excludedDiagnosis is present, treat it only as a rejected prior hypothesis: do not repeat it as the selected cause or positive evidence. Return exactly the requested structured advisory reasoning, use null for unknown candidate fields, use only the listed enum values, and do not include operational actions or extra fields.",
+        instructions: "Classify the support ticket using only the provided context. Treat knowledgeArticles as advisory domain knowledge selected by the deterministic baseline; use their contents to interpret the ticket, but do not assume a knowledge article proves its cause applies. If excludedDiagnosis is present, treat it only as a rejected prior hypothesis: do not repeat it as the selected cause or positive evidence. Return exactly the requested structured advisory reasoning, use null for unknown candidate fields, use only the listed enum values, and do not include operational actions or extra fields.",
         input: buildReasoningInput(input.input),
         store: false,
         text: {
@@ -289,7 +289,7 @@ function buildReasoningInput(input: GptClassificationReasoningInput): string {
       description: input.ticket.description,
       tags: input.ticket.tags,
     },
-      conversationText: input.conversationContext.classificationText,
+    conversationText: input.conversationContext.classificationText,
     deterministicClassification: {
       category: input.deterministicClassification.category,
       team: input.deterministicClassification.team,
@@ -297,6 +297,14 @@ function buildReasoningInput(input: GptClassificationReasoningInput): string {
       knowledgeArticleIds: input.deterministicClassification.knowledgeArticleIds,
       confidence: input.deterministicClassification.confidence,
     },
+
+    knowledgeArticles: input.knowledgeArticles.map((article) => ({
+      id: article.id,
+      title: article.title,
+      tags: article.tags,
+      body: article.body,
+    })),
+
     excludedDiagnosis: input.excludedDiagnosis === undefined
       ? undefined
       : {

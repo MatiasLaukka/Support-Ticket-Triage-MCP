@@ -8,6 +8,10 @@ import { buildTicketLifecycleView } from "./lifecycle.js";
 import { diagnosisContextForTicket } from "./diagnostic-workflow.js";
 import { buildApprovalDeskRecommendationInput } from "./recommendation-builder.js";
 import { buildOperatorGuidance } from "./workflow-guidance.js";
+import {
+  scoreEvaluationOracle,
+  type EvaluationOracle,
+} from "../evaluation-oracle.js";
 
 export interface SeedTicketLifecycleObservation {
   ticketId: string;
@@ -44,9 +48,10 @@ export interface SeedTicketLifecycleReport {
 export function auditSeedTicketLifecycles(
   tickets: readonly Ticket[],
   outcomes: ReadonlyMap<string, ExpectedOutcome>,
+  oracles: ReadonlyMap<string, EvaluationOracle> = new Map(),
 ): SeedTicketLifecycleReport {
   const observations = tickets.map((ticket, index) =>
-    observeTicket(ticket, outcomes.get(ticket.id), index),
+    observeTicket(ticket, outcomes.get(ticket.id), oracles.get(ticket.id), index),
   );
   return {
     ticketCount: observations.length,
@@ -69,6 +74,7 @@ export function auditSeedTicketLifecycles(
 function observeTicket(
   ticket: Ticket,
   outcome: ExpectedOutcome | undefined,
+  oracle: EvaluationOracle | undefined,
   index: number,
 ): SeedTicketLifecycleObservation {
   const { actor: _actor, ...input } = buildApprovalDeskRecommendationInput({
@@ -129,7 +135,7 @@ function observeTicket(
     lifecycleActions: lifecycle.actions,
     lifecycleGate,
     lifecycleInvariantMismatches,
-    classificationMismatches: compareClassification(recommendation, outcome),
+    classificationMismatches: compareClassification(recommendation, outcome, oracle),
   };
 }
 
@@ -174,7 +180,18 @@ function lifecycleInvariantFailures(input: {
 function compareClassification(
   recommendation: TriageRecommendation,
   outcome: ExpectedOutcome | undefined,
+  oracle?: EvaluationOracle,
 ): string[] {
+  if (oracle !== undefined) {
+    return scoreEvaluationOracle(oracle, {
+      category: recommendation.category,
+      team: recommendation.team,
+      priority: recommendation.priority,
+      requiredEscalations: recommendation.escalationReasons,
+      knowledgeArticleIds: recommendation.knowledgeArticleIds,
+      knownCause: recommendation.knownCause,
+    }).failures;
+  }
   if (outcome === undefined) return ["missing expected outcome"];
   const mismatches: string[] = [];
   if (recommendation.category !== outcome.category) {

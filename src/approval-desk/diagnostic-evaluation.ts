@@ -15,6 +15,10 @@ import {
   buildOperatorGuidance,
   type OperatorGuidance,
 } from "./workflow-guidance.js";
+import {
+  scoreEvaluationOracle,
+  type EvaluationOracle,
+} from "../evaluation-oracle.js";
 
 export type DiagnosticScenarioFamily =
   | "known-event"
@@ -54,6 +58,8 @@ export interface DiagnosticEvaluationScenario {
   family: DiagnosticScenarioFamily;
   ticket: Ticket;
   outcome?: ExpectedOutcome;
+  /** Evaluation-only oracle; production recommendation semantics remain outcome-based. */
+  oracle?: EvaluationOracle;
   customerReplies?: readonly DiagnosticEvaluationReply[];
   previousSupportResponse?: DiagnosticEvaluationPreviousResponse;
   audits?: readonly AuditEvent[];
@@ -75,6 +81,9 @@ export interface DiagnosticEvaluationObservation {
   promptInjectionDetected: boolean;
   approvalRequired: boolean;
   approvalBypass: boolean;
+  oracleClassificationPass: boolean | null;
+  oracleKnowledgePass: boolean | null;
+  oracleKnownCausePass: boolean | null;
   failures: string[];
 }
 
@@ -94,6 +103,9 @@ export interface DiagnosticEvaluationReport {
   staleActionCount: number;
   unsafeCustomerResponseCount: number;
   observations: DiagnosticEvaluationObservation[];
+  oracleClassificationAccuracy: number | null;
+  oracleKnowledgeCoverage: number | null;
+  oracleKnownCauseAccuracy: number | null;
 }
 
 export function runDiagnosticEvaluation(
@@ -135,6 +147,9 @@ export function runDiagnosticEvaluation(
   const approvalBypassCount = observations.filter(
     (observation) => observation.approvalBypass,
   ).length;
+  const oracleObservations = observations.filter(
+    ({ oracleClassificationPass }) => oracleClassificationPass !== null,
+  );
 
   return {
     scenarioCount: scenarios.length,
@@ -216,6 +231,18 @@ export function runDiagnosticEvaluation(
         );
     }).length,
     observations,
+    oracleClassificationAccuracy: rate(
+      oracleObservations.filter(({ oracleClassificationPass }) => oracleClassificationPass).length,
+      oracleObservations.length,
+    ),
+    oracleKnowledgeCoverage: rate(
+      oracleObservations.filter(({ oracleKnowledgePass }) => oracleKnowledgePass).length,
+      oracleObservations.length,
+    ),
+    oracleKnownCauseAccuracy: rate(
+      oracleObservations.filter(({ oracleKnownCausePass }) => oracleKnownCausePass).length,
+      oracleObservations.length,
+    ),
   };
 }
 
@@ -265,6 +292,18 @@ function evaluateScenario(
     diagnosis.diagnosticState?.state === "escalated"
       ? "escalated"
       : diagnosis.confidence;
+  const oracleScore = scenario.oracle === undefined
+    ? undefined
+    : scoreEvaluationOracle(scenario.oracle, {
+        category: recommendation.category,
+        team: recommendation.team,
+        priority: recommendation.priority,
+        requiredEscalations: recommendation.escalationReasons,
+        knowledgeArticleIds: recommendation.knowledgeArticleIds,
+        knownCause: recommendation.knownCause,
+      });
+  // Keep legacy scenario failures/metrics stable; oracle results are reported
+  // in their dedicated fields below rather than changing older expectations.
   const failures = expectedFailures(scenario, {
     category: classification.category,
     knownCause: recommendation.knownCause ?? null,
@@ -287,6 +326,9 @@ function evaluateScenario(
     promptInjectionDetected: promptInjection.detected,
     approvalRequired: guidance.approval.required,
     approvalBypass: recommendation.resolution !== "pending",
+    oracleClassificationPass: oracleScore?.classificationPass ?? null,
+    oracleKnowledgePass: oracleScore?.knowledgePass ?? null,
+    oracleKnownCausePass: oracleScore?.knownCausePass ?? null,
     failures,
   };
 }

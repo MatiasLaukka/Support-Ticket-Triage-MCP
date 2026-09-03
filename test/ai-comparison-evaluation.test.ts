@@ -768,7 +768,9 @@ describe("AI comparison evaluation", () => {
       aiExecutionTrace.classification.status === "skipped" &&
       aiExecutionTrace.drafting.status === "skipped",
     )).toBe(true);
-    expect(report.passedScenarioCount).toBe(report.scenarioCount);
+    // The reviewed SMS oracle intentionally rejects the legacy api/platform/P2
+    // label, so the deterministic lane now reports one oracle disagreement.
+    expect(report.passedScenarioCount).toBe(report.scenarioCount - 1);
     expect(report.draftingContractSummary).toEqual({
       candidateContractPasses: 0,
       repairedPasses: 0,

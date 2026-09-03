@@ -3930,6 +3930,55 @@ describe("createApprovalDeskHttpServer", () => {
     expect(seenArticleIds).toEqual([["security-incident-response"]]);
   });
 
+  it("uses the explicit runtime environment for recommendation providers", async () => {
+    const originalApiKey = process.env.OPENAI_API_KEY;
+    const originalDraftProvider = process.env.APPROVAL_DRAFT_PROVIDER;
+    const originalFetch = globalThis.fetch;
+    const openAiRequests: string[] = [];
+
+    process.env.OPENAI_API_KEY = "test-only-global-key";
+    process.env.APPROVAL_DRAFT_PROVIDER = "openai";
+    globalThis.fetch = async (input, init) => {
+      const url = typeof input === "string"
+        ? input
+        : input instanceof URL
+          ? input.href
+          : input.url;
+      if (url.startsWith("https://api.openai.com/")) {
+        openAiRequests.push(url);
+        throw new Error("Unexpected OpenAI request from explicit fixture environment.");
+      }
+      return originalFetch(input, init);
+    };
+
+    try {
+      const { json } = await startFixture();
+
+      const created = await json("/api/tickets/TKT-1010/recommendations", {
+        method: "POST",
+        body: JSON.stringify({
+          actor: "approval-desk",
+          aiPreference: "gpt-preferred",
+        }),
+      });
+
+      expect(created.status).toBe(201);
+      expect(openAiRequests).toEqual([]);
+    } finally {
+      globalThis.fetch = originalFetch;
+      if (originalApiKey === undefined) {
+        delete process.env.OPENAI_API_KEY;
+      } else {
+        process.env.OPENAI_API_KEY = originalApiKey;
+      }
+      if (originalDraftProvider === undefined) {
+        delete process.env.APPROVAL_DRAFT_PROVIDER;
+      } else {
+        process.env.APPROVAL_DRAFT_PROVIDER = originalDraftProvider;
+      }
+    }
+  });
+
   it("passes GPT advisory classification signals from the reasoning provider into recommendation creation", async () => {
     const { json } = await startFixture({
       classificationReasoningProvider: {

@@ -126,6 +126,57 @@ describe("evaluateTicketWithAi", () => {
     expect(draftInput).toMatchObject({ excludedDiagnosis: rejectedDiagnosis });
   });
 
+  it("grounds GPT classification in the deterministic baseline's selected knowledge contents", async () => {
+  const allKnowledgeArticles = await loadKnowledgeArticles();
+  let classificationInput: unknown;
+
+  await evaluateTicketWithAi({
+    ticket: await loadSeedTicket("TKT-1010"),
+    actor: "approval-desk",
+    allKnowledgeArticles,
+    customerReplies: [campaignEditorReply],
+    aiPreference: "gpt-preferred",
+    responseStyle: "auto",
+    classificationProvider: {
+      async reason(input) {
+        classificationInput = input;
+        return campaignEditorProvider.reason(input);
+      },
+    },
+    draftProvider: acceptedDraftProvider,
+  });
+
+  expect(classificationInput).toBeDefined();
+
+  const captured = classificationInput as {
+    deterministicClassification: {
+      knowledgeArticleIds: string[];
+    };
+    knowledgeArticles?: Array<{
+      id: string;
+      title: string;
+      tags: string[];
+      body: string;
+    }>;
+  };
+
+  const expectedKnowledgeArticles = allKnowledgeArticles
+    .filter((article) =>
+      captured.deterministicClassification.knowledgeArticleIds.includes(article.id),
+    )
+    .map((article) => ({
+      id: article.id,
+      title: article.title,
+      tags: article.tags,
+      body: article.body,
+    }));
+
+  // Make sure this fixture genuinely exercises knowledge grounding.
+  expect(expectedKnowledgeArticles.length).toBeGreaterThan(0);
+
+  expect(captured.knowledgeArticles).toEqual(expectedKnowledgeArticles);
+});
+
   it("uses GPT advice and drafting while preserving deterministic final authority", async () => {
     const input = await evaluateTicketWithAi({
       ticket: await loadSeedTicket("TKT-1010"),

@@ -276,6 +276,7 @@ describe("OpenAI-compatible endpoint behavior", () => {
         ticket,
         conversationContext,
         deterministicClassification: classifyTicketFromContext(conversationContext),
+        knowledgeArticles: [],
       });
 
       // Verify the request body contains ticket, conversationText, and deterministicClassification

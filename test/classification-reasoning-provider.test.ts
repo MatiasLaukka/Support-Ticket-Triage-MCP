@@ -44,6 +44,7 @@ function providerInput() {
     ticket,
     conversationContext,
     deterministicClassification: classifyTicketFromContext(conversationContext),
+    knowledgeArticles: [],
   };
 }
 
@@ -80,7 +81,18 @@ describe("OpenAiClassificationReasoningProvider", () => {
       fetch,
     });
 
-    const execution = await provider.reason(providerInput());
+    const execution = await provider.reason({
+      ...providerInput(),
+      knowledgeArticles: [
+        {
+          id: "performance-troubleshooting",
+          title: "Performance Troubleshooting",
+          tags: ["performance", "loading", "browser", "investigation"],
+          body:
+            "Blank pages and repeated loading states can be caused by browser session state or platform-side delays.",
+        },
+      ],
+    });
 
     expect(execution.reasoning).toMatchObject({
       issueType: "campaign-editor",
@@ -95,6 +107,17 @@ describe("OpenAiClassificationReasoningProvider", () => {
     const firstRequest = fetch.mock.calls[0]![1] as { body: string };
     const request = JSON.parse(firstRequest.body);
     const schema = request.text.format.schema;
+    const reasoningInput = JSON.parse(request.input);
+
+    expect(reasoningInput.knowledgeArticles).toEqual([
+      {
+        id: "performance-troubleshooting",
+        title: "Performance Troubleshooting",
+        tags: ["performance", "loading", "browser", "investigation"],
+        body:
+          "Blank pages and repeated loading states can be caused by browser session state or platform-side delays.",
+      },
+    ]);
     expect(request).toMatchObject({ store: false });
     expect(schema.required).toEqual(expect.arrayContaining(Object.keys(schema.properties)));
     expect(schema.properties.candidateCategory).toMatchObject({ type: ["string", "null"] });

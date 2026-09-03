@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { CandidateDraftProvider, CandidateDraftProviderInput } from "./candidate-draft-provider.js";
+import { makeOpenAiResponsesUrl } from "../utils/normalize-url.js";
 
-const OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses";
 const DEFAULT_MODEL = "gpt-5.6-luna";
 const DEFAULT_TIMEOUT_MS = 20_000;
 const PROMPT_VERSION = "knowledge-candidate-v1";
@@ -24,6 +24,7 @@ export class OpenAiKnowledgeCandidateDraftProvider implements CandidateDraftProv
     apiKey: string;
     model?: string;
     timeoutMs?: number;
+    baseUrl?: string;
     fetch?: FetchLike;
     now?: () => number;
   }) {}
@@ -33,10 +34,11 @@ export class OpenAiKnowledgeCandidateDraftProvider implements CandidateDraftProv
     const fetchImpl = this.options.fetch ?? fetch;
     const controller = new AbortController();
     const timeoutMs = this.options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+    const effectiveBaseUrl = makeOpenAiResponsesUrl(this.options.baseUrl);
     let timeout: ReturnType<typeof setTimeout> | undefined;
     try {
       const response = await Promise.race([
-        fetchImpl(OPENAI_RESPONSES_URL, {
+        fetchImpl(effectiveBaseUrl, {
           method: "POST",
           headers: {
             "content-type": "application/json",
@@ -103,6 +105,7 @@ export function createOpenAiKnowledgeCandidateDraftProvider(options: {
   apiKey?: string;
   model?: string;
   timeoutMs?: number;
+  baseUrl?: string;
   fetch?: FetchLike;
   now?: () => number;
 }): CandidateDraftProvider {

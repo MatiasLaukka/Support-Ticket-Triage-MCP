@@ -123,6 +123,47 @@ describe("operational workflow reads", () => {
     reopened.close();
   });
 
+  it("does not carry an older sent response onto a newer pending recommendation summary", () => {
+    const { store } = seededWorkflowStore();
+    try {
+      store.transaction((unit) => {
+        const nextRecommendation = TriageRecommendationSchema.parse({
+          ...makeRecommendation(),
+          id: "20000000-0000-4000-8000-000000000009",
+          resolution: "pending",
+          createdAt: "2026-08-10T12:00:00.000Z",
+        });
+        const [sequence] = unit.allocateEventSequences(ticketId, 1);
+        const eventId = "50000000-0000-4000-8000-000000000009";
+        unit.appendEvent(workflowEvent({
+          id: eventId,
+          sequence: sequence!,
+          occurredAt: nextRecommendation.createdAt,
+          action: "recommendation-submitted",
+          facts: { status: "pending", sourceRevision: 0 },
+        }));
+        unit.insertRecommendation(nextRecommendation);
+        unit.appendRecommendationRevision({
+          recommendation: nextRecommendation,
+          operationalEventId: eventId,
+          createdAt: nextRecommendation.createdAt,
+        });
+      });
+
+      const summary = summarizeRecommendationsForSnapshot(store.readWorkflowSnapshot(ticketId));
+      expect(summary.summary).toMatchObject({
+        latestRecommendationId: "20000000-0000-4000-8000-000000000009",
+        latestResolution: "pending",
+        workflowState: "draft-ready",
+        hasPendingRecommendation: true,
+        hasSentResponse: false,
+      });
+      expect(summary.summary.latestSentAt).toBeUndefined();
+    } finally {
+      store.close();
+    }
+  });
+
   it("writes a customer reply as one atomic message, reference-only event, trace, and replay result", async () => {
     const harness = replyHarness();
     try {

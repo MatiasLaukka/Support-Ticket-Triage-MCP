@@ -145,10 +145,17 @@ export function summarizeRecommendationsForTicket(
   );
   const latest = currentRelated[0];
   const ticketAudits = audits.filter((event) => event.ticketId === ticket.id);
-  const latestSent = latestAuditPosition(
-    ticketAudits,
-    (event) => event.action === "customer-response-sent",
-  );
+  const latestSent = latest === undefined
+    ? latestAuditPosition(
+        ticketAudits,
+        (event) => event.action === "customer-response-sent",
+      )
+    : latestAuditPosition(
+        ticketAudits,
+        (event) =>
+          event.action === "customer-response-sent" &&
+          event.recommendationId === latest.id,
+      );
   const latestCustomerReply = latestAuditPosition(
     ticketAudits,
     (event) => event.action === "customer-reply-received",
@@ -209,7 +216,11 @@ export function summarizeRecommendationsForSnapshot(
   const currentRelated = related.filter(({ resolution }) =>
     resolution === "pending" || resolution === "approved");
   const latest = currentRelated[0];
-  const latestSent = operationalMessageCausalPositions(snapshot, "support").at(-1);
+  const latestSent = latest === undefined
+    ? operationalMessageCausalPositions(snapshot, "support").at(-1)
+    : operationalMessageCausalPositions(snapshot, "support")
+        .filter(({ message }) => message.recommendationId === latest.id)
+        .at(-1);
   const latestCustomerReply = operationalMessageCausalPositions(snapshot, "customer").at(-1);
 
   return {

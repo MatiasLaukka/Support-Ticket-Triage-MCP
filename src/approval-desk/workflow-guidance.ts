@@ -440,11 +440,22 @@ export function buildOperatorGuidance(input: {
       currentTicketRevision: input.ticket.revision,
       latestConversationWatermark: conversationWatermarkFromAudits(input.audits),
     }).stale;
+  const latestDiagnosisInvalidated = latestDiagnosis !== undefined &&
+    input.audits.some((event) =>
+      event.action === "diagnosis-invalidated" &&
+      event.before.diagnosisId === latestDiagnosis.id,
+    );
+  const latestDiagnosisRequiresEvaluation =
+    isAuditNewerThanRecommendation(latestDiagnosis, latest, input.audits) &&
+    (latestDiagnosisReview?.review.decision === "reject" || latestDiagnosisInvalidated);
   if (
-    latest?.supportState === "escalated" ||
-    latestDiagnosticContext?.diagnosticState?.state === "escalated" ||
-    latestDiagnosis?.action === "diagnostic-escalated" ||
-    latestRecordedDiagnosticState?.state === "escalated"
+    !latestDiagnosisRequiresEvaluation &&
+    (
+      latest?.supportState === "escalated" ||
+      latestDiagnosticContext?.diagnosticState?.state === "escalated" ||
+      latestDiagnosis?.action === "diagnostic-escalated" ||
+      latestRecordedDiagnosticState?.state === "escalated"
+    )
   ) {
     return OperatorGuidanceSchema.parse({
       stage: "escalated",
@@ -566,13 +577,19 @@ export function buildOperatorGuidance(input: {
       input.audits,
     )
   ) {
-    if (latestDiagnosisReview?.review.decision === "reject") {
+    if (
+      latestDiagnosisReview?.review.decision === "reject" ||
+      latestDiagnosisInvalidated
+    ) {
       return withKnowledgePattern({
         stage: "diagnosis-recorded",
-        changed: "The latest diagnosis was rejected and needs a new evaluation.",
+        changed: latestDiagnosisInvalidated
+          ? "The latest diagnosis was invalidated and needs a new evaluation."
+          : "The latest diagnosis was rejected and needs a new evaluation.",
         nextAction: "evaluate-ticket",
-        reason:
-          "The rejected diagnosis remains historical; evaluate the current ticket before recording another diagnosis.",
+        reason: latestDiagnosisInvalidated
+          ? "The invalidated diagnosis remains historical; evaluate the current ticket before recording another diagnosis."
+          : "The rejected diagnosis remains historical; evaluate the current ticket before recording another diagnosis.",
         approval: noApproval,
         unlocksTool: "evaluate_ticket",
         blockers: [],
@@ -620,7 +637,10 @@ export function buildOperatorGuidance(input: {
       unlocksTool: "evaluate_ticket",
       blockers: [],
       customerNextStep:
-        "No customer action is required until support sends the reviewed diagnostic update.",
+        authoritativeDiagnosis.diagnosis.owner === "customer" ||
+          authoritativeDiagnosis.diagnosis.owner === "support"
+          ? authoritativeDiagnosis.diagnosis.recommendedNextAction
+          : "No customer action is required until support sends the reviewed diagnostic update.",
     });
   }
 

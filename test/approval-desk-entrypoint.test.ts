@@ -1,5 +1,5 @@
 ﻿import { spawn, type ChildProcessByStdio } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import type { Readable } from "node:stream";
 import { join, resolve } from "node:path";
@@ -126,6 +126,16 @@ afterEach(async () => {
 });
 
 describe("compiled approval desk entrypoint", () => {
+  it("builds the compiled entrypoint before launching from a clean dist", async () => {
+    const packageJson = JSON.parse(
+      await readFile(resolve("package.json"), "utf8"),
+    ) as { scripts?: Record<string, string> };
+
+    expect(packageJson.scripts?.["approval-desk"]).toMatch(
+      /^npm run build && node dist\/src\/approval-desk\.js$/,
+    );
+  });
+
   it("listens on an ephemeral local port and serves the Approval Desk UI", async () => {
     const { child, output, close } = await spawnApprovalDesk({
       APPROVAL_DESK_PORT: "0",

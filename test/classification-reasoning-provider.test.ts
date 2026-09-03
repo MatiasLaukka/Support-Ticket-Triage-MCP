@@ -54,7 +54,7 @@ describe("OpenAiClassificationReasoningProvider", () => {
       ok: true,
       status: 200,
       text: async () => JSON.stringify({
-        output: [{ content: [{
+        output: [{ type: "message", content: [{
           type: "output_text",
           text: JSON.stringify({
             issueType: "campaign-editor",
@@ -145,7 +145,7 @@ describe("OpenAiClassificationReasoningProvider", () => {
         ok: true,
         status: 200,
         text: async () => JSON.stringify({
-          output: [{ content: [{
+          output: [{ type: "message", content: [{
             type: "output_text",
             text: JSON.stringify({
               issueType: "campaign-editor",
@@ -205,7 +205,7 @@ describe("OpenAiClassificationReasoningProvider", () => {
         ok: true,
         status: 200,
         text: async () => JSON.stringify({
-          output: [{ content: [{
+          output: [{ type: "message", content: [{
             type: "output_text",
             text: JSON.stringify({
               issueType: "campaign-editor",
@@ -267,5 +267,136 @@ describe("OpenAiClassificationReasoningProvider", () => {
       category: "timeout",
       message: "OpenAI timed out; deterministic output was used.",
     });
+  });
+
+  it("accepts real Ollama response shape with reasoning item and message/output_text", async () => {
+    const fetch = vi.fn(async (_url: string, _init: unknown) => ({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({
+        output: [
+          // Real Ollama response: reasoning item has type at top level, no content property
+          {
+            type: "reasoning",
+            summary: [{ type: "summary_text", text: "Analyzing ticket for classification..." }],
+            encrypted_content: "encrypted...",
+          },
+          // message item with output_text containing classification JSON
+          {
+            type: "message",
+            status: "completed",
+            role: "assistant",
+            content: [{
+              type: "output_text",
+              text: JSON.stringify({
+                issueType: "campaign-editor",
+                candidateCategory: "performance",
+                candidateTeam: "product",
+                candidatePriority: "P2",
+                knowledgeArticleIds: ["campaign-send-failures"],
+                confidence: 0.9,
+                evidence: ["content area never finishes loading"],
+                missingEvidenceThatWouldChangeClassification: ["browser comparison"],
+                explanation: "The reply describes editor loading failure.",
+              }),
+              annotations: [],
+              logprobs: [],
+            }],
+          },
+        ],
+        usage: { input_tokens: 120, output_tokens: 40, total_tokens: 160 },
+      }),
+    }));
+    const provider = new OpenAiClassificationReasoningProvider({
+      apiKey: "sk-test",
+      model: "gpt-5.6-luna",
+      now: (() => {
+        const values = [1000, 1125];
+        return () => values.shift()!;
+      })(),
+      fetch,
+    });
+
+    const execution = await provider.reason({
+      ...providerInput(),
+    });
+
+    expect(execution.reasoning).toMatchObject({
+      issueType: "campaign-editor",
+      candidateCategory: "performance",
+      candidateTeam: "product",
+    });
+    expect(execution.telemetry).toEqual({
+      model: "gpt-5.6-luna",
+      latencyMs: 125,
+      usage: { inputTokens: 120, outputTokens: 40, totalTokens: 160 },
+    });
+  });
+
+  it("rejects mixed unsupported+valid-message response at response-envelope stage", async () => {
+    const fetch = vi.fn(async (_url: string, _init: unknown) => ({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({
+        output: [
+          // Unsupported type item - should cause envelope validation to fail
+          { type: "unsupported", content: [{ type: "unsupported_type", text: "This should be rejected" }] },
+          // Valid message item with output_text - would normally be accepted but envelope fails due to unsupported item
+          {
+            type: "message",
+            content: [{
+              type: "output_text",
+              text: JSON.stringify({
+                issueType: "campaign-editor",
+                candidateCategory: "performance",
+                candidateTeam: "product",
+                candidatePriority: "P2",
+                knowledgeArticleIds: ["campaign-send-failures"],
+                confidence: 0.9,
+                evidence: ["content area never finishes loading"],
+                missingEvidenceThatWouldChangeClassification: ["browser comparison"],
+                explanation: "The reply describes editor loading failure.",
+              }),
+            }],
+          },
+        ],
+      }),
+    }));
+    const provider = new OpenAiClassificationReasoningProvider({
+      apiKey: "sk-test",
+      fetch,
+    });
+
+    const error = await provider.reason(providerInput()).catch((caught) => caught);
+
+    // Mixed unsupported+valid-message response is rejected at envelope stage
+    // The discriminated union rejects the unsupported type before filtering can occur
+    // Error reports the path where validation failed (output.0.type), not the type name itself
+    expect(error.name).toBe("InvalidClassificationSchemaError");
+    expect(error.stage).toBe("response-envelope");
+    expect(error.fields).toContain("output.0.type");
+  });
+
+  it("rejects malformed message item without required content array", async () => {
+    const fetch = vi.fn(async (_url: string, _init: unknown) => ({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({
+        output: [
+          // Malformed message item missing required content array
+          { type: "message" },
+        ],
+      }),
+    }));
+    const provider = new OpenAiClassificationReasoningProvider({
+      apiKey: "sk-test",
+      fetch,
+    });
+
+    const error = await provider.reason(providerInput()).catch((caught) => caught);
+
+    // Malformed message item without content array is rejected at envelope stage
+    expect(error.name).toBe("InvalidClassificationSchemaError");
+    expect(error.stage).toBe("response-envelope");
   });
 });

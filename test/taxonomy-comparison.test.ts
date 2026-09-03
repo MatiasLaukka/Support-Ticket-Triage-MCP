@@ -275,6 +275,27 @@ describe("taxonomy inference comparison", () => {
       {
         ticketId: "TKT-1017",
         status: "scored",
+        expected: {
+          acceptablePrimaryProductSurfaces: [
+            {
+              domain: "messaging",
+              area: "sms",
+            },
+          ],
+          acceptableProblemClasses: [
+            "expected-behavior",
+          ],
+        },
+        actual: {
+          primaryProductSurface: {
+            domain: "messaging",
+            area: "sms",
+          },
+          secondaryProductSurfaces: [],
+          problemClasses: [
+            "expected-behavior",
+          ],
+        },
         primarySurfacePass: true,
         problemClassPass: true,
         taxonomyPass: true,
@@ -408,6 +429,32 @@ describe("taxonomy inference comparison", () => {
       {
         ticketId: "TKT-1030",
         status: "scored",
+        expected: {
+          acceptablePrimaryProductSurfaces: [
+            {
+              domain: "customer-data",
+              area: "consent",
+            },
+          ],
+          acceptableProblemClasses: [
+            "data-integrity",
+          ],
+        },
+        actual: {
+          primaryProductSurface: {
+            domain: "customer-data",
+            area: "consent",
+          },
+          secondaryProductSurfaces: [
+            {
+              domain: "messaging",
+              area: "sms",
+            },
+          ],
+          problemClasses: [
+            "data-integrity",
+          ],
+        },
         primarySurfacePass: true,
         problemClassPass: true,
         taxonomyPass: true,
@@ -556,5 +603,33 @@ describe("taxonomy inference comparison", () => {
       },
       gpt: null,
     });
+
+    expect(report.deterministic.results).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          ticketId: "TKT-1017",
+          status: "scored",
+          expected: {
+            acceptablePrimaryProductSurfaces: [
+              {
+                domain: "messaging",
+                area: "sms",
+              },
+            ],
+            acceptableProblemClasses: [
+              "expected-behavior",
+            ],
+          },
+          actual: expect.objectContaining({
+            primaryProductSurface: {
+              domain: "messaging",
+              area: "sms",
+            },
+            secondaryProductSurfaces: expect.any(Array),
+            problemClasses: expect.any(Array),
+          }),
+        }),
+      ]),
+    );
   });
 });

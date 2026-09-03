@@ -100,6 +100,8 @@ describe("taxonomy lane evaluation", () => {
         {
           ticketId: "TKT-A",
           status: "scored",
+          expected: firstExpectation,
+          actual: correctCandidate,
           primarySurfacePass: true,
           problemClassPass: true,
           taxonomyPass: true,
@@ -108,6 +110,8 @@ describe("taxonomy lane evaluation", () => {
         {
           ticketId: "TKT-B",
           status: "scored",
+          expected: secondExpectation,
+          actual: abstainingCandidate,
           primarySurfacePass: false,
           problemClassPass: true,
           taxonomyPass: false,
@@ -192,6 +196,8 @@ describe("taxonomy lane evaluation", () => {
         {
         ticketId: "TKT-SCORED",
         status: "scored",
+        expected: expectation,
+        actual: correctCandidate,
         primarySurfacePass: true,
         problemClassPass: true,
         taxonomyPass: true,

@@ -43,6 +43,9 @@ export interface ScoredTaxonomyLaneEvaluationResult {
   ticketId: string;
   status: "scored";
 
+  expected: NonNullable<EvaluationOracle["taxonomy"]>;
+  actual: TaxonomyInferenceCandidate;
+
   primarySurfacePass: boolean;
   problemClassPass: boolean;
   taxonomyPass: boolean;
@@ -121,6 +124,8 @@ export function evaluateTaxonomyLane(input: {
         return {
           ticketId,
           status: "scored" as const,
+          expected: expectation,
+          actual: outcome.candidate,
           ...score,
         };
       },

@@ -240,6 +240,80 @@ describe("OpenAiTaxonomyReasoningProvider", () => {
       .not.toContain('"oneOf"');
   });
 
+  it("communicates an evidence-disciplined taxonomy policy in the provider request", async () => {
+    const fetch = vi.fn(
+      async (_url: string, _init: unknown) => ({
+        ok: true,
+        status: 200,
+        text: async () =>
+          JSON.stringify({
+            output: [
+              {
+                content: [
+                  {
+                    type: "output_text",
+                    text: JSON.stringify({
+                      primaryProductSurface: null,
+                      secondaryProductSurfaces: [],
+                      problemClasses: [],
+                      rationale:
+                        "The available ticket evidence does not support a stronger taxonomy conclusion.",
+                    }),
+                  },
+                ],
+              },
+            ],
+          }),
+      }),
+    );
+
+    const provider =
+      new OpenAiTaxonomyReasoningProvider({
+        apiKey: "sk-test",
+        fetch,
+      });
+
+    await provider.reason(await providerInput());
+
+    const request = JSON.parse(
+      (fetch.mock.calls[0]![1] as { body: string }).body,
+    ) as {
+      instructions: string;
+    };
+
+    const instructions = request.instructions
+      .toLowerCase()
+      .replace(/\s+/g, " ");
+
+    expect(instructions).toMatch(
+      /do not infer a root cause|root cause.*must not be inferred/,
+    );
+    expect(instructions).toMatch(
+      /problemclass(?:es)?.*(positive evidence|positively supports)|positive evidence.*problemclass/,
+    );
+    expect(instructions).toMatch(
+      /problemclasses?.*(empty|\[\]).*(correct|preferred)|(?:correct|preferred).*problemclasses?.*(empty|\[\])/,
+    );
+    expect(instructions).toMatch(
+      /defect.*(failure|fails|does not work).*(insufficient|not automatically|alone)|(?:failure|fails|does not work).*defect.*(insufficient|not automatically|alone)/,
+    );
+    expect(instructions).toMatch(
+      /configuration.*(possible|possibility|merely|automatically).*(misconfiguration|explain|configuration)|(?:misconfiguration|configuration).*not automatically/,
+    );
+    expect(instructions).toMatch(
+      /data-integrity.*(mismatch|missing|delayed|unexplained).*(not necessarily|not automatically|insufficient|alone)|(?:mismatch|missing|delayed|unexplained).*data-integrity.*(not necessarily|not automatically|insufficient|alone)/,
+    );
+    expect(instructions).toMatch(
+      /multiple problemclasses?.*(independently supported|each.*supported)|independently supported.*problemclasses?/,
+    );
+    expect(instructions).toMatch(
+      /primaryproductsurface.*null.*(valid|correct).*(inadequate|cannot support|unsupported)|(?:inadequate|cannot support|unsupported).*surface.*primaryproductsurface.*null/,
+    );
+    expect(instructions).toMatch(
+      /(category.*team.*priority|deterministic classification).*(advisory|not.*taxonomy.*ground truth|not.*ground truth)/,
+    );
+  });
+
   it("returns a strict semantic taxonomy candidate with telemetry", async () => {
     const fetch = vi.fn(
       async (_url: string, _init: unknown) => ({

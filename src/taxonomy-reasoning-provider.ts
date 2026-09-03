@@ -27,6 +27,36 @@ const DEFAULT_TIMEOUT_MS = 20_000;
 const OPENAI_RESPONSES_URL =
   "https://api.openai.com/v1/responses";
 
+const TAXONOMY_REASONING_INSTRUCTIONS = [
+  "Infer semantic diagnostic taxonomy using only the provided ticket and conversation context.",
+  "Do not infer a root cause.",
+  "Distinguish observed evidence from a plausible explanation, a root cause, and a supported ProblemClass.",
+  "A product surface identifies where the reported behavior manifests.",
+  "Select a primary product surface only when the available evidence supports it.",
+  "Secondary product surfaces may represent clearly involved additional surfaces.",
+  "primaryProductSurface: null is valid and correct when surface evidence is inadequate or cannot support a meaningful surface.",
+  "Do not select product surfaces merely to make the candidate complete.",
+  "ProblemClasses require positive evidence.",
+  "Include a ProblemClass only when the current evidence positively supports that classification; possible, plausible, or likely explanations are insufficient.",
+  "problemClasses: [] is the correct and preferred result when no ProblemClass is established by the available evidence.",
+  "Multiple ProblemClasses are allowed only when each is independently supported.",
+  "An unexplained failure must not automatically become defect; it does not work, missing behavior, or a failure alone is insufficient.",
+  "A possible misconfiguration or the mere possibility that configuration explains a symptom is insufficient to establish configuration.",
+  "An unexplained mismatch, missing result, stale-looking result, or delayed result alone does not automatically establish data-integrity.",
+  "A security-adjacent or credential-related symptom must not automatically become access.",
+  "For defect, evidence must establish that observed product behavior contradicts expected product behavior.",
+  "For configuration, evidence must identify a relevant configuration state, mismatch, or setting that explains or classifies the observed issue.",
+  "For data-integrity, evidence must establish that data itself is incorrect, inconsistent, corrupted, or contradictory.",
+  "For expected-behavior, evidence must support that the behavior is intentional product or policy behavior rather than a failure.",
+  "For degraded-performance, an observed delay, latency, slowness, backlog, or degraded timing can support the class when the performance symptom itself is established.",
+  "For security, the observed issue itself must concern security exposure, compromise risk, credentials or secrets, or another established security condition; proof of exploitation is not required.",
+  "For access, evidence must establish an authentication, authorization, permission, or access failure, not merely a security-related situation.",
+  "For feature-request, the user must be asking for new or changed capability rather than reporting an established malfunction.",
+  "Preserve the existing canonical meanings of the remaining ProblemClasses; do not redesign the taxonomy.",
+  "The supplied deterministic category, team, and priority are advisory context, not taxonomy ground truth or evidence that a surface or ProblemClass is true.",
+  "Return only the requested semantic taxonomy fields and rationale.",
+].join(" ");
+
 const TaxonomyProviderResponseSchema = z
   .object({
     primaryProductSurface:
@@ -114,7 +144,7 @@ export class OpenAiTaxonomyReasoningProvider
             model,
 
             instructions:
-              "Infer semantic diagnostic taxonomy using only the provided ticket and conversation context. Do not infer a root cause. Return only the requested semantic taxonomy fields and rationale.",
+              TAXONOMY_REASONING_INSTRUCTIONS,
 
             input:
               buildReasoningInput(input),

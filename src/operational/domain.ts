@@ -16,6 +16,7 @@ import {
 } from "../domain.js";
 import { CompletedDiagnosisSchema } from "../knowledge-evolution/domain.js";
 import { DiagnosticStateSnapshotSchema } from "../approval-desk/diagnostic-state.js";
+import { DiagnosticTaxonomyContextSchema } from "../diagnostic-taxonomy.js";
 
 const NonBlankStringSchema = z.string().trim().min(1);
 const IdentifierSchema = z.string().trim().min(1).max(160)
@@ -59,6 +60,7 @@ const OperationalLifecycleAuditEventSchema = AuditEventSchema.refine(
     "diagnostic-escalated",
     "diagnosis-reviewed",
     "diagnosis-invalidated",
+    "diagnostic-taxonomy-revised",
     "fix-available",
     "fix-ineffective",
     "platform-mitigation-available",
@@ -229,6 +231,23 @@ export const RecommendationRevisionSchema = z.object({
   operationalEventId: OperationalEventIdSchema,
   createdAt: IsoTimestampSchema,
 }).strict().readonly();
+
+export const DiagnosticTaxonomyRevisionSchema = z.object({
+  id: IdentifierSchema,
+  ticketId: TicketIdSchema,
+  revision: RevisionNumberSchema,
+  context: DiagnosticTaxonomyContextSchema,
+  operationalEventId: OperationalEventIdSchema,
+  createdAt: IsoTimestampSchema,
+}).strict().superRefine((revision, context) => {
+  if (revision.revision < 1) {
+    context.addIssue({
+      code: "custom",
+      path: ["revision"],
+      message: "Diagnostic taxonomy revisions must start at one.",
+    });
+  }
+}).readonly();
 
 const OperationalDiagnosisContextSchema = z.object({
   status: z.literal("completed"),
@@ -594,6 +613,7 @@ export const OperationalWorkflowSnapshotSchema = z.object({
   ticketRevisions: z.array(TicketRevisionSchema),
   recommendations: z.array(TriageRecommendationSchema),
   recommendationRevisions: z.array(RecommendationRevisionSchema),
+  diagnosticTaxonomyRevisions: z.array(DiagnosticTaxonomyRevisionSchema).default([]),
   messages: z.array(ConversationMessageSchema),
   diagnoses: z.array(OperationalDiagnosisRecordSchema),
   events: z.array(OperationalEventSchema),
@@ -624,6 +644,7 @@ export const OperationalWorkflowSnapshotSchema = z.object({
     ...snapshot.ticketRevisions.map((revision) => revision.ticketId),
     ...snapshot.recommendations.map((recommendation) => recommendation.ticketId),
     ...snapshot.recommendationRevisions.map((revision) => revision.recommendation.ticketId),
+    ...snapshot.diagnosticTaxonomyRevisions.map((revision) => revision.ticketId),
     ...snapshot.messages.map((message) => message.ticketId),
     ...snapshot.diagnoses.map((diagnosis) => diagnosis.diagnosis.ticketId),
     ...snapshot.traces.map((trace) => trace.ticketId),
@@ -636,6 +657,7 @@ export const OperationalWorkflowSnapshotSchema = z.object({
   const eventReferences = [
     ...snapshot.ticketRevisions.map((revision) => revision.operationalEventId),
     ...snapshot.recommendationRevisions.map((revision) => revision.operationalEventId),
+    ...snapshot.diagnosticTaxonomyRevisions.map((revision) => revision.operationalEventId),
     ...snapshot.messages.map((message) => message.operationalEventId),
     ...snapshot.diagnoses.map((diagnosis) => diagnosis.operationalEventId),
     ...snapshot.traces.map((trace) => trace.operationalEventId),
@@ -643,6 +665,46 @@ export const OperationalWorkflowSnapshotSchema = z.object({
   eventReferences.forEach((eventId, index) => {
     if (!eventIds.has(eventId)) {
       context.addIssue({ code: "custom", path: ["eventReferences", index], message: "Snapshot child records must reference a snapshot operational event." });
+    }
+  });
+  const taxonomyRevisionIds = new Set<string>();
+  const taxonomyEventIds = new Set<string>();
+  snapshot.diagnosticTaxonomyRevisions.forEach((revision, index) => {
+    if (taxonomyRevisionIds.has(revision.id)) {
+      context.addIssue({
+        code: "custom",
+        path: ["diagnosticTaxonomyRevisions", index, "id"],
+        message: "Diagnostic taxonomy revision IDs must be unique.",
+      });
+    }
+    taxonomyRevisionIds.add(revision.id);
+    if (taxonomyEventIds.has(revision.operationalEventId)) {
+      context.addIssue({
+        code: "custom",
+        path: ["diagnosticTaxonomyRevisions", index, "operationalEventId"],
+        message: "An operational event may back only one diagnostic taxonomy revision.",
+      });
+    }
+    taxonomyEventIds.add(revision.operationalEventId);
+    const event = snapshot.events.find((candidate) => candidate.id === revision.operationalEventId);
+    if (
+      event === undefined
+      || event.ticketId !== revision.ticketId
+      || event.action !== "diagnostic-taxonomy-revised"
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["diagnosticTaxonomyRevisions", index, "operationalEventId"],
+        message: "Diagnostic taxonomy revisions must bind to a same-ticket diagnostic-taxonomy-revised event.",
+      });
+    }
+    const expectedRevision = index + 1;
+    if (revision.revision !== expectedRevision) {
+      context.addIssue({
+        code: "custom",
+        path: ["diagnosticTaxonomyRevisions", index, "revision"],
+        message: `Diagnostic taxonomy revisions must be contiguous and ordered from one (expected ${expectedRevision}).`,
+      });
     }
   });
   for (const [index, diagnosis] of snapshot.diagnoses.entries()) {
@@ -772,6 +834,7 @@ export const DecisionTimelineEntrySchema = z.object({
 export type OperationalEvent = z.infer<typeof OperationalEventSchema>;
 export type TicketRevision = z.infer<typeof TicketRevisionSchema>;
 export type ConversationMessage = z.infer<typeof ConversationMessageSchema>;
+export type DiagnosticTaxonomyRevision = z.infer<typeof DiagnosticTaxonomyRevisionSchema>;
 export type OperationalWorkflowSnapshot = z.infer<typeof OperationalWorkflowSnapshotSchema>;
 export type OperationalOutboxRow = z.infer<typeof OperationalOutboxRowSchema>;
 export type CommandIdempotencyRecord = z.infer<typeof CommandIdempotencyRecordSchema>;

@@ -382,6 +382,8 @@ function summarizeAuditEvent(event: AuditEvent): string {
       return "Diagnosis review was recorded without replacing the original diagnosis.";
     case "diagnosis-invalidated":
       return `Diagnosis was invalidated: ${event.rationale}`;
+    case "diagnostic-taxonomy-revised":
+      return "Diagnostic taxonomy was revised from governed evidence.";
     case "diagnostic-escalated":
       return "Diagnostic ambiguity was escalated for specialist review.";
     case "fix-available":

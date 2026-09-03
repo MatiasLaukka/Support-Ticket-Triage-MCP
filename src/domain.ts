@@ -712,6 +712,7 @@ export const AuditActionSchema = z.enum([
     "customer-response-sent",
     "customer-reply-received",
   "diagnosis-completed",
+  "diagnostic-taxonomy-revised",
   "diagnosis-reviewed",
   "diagnosis-invalidated",
   "diagnostic-escalated",

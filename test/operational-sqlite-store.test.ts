@@ -505,6 +505,55 @@ describe("OperationalSqliteStore migrations and transaction boundary", () => {
     reopened.initialize();
     reopened.close();
   });
+
+  it("stores taxonomy revision identity as single-column unique keys in schema v3", () => {
+    const path = temporaryDatabasePath();
+
+    const store = OperationalSqliteStore.open(path);
+    store.initialize();
+    store.close();
+
+    const database = new Database(path, { readonly: true });
+
+    try {
+      const columns = database
+        .prepare("PRAGMA table_info(diagnostic_taxonomy_revisions)")
+        .all() as Array<{ name: string }>;
+
+      const indexes = database
+        .prepare("PRAGMA index_list(diagnostic_taxonomy_revisions)")
+        .all() as Array<{
+          name: string;
+          unique: number;
+        }>;
+
+      const uniqueSingleColumnIndexes = indexes
+        .filter(({ unique }) => unique === 1)
+        .flatMap(({ name }) => {
+          const indexedColumns = database
+            .prepare(`PRAGMA index_info("${name}")`)
+            .all() as Array<{ name: string }>;
+
+          return indexedColumns.length === 1
+            ? [indexedColumns[0]!.name]
+            : [];
+        })
+        .sort();
+
+      expect({
+        hasIdColumn: columns.some(({ name }) => name === "id"),
+        uniqueSingleColumnIndexes,
+      }).toEqual({
+        hasIdColumn: true,
+        uniqueSingleColumnIndexes: [
+          "id",
+          "operational_event_id",
+        ],
+      });
+    } finally {
+      database.close();
+    }
+  });
 });
 
 function ticket() {

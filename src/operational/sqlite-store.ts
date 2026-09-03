@@ -699,9 +699,10 @@ const INITIAL_SCHEMA_SQL = `
 
 const DIAGNOSTIC_TAXONOMY_REVISION_SCHEMA_SQL = `
   CREATE TABLE diagnostic_taxonomy_revisions (
+    id TEXT NOT NULL UNIQUE,
     ticket_id TEXT NOT NULL,
     revision INTEGER NOT NULL CHECK (revision > 0),
-    operational_event_id TEXT NOT NULL,
+    operational_event_id TEXT NOT NULL UNIQUE,
     created_at TEXT NOT NULL,
     product_surface_support TEXT NOT NULL CHECK (product_surface_support IN ('tentative', 'supported', 'established')),
     problem_class_support TEXT NOT NULL CHECK (problem_class_support IN ('tentative', 'supported', 'established')),

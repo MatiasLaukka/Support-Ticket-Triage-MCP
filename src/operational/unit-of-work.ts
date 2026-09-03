@@ -761,17 +761,11 @@ export class OperationalUnitOfWork {
         "IDEMPOTENCY_CONFLICT",
       );
     }
-    const existingId = (this.database.prepare(
-      "SELECT payload_json FROM diagnostic_taxonomy_revisions",
-    ).all() as JsonRow[]).some((row) => {
-      try {
-        const value = JSON.parse(row.payload_json) as { id?: unknown };
-        return value.id === parsed.id;
-      } catch {
-        return false;
-      }
-    });
-    if (existingId || this.diagnosticTaxonomyRevisionWrites.some((row) => row.id === parsed.id)) {
+    const existingId = this.database.prepare(
+      "SELECT 1 AS found FROM diagnostic_taxonomy_revisions WHERE id = ? LIMIT 1",
+    ).get(parsed.id) as { found?: number } | undefined;
+
+    if (existingId?.found === 1) {
       throw new OperationalStoreError(
         "Diagnostic taxonomy revision IDs must be unique.",
         "IDEMPOTENCY_CONFLICT",
@@ -779,10 +773,11 @@ export class OperationalUnitOfWork {
     }
     this.database.prepare(`
       INSERT INTO diagnostic_taxonomy_revisions(
-        ticket_id, revision, operational_event_id, created_at,
+        id, ticket_id, revision, operational_event_id, created_at,
         product_surface_support, problem_class_support, payload_json
-      ) VALUES (?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
+      parsed.id,
       parsed.ticketId,
       parsed.revision,
       parsed.operationalEventId,

@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import Database from "better-sqlite3";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -73,6 +74,182 @@ describe("reliability command replay", () => {
     expect(retry.body.recommendation).toEqual(first.body.recommendation);
     expect(classificationCalls).toBe(1);
     expect(draftingCalls).toBe(1);
+  });
+
+  it("rejects a changed HTTP body for a committed key before provider work or mutation", async () => {
+    let providerCalls = 0;
+    const classification = createControlledClassificationProvider();
+    const drafting = createControlledDraftProvider();
+    const harness = await openReliabilityRuntime({
+      classificationReasoningProvider: {
+        async reason(input) {
+          providerCalls += 1;
+          return classification.reason(input);
+        },
+      },
+      draftProvider: {
+        async draft(input) {
+          providerCalls += 1;
+          return drafting.draft(input);
+        },
+      },
+    });
+    activeRuntimes.push(harness);
+    const key = randomUUID();
+    const first = await harness.post(
+      "/api/tickets/TKT-1010/recommendations",
+      { actor: "approval-desk", aiPreference: "auto" },
+      key,
+    );
+    const snapshot = (harness.runtime.operationalStore as OperationalSqliteStore)
+      .readWorkflowSnapshot("TKT-1010");
+    const callsAfterFirst = providerCalls;
+    const conflict = await harness.post(
+      "/api/tickets/TKT-1010/recommendations",
+      { actor: "approval-desk", aiPreference: "auto", responseStyle: "concise" },
+      key,
+    );
+
+    expect(first.status).toBe(201);
+    expect(conflict.status).toBe(409);
+    expect(conflict.body.error).toMatchObject({ code: "IDEMPOTENCY_CONFLICT" });
+    expect(providerCalls).toBe(callsAfterFirst);
+    expect((harness.runtime.operationalStore as OperationalSqliteStore)
+      .readWorkflowSnapshot("TKT-1010")).toEqual(snapshot);
+  });
+
+  it("rejects a changed MCP body for a committed key before provider work or mutation", async () => {
+    let providerCalls = 0;
+    const classification = createControlledClassificationProvider();
+    const drafting = createControlledDraftProvider();
+    const harness = await openReliabilityRuntime();
+    activeRuntimes.push(harness);
+    const server = createTriageServer({
+      ...harness.runtime,
+      classificationReasoningProvider: {
+        async reason(input) {
+          providerCalls += 1;
+          return classification.reason(input);
+        },
+      },
+      draftProvider: {
+        async draft(input) {
+          providerCalls += 1;
+          return drafting.draft(input);
+        },
+      },
+    });
+    const client = new Client({ name: "reliability-mcp-changed", version: "1.0.0" });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    await server.connect(serverTransport);
+    await client.connect(clientTransport);
+    try {
+      const key = randomUUID();
+      const first = await client.callTool({
+        name: "evaluate_ticket",
+        arguments: { commandId: key, ticketId: "TKT-1010", actor: "approval-desk", aiPreference: "auto" },
+      });
+      const snapshot = (harness.runtime.operationalStore as OperationalSqliteStore)
+        .readWorkflowSnapshot("TKT-1010");
+      const callsAfterFirst = providerCalls;
+      const conflict = await client.callTool({
+        name: "evaluate_ticket",
+        arguments: {
+          commandId: key,
+          ticketId: "TKT-1010",
+          actor: "approval-desk",
+          aiPreference: "auto",
+          responseStyle: "concise",
+        },
+      });
+
+      expect(first.isError).not.toBe(true);
+      expect(conflict.isError).toBe(true);
+      expect(JSON.stringify(conflict.content)).toContain("IDEMPOTENCY_CONFLICT");
+      expect(providerCalls).toBe(callsAfterFirst);
+      expect((harness.runtime.operationalStore as OperationalSqliteStore)
+        .readWorkflowSnapshot("TKT-1010")).toEqual(snapshot);
+    } finally {
+      await Promise.allSettled([client.close(), server.close()]);
+    }
+  });
+
+  it("rejects an HTTP reuse of a version-1 receipt before provider work or mutation", async () => {
+    let providerCalls = 0;
+    const harness = await openReliabilityRuntime({
+      classificationReasoningProvider: {
+        async reason(input) {
+          providerCalls += 1;
+          return createControlledClassificationProvider().reason(input);
+        },
+      },
+      draftProvider: {
+        async draft(input) {
+          providerCalls += 1;
+          return createControlledDraftProvider().draft(input);
+        },
+      },
+    });
+    activeRuntimes.push(harness);
+    const key = randomUUID();
+    insertLegacyEvaluationReceipt(harness.root, key);
+    const before = (harness.runtime.operationalStore as OperationalSqliteStore)
+      .readWorkflowSnapshot("TKT-1010");
+
+    const response = await harness.post(
+      "/api/tickets/TKT-1010/recommendations",
+      { actor: "approval-desk", aiPreference: "auto" },
+      key,
+    );
+
+    expect(response.status).toBe(409);
+    expect(response.body.error).toMatchObject({ code: "LEGACY_REPLAY_UNAVAILABLE" });
+    expect(providerCalls).toBe(0);
+    expect((harness.runtime.operationalStore as OperationalSqliteStore)
+      .readWorkflowSnapshot("TKT-1010")).toEqual(before);
+  });
+
+  it("rejects an MCP reuse of a version-1 receipt before provider work or mutation", async () => {
+    let providerCalls = 0;
+    const harness = await openReliabilityRuntime();
+    activeRuntimes.push(harness);
+    const server = createTriageServer({
+      ...harness.runtime,
+      classificationReasoningProvider: {
+        async reason(input) {
+          providerCalls += 1;
+          return createControlledClassificationProvider().reason(input);
+        },
+      },
+      draftProvider: {
+        async draft(input) {
+          providerCalls += 1;
+          return createControlledDraftProvider().draft(input);
+        },
+      },
+    });
+    const client = new Client({ name: "reliability-mcp-legacy", version: "1.0.0" });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    await server.connect(serverTransport);
+    await client.connect(clientTransport);
+    try {
+      const key = randomUUID();
+      insertLegacyEvaluationReceipt(harness.root, key);
+      const before = (harness.runtime.operationalStore as OperationalSqliteStore)
+        .readWorkflowSnapshot("TKT-1010");
+      const response = await client.callTool({
+        name: "evaluate_ticket",
+        arguments: { commandId: key, ticketId: "TKT-1010", actor: "approval-desk", aiPreference: "auto" },
+      });
+
+      expect(response.isError).toBe(true);
+      expect(JSON.stringify(response.content)).toContain("LEGACY_REPLAY_UNAVAILABLE");
+      expect(providerCalls).toBe(0);
+      expect((harness.runtime.operationalStore as OperationalSqliteStore)
+        .readWorkflowSnapshot("TKT-1010")).toEqual(before);
+    } finally {
+      await Promise.allSettled([client.close(), server.close()]);
+    }
   });
 
   it("shares the frozen evaluation preparation and replay across HTTP and MCP", async () => {
@@ -385,4 +562,30 @@ async function postToServer(
     body: JSON.stringify(body),
   });
   return { status: response.status, body: await response.json() as Record<string, unknown> };
+}
+
+function insertLegacyEvaluationReceipt(root: string, commandId: string): void {
+  const database = new Database(join(root, "operational.sqlite"));
+  try {
+    database.prepare(`
+      INSERT INTO command_idempotency(
+        command_id, operation, request_hash, result_json, created_at
+      ) VALUES (?, ?, ?, ?, ?)
+    `).run(
+      commandId,
+      "evaluate-ticket",
+      "c".repeat(64),
+      JSON.stringify({
+        operation: "evaluate-ticket",
+        tickets: [{
+          ticketId: "TKT-1010",
+          operationalEventIds: ["33333333-3333-4333-8333-333333333338"],
+          resultingRevision: null,
+        }],
+      }),
+      "2026-09-05T10:00:00.000Z",
+    );
+  } finally {
+    database.close();
+  }
 }

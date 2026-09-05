@@ -14,6 +14,29 @@ export interface ReliabilityRuntimeOptions extends ApprovalDeskHttpOptions {
   omitEvaluationGuard?: boolean;
 }
 
+export async function closeReliabilityResources(
+  server: Pick<Server, "close">,
+  runtime: Pick<RuntimeDependencies, "close">,
+): Promise<void> {
+  const errors: unknown[] = [];
+  try {
+    await new Promise<void>((resolveClose, rejectClose) => {
+      server.close((error) => error ? rejectClose(error) : resolveClose());
+    });
+  } catch (error) {
+    errors.push(error);
+  }
+  try {
+    await runtime.close();
+  } catch (error) {
+    errors.push(error);
+  }
+  if (errors.length === 1) throw errors[0];
+  if (errors.length > 1) {
+    throw new AggregateError(errors, "Reliability runtime resources could not be closed cleanly.");
+  }
+}
+
 export async function openReliabilityRuntime(
   options: ReliabilityRuntimeOptions = {},
 ) {
@@ -50,8 +73,14 @@ export async function openReliabilityRuntime(
       });
       return { runtime, server };
     } catch (error) {
-      server.close();
-      runtime.close();
+      try {
+        await closeReliabilityResources(server, runtime);
+      } catch (cleanupError) {
+        throw new AggregateError(
+          [error, cleanupError],
+          "Reliability runtime startup and cleanup failed.",
+        );
+      }
       throw error;
     }
   }
@@ -66,10 +95,7 @@ export async function openReliabilityRuntime(
   async function stop(): Promise<void> {
     const current = active;
     if (current === undefined) return;
-    await new Promise<void>((resolveClose, reject) => {
-      current.server.close((error) => error ? reject(error) : resolveClose());
-    });
-    current.runtime.close();
+    await closeReliabilityResources(current.server, current.runtime);
   }
 
   return {

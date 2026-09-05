@@ -1,8 +1,8 @@
 # Support Ticket Triage — Reliability Slice R1
 
-Status: proposed design for implementation review  
-Date: 2026-09-05  
-Baseline: main, caaf00917447b32f0b9928c49dd6a572abe8e4f7  
+Status: proposed design for implementation review
+Date: 2026-09-05
+Baseline: main, caaf00917447b32f0b9928c49dd6a572abe8e4f7
 Repository: https://github.com/MatiasLaukka/Support-Ticket-Triage-MCP
 
 ## 1. Objective and scope

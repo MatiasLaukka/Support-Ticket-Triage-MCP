@@ -1284,7 +1284,7 @@ export class TriageService {
 
   private replayRecommendation(reader: OperationalResultReader, replay: CommandReplay): TriageRecommendation {
     const recommendationId = replay.result.recommendationId ?? replay.result.recommendationIds?.[0];
-    if (recommendationId === undefined) throw stale("Operational recommendation replay is missing its recommendation reference.");
+    if (recommendationId === undefined) throw replayIntegrity("Operational recommendation replay is missing its recommendation reference.");
     const eventIds = new Set(replay.result.tickets.flatMap(({ operationalEventIds }) => operationalEventIds));
     const snapshot = reader.readWorkflowSnapshot(replay.result.tickets[0]!.ticketId);
     const endSequence = Math.max(
@@ -1299,7 +1299,7 @@ export class TriageService {
         revision.recommendation.id === recommendationId && event !== undefined && event.sequence <= endSequence,
       )
       .at(-1)?.revision.recommendation;
-    if (historical === undefined) throw stale("Operational recommendation replay is missing its persisted recommendation.");
+    if (historical === undefined) throw replayIntegrity("Operational recommendation replay is missing its persisted recommendation.");
     return historical;
   }
 
@@ -1756,8 +1756,12 @@ export class TriageService {
     replay: CommandReplay,
   ): AuditEvent {
     const ticketResult = replay.result.tickets[0];
-    if (ticketResult === undefined || replay.result.messageId === undefined) {
-      throw stale("Operational customer-reply replay is missing its message reference.");
+    if (
+      ticketResult === undefined
+      || replay.result.messageId === undefined
+      || replay.result.ticketSnapshot === undefined
+    ) {
+      throw replayIntegrity("Operational customer-reply replay is missing its immutable result references.");
     }
     const snapshot = reader.readWorkflowSnapshot(ticketResult.ticketId);
     const message = snapshot.messages.find(({ id }) => id === replay.result.messageId);
@@ -1769,11 +1773,11 @@ export class TriageService {
       || event?.action !== "customer-reply-received"
       || !ticketResult.operationalEventIds.includes(event.id)
     ) {
-      throw stale("Operational customer-reply replay is missing its persisted message.");
+      throw replayIntegrity("Operational customer-reply replay is missing its persisted message.");
     }
     return operationalCustomerReplyAudit(
       message,
-      replay.result.ticketSnapshot ?? snapshot.ticket,
+      replay.result.ticketSnapshot,
       event.actor,
     );
   }
@@ -1895,8 +1899,12 @@ export class TriageService {
     const ticketResult = replay.result.tickets[0];
     const recommendationId = replay.result.recommendationId
       ?? replay.result.recommendationIds?.[0];
-    if (ticketResult === undefined || recommendationId === undefined) {
-      throw stale("Operational approval replay is missing its semantic references.");
+    if (
+      ticketResult === undefined
+      || recommendationId === undefined
+      || replay.result.ticketSnapshot === undefined
+    ) {
+      throw replayIntegrity("Operational approval replay is missing its immutable result references.");
     }
     const snapshot = reader.readWorkflowSnapshot(ticketResult.ticketId);
     const event = snapshot.events.find(
@@ -1910,13 +1918,10 @@ export class TriageService {
             && revision.recommendation.id === recommendationId,
         )?.recommendation;
     if (event === undefined || recommendation === undefined) {
-      throw stale("Operational approval replay is missing its persisted recommendation.");
+      throw replayIntegrity("Operational approval replay is missing its persisted recommendation.");
     }
-    const ticket = replay.result.ticketSnapshot ?? snapshot.ticketRevisions.find(
-      ({ operationalEventId }) => operationalEventId === event.id,
-    )?.ticket ?? snapshot.ticket;
     return {
-      ticket,
+      ticket: replay.result.ticketSnapshot,
       auditEvent: operationalRecommendationLifecycleAudit(
         event,
         recommendation,
@@ -2034,7 +2039,7 @@ export class TriageService {
     const ticketResult = replay.result.tickets[0];
     const recommendationId = replay.result.recommendationId;
     if (ticketResult === undefined || recommendationId === undefined) {
-      throw stale("Operational lifecycle replay is missing its semantic references.");
+      throw replayIntegrity("Operational lifecycle replay is missing its semantic references.");
     }
     const snapshot = reader.readWorkflowSnapshot(ticketResult.ticketId);
     const event = snapshot.events.find(
@@ -2048,7 +2053,7 @@ export class TriageService {
             && revision.recommendation.id === recommendationId,
         )?.recommendation;
     if (event === undefined || recommendation === undefined) {
-      throw stale("Operational lifecycle replay is missing its persisted recommendation.");
+      throw replayIntegrity("Operational lifecycle replay is missing its persisted recommendation.");
     }
     const reason = typeof event.facts.reasonCode === "string"
       ? event.facts.reasonCode
@@ -2186,7 +2191,7 @@ export class TriageService {
     const ticketResult = replay.result.tickets[0];
     const messageId = replay.result.messageId;
     if (ticketResult === undefined || messageId === undefined) {
-      throw stale("Operational support-response replay is missing its semantic references.");
+      throw replayIntegrity("Operational support-response replay is missing its semantic references.");
     }
     const snapshot = reader.readWorkflowSnapshot(ticketResult.ticketId);
     const message = snapshot.messages.find(({ id }) => id === messageId);
@@ -2203,7 +2208,7 @@ export class TriageService {
       || recommendation === undefined
       || !ticketResult.operationalEventIds.includes(event.id)
     ) {
-      throw stale("Operational support-response replay is missing its persisted message.");
+      throw replayIntegrity("Operational support-response replay is missing its persisted message.");
     }
     return operationalSupportResponseAudit(event, message, recommendation);
   }
@@ -2443,7 +2448,7 @@ export class TriageService {
         && action === "customer-response-sent",
     );
     if (persistedSentEvent === undefined) {
-      throw stale("Operational approval and send replay is missing its sent event.");
+      throw replayIntegrity("Operational approval and send replay is missing its sent event.");
     }
     const auditsBeforeSentEventIds = replay.result.auditsBeforeSentEventIds
       ?? snapshot.events
@@ -4358,7 +4363,7 @@ export class TriageService {
       || audits.length !== replay.result.tickets.length
       || audits.some(({ action }) => action !== expectedAction)
     ) {
-      throw stale("Operational lifecycle replay is missing its persisted audit result.");
+      throw replayIntegrity("Operational lifecycle replay is missing its persisted audit result.");
     }
     return audits;
   }
@@ -4376,7 +4381,7 @@ export class TriageService {
       || audits?.length !== 1
       || !expectedActions.includes(audit.action)
     ) {
-      throw stale("Operational lifecycle replay is missing its persisted audit result.");
+      throw replayIntegrity("Operational lifecycle replay is missing its persisted audit result.");
     }
     return audit;
   }
@@ -4386,7 +4391,7 @@ export class TriageService {
   ): { ticket: Ticket; auditEvent: AuditEvent } {
     const ticket = replay.result.ticketSnapshot;
     if (ticket === undefined) {
-      throw stale("Operational closure replay is missing its persisted ticket snapshot.");
+      throw replayIntegrity("Operational closure replay is missing its persisted ticket snapshot.");
     }
     return {
       ticket: TicketSchema.parse(ticket),
@@ -5119,7 +5124,7 @@ export function operationalConversationAuditsForEventIds(
     persistedEventIds.length !== eventIds.length
     || persistedEventIds.some((id, index) => id !== eventIds[index])
   ) {
-    throw stale("Operational pre-send audit replay is missing its causal events.");
+    throw replayIntegrity("Operational pre-send audit replay is missing its causal events.");
   }
   return snapshot.events.flatMap((event) => {
     if (!includedEventIds.has(event.id)) return [];
@@ -5286,6 +5291,10 @@ async function serializeRecommendation<T>(
 
 function stale(message: string): DomainError {
   return new DomainError(message, "STALE_APPROVAL");
+}
+
+function replayIntegrity(message: string): OperationalStoreError {
+  return new OperationalStoreError(message, "PERSISTENCE_ERROR");
 }
 
 function invalidDiagnosisReview(message: string): DomainError {

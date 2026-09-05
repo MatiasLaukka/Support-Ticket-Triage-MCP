@@ -37,6 +37,38 @@ describe("reliability lifecycle command replay", () => {
       .toHaveLength(2);
   });
 
+  it("rejects a receipt whose immutable reply reference no longer exists", async () => {
+    const harness = await openReliabilityRuntime();
+    activeRuntimes.push(harness);
+    const commandId = randomUUID();
+    const path = "/api/tickets/TKT-1010/customer-replies";
+    const input = { actor: "reviewer", body: "The campaign page is blank." };
+
+    const first = await harness.post(path, input, commandId);
+    expect(first.status).toBe(201);
+
+    const database = new Database(`${harness.root}/operational.sqlite`);
+    try {
+      const receipt = JSON.parse(
+        (database.prepare(
+          "SELECT result_json FROM command_idempotency WHERE command_id = ?",
+        ).get(commandId) as { result_json: string }).result_json,
+      ) as { messageId?: string };
+      receipt.messageId = randomUUID();
+      database.prepare(
+        "UPDATE command_idempotency SET result_json = ? WHERE command_id = ?",
+      ).run(JSON.stringify(receipt), commandId);
+    } finally {
+      database.close();
+    }
+
+    const replay = await harness.post(path, input, commandId);
+    expect(replay.status).toBe(500);
+    expect(replay.body).toMatchObject({
+      error: { code: "OPERATIONAL_INTEGRITY_ERROR" },
+    });
+  });
+
   it("uses a v2 receipt for recommendation approval", async () => {
     const harness = await openReliabilityRuntime();
     activeRuntimes.push(harness);

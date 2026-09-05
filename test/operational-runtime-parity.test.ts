@@ -1,4 +1,5 @@
 import { Worker } from "node:worker_threads";
+import Database from "better-sqlite3";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -9,6 +10,12 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { afterEach, describe, expect, it } from "vitest";
 import { TicketSchema, TriageRecommendationSchema, type Ticket } from "../src/domain.js";
 import { createApprovalDeskHttpServer } from "../src/approval-desk/http.js";
+import {
+  createControlledClassificationProvider,
+  createControlledDraftProvider,
+} from "../src/approval-desk/controlled-evaluation-providers.js";
+import type { ClassificationReasoningProvider } from "../src/approval-desk/classification-reasoning-provider.js";
+import type { CustomerResponseDraftProvider } from "../src/approval-desk/draft-response-provider.js";
 import { importOperationalData, type OperationalImportAggregate } from "../src/operational/import.js";
 import { OperationalSqliteStore } from "../src/operational/sqlite-store.js";
 import { createRuntimeDependencies, type RuntimeDependencies } from "../src/runtime.js";
@@ -30,6 +37,166 @@ afterEach(async () => {
 });
 
 describe("production operational runtime parity", () => {
+  it("blocks evaluation before provider work while a readable import is incomplete", async () => {
+    const fixture = await runtimeFixture();
+    const database = join(fixture.root, "partial-import.sqlite");
+    const partial = OperationalSqliteStore.open(database);
+    partial.initialize();
+    partial.transaction((unit) => {
+      unit.transitionImportState("empty", "import-in-progress");
+      unit.insertTicket(importedTicket());
+    });
+    partial.close();
+
+    let providerCalls = 0;
+    const baseProvider = createControlledClassificationProvider();
+    const classificationReasoningProvider: ClassificationReasoningProvider = {
+      async reason(input) {
+        providerCalls += 1;
+        return baseProvider.reason(input);
+      },
+    };
+    const runtime = await openRuntime(fixture, database);
+    const before = operationalMutationCounts(database);
+    const { baseUrl } = await startHttp(runtime, { classificationReasoningProvider });
+
+    const response = await fetch(`${baseUrl}/api/tickets/TKT-0001/recommendations`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "Idempotency-Key": "81000000-0000-4000-8000-000000000001",
+      },
+      body: JSON.stringify({ actor: "approval-desk", aiPreference: "auto" }),
+    });
+
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toMatchObject({
+      error: { code: "OPERATIONAL_NOT_READY" },
+    });
+    expect(providerCalls).toBe(0);
+    expect(operationalMutationCounts(database)).toEqual(before);
+  });
+
+  it("returns safe integrity errors for a tampered import state over HTTP and MCP", async () => {
+    const fixture = await runtimeFixture();
+    const database = join(fixture.root, "tampered-import-state.sqlite");
+    importTicket(database, importedTicket());
+    let providerCalls = 0;
+    const providerOptions = {
+      classificationReasoningProvider: {
+        async reason(input: Parameters<ClassificationReasoningProvider["reason"]>[0]) {
+          providerCalls += 1;
+          return createControlledClassificationProvider().reason(input);
+        },
+      } satisfies ClassificationReasoningProvider,
+      draftProvider: {
+        async draft(input: Parameters<CustomerResponseDraftProvider["draft"]>[0]) {
+          providerCalls += 1;
+          return createControlledDraftProvider().draft(input);
+        },
+      },
+    };
+    const runtime = await openRuntime(fixture, database);
+    const before = operationalStore(runtime).readWorkflowSnapshot("TKT-0001");
+    const { baseUrl } = await startHttp(runtime, providerOptions);
+    const mcpServer = createTriageServer({ ...runtime, ...providerOptions });
+    mcpServers.push(mcpServer);
+    const client = new Client({ name: "tampered-import-state", version: "1.0.0" });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    await mcpServer.connect(serverTransport);
+    await client.connect(clientTransport);
+    clients.push(client);
+    const raw = new Database(database);
+    raw.prepare("UPDATE operational_metadata SET value = ? WHERE key = 'import_state'")
+      .run("impossible-state");
+    raw.close();
+
+    const http = await fetch(`${baseUrl}/api/tickets/TKT-0001/recommendations`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "Idempotency-Key": "86000000-0000-4000-8000-000000000001",
+      },
+      body: JSON.stringify({ actor: "approval-desk", aiPreference: "auto" }),
+    });
+    const httpBody = await http.json() as { error?: { code?: string; message?: string } };
+    const mcp = await callTool(client, "evaluate_ticket", {
+      commandId: "86000000-0000-4000-8000-000000000002",
+      ticketId: "TKT-0001",
+      actor: "approval-desk",
+      aiPreference: "auto",
+    });
+
+    expect(http.status).toBe(500);
+    expect(httpBody.error).toMatchObject({ code: "OPERATIONAL_INTEGRITY_ERROR" });
+    expect(httpBody.error?.message).not.toContain("impossible-state");
+    expect(mcp.isError).toBe(true);
+    expect(JSON.stringify(mcp.content)).toContain("OPERATIONAL_INTEGRITY_ERROR");
+    expect(JSON.stringify(mcp.content)).not.toContain("impossible-state");
+    expect(providerCalls).toBe(0);
+    expect(operationalStore(runtime).readWorkflowSnapshot("TKT-0001")).toEqual(before);
+  });
+
+  it("returns safe integrity errors for a tampered request-hash version over HTTP and MCP", async () => {
+    const fixture = await runtimeFixture();
+    const database = join(fixture.root, "tampered-request-version.sqlite");
+    importTicket(database, importedTicket());
+    let providerCalls = 0;
+    const providerOptions = {
+      classificationReasoningProvider: {
+        async reason(input: Parameters<ClassificationReasoningProvider["reason"]>[0]) {
+          providerCalls += 1;
+          return createControlledClassificationProvider().reason(input);
+        },
+      } satisfies ClassificationReasoningProvider,
+      draftProvider: {
+        async draft(input: Parameters<CustomerResponseDraftProvider["draft"]>[0]) {
+          providerCalls += 1;
+          return createControlledDraftProvider().draft(input);
+        },
+      },
+    };
+    const runtime = await openRuntime(fixture, database);
+    const key = "86000000-0000-4000-8000-000000000003";
+    insertCommandReceipt(database, key);
+    const before = operationalStore(runtime).readWorkflowSnapshot("TKT-0001");
+    const { baseUrl } = await startHttp(runtime, providerOptions);
+    const mcpServer = createTriageServer({ ...runtime, ...providerOptions });
+    mcpServers.push(mcpServer);
+    const client = new Client({ name: "tampered-request-version", version: "1.0.0" });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    await mcpServer.connect(serverTransport);
+    await client.connect(clientTransport);
+    clients.push(client);
+    const raw = new Database(database);
+    raw.pragma("ignore_check_constraints = ON");
+    raw.prepare("UPDATE command_idempotency SET request_hash_version = 99 WHERE command_id = ?")
+      .run(key);
+    raw.close();
+
+    const http = await fetch(`${baseUrl}/api/tickets/TKT-0001/recommendations`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "Idempotency-Key": key },
+      body: JSON.stringify({ actor: "approval-desk", aiPreference: "auto" }),
+    });
+    const httpBody = await http.json() as { error?: { code?: string; message?: string } };
+    const mcp = await callTool(client, "evaluate_ticket", {
+      commandId: key,
+      ticketId: "TKT-0001",
+      actor: "approval-desk",
+      aiPreference: "auto",
+    });
+
+    expect(http.status).toBe(500);
+    expect(httpBody.error).toMatchObject({ code: "OPERATIONAL_INTEGRITY_ERROR" });
+    expect(httpBody.error?.message).not.toContain("request hash version");
+    expect(mcp.isError).toBe(true);
+    expect(JSON.stringify(mcp.content)).toContain("OPERATIONAL_INTEGRITY_ERROR");
+    expect(JSON.stringify(mcp.content)).not.toContain("request hash version");
+    expect(providerCalls).toBe(0);
+    expect(operationalStore(runtime).readWorkflowSnapshot("TKT-0001")).toEqual(before);
+  });
+
   it("owns the configured operational database and starts incomplete cutovers in restricted mode", async () => {
     const fixture = await runtimeFixture();
     const emptyDatabase = join(fixture.root, "empty.sqlite");
@@ -48,7 +215,7 @@ describe("production operational runtime parity", () => {
       body: "This restricted database must not accept writes.",
       receivedAt: fixedNow,
     }, { commandId: "81000000-0000-4000-8000-000000000001" }))
-      .rejects.toMatchObject({ code: "STATE_ERROR" });
+      .rejects.toMatchObject({ code: "OPERATIONAL_NOT_READY" });
 
     closeRuntime(runtime);
     expect(() => operationalStore(runtime).readImportState()).toThrow(/closed/i);
@@ -362,8 +529,11 @@ function closeRuntime(runtime: RuntimeDependencies): void {
   }
 }
 
-async function startHttp(runtime: RuntimeDependencies): Promise<{ baseUrl: string }> {
-  const server = createApprovalDeskHttpServer(runtime);
+async function startHttp(
+  runtime: RuntimeDependencies,
+  options: Parameters<typeof createApprovalDeskHttpServer>[1] = {},
+): Promise<{ baseUrl: string }> {
+  const server = createApprovalDeskHttpServer(runtime, options);
   httpServers.push(server);
   await new Promise<void>((resolveListen, rejectListen) => {
     server.once("error", rejectListen);
@@ -374,6 +544,29 @@ async function startHttp(runtime: RuntimeDependencies): Promise<{ baseUrl: strin
   });
   const address = server.address() as AddressInfo;
   return { baseUrl: `http://127.0.0.1:${address.port}` };
+}
+
+function operationalMutationCounts(path: string): Record<string, number> {
+  const database = new Database(path, { readonly: true });
+  try {
+    return Object.fromEntries([
+      "command_idempotency",
+      "ticket_revisions",
+      "conversation_messages",
+      "recommendations",
+      "recommendation_revisions",
+      "diagnostic_taxonomy_revisions",
+      "diagnoses",
+      "operational_events",
+      "decision_trace_events",
+      "learning_capture_outbox",
+    ].map((table) => [
+      table,
+      (database.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get() as { count: number }).count,
+    ]));
+  } finally {
+    database.close();
+  }
 }
 
 async function connectMcp(runtime: RuntimeDependencies): Promise<Client> {
@@ -404,6 +597,33 @@ function closeHttp(server: ReturnType<typeof createApprovalDeskHttpServer>): Pro
 
 function operationalStore(runtime: RuntimeDependencies): OperationalSqliteStore {
   return runtime.operationalStore as OperationalSqliteStore;
+}
+
+function insertCommandReceipt(path: string, commandId: string): void {
+  const database = new Database(path);
+  try {
+    database.prepare(`
+      INSERT INTO command_idempotency(
+        command_id, operation, request_hash, request_hash_version, result_json, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?)
+    `).run(
+      commandId,
+      "evaluate-ticket",
+      "d".repeat(64),
+      2,
+      JSON.stringify({
+        operation: "evaluate-ticket",
+        tickets: [{
+          ticketId: "TKT-0001",
+          operationalEventIds: ["84000000-0000-4000-8000-000000000099"],
+          resultingRevision: null,
+        }],
+      }),
+      "2026-08-11T12:00:00.000Z",
+    );
+  } finally {
+    database.close();
+  }
 }
 
 function runApprovalWorker(input: {

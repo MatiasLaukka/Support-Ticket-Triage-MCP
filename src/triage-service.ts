@@ -78,6 +78,7 @@ import {
   type CommandReplay,
   type OperationalCommandContext,
 } from "./operational/idempotency.js";
+import type { OperationalResultReader } from "./operational-command-dispatch.js";
 import type {
   ConversationMessage,
   LearningCaptureEnvelope,
@@ -85,7 +86,10 @@ import type {
   OperationalWorkflowSnapshot,
 } from "./operational/domain.js";
 import { OperationalEventSchema } from "./operational/domain.js";
-import type { OperationalUnitOfWork } from "./operational/unit-of-work.js";
+import {
+  OperationalStoreError,
+  type OperationalUnitOfWork,
+} from "./operational/unit-of-work.js";
 export type {
   DiagnosisReviewInput,
 } from "./approval-desk/diagnosis-review.js";
@@ -394,6 +398,12 @@ export type CustomerReplyWatermark = z.infer<
 export interface SubmitEvaluationInput extends SubmitRecommendationInput {
   evaluatedCustomerReplyWatermark: CustomerReplyWatermark;
   classificationConfidence?: ClassificationConfidence;
+}
+
+export interface PreparedOperationalEvaluation {
+  readonly recommendationInput: Omit<SubmitRecommendationInput, "submittedAt">;
+  readonly evaluatedCustomerReplyWatermark: CustomerReplyWatermark;
+  readonly classificationConfidence?: ClassificationConfidence;
 }
 
 export interface RejectRecommendationInput {
@@ -937,73 +947,121 @@ export class TriageService {
       const replay = unit.beginCommand(commandContext.commandId, "evaluate-ticket", parsed);
       if (replay !== "new") return this.replayEvaluation(unit, replay);
       const snapshot = unit.readWorkflowSnapshot(parsed.ticketId);
-      if (snapshot.ticket.revision !== parsed.sourceRevision) {
-        throw stale("Recommendation source revision is stale.");
-      }
-      if (!operationalCustomerReplyWatermarksMatch(
-        evaluatedCustomerReplyWatermark,
-        snapshot,
-      )) {
+      if (snapshot.ticket.revision !== parsed.sourceRevision) throw stale("Recommendation source revision is stale.");
+      if (!operationalCustomerReplyWatermarksMatch(evaluatedCustomerReplyWatermark, snapshot)) {
         throw stale("Evaluation customer reply snapshot is stale.");
       }
-
-      const superseded = snapshot.recommendations.filter((candidate) =>
-        candidate.resolution === "pending" &&
-        candidate.ticketId === parsed.ticketId &&
-        this.hasOperationalCustomerReplyAfterRecommendation(snapshot, candidate),
-      );
-      const eventIds = [this.uuid(), ...superseded.map(() => this.uuid())];
-      const sequences = unit.allocateEventSequences(parsed.ticketId, eventIds.length);
-      unit.appendEvent(this.operationalRecommendationEvent(
-        eventIds[0]!,
-        parsed.ticketId,
-        sequences[0]!,
+      const result = this.commitOperationalEvaluationWriteSet(
+        unit,
+        snapshot,
+        parsed,
+        recommendation,
         commandContext.commandId,
-        recommendation,
-        parsed.actor,
-        parsed.submittedAt,
-        "recommendation-submitted",
-      ));
-      unit.insertRecommendation(recommendation);
-      unit.appendRecommendationRevision({
-        recommendation,
-        operationalEventId: eventIds[0]!,
-        createdAt: parsed.submittedAt,
-      });
-      this.appendEvaluationTraces(unit, eventIds[0]!, recommendation, parsed.actor, parsed.submittedAt);
-
-      superseded.forEach((candidate, index) => {
-        const updated = TriageRecommendationSchema.parse({ ...candidate, resolution: "superseded" });
-        const eventId = eventIds[index + 1]!;
-        unit.appendEvent(this.operationalRecommendationEvent(
-          eventId,
-          parsed.ticketId,
-          sequences[index + 1]!,
-          commandContext.commandId,
-          updated,
-          parsed.actor,
-          parsed.submittedAt,
-          "recommendation-superseded",
-        ));
-        unit.updateRecommendation(updated, "pending");
-        unit.appendRecommendationRevision({
-          recommendation: updated,
-          operationalEventId: eventId,
-          createdAt: parsed.submittedAt,
-        });
-      });
-
-      const recommendationIds = [recommendation.id, ...superseded.map(({ id }) => id)];
-      const result: OperationalResultReference = {
-        operation: "evaluate-ticket",
-        tickets: [{ ticketId: parsed.ticketId, operationalEventIds: eventIds, resultingRevision: null }],
-        ...(recommendationIds.length === 1
-          ? { recommendationId: recommendationIds[0]! }
-          : { recommendationIds }),
-      };
+      );
       unit.persistCommandResult(commandContext.commandId, requestHash, result);
       return this.replayEvaluation(unit, { result }, recommendation.id);
     });
+  }
+
+  /** Commit an already-prepared evaluation inside the dispatch transaction. */
+  commitOperationalEvaluation(
+    unit: OperationalUnitOfWork,
+    prepared: PreparedOperationalEvaluation,
+    commandId: string,
+  ): OperationalResultReference {
+    const snapshot = unit.readWorkflowSnapshot(prepared.recommendationInput.ticketId);
+    if (snapshot.ticket.revision !== prepared.recommendationInput.sourceRevision) {
+      throw stale("Recommendation source revision is stale.");
+    }
+    if (!operationalCustomerReplyWatermarksMatch(prepared.evaluatedCustomerReplyWatermark, snapshot)) {
+      throw stale("Evaluation customer reply snapshot is stale.");
+    }
+    const parsed = SubmitRecommendationInputSchema.parse({
+      ...prepared.recommendationInput,
+      submittedAt: this.now().toISOString(),
+    });
+    const recommendation = this.buildRecommendation(
+      parsed,
+      snapshot.ticket,
+      prepared.classificationConfidence,
+    );
+    return this.commitOperationalEvaluationWriteSet(
+      unit,
+      snapshot,
+      parsed,
+      recommendation,
+      commandId,
+    );
+  }
+
+  replayOperationalEvaluation(
+    reader: OperationalResultReader,
+    result: OperationalResultReference,
+  ): { recommendation: TriageRecommendation; recommendations: TriageRecommendation[] } {
+    return this.replayEvaluation(reader, { result });
+  }
+
+  private commitOperationalEvaluationWriteSet(
+    unit: OperationalUnitOfWork,
+    snapshot: OperationalWorkflowSnapshot,
+    parsed: z.infer<typeof SubmitRecommendationInputSchema>,
+    recommendation: TriageRecommendation,
+    commandId: string,
+  ): OperationalResultReference {
+    const superseded = snapshot.recommendations.filter((candidate) =>
+      candidate.resolution === "pending" &&
+      candidate.ticketId === parsed.ticketId &&
+      this.hasOperationalCustomerReplyAfterRecommendation(snapshot, candidate),
+    );
+    const eventIds = [this.uuid(), ...superseded.map(() => this.uuid())];
+    const sequences = unit.allocateEventSequences(parsed.ticketId, eventIds.length);
+    unit.appendEvent(this.operationalRecommendationEvent(
+      eventIds[0]!,
+      parsed.ticketId,
+      sequences[0]!,
+      commandId,
+      recommendation,
+      parsed.actor,
+      parsed.submittedAt,
+      "recommendation-submitted",
+    ));
+    unit.insertRecommendation(recommendation);
+    unit.appendRecommendationRevision({
+      recommendation,
+      operationalEventId: eventIds[0]!,
+      createdAt: parsed.submittedAt,
+    });
+    this.appendEvaluationTraces(unit, eventIds[0]!, recommendation, parsed.actor, parsed.submittedAt);
+
+    superseded.forEach((candidate, index) => {
+      const updated = TriageRecommendationSchema.parse({ ...candidate, resolution: "superseded" });
+      const eventId = eventIds[index + 1]!;
+      unit.appendEvent(this.operationalRecommendationEvent(
+        eventId,
+        parsed.ticketId,
+        sequences[index + 1]!,
+        commandId,
+        updated,
+        parsed.actor,
+        parsed.submittedAt,
+        "recommendation-superseded",
+      ));
+      unit.updateRecommendation(updated, "pending");
+      unit.appendRecommendationRevision({
+        recommendation: updated,
+        operationalEventId: eventId,
+        createdAt: parsed.submittedAt,
+      });
+    });
+
+    const recommendationIds = [recommendation.id, ...superseded.map(({ id }) => id)];
+    return {
+      operation: "evaluate-ticket",
+      tickets: [{ ticketId: parsed.ticketId, operationalEventIds: eventIds, resultingRevision: null }],
+      ...(recommendationIds.length === 1
+        ? { recommendationId: recommendationIds[0]! }
+        : { recommendationIds }),
+    };
   }
 
   private operationalRecommendationEvent(
@@ -1147,7 +1205,7 @@ export class TriageService {
   }
 
   private replayEvaluation(
-    unit: OperationalUnitOfWork,
+    unit: OperationalResultReader,
     replay: CommandReplay,
     preferredRecommendationId?: string,
   ): { recommendation: TriageRecommendation; recommendations: TriageRecommendation[] } {
@@ -1168,7 +1226,12 @@ export class TriageService {
       }
     }
     const recommendation = latest.get(preferredRecommendationId ?? recommendationIds[0]!);
-    if (recommendation === undefined) throw stale("Operational evaluation replay is missing its persisted recommendation.");
+    if (recommendation === undefined) {
+      throw new OperationalStoreError(
+        "Operational evaluation replay is missing its persisted recommendation.",
+        "SCHEMA_ERROR",
+      );
+    }
     return {
       recommendation,
       recommendations: [...latest.entries()]
@@ -1514,6 +1577,7 @@ export class TriageService {
           resultingRevision: null,
         }],
         messageId,
+        ticketSnapshot: snapshot.ticket,
       });
       return operationalCustomerReplyAudit(message, snapshot.ticket, reply.actor);
     });
@@ -1539,7 +1603,11 @@ export class TriageService {
     ) {
       throw stale("Operational customer-reply replay is missing its persisted message.");
     }
-    return operationalCustomerReplyAudit(message, snapshot.ticket, event.actor);
+    return operationalCustomerReplyAudit(
+      message,
+      replay.result.ticketSnapshot ?? snapshot.ticket,
+      event.actor,
+    );
   }
 
   private approveOperational(

@@ -313,8 +313,8 @@ export async function createRuntimeDependencies(
     now,
   });
   const evaluationGuard = new TicketEvaluationGuard();
-  const operationalCommandDispatcher = isDispatchableOperationalStore(runtimeOperationalStore)
-    ? new OperationalCommandDispatcher(runtimeOperationalStore)
+  const operationalCommandDispatcher = isDispatchableOperationalStore(serviceOperationalStore)
+    ? new OperationalCommandDispatcher(serviceOperationalStore)
     : undefined;
 
   return {

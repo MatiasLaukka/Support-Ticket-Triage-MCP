@@ -196,20 +196,35 @@ export class OperationalSqliteStore {
     project: (receipt: CommandIdempotencyRecord, reader: OperationalResultReader) => T,
   ): T | undefined {
     this.assertInitialized();
+    let projectionStarted = false;
     const read = this.database.transaction(() => {
       const unit = new OperationalUnitOfWork(this.database);
       try {
-        const receipt = unit.readCommandReceipt(commandId);
+        const receipt = this.normalizeDeferredRead(
+          () => unit.readCommandReceipt(commandId),
+          "Operational command receipt read could not complete",
+        );
         if (receipt === undefined) return undefined;
         const reader: OperationalResultReader = {
-          readWorkflowSnapshot: unit.readWorkflowSnapshot.bind(unit),
+          readWorkflowSnapshot: (ticketId) => this.normalizeDeferredRead(
+            () => unit.readWorkflowSnapshot(ticketId),
+            "Operational command result read could not complete",
+          ),
         };
+        projectionStarted = true;
         return project(receipt, reader);
       } finally {
         unit.closeScope();
       }
     });
-    return read();
+    try {
+      return read();
+    } catch (error) {
+      if (!projectionStarted && isSqliteLockError(error)) {
+        throw this.mapPersistenceError(error, "Operational command receipt read could not complete");
+      }
+      throw error;
+    }
   }
 
   readWorkflowSnapshot(ticketId: TicketId): OperationalWorkflowSnapshot {
@@ -571,6 +586,15 @@ export class OperationalSqliteStore {
     const detail = error instanceof Error ? error.message : "unknown SQLite error";
     return new OperationalStoreError(`${action}: ${detail}.`, "PERSISTENCE_ERROR", { cause: error });
   }
+
+  private normalizeDeferredRead<T>(work: () => T, action: string): T {
+    try {
+      return work();
+    } catch (error) {
+      if (isSqliteLockError(error)) throw this.mapPersistenceError(error, action);
+      throw error;
+    }
+  }
 }
 
 const cachedExpectedSchemaSignatures = new Map<number, string>();
@@ -614,6 +638,12 @@ function schemaSignatureFor(database: Database.Database): string {
 
 function normalizeSchemaSql(sql: string | null): string {
   return (sql ?? "").replace(/\s+/g, " ").trim();
+}
+
+function isSqliteLockError(error: unknown): boolean {
+  if (typeof error !== "object" || error === null || !("code" in error)) return false;
+  const code = (error as { code?: unknown }).code;
+  return code === "SQLITE_BUSY" || code === "SQLITE_LOCKED";
 }
 
 function isDeclaredAsync(work: Function): boolean {

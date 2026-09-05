@@ -940,7 +940,7 @@ async function createRecommendation(
       learningAvailability: deps.learningAvailability,
       env: deps.env,
       now: deps.now,
-      evaluationGuard: deps.evaluationGuard,
+      evaluationGuard,
       draftProvider: options.draftProvider,
       classificationReasoningProvider: options.classificationReasoningProvider,
       loadExpectedOutcome: options.expectedOutcomesPath === undefined

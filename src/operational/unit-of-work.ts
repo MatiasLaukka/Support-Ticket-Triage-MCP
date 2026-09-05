@@ -421,7 +421,7 @@ export class OperationalUnitOfWork {
     const row = this.database.prepare(
       "SELECT value FROM operational_metadata WHERE key = 'import_state'",
     ).get() as MetadataValueRow | undefined;
-    return parseWith(
+    return parseStoredValue(
       ImportStateSchema,
       row?.value,
       "Operational import state is invalid.",
@@ -1401,7 +1401,7 @@ export class OperationalUnitOfWork {
       commandId: row.command_id,
       operation: row.operation,
       requestHash: row.request_hash,
-      requestHashVersion: parseWith(
+      requestHashVersion: parseStoredValue(
         RequestHashVersionSchema,
         row.request_hash_version,
         "Operational command request hash version is invalid.",
@@ -1958,6 +1958,18 @@ function parseWith<T>(
   const parsed = schema.safeParse(value);
   if (!parsed.success) {
     throw new OperationalStoreError(message, "VALIDATION_ERROR", { cause: parsed.error });
+  }
+  return parsed.data;
+}
+
+function parseStoredValue<T>(
+  schema: { safeParse(value: unknown): { success: true; data: T } | { success: false; error: unknown } },
+  value: unknown,
+  message: string,
+): T {
+  const parsed = schema.safeParse(value);
+  if (!parsed.success) {
+    throw new OperationalStoreError(message, "PERSISTENCE_ERROR", { cause: parsed.error });
   }
   return parsed.data;
 }

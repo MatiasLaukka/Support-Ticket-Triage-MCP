@@ -1,4 +1,5 @@
 import { Worker } from "node:worker_threads";
+import Database from "better-sqlite3";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -9,6 +10,8 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { afterEach, describe, expect, it } from "vitest";
 import { TicketSchema, TriageRecommendationSchema, type Ticket } from "../src/domain.js";
 import { createApprovalDeskHttpServer } from "../src/approval-desk/http.js";
+import { createControlledClassificationProvider } from "../src/approval-desk/controlled-evaluation-providers.js";
+import type { ClassificationReasoningProvider } from "../src/approval-desk/classification-reasoning-provider.js";
 import { importOperationalData, type OperationalImportAggregate } from "../src/operational/import.js";
 import { OperationalSqliteStore } from "../src/operational/sqlite-store.js";
 import { createRuntimeDependencies, type RuntimeDependencies } from "../src/runtime.js";
@@ -30,6 +33,46 @@ afterEach(async () => {
 });
 
 describe("production operational runtime parity", () => {
+  it("blocks evaluation before provider work while a readable import is incomplete", async () => {
+    const fixture = await runtimeFixture();
+    const database = join(fixture.root, "partial-import.sqlite");
+    const partial = OperationalSqliteStore.open(database);
+    partial.initialize();
+    partial.transaction((unit) => {
+      unit.transitionImportState("empty", "import-in-progress");
+      unit.insertTicket(importedTicket());
+    });
+    partial.close();
+
+    let providerCalls = 0;
+    const baseProvider = createControlledClassificationProvider();
+    const classificationReasoningProvider: ClassificationReasoningProvider = {
+      async reason(input) {
+        providerCalls += 1;
+        return baseProvider.reason(input);
+      },
+    };
+    const runtime = await openRuntime(fixture, database);
+    const before = operationalMutationCounts(database);
+    const { baseUrl } = await startHttp(runtime, { classificationReasoningProvider });
+
+    const response = await fetch(`${baseUrl}/api/tickets/TKT-0001/recommendations`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "Idempotency-Key": "81000000-0000-4000-8000-000000000001",
+      },
+      body: JSON.stringify({ actor: "approval-desk", aiPreference: "auto" }),
+    });
+
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toMatchObject({
+      error: { code: "OPERATIONAL_NOT_READY" },
+    });
+    expect(providerCalls).toBe(0);
+    expect(operationalMutationCounts(database)).toEqual(before);
+  });
+
   it("owns the configured operational database and starts incomplete cutovers in restricted mode", async () => {
     const fixture = await runtimeFixture();
     const emptyDatabase = join(fixture.root, "empty.sqlite");
@@ -362,8 +405,11 @@ function closeRuntime(runtime: RuntimeDependencies): void {
   }
 }
 
-async function startHttp(runtime: RuntimeDependencies): Promise<{ baseUrl: string }> {
-  const server = createApprovalDeskHttpServer(runtime);
+async function startHttp(
+  runtime: RuntimeDependencies,
+  options: Parameters<typeof createApprovalDeskHttpServer>[1] = {},
+): Promise<{ baseUrl: string }> {
+  const server = createApprovalDeskHttpServer(runtime, options);
   httpServers.push(server);
   await new Promise<void>((resolveListen, rejectListen) => {
     server.once("error", rejectListen);
@@ -374,6 +420,28 @@ async function startHttp(runtime: RuntimeDependencies): Promise<{ baseUrl: strin
   });
   const address = server.address() as AddressInfo;
   return { baseUrl: `http://127.0.0.1:${address.port}` };
+}
+
+function operationalMutationCounts(path: string): Record<string, number> {
+  const database = new Database(path, { readonly: true });
+  try {
+    return Object.fromEntries([
+      "command_idempotency",
+      "ticket_revisions",
+      "conversation_messages",
+      "recommendations",
+      "recommendation_revisions",
+      "diagnoses",
+      "operational_events",
+      "decision_trace_events",
+      "learning_capture_outbox",
+    ].map((table) => [
+      table,
+      (database.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get() as { count: number }).count,
+    ]));
+  } finally {
+    database.close();
+  }
 }
 
 async function connectMcp(runtime: RuntimeDependencies): Promise<Client> {

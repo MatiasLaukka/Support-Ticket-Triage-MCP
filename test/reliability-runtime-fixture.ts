@@ -10,8 +10,12 @@ import {
   type ApprovalDeskHttpOptions,
 } from "../src/approval-desk/http.js";
 
+export interface ReliabilityRuntimeOptions extends ApprovalDeskHttpOptions {
+  omitEvaluationGuard?: boolean;
+}
+
 export async function openReliabilityRuntime(
-  options: ApprovalDeskHttpOptions = {},
+  options: ReliabilityRuntimeOptions = {},
 ) {
   const root = await mkdtemp(join(tmpdir(), "triage-r1-"));
   const env = {
@@ -30,7 +34,12 @@ export async function openReliabilityRuntime(
 
   async function start(): Promise<{ runtime: RuntimeDependencies; server: Server }> {
     const runtime = await createRuntimeDependencies({ env, now: () => new Date(time) });
-    const server = createApprovalDeskHttpServer(runtime, options);
+    const { omitEvaluationGuard: _omitEvaluationGuard, ...serverOptions } = options;
+    const { evaluationGuard: _evaluationGuard, ...withoutGuard } = runtime;
+    const server = createApprovalDeskHttpServer(
+      options.omitEvaluationGuard ? withoutGuard : runtime,
+      serverOptions,
+    );
     try {
       await new Promise<void>((resolveListen, reject) => {
         server.once("error", reject);

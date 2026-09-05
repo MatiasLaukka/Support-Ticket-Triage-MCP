@@ -27,6 +27,7 @@ export interface PreparedCommandDefinition<I, P, R> {
 
 export interface DispatchableOperationalStore {
   transaction<T>(work: (unit: OperationalUnitOfWork) => T): T;
+  assertRuntimeMutationsAllowed?(): void;
   readCommandOutcome<T>(
     commandId: string,
     project: (receipt: CommandIdempotencyRecord, reader: OperationalResultReader) => T,
@@ -92,6 +93,7 @@ export class OperationalCommandDispatcher {
     commandId: string,
     requestHash: string,
   ): Promise<R> {
+    this.store.assertRuntimeMutationsAllowed?.();
     const prepared = await definition.prepare(intent);
     return this.store.transaction((unit) => {
       const replay = unit.beginCommandV2(commandId, definition.operation, intent);

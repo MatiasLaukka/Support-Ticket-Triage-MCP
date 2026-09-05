@@ -577,6 +577,57 @@ describe("OperationalSqliteStore migrations and transaction boundary", () => {
     store.close();
   });
 
+  it("classifies a corrupt persisted import state as an operational persistence failure", () => {
+    const path = temporaryDatabasePath();
+    const store = OperationalSqliteStore.open(path);
+    store.initialize();
+    const raw = new Database(path);
+    raw.prepare("UPDATE operational_metadata SET value = ? WHERE key = 'import_state'")
+      .run("impossible-state");
+    raw.close();
+
+    expect(() => store.readImportState()).toThrowError(
+      expect.objectContaining({ code: "PERSISTENCE_ERROR" }),
+    );
+    store.close();
+  });
+
+  it("classifies an impossible persisted request hash version as an operational persistence failure", () => {
+    const path = temporaryDatabasePath();
+    const store = OperationalSqliteStore.open(path);
+    store.initialize();
+    const commandId = "33333333-3333-4333-8333-333333333334";
+    const raw = new Database(path);
+    raw.prepare(`
+      INSERT INTO command_idempotency(
+        command_id, operation, request_hash, request_hash_version, result_json, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?)
+    `).run(
+      commandId,
+      "ticket-update",
+      "a".repeat(64),
+      1,
+      JSON.stringify({
+        operation: "ticket-update",
+        tickets: [{
+          ticketId: "TKT-0001",
+          operationalEventIds: ["33333333-3333-4333-8333-333333333336"],
+          resultingRevision: null,
+        }],
+      }),
+      "2026-09-05T10:00:00.000Z",
+    );
+    raw.pragma("ignore_check_constraints = ON");
+    raw.prepare("UPDATE command_idempotency SET request_hash_version = 99 WHERE command_id = ?")
+      .run(commandId);
+    raw.close();
+
+    expect(() => store.readCommandReceipt(commandId)).toThrowError(
+      expect.objectContaining({ code: "PERSISTENCE_ERROR" }),
+    );
+    store.close();
+  });
+
   it("uses a bounded busy timeout and makes close idempotent", () => {
     const path = temporaryDatabasePath();
     const first = OperationalSqliteStore.open(path, { busyTimeoutMs: 80 });
@@ -598,6 +649,46 @@ describe("OperationalSqliteStore migrations and transaction boundary", () => {
     const reopened = OperationalSqliteStore.open(path);
     reopened.initialize();
     reopened.close();
+  });
+
+  it("normalizes only deferred-read SQLite lock failures and preserves projection failures", () => {
+    const path = temporaryDatabasePath();
+    const store = OperationalSqliteStore.open(path, { busyTimeoutMs: 80 });
+    store.initialize();
+    const commandId = "33333333-3333-4333-8333-333333333335";
+    const raw = new Database(path);
+    raw.prepare(`
+      INSERT INTO command_idempotency(
+        command_id, operation, request_hash, request_hash_version, result_json, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?)
+    `).run(
+      commandId,
+      "ticket-update",
+      "b".repeat(64),
+      2,
+      JSON.stringify({
+        operation: "ticket-update",
+        tickets: [{
+          ticketId: "TKT-0001",
+          operationalEventIds: ["33333333-3333-4333-8333-333333333337"],
+          resultingRevision: null,
+        }],
+      }),
+      "2026-09-05T10:00:00.000Z",
+    );
+    raw.exec("BEGIN EXCLUSIVE");
+    try {
+      expect(() => store.readCommandOutcome(commandId, () => "projected"))
+        .toThrowError(expect.objectContaining({ code: "PERSISTENCE_ERROR" }));
+    } finally {
+      raw.exec("ROLLBACK");
+      raw.close();
+    }
+
+    expect(() => store.readCommandOutcome(commandId, () => {
+      throw new Error("replay projection failed");
+    })).toThrow("replay projection failed");
+    store.close();
   });
 
   it("stores taxonomy revision identity as single-column unique keys in schema v3", () => {

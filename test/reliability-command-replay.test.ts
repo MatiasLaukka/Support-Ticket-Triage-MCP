@@ -162,6 +162,45 @@ describe("reliability command replay", () => {
     expect(calls).toBe(1);
   });
 
+  it("uses the HTTP fallback evaluation guard when dependencies omit one", async () => {
+    const base = createControlledClassificationProvider();
+    const entered = deferred();
+    let calls = 0;
+    const classification: ClassificationReasoningProvider = {
+      async reason(input) {
+        calls += 1;
+        if (calls === 1) {
+          entered.resolve();
+          await entered.releasePromise;
+        }
+        return base.reason(input);
+      },
+    };
+    const harness = await openReliabilityRuntime({
+      omitEvaluationGuard: true,
+      classificationReasoningProvider: classification,
+      draftProvider: createControlledDraftProvider(),
+    });
+    activeRuntimes.push(harness);
+    const body = { actor: "approval-desk", aiPreference: "gpt-preferred" };
+    const firstPromise = harness.post(
+      "/api/tickets/TKT-1010/recommendations",
+      body,
+      randomUUID(),
+    );
+    await entered.reached;
+    const second = await harness.post(
+      "/api/tickets/TKT-1010/recommendations",
+      body,
+      randomUUID(),
+    );
+    entered.release();
+    await expect(firstPromise).resolves.toMatchObject({ status: 201 });
+    expect(second.status).toBe(409);
+    expect(second.body.error).toMatchObject({ code: "EVALUATION_IN_PROGRESS" });
+    expect(calls).toBe(1);
+  });
+
   it("rejects an evaluation whose source gains a reply during provider work without a receipt", async () => {
     const base = createControlledClassificationProvider();
     const entered = deferred();

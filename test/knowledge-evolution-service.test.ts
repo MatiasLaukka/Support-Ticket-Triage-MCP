@@ -279,7 +279,7 @@ describe("knowledge evolution service", () => {
     await expect(service.approve({ ...input, actorId: "  " })).rejects.toMatchObject({ code: "INVALID_APPROVAL_FIELDS" });
     await expect(service.approve({ ...input, expectedVersion: 2 })).rejects.toMatchObject({ code: "STALE_APPROVAL" });
     await service.approve(input);
-    await expect(service.approve(input)).rejects.toMatchObject({ code: "REPOSITORY_ERROR" });
+    await expect(service.approve(input)).rejects.toMatchObject({ code: "STALE_APPROVAL" });
   });
 
   it("removes a promoted object when its mandatory approval audit cannot be appended, allowing a retry", async () => {

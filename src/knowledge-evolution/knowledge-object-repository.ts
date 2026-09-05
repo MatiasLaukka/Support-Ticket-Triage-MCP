@@ -37,7 +37,16 @@ export class KnowledgeObjectRepository {
         throw new DomainError("Knowledge candidate version is stale.", "STALE_APPROVAL");
       }
       try { await writeNewJson(this.approvedRoot, approved, KnowledgeObjectWriteSchema); }
-      catch (error) { if (error instanceof DomainError && error.code === "REPOSITORY_ERROR") throw repositoryError("Knowledge candidate has already been promoted."); throw error; }
+      catch (error) {
+        if (
+          error instanceof DomainError
+          && error.code === "REPOSITORY_ERROR"
+          && error.message === "Repository record already exists."
+        ) {
+          throw new DomainError("Knowledge candidate has already been promoted.", "STALE_APPROVAL");
+        }
+        throw error;
+      }
       return KnowledgeObjectWriteSchema.parse(approved);
     });
   }

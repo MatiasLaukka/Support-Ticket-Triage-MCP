@@ -8,11 +8,15 @@ import type {
 } from "../domain.js";
 import type { CompletedDiagnosis } from "../knowledge-evolution/domain.js";
 import type {
+  CommandIdempotencyRecord,
   ImportResolution,
   ImportState,
   OperationalOutboxRow,
   OperationalWorkflowSnapshot,
 } from "./domain.js";
+import type {
+  OperationalResultReader,
+} from "../operational-command-dispatch.js";
 import {
   OperationalStoreError,
   OperationalUnitOfWork,
@@ -21,10 +25,11 @@ import {
 
 export { OperationalStoreError } from "./unit-of-work.js";
 
-export const CURRENT_SCHEMA_VERSION = 3;
+export const CURRENT_SCHEMA_VERSION = 4;
 const INITIAL_SCHEMA_VERSION = 1;
 const DIAGNOSIS_REVIEW_PAYLOAD_MIGRATION = "immutable-diagnosis-review-payload";
 const DIAGNOSTIC_TAXONOMY_REVISION_MIGRATION = "diagnostic-taxonomy-revisions";
+const VERSIONED_COMMAND_REQUEST_IDENTITY_MIGRATION = "versioned-command-request-identity";
 const DEFAULT_BUSY_TIMEOUT_MS = 250;
 const REQUIRED_TABLES = [
   "schema_migrations",
@@ -179,6 +184,49 @@ export class OperationalSqliteStore {
     return this.withReader((reader) => reader.readDiagnosis(id));
   }
 
+  readCommandReceipt(commandId: string): CommandIdempotencyRecord | undefined {
+    this.assertInitialized();
+    const read = this.database.transaction(() =>
+      this.withReader((reader) => reader.readCommandReceipt(commandId)));
+    return read();
+  }
+
+  readCommandOutcome<T>(
+    commandId: string,
+    project: (receipt: CommandIdempotencyRecord, reader: OperationalResultReader) => T,
+  ): T | undefined {
+    this.assertInitialized();
+    let projectionStarted = false;
+    const read = this.database.transaction(() => {
+      const unit = new OperationalUnitOfWork(this.database);
+      try {
+        const receipt = this.normalizeDeferredRead(
+          () => unit.readCommandReceipt(commandId),
+          "Operational command receipt read could not complete",
+        );
+        if (receipt === undefined) return undefined;
+        const reader: OperationalResultReader = {
+          readWorkflowSnapshot: (ticketId) => this.normalizeDeferredRead(
+            () => unit.readWorkflowSnapshot(ticketId),
+            "Operational command result read could not complete",
+          ),
+        };
+        projectionStarted = true;
+        return project(receipt, reader);
+      } finally {
+        unit.closeScope();
+      }
+    });
+    try {
+      return read();
+    } catch (error) {
+      if (!projectionStarted && isSqliteLockError(error)) {
+        throw this.mapPersistenceError(error, "Operational command receipt read could not complete");
+      }
+      throw error;
+    }
+  }
+
   readWorkflowSnapshot(ticketId: TicketId): OperationalWorkflowSnapshot {
     this.assertInitialized();
     const read = this.database.transaction(() =>
@@ -232,7 +280,7 @@ export class OperationalSqliteStore {
     if (state === "empty" || state === "import-in-progress") {
       throw new OperationalStoreError(
         `Operational database is ${state}; initialize or complete the operational import before runtime mutations.`,
-        "STATE_ERROR",
+        "OPERATIONAL_NOT_READY",
       );
     }
   }
@@ -256,7 +304,8 @@ export class OperationalSqliteStore {
       );
       insertMigration.run(INITIAL_SCHEMA_VERSION, "initial-operational-schema", appliedAt);
       insertMigration.run(2, DIAGNOSIS_REVIEW_PAYLOAD_MIGRATION, appliedAt);
-      insertMigration.run(CURRENT_SCHEMA_VERSION, DIAGNOSTIC_TAXONOMY_REVISION_MIGRATION, appliedAt);
+      insertMigration.run(3, DIAGNOSTIC_TAXONOMY_REVISION_MIGRATION, appliedAt);
+      insertMigration.run(CURRENT_SCHEMA_VERSION, VERSIONED_COMMAND_REQUEST_IDENTITY_MIGRATION, appliedAt);
       this.database.prepare(
         "INSERT INTO operational_metadata(key, value) VALUES (?, ?), (?, ?)",
       ).run("schema_version", String(CURRENT_SCHEMA_VERSION), "import_state", "empty");
@@ -318,16 +367,32 @@ export class OperationalSqliteStore {
       && migrations[1]?.name === DIAGNOSIS_REVIEW_PAYLOAD_MIGRATION
     ) {
       this.applyDiagnosticTaxonomyRevisionMigration();
+      this.validateMigrationTable();
       return;
     }
     if (
-      migrations.length !== 3
+      migrations.length === 3
+      && migrations[0]?.version === INITIAL_SCHEMA_VERSION
+      && migrations[0]?.name === "initial-operational-schema"
+      && migrations[1]?.version === 2
+      && migrations[1]?.name === DIAGNOSIS_REVIEW_PAYLOAD_MIGRATION
+      && migrations[2]?.version === 3
+      && migrations[2]?.name === DIAGNOSTIC_TAXONOMY_REVISION_MIGRATION
+    ) {
+      this.applyVersionedCommandRequestIdentityMigration();
+      this.validateMigrationTable();
+      return;
+    }
+    if (
+      migrations.length !== 4
       || migrations[0]?.version !== INITIAL_SCHEMA_VERSION
       || migrations[0]?.name !== "initial-operational-schema"
       || migrations[1]?.version !== 2
       || migrations[1]?.name !== DIAGNOSIS_REVIEW_PAYLOAD_MIGRATION
-      || migrations[2]?.version !== CURRENT_SCHEMA_VERSION
+      || migrations[2]?.version !== 3
       || migrations[2]?.name !== DIAGNOSTIC_TAXONOMY_REVISION_MIGRATION
+      || migrations[3]?.version !== CURRENT_SCHEMA_VERSION
+      || migrations[3]?.name !== VERSIONED_COMMAND_REQUEST_IDENTITY_MIGRATION
     ) {
       throw new OperationalStoreError(
         "Corrupt operational schema: migration history is incomplete or inconsistent.",
@@ -378,7 +443,33 @@ export class OperationalSqliteStore {
       const appliedAt = new Date().toISOString();
       this.database.prepare(
         "INSERT INTO schema_migrations(version, name, applied_at) VALUES (?, ?, ?)",
-      ).run(CURRENT_SCHEMA_VERSION, DIAGNOSTIC_TAXONOMY_REVISION_MIGRATION, appliedAt);
+      ).run(3, DIAGNOSTIC_TAXONOMY_REVISION_MIGRATION, appliedAt);
+      this.database.prepare(
+        "UPDATE operational_metadata SET value = ? WHERE key = 'schema_version'",
+      ).run("3");
+      this.database.exec("COMMIT");
+    } catch (error) {
+      if (this.database.inTransaction) {
+        try { this.database.exec("ROLLBACK"); } catch { /* preserve the migration error */ }
+      }
+      if (error instanceof OperationalStoreError) throw error;
+      throw new OperationalStoreError(
+        "Operational diagnostic taxonomy migration failed.",
+        "SCHEMA_ERROR",
+        { cause: error },
+      );
+    }
+  }
+
+  private applyVersionedCommandRequestIdentityMigration(): void {
+    try {
+      this.database.exec("BEGIN IMMEDIATE");
+      this.validatePhysicalSchema(3);
+      this.database.exec(VERSIONED_COMMAND_REQUEST_IDENTITY_SCHEMA_SQL);
+      const appliedAt = new Date().toISOString();
+      this.database.prepare(
+        "INSERT INTO schema_migrations(version, name, applied_at) VALUES (?, ?, ?)",
+      ).run(CURRENT_SCHEMA_VERSION, VERSIONED_COMMAND_REQUEST_IDENTITY_MIGRATION, appliedAt);
       this.database.prepare(
         "UPDATE operational_metadata SET value = ? WHERE key = 'schema_version'",
       ).run(String(CURRENT_SCHEMA_VERSION));
@@ -389,7 +480,7 @@ export class OperationalSqliteStore {
       }
       if (error instanceof OperationalStoreError) throw error;
       throw new OperationalStoreError(
-        "Operational diagnostic taxonomy migration failed.",
+        "Operational command request identity migration failed.",
         "SCHEMA_ERROR",
         { cause: error },
       );
@@ -495,6 +586,15 @@ export class OperationalSqliteStore {
     const detail = error instanceof Error ? error.message : "unknown SQLite error";
     return new OperationalStoreError(`${action}: ${detail}.`, "PERSISTENCE_ERROR", { cause: error });
   }
+
+  private normalizeDeferredRead<T>(work: () => T, action: string): T {
+    try {
+      return work();
+    } catch (error) {
+      if (isSqliteLockError(error)) throw this.mapPersistenceError(error, action);
+      throw error;
+    }
+  }
 }
 
 const cachedExpectedSchemaSignatures = new Map<number, string>();
@@ -515,6 +615,7 @@ function expectedSchemaSignature(version: number): string {
 
 function schemaSqlForVersion(version: number): string {
   if (version === 2) return INITIAL_SCHEMA_SQL;
+  if (version === 3) return V3_SCHEMA_SQL;
   if (version === CURRENT_SCHEMA_VERSION) return CURRENT_SCHEMA_SQL;
   throw new Error(`Unsupported operational schema version ${version}.`);
 }
@@ -537,6 +638,12 @@ function schemaSignatureFor(database: Database.Database): string {
 
 function normalizeSchemaSql(sql: string | null): string {
   return (sql ?? "").replace(/\s+/g, " ").trim();
+}
+
+function isSqliteLockError(error: unknown): boolean {
+  if (typeof error !== "object" || error === null || !("code" in error)) return false;
+  const code = (error as { code?: unknown }).code;
+  return code === "SQLITE_BUSY" || code === "SQLITE_LOCKED";
 }
 
 function isDeclaredAsync(work: Function): boolean {
@@ -715,4 +822,10 @@ const DIAGNOSTIC_TAXONOMY_REVISION_SCHEMA_SQL = `
     ON diagnostic_taxonomy_revisions(ticket_id, operational_event_id);
 `;
 
-const CURRENT_SCHEMA_SQL = `${INITIAL_SCHEMA_SQL}\n${DIAGNOSTIC_TAXONOMY_REVISION_SCHEMA_SQL}`;
+const V3_SCHEMA_SQL = `${INITIAL_SCHEMA_SQL}\n${DIAGNOSTIC_TAXONOMY_REVISION_SCHEMA_SQL}`;
+const VERSIONED_COMMAND_REQUEST_IDENTITY_SCHEMA_SQL = `
+  ALTER TABLE command_idempotency
+  ADD COLUMN request_hash_version INTEGER NOT NULL DEFAULT 1
+  CHECK (request_hash_version IN (1, 2));
+`;
+const CURRENT_SCHEMA_SQL = `${V3_SCHEMA_SQL}\n${VERSIONED_COMMAND_REQUEST_IDENTITY_SCHEMA_SQL}`;

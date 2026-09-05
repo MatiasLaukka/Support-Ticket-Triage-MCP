@@ -35,6 +35,7 @@ const SafeProviderModelSchema = SafeFactTextSchema.and(
 export const OperationalEventIdSchema = z.uuid();
 export const CommandIdSchema = z.uuid();
 export const RequestHashSchema = z.string().regex(/^[a-f0-9]{64}$/);
+export const RequestHashVersionSchema = z.union([z.literal(1), z.literal(2)]);
 export const MessageIdSchema = z.uuid();
 export const TicketSequenceSchema = z.number().int().positive();
 export const RevisionNumberSchema = z.number().int().nonnegative();
@@ -530,6 +531,7 @@ export const CommandIdempotencyRecordSchema = z.object({
   commandId: CommandIdSchema,
   operation: IdentifierSchema,
   requestHash: RequestHashSchema,
+  requestHashVersion: RequestHashVersionSchema.default(1),
   result: OperationalResultReferenceSchema,
   createdAt: IsoTimestampSchema,
 }).strict().superRefine((record, context) => {
@@ -838,6 +840,7 @@ export type DiagnosticTaxonomyRevision = z.infer<typeof DiagnosticTaxonomyRevisi
 export type OperationalWorkflowSnapshot = z.infer<typeof OperationalWorkflowSnapshotSchema>;
 export type OperationalOutboxRow = z.infer<typeof OperationalOutboxRowSchema>;
 export type CommandIdempotencyRecord = z.infer<typeof CommandIdempotencyRecordSchema>;
+export type RequestHashVersion = z.infer<typeof RequestHashVersionSchema>;
 export type ImportState = z.infer<typeof ImportStateSchema>;
 export type ImportResolution = z.infer<typeof ImportResolutionSchema>;
 export type DecisionTimelineEntry = z.infer<typeof DecisionTimelineEntrySchema>;

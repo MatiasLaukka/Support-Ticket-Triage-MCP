@@ -229,7 +229,7 @@ export class KnowledgeEvolutionService implements KnowledgeRevisionOperations {
         this.dependencies.audits.list({ candidateId: candidate.id }),
       ]);
       if (approved.some((object) => object.id === candidate.id)) {
-        throw new DomainError("Knowledge candidate has already been promoted.", "REPOSITORY_ERROR");
+        throw new DomainError("Knowledge candidate has already been promoted.", "STALE_APPROVAL");
       }
       const reviewed = applyEdits(candidate, input.edits);
       assertPromotable(reviewed, reviewEvents);

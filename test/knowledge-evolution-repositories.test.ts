@@ -118,7 +118,7 @@ describe("knowledge evolution repositories", () => {
     await expect(repository.promote(candidate.id, approved)).resolves.toMatchObject({ ...approved, version: 1 });
     await expect(repository.listCandidates()).resolves.toMatchObject([candidate]);
     await expect(repository.listApproved()).resolves.toMatchObject([{ ...approved, version: 1 }]);
-    await expect(repository.promote(candidate.id, approved)).rejects.toMatchObject({ code: "REPOSITORY_ERROR" });
+    await expect(repository.promote(candidate.id, approved)).rejects.toMatchObject({ code: "STALE_APPROVAL" });
     await expect(repository.promote("other-candidate", approved)).rejects.toMatchObject({ code: "REPOSITORY_ERROR" });
     const staleCandidateFileId = "stale-known-cause";
     const staleCandidate: KnowledgeCandidate = { ...candidate, id: "different-internal-candidate-id" };

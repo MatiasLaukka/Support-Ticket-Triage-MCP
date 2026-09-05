@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { OperationalResultReference } from "./domain.js";
+import type { CommandIdempotencyRecord, OperationalResultReference } from "./domain.js";
 
 const OPERATION_NAME_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const NON_SEMANTIC_REQUEST_KEYS = new Set([
@@ -39,14 +39,23 @@ export interface CommandReplay {
  */
 export function canonicalRequestHash(operation: string, request: unknown): string {
   const normalizedOperation = normalizeOperationName(operation);
-  const semanticRequest = projectSemanticRequest(request, new Set<object>());
+  const semanticRequest = projectSemanticRequest(request, new Set<object>(), true);
   const canonical = `{"operation":${JSON.stringify(normalizedOperation)},"request":${canonicalSemanticJson(semanticRequest)}}`;
   return createHash("sha256").update(canonical, "utf8").digest("hex");
+}
+
+/** Hashes the complete validated semantic request under the version-2 receipt contract. */
+export function canonicalRequestHashV2(operation: string, request: unknown): string {
+  const normalizedOperation = normalizeOperationName(operation);
+  const semanticRequest = projectSemanticRequest(request, new Set<object>(), false);
+  const preimage = `{"version":2,"operation":${JSON.stringify(normalizedOperation)},"request":${canonicalSemanticJson(semanticRequest)}}`;
+  return createHash("sha256").update(preimage, "utf8").digest("hex");
 }
 
 function projectSemanticRequest(
   value: unknown,
   ancestors: Set<object>,
+  filterReservedKeys: boolean,
 ): null | boolean | number | string | readonly unknown[] | Readonly<Record<string, unknown>> {
   if (value === null || typeof value === "string" || typeof value === "boolean") return value;
   if (typeof value === "number") {
@@ -91,7 +100,7 @@ function projectSemanticRequest(
       ) {
         throw new TypeError("Canonical semantic request array indices must be enumerable data properties.");
       }
-      return projectSemanticRequest(descriptor.value, ancestors);
+      return projectSemanticRequest(descriptor.value, ancestors, filterReservedKeys);
     });
     ancestors.delete(value);
     return projected;
@@ -114,9 +123,9 @@ function projectSemanticRequest(
     if (descriptor === undefined || !descriptor.enumerable || !("value" in descriptor)) {
       throw new TypeError("Canonical semantic request objects require enumerable data properties.");
     }
-    if (NON_SEMANTIC_REQUEST_KEYS.has(key) || descriptor.value === undefined) continue;
+    if ((filterReservedKeys && NON_SEMANTIC_REQUEST_KEYS.has(key)) || descriptor.value === undefined) continue;
     Object.defineProperty(projected, key, {
-      value: projectSemanticRequest(descriptor.value, ancestors),
+      value: projectSemanticRequest(descriptor.value, ancestors, filterReservedKeys),
       enumerable: true,
       configurable: false,
       writable: false,
@@ -167,6 +176,13 @@ export function immutableCommandReplay(
   result: OperationalResultReference,
 ): CommandReplay {
   return deepFreeze({ result });
+}
+
+/** @internal Receipt data is detached from storage and deeply immutable. */
+export function immutableCommandReceipt(
+  record: CommandIdempotencyRecord,
+): CommandIdempotencyRecord {
+  return deepFreeze(record);
 }
 
 function deepFreeze<T>(value: T): T {

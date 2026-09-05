@@ -21,6 +21,7 @@ import type {
   TriageRecommendation,
 } from "../domain.js";
 import { DomainError } from "../errors.js";
+import { classifyCommandError } from "../command-errors.js";
 import { CommandIdSchema } from "../operational/domain.js";
 import { readDecisionTimeline } from "../operational/timeline.js";
 import { calculateQueueMetrics } from "../metrics.js";
@@ -41,6 +42,7 @@ import {
   type ClassificationReasoningProvider,
 } from "./classification-reasoning-provider.js";
 import { evaluateTicketWithAi } from "./ai-evaluation.js";
+import { evaluateTicketCommand } from "../evaluation-command.js";
 import { TicketEvaluationGuard } from "./evaluation-guard.js";
 import { buildAutomationEvidenceReport } from "./evidence-report.js";
 import { approvalDeskHtml } from "./ui.js";
@@ -336,7 +338,7 @@ export function createApprovalDeskHttpServer(
   deps: RuntimeDependencies,
   options: ApprovalDeskHttpOptions = {},
 ) {
-  const evaluationGuard = new TicketEvaluationGuard();
+  const evaluationGuard = deps.evaluationGuard ?? new TicketEvaluationGuard();
   return createServer((request, response) => {
     void routeRequest(request, response, deps, options, evaluationGuard);
   });
@@ -923,6 +925,42 @@ async function createRecommendation(
 ): Promise<unknown> {
   const ticketId = TicketIdSchema.parse(id);
   const body = SubmitBodySchema.parse(await readJsonBody(request));
+  if (deps.operationalCommandDispatcher !== undefined) {
+    const commandContext = commandContextFromRequest(request, deps);
+    if (commandContext === undefined) {
+      throw invalidRequest("Idempotency-Key is required for operational mutations.");
+    }
+    const evaluation = await evaluateTicketCommand({
+      dispatcher: deps.operationalCommandDispatcher,
+      service: deps.service,
+      tickets: deps.tickets,
+      audits: deps.audits,
+      knowledge: deps.knowledge,
+      knowledgeEvolution: deps.knowledgeEvolution.service,
+      learningAvailability: deps.learningAvailability,
+      env: deps.env,
+      now: deps.now,
+      evaluationGuard,
+      draftProvider: options.draftProvider,
+      classificationReasoningProvider: options.classificationReasoningProvider,
+      loadExpectedOutcome: options.expectedOutcomesPath === undefined
+        ? undefined
+        : async (requestedTicketId) => {
+          const outcomes = await loadExpectedOutcomes(options.expectedOutcomesPath!);
+          return outcomes?.get(requestedTicketId);
+        },
+    }, {
+      ticketId,
+      actor: body.actor,
+      responseStyle: body.responseStyle,
+      aiPreference: body.aiPreference,
+      customerReplies: body.customerReplies,
+    }, commandContext.commandId);
+    return {
+      recommendation: evaluation.recommendation,
+      ...(await lifecycleEnvelope({ deps }, ticketId)),
+    };
+  }
   return evaluationGuard.run(ticketId, async () => {
     const reusableKnowledge = deps.learningAvailability.status === "unavailable"
       ? unavailableReusableKnowledge()
@@ -1722,18 +1760,10 @@ function json(
 }
 
 function handleError(response: ServerResponse, error: unknown): void {
-  if (error instanceof z.ZodError) {
-    json(response, 400, {
-      error: {
-        code: "INVALID_REQUEST",
-        message: error.issues[0]?.message ?? "Invalid request.",
-      },
-    });
-    return;
-  }
-  if (error instanceof DomainError) {
-    json(response, domainStatus(error), {
-      error: { code: error.code, message: error.message },
+  const classified = classifyCommandError(error);
+  if (classified !== undefined) {
+    json(response, classified.httpStatus, {
+      error: { code: classified.code, message: classified.message },
     });
     return;
   }
@@ -1749,19 +1779,4 @@ function handleError(response: ServerResponse, error: unknown): void {
       message: UNEXPECTED_ERROR_TEXT,
     },
   });
-}
-
-function domainStatus(error: DomainError): number {
-  switch (error.code) {
-    case "STALE_APPROVAL":
-    case "EVALUATION_IN_PROGRESS":
-      return 409;
-    case "TICKET_NOT_FOUND":
-    case "RECOMMENDATION_NOT_FOUND":
-      return 404;
-    case "REPOSITORY_ERROR":
-      return 503;
-    default:
-      return 400;
-  }
 }

@@ -31,6 +31,7 @@ import {
   OperationalWorkflowSnapshotSchema,
   RecommendationRevisionSchema,
   RequestHashSchema,
+  RequestHashVersionSchema,
   TicketRevisionSchema,
   conversationMessageKindForOperationalAction,
   isCanonicalConversationEventPair,
@@ -48,17 +49,22 @@ import {
 } from "./domain.js";
 import {
   canonicalRequestHash,
+  canonicalRequestHashV2,
+  immutableCommandReceipt,
   immutableCommandReplay,
   normalizeOperationName,
   type CommandReplay,
 } from "./idempotency.js";
+import type { RequestHashVersion } from "./domain.js";
 
 export type OperationalStoreErrorCode =
   | "ASYNC_TRANSACTION"
   | "CLOSED"
   | "IDEMPOTENCY_CONFLICT"
+  | "LEGACY_REPLAY_UNAVAILABLE"
   | "NOT_FOUND"
   | "NOT_INITIALIZED"
+  | "OPERATIONAL_NOT_READY"
   | "PERSISTENCE_ERROR"
   | "SCHEMA_ERROR"
   | "SEQUENCE_ERROR"
@@ -87,6 +93,7 @@ interface CommandRow {
   command_id: string;
   operation: string;
   request_hash: string;
+  request_hash_version: number;
   result_json: string;
   created_at: string;
 }
@@ -197,6 +204,7 @@ export class OperationalUnitOfWork {
   private readonly pendingCommandClaims = new Map<string, {
     readonly operation: string;
     readonly requestHash: string;
+    readonly requestHashVersion: RequestHashVersion;
   }>();
 
   private readonly initialTotalChanges: number;
@@ -229,9 +237,57 @@ export class OperationalUnitOfWork {
       );
     }
 
+    return this.beginCommandWithHash(parsedCommandId, parsedOperation, requestHash, 1);
+  }
+
+  beginCommandV2(
+    commandId: string,
+    operation: string,
+    semanticRequest: unknown,
+  ): CommandReplay | "new" {
+    this.assertActive();
+    const parsedCommandId = parseWith(
+      CommandIdSchema,
+      commandId,
+      "Operational command ID is invalid.",
+    );
+    let parsedOperation: string;
+    let requestHash: string;
+    try {
+      parsedOperation = normalizeOperationName(operation);
+      requestHash = canonicalRequestHashV2(parsedOperation, semanticRequest);
+    } catch (error) {
+      throw new OperationalStoreError(
+        "Operational command request could not be normalized.",
+        "VALIDATION_ERROR",
+        { cause: error },
+      );
+    }
+
+    const stored = this.readCommandRecord(parsedCommandId);
+    if (stored?.requestHashVersion === 1) {
+      throw new OperationalStoreError(
+        "This operational command was committed with a legacy request identity and cannot be replayed automatically.",
+        "LEGACY_REPLAY_UNAVAILABLE",
+      );
+    }
+    return this.beginCommandWithHash(parsedCommandId, parsedOperation, requestHash, 2);
+  }
+
+  private beginCommandWithHash(
+    parsedCommandId: string,
+    parsedOperation: string,
+    requestHash: string,
+    requestHashVersion: RequestHashVersion,
+  ): CommandReplay | "new" {
+
     const stored = this.readCommandRecord(parsedCommandId);
     if (stored !== undefined) {
-      if (stored.operation !== parsedOperation || stored.requestHash !== requestHash) {
+      if (
+        stored.operation !== parsedOperation
+        || stored.requestHashVersion !== requestHashVersion
+        || stored.requestHash !== requestHash
+      ) {
         throw new OperationalStoreError(
           "Operational command ID was already used for a different operation or request.",
           "IDEMPOTENCY_CONFLICT",
@@ -260,6 +316,7 @@ export class OperationalUnitOfWork {
     this.pendingCommandClaims.set(parsedCommandId, {
       operation: parsedOperation,
       requestHash,
+      requestHashVersion,
     });
     return "new";
   }
@@ -312,6 +369,7 @@ export class OperationalUnitOfWork {
         commandId: parsedCommandId,
         operation: claim.operation,
         requestHash: claim.requestHash,
+        requestHashVersion: claim.requestHashVersion,
         result: parsedResult,
         createdAt: new Date().toISOString(),
       },
@@ -319,12 +377,13 @@ export class OperationalUnitOfWork {
     );
     this.database.prepare(`
       INSERT INTO command_idempotency(
-        command_id, operation, request_hash, result_json, created_at
-      ) VALUES (?, ?, ?, ?, ?)
+        command_id, operation, request_hash, request_hash_version, result_json, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?)
     `).run(
       record.commandId,
       record.operation,
       record.requestHash,
+      record.requestHashVersion,
       JSON.stringify(record.result),
       record.createdAt,
     );
@@ -346,12 +405,23 @@ export class OperationalUnitOfWork {
       : immutableCommandReplay(record.result).result;
   }
 
+  readCommandReceipt(commandId: string): CommandIdempotencyRecord | undefined {
+    this.assertActive();
+    const parsedCommandId = parseWith(
+      CommandIdSchema,
+      commandId,
+      "Operational command ID is invalid.",
+    );
+    const record = this.readCommandRecord(parsedCommandId);
+    return record === undefined ? undefined : immutableCommandReceipt(record);
+  }
+
   readImportState(): ImportState {
     this.assertActive();
     const row = this.database.prepare(
       "SELECT value FROM operational_metadata WHERE key = 'import_state'",
     ).get() as MetadataValueRow | undefined;
-    return parseWith(
+    return parseStoredValue(
       ImportStateSchema,
       row?.value,
       "Operational import state is invalid.",
@@ -1313,7 +1383,7 @@ export class OperationalUnitOfWork {
 
   private readCommandRecord(commandId: string): CommandIdempotencyRecord | undefined {
     const row = this.database.prepare(`
-      SELECT command_id, operation, request_hash, result_json, created_at
+      SELECT command_id, operation, request_hash, request_hash_version, result_json, created_at
       FROM command_idempotency WHERE command_id = ?
     `).get(commandId) as CommandRow | undefined;
     if (row === undefined) return undefined;
@@ -1331,6 +1401,11 @@ export class OperationalUnitOfWork {
       commandId: row.command_id,
       operation: row.operation,
       requestHash: row.request_hash,
+      requestHashVersion: parseStoredValue(
+        RequestHashVersionSchema,
+        row.request_hash_version,
+        "Operational command request hash version is invalid.",
+      ),
       result,
       createdAt: row.created_at,
     });
@@ -1883,6 +1958,18 @@ function parseWith<T>(
   const parsed = schema.safeParse(value);
   if (!parsed.success) {
     throw new OperationalStoreError(message, "VALIDATION_ERROR", { cause: parsed.error });
+  }
+  return parsed.data;
+}
+
+function parseStoredValue<T>(
+  schema: { safeParse(value: unknown): { success: true; data: T } | { success: false; error: unknown } },
+  value: unknown,
+  message: string,
+): T {
+  const parsed = schema.safeParse(value);
+  if (!parsed.success) {
+    throw new OperationalStoreError(message, "PERSISTENCE_ERROR", { cause: parsed.error });
   }
   return parsed.data;
 }

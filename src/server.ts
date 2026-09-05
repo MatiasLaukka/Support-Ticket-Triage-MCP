@@ -30,6 +30,7 @@ import {
   type TriageRecommendation,
 } from "./domain.js";
 import { DomainError } from "./errors.js";
+import { classifyCommandError } from "./command-errors.js";
 import type { KnowledgeRepository } from "./knowledge-repository.js";
 import {
   calculateQueueMetrics,
@@ -47,6 +48,7 @@ import {
   type ClassificationReasoningProvider,
 } from "./approval-desk/classification-reasoning-provider.js";
 import { evaluateTicketWithAi } from "./approval-desk/ai-evaluation.js";
+import { evaluateTicketCommand } from "./evaluation-command.js";
 import {
   buildTicketWorkflowReadModel,
   customerRepliesFromAudits,
@@ -505,6 +507,8 @@ export interface TriageServerDependencies {
   };
   learningAvailability?: { readonly status: "available" | "unavailable" };
   operationalStore?: DecisionTimelineSource;
+  operationalCommandDispatcher?: import("./operational-command-dispatch.js").OperationalCommandDispatcher;
+  evaluationGuard?: import("./approval-desk/evaluation-guard.js").TicketEvaluationGuard;
   operationalDiagnoses?: {
     list(ticketId?: TicketId): Promise<OperationalWorkflowSnapshot["diagnoses"]>;
   };
@@ -1145,6 +1149,46 @@ async function evaluateTicket(
   deps: TriageServerDependencies,
   input: z.infer<typeof EvaluateTicketInputSchema>,
 ): Promise<z.infer<typeof EvaluateTicketOutputSchema>> {
+  if (deps.operationalCommandDispatcher !== undefined) {
+    const evaluation = await evaluateTicketCommand({
+      dispatcher: deps.operationalCommandDispatcher,
+      service: deps.service,
+      tickets: deps.tickets,
+      audits: deps.audits,
+      knowledge: deps.knowledge,
+      knowledgeEvolution: deps.knowledgeEvolution.service,
+      learningAvailability: deps.learningAvailability,
+      env: deps.env,
+      now: deps.now,
+      evaluationGuard: deps.evaluationGuard,
+      draftProvider: deps.draftProvider,
+      classificationReasoningProvider: deps.classificationReasoningProvider,
+    }, {
+      ticketId: input.ticketId,
+      actor: input.actor,
+      responseStyle: input.responseStyle,
+      aiPreference: input.aiPreference,
+    }, input.commandId);
+    const [persistedTicket, persistedAudits] = await Promise.all([
+      deps.tickets.get(input.ticketId),
+      deps.audits.list(input.ticketId),
+    ]);
+    return EvaluateTicketOutputSchema.parse({
+      recommendation: evaluation.recommendation,
+      ...lifecycleEnvelopeFromParts({
+        ticket: persistedTicket,
+        audits: persistedAudits,
+        recommendations: evaluation.recommendations,
+      }),
+    });
+  }
+  return evaluateTicketLegacy(deps, input);
+}
+
+async function evaluateTicketLegacy(
+  deps: TriageServerDependencies,
+  input: z.infer<typeof EvaluateTicketInputSchema>,
+): Promise<z.infer<typeof EvaluateTicketOutputSchema>> {
   const { commandId } = input;
   const reusableKnowledge = deps.learningAvailability?.status === "unavailable"
     ? unavailableReusableKnowledge()
@@ -1591,23 +1635,13 @@ async function toolResult<T extends object>(
       structuredContent,
     };
   } catch (error) {
-    if (error instanceof z.ZodError) {
+    const classified = classifyCommandError(error);
+    if (classified !== undefined) {
       return {
         content: [
           {
             type: "text",
-            text: `INVALID_REQUEST: ${error.issues[0]?.message ?? "Invalid request."}`,
-          },
-        ],
-        isError: true,
-      };
-    }
-    if (error instanceof DomainError) {
-      return {
-        content: [
-          {
-            type: "text",
-            text: `${error.code}: ${error.message}`,
+            text: `${classified.code}: ${classified.message}`,
           },
         ],
         isError: true,
@@ -1627,8 +1661,9 @@ async function resourceOperation<T>(
   try {
     return await operation();
   } catch (error) {
-    if (error instanceof DomainError) {
-      throw new Error(`${error.code}: ${error.message}`);
+    const classified = classifyCommandError(error);
+    if (classified !== undefined) {
+      throw new Error(`${classified.code}: ${classified.message}`);
     }
     logUnexpectedError(error);
     throw new Error(UNEXPECTED_ERROR_TEXT);

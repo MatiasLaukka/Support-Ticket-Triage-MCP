@@ -273,7 +273,7 @@ describe("SqliteKnowledgeEvolutionStore", () => {
     await store.saveCandidate(candidate);
     await expect(store.promote(candidate.id, approved, candidate.version + 1)).rejects.toMatchObject({ code: "STALE_APPROVAL" });
     await store.promote(candidate.id, approved, candidate.version);
-    await expect(store.promote(candidate.id, approved, candidate.version)).rejects.toMatchObject({ code: "REPOSITORY_ERROR" });
+    await expect(store.promote(candidate.id, approved, candidate.version)).rejects.toMatchObject({ code: "STALE_APPROVAL" });
     await expect(store.listApproved()).resolves.toEqual([approved]);
     ledger.close();
   });

@@ -332,7 +332,7 @@ export class SqliteKnowledgeEvolutionStore implements KnowledgeVersionStore {
           throw new DomainError("Knowledge candidate version is stale.", "STALE_APPROVAL");
         }
         const existing = this.database.prepare("SELECT 1 AS found FROM knowledge_versions WHERE object_id = ? LIMIT 1").get(candidateId) as { found?: number } | undefined;
-        if (existing?.found === 1) throw repositoryError("Knowledge candidate has already been promoted.");
+        if (existing?.found === 1) throw new DomainError("Knowledge candidate has already been promoted.", "STALE_APPROVAL");
         this.database.prepare("INSERT INTO knowledge_versions(object_id, version, approved_at, approved_at_epoch, learning_governance, payload_json) VALUES (?, ?, ?, ?, ?, ?)")
           .run(parsed.data.id, parsed.data.version, approval.approvedAt, timestampMs(approval.approvedAt), "ledger", JSON.stringify(parsed.data));
         this.database.prepare("INSERT INTO knowledge_object_heads(object_id, version) VALUES (?, ?)").run(parsed.data.id, parsed.data.version);
@@ -363,7 +363,7 @@ export class SqliteKnowledgeEvolutionStore implements KnowledgeVersionStore {
     } catch (error) {
       if (error instanceof DomainError) throw error;
       if (error instanceof Error && error.name === "DomainError") throw error;
-      if (isUniqueViolation(error)) throw repositoryError("Knowledge candidate has already been promoted.");
+      if (isUniqueViolation(error)) throw new DomainError("Knowledge candidate has already been promoted.", "STALE_APPROVAL");
       if (error instanceof DomainError) throw error;
       throw repositoryError("Knowledge candidate promotion could not be persisted.");
     }

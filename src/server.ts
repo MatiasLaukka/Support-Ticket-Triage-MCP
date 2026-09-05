@@ -48,6 +48,7 @@ import {
   type ClassificationReasoningProvider,
 } from "./approval-desk/classification-reasoning-provider.js";
 import { evaluateTicketWithAi } from "./approval-desk/ai-evaluation.js";
+import { evaluateTicketCommand } from "./evaluation-command.js";
 import {
   buildTicketWorkflowReadModel,
   customerRepliesFromAudits,
@@ -506,6 +507,8 @@ export interface TriageServerDependencies {
   };
   learningAvailability?: { readonly status: "available" | "unavailable" };
   operationalStore?: DecisionTimelineSource;
+  operationalCommandDispatcher?: import("./operational-command-dispatch.js").OperationalCommandDispatcher;
+  evaluationGuard?: import("./approval-desk/evaluation-guard.js").TicketEvaluationGuard;
   operationalDiagnoses?: {
     list(ticketId?: TicketId): Promise<OperationalWorkflowSnapshot["diagnoses"]>;
   };
@@ -1143,6 +1146,46 @@ async function invalidateDiagnosis(
 }
 
 async function evaluateTicket(
+  deps: TriageServerDependencies,
+  input: z.infer<typeof EvaluateTicketInputSchema>,
+): Promise<z.infer<typeof EvaluateTicketOutputSchema>> {
+  if (deps.operationalCommandDispatcher !== undefined) {
+    const evaluation = await evaluateTicketCommand({
+      dispatcher: deps.operationalCommandDispatcher,
+      service: deps.service,
+      tickets: deps.tickets,
+      audits: deps.audits,
+      knowledge: deps.knowledge,
+      knowledgeEvolution: deps.knowledgeEvolution.service,
+      learningAvailability: deps.learningAvailability,
+      env: deps.env,
+      now: deps.now,
+      evaluationGuard: deps.evaluationGuard,
+      draftProvider: deps.draftProvider,
+      classificationReasoningProvider: deps.classificationReasoningProvider,
+    }, {
+      ticketId: input.ticketId,
+      actor: input.actor,
+      responseStyle: input.responseStyle,
+      aiPreference: input.aiPreference,
+    }, input.commandId);
+    const [persistedTicket, persistedAudits] = await Promise.all([
+      deps.tickets.get(input.ticketId),
+      deps.audits.list(input.ticketId),
+    ]);
+    return EvaluateTicketOutputSchema.parse({
+      recommendation: evaluation.recommendation,
+      ...lifecycleEnvelopeFromParts({
+        ticket: persistedTicket,
+        audits: persistedAudits,
+        recommendations: evaluation.recommendations,
+      }),
+    });
+  }
+  return evaluateTicketLegacy(deps, input);
+}
+
+async function evaluateTicketLegacy(
   deps: TriageServerDependencies,
   input: z.infer<typeof EvaluateTicketInputSchema>,
 ): Promise<z.infer<typeof EvaluateTicketOutputSchema>> {

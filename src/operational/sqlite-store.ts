@@ -14,6 +14,9 @@ import type {
   OperationalOutboxRow,
   OperationalWorkflowSnapshot,
 } from "./domain.js";
+import type {
+  OperationalResultReader,
+} from "../operational-command-dispatch.js";
 import {
   OperationalStoreError,
   OperationalUnitOfWork,
@@ -185,6 +188,27 @@ export class OperationalSqliteStore {
     this.assertInitialized();
     const read = this.database.transaction(() =>
       this.withReader((reader) => reader.readCommandReceipt(commandId)));
+    return read();
+  }
+
+  readCommandOutcome<T>(
+    commandId: string,
+    project: (receipt: CommandIdempotencyRecord, reader: OperationalResultReader) => T,
+  ): T | undefined {
+    this.assertInitialized();
+    const read = this.database.transaction(() => {
+      const unit = new OperationalUnitOfWork(this.database);
+      try {
+        const receipt = unit.readCommandReceipt(commandId);
+        if (receipt === undefined) return undefined;
+        const reader: OperationalResultReader = {
+          readWorkflowSnapshot: unit.readWorkflowSnapshot.bind(unit),
+        };
+        return project(receipt, reader);
+      } finally {
+        unit.closeScope();
+      }
+    });
     return read();
   }
 

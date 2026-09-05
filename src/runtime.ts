@@ -32,6 +32,11 @@ import {
   type DemoStateUsageLease,
 } from "./demo-state-lease.js";
 import { parseKnowledgeCandidateTimeoutMs } from "./utils/parse-openai-timeout.js";
+import { TicketEvaluationGuard } from "./approval-desk/evaluation-guard.js";
+import {
+  OperationalCommandDispatcher,
+  type DispatchableOperationalStore,
+} from "./operational-command-dispatch.js";
 
 const STARTUP_PATH_MESSAGES = {
   TRIAGE_DATA_ROOT: "TRIAGE_DATA_ROOT must not be blank.",
@@ -82,6 +87,8 @@ export interface RuntimeDependencies {
   knowledgeEvolution: { diagnoses: DiagnosisRepository; objects: SqliteKnowledgeEvolutionStore; audits: SqliteKnowledgeEvolutionStore; ledger: SqliteLearningLedger; service: KnowledgeEvolutionService };
   service: TriageService;
   operationalStore?: OperationalCommandStore;
+  operationalCommandDispatcher?: OperationalCommandDispatcher;
+  evaluationGuard?: TicketEvaluationGuard;
   learningOutbox?: LearningOutboxWorker;
   learningAvailability: LearningAvailability;
   now: () => Date;
@@ -305,6 +312,10 @@ export async function createRuntimeDependencies(
     ...(serviceOperationalStore === undefined ? {} : { operationalStore: serviceOperationalStore }),
     now,
   });
+  const evaluationGuard = new TicketEvaluationGuard();
+  const operationalCommandDispatcher = isDispatchableOperationalStore(runtimeOperationalStore)
+    ? new OperationalCommandDispatcher(runtimeOperationalStore)
+    : undefined;
 
   return {
     env,
@@ -316,6 +327,8 @@ export async function createRuntimeDependencies(
     knowledgeEvolution,
     service,
     ...(runtimeOperationalStore === undefined ? {} : { operationalStore: runtimeOperationalStore }),
+    ...(operationalCommandDispatcher === undefined ? {} : { operationalCommandDispatcher }),
+    evaluationGuard,
     ...(learningOutbox === undefined ? {} : { learningOutbox }),
     learningAvailability,
     now,
@@ -344,6 +357,14 @@ export async function createRuntimeDependencies(
     }
     throw error;
   }
+}
+
+function isDispatchableOperationalStore(
+  store: OperationalCommandStore | undefined,
+): store is OperationalCommandStore & DispatchableOperationalStore {
+  return store !== undefined && typeof (
+    store as Partial<DispatchableOperationalStore>
+  ).readCommandOutcome === "function";
 }
 
 function closeRuntimeResources(input: {

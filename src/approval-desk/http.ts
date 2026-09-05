@@ -42,6 +42,7 @@ import {
   type ClassificationReasoningProvider,
 } from "./classification-reasoning-provider.js";
 import { evaluateTicketWithAi } from "./ai-evaluation.js";
+import { evaluateTicketCommand } from "../evaluation-command.js";
 import { TicketEvaluationGuard } from "./evaluation-guard.js";
 import { buildAutomationEvidenceReport } from "./evidence-report.js";
 import { approvalDeskHtml } from "./ui.js";
@@ -337,7 +338,7 @@ export function createApprovalDeskHttpServer(
   deps: RuntimeDependencies,
   options: ApprovalDeskHttpOptions = {},
 ) {
-  const evaluationGuard = new TicketEvaluationGuard();
+  const evaluationGuard = deps.evaluationGuard ?? new TicketEvaluationGuard();
   return createServer((request, response) => {
     void routeRequest(request, response, deps, options, evaluationGuard);
   });
@@ -924,6 +925,42 @@ async function createRecommendation(
 ): Promise<unknown> {
   const ticketId = TicketIdSchema.parse(id);
   const body = SubmitBodySchema.parse(await readJsonBody(request));
+  if (deps.operationalCommandDispatcher !== undefined) {
+    const commandContext = commandContextFromRequest(request, deps);
+    if (commandContext === undefined) {
+      throw invalidRequest("Idempotency-Key is required for operational mutations.");
+    }
+    const evaluation = await evaluateTicketCommand({
+      dispatcher: deps.operationalCommandDispatcher,
+      service: deps.service,
+      tickets: deps.tickets,
+      audits: deps.audits,
+      knowledge: deps.knowledge,
+      knowledgeEvolution: deps.knowledgeEvolution.service,
+      learningAvailability: deps.learningAvailability,
+      env: deps.env,
+      now: deps.now,
+      evaluationGuard: deps.evaluationGuard,
+      draftProvider: options.draftProvider,
+      classificationReasoningProvider: options.classificationReasoningProvider,
+      loadExpectedOutcome: options.expectedOutcomesPath === undefined
+        ? undefined
+        : async (requestedTicketId) => {
+          const outcomes = await loadExpectedOutcomes(options.expectedOutcomesPath!);
+          return outcomes?.get(requestedTicketId);
+        },
+    }, {
+      ticketId,
+      actor: body.actor,
+      responseStyle: body.responseStyle,
+      aiPreference: body.aiPreference,
+      customerReplies: body.customerReplies,
+    }, commandContext.commandId);
+    return {
+      recommendation: evaluation.recommendation,
+      ...(await lifecycleEnvelope({ deps }, ticketId)),
+    };
+  }
   return evaluationGuard.run(ticketId, async () => {
     const reusableKnowledge = deps.learningAvailability.status === "unavailable"
       ? unavailableReusableKnowledge()

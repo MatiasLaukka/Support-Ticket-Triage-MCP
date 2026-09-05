@@ -21,6 +21,7 @@ import type {
   TriageRecommendation,
 } from "../domain.js";
 import { DomainError } from "../errors.js";
+import { classifyCommandError } from "../command-errors.js";
 import { CommandIdSchema } from "../operational/domain.js";
 import { readDecisionTimeline } from "../operational/timeline.js";
 import { calculateQueueMetrics } from "../metrics.js";
@@ -1722,18 +1723,10 @@ function json(
 }
 
 function handleError(response: ServerResponse, error: unknown): void {
-  if (error instanceof z.ZodError) {
-    json(response, 400, {
-      error: {
-        code: "INVALID_REQUEST",
-        message: error.issues[0]?.message ?? "Invalid request.",
-      },
-    });
-    return;
-  }
-  if (error instanceof DomainError) {
-    json(response, domainStatus(error), {
-      error: { code: error.code, message: error.message },
+  const classified = classifyCommandError(error);
+  if (classified !== undefined) {
+    json(response, classified.httpStatus, {
+      error: { code: classified.code, message: classified.message },
     });
     return;
   }
@@ -1749,19 +1742,4 @@ function handleError(response: ServerResponse, error: unknown): void {
       message: UNEXPECTED_ERROR_TEXT,
     },
   });
-}
-
-function domainStatus(error: DomainError): number {
-  switch (error.code) {
-    case "STALE_APPROVAL":
-    case "EVALUATION_IN_PROGRESS":
-      return 409;
-    case "TICKET_NOT_FOUND":
-    case "RECOMMENDATION_NOT_FOUND":
-      return 404;
-    case "REPOSITORY_ERROR":
-      return 503;
-    default:
-      return 400;
-  }
 }

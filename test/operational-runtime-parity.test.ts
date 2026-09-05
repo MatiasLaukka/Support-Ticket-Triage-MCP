@@ -48,7 +48,7 @@ describe("production operational runtime parity", () => {
       body: "This restricted database must not accept writes.",
       receivedAt: fixedNow,
     }, { commandId: "81000000-0000-4000-8000-000000000001" }))
-      .rejects.toMatchObject({ code: "STATE_ERROR" });
+      .rejects.toMatchObject({ code: "OPERATIONAL_NOT_READY" });
 
     closeRuntime(runtime);
     expect(() => operationalStore(runtime).readImportState()).toThrow(/closed/i);

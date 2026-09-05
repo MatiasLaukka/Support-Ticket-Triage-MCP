@@ -241,7 +241,7 @@ export class OperationalSqliteStore {
     if (state === "empty" || state === "import-in-progress") {
       throw new OperationalStoreError(
         `Operational database is ${state}; initialize or complete the operational import before runtime mutations.`,
-        "STATE_ERROR",
+        "OPERATIONAL_NOT_READY",
       );
     }
   }

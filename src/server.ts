@@ -30,6 +30,7 @@ import {
   type TriageRecommendation,
 } from "./domain.js";
 import { DomainError } from "./errors.js";
+import { classifyCommandError } from "./command-errors.js";
 import type { KnowledgeRepository } from "./knowledge-repository.js";
 import {
   calculateQueueMetrics,
@@ -1591,23 +1592,13 @@ async function toolResult<T extends object>(
       structuredContent,
     };
   } catch (error) {
-    if (error instanceof z.ZodError) {
+    const classified = classifyCommandError(error);
+    if (classified !== undefined) {
       return {
         content: [
           {
             type: "text",
-            text: `INVALID_REQUEST: ${error.issues[0]?.message ?? "Invalid request."}`,
-          },
-        ],
-        isError: true,
-      };
-    }
-    if (error instanceof DomainError) {
-      return {
-        content: [
-          {
-            type: "text",
-            text: `${error.code}: ${error.message}`,
+            text: `${classified.code}: ${classified.message}`,
           },
         ],
         isError: true,
@@ -1627,8 +1618,9 @@ async function resourceOperation<T>(
   try {
     return await operation();
   } catch (error) {
-    if (error instanceof DomainError) {
-      throw new Error(`${error.code}: ${error.message}`);
+    const classified = classifyCommandError(error);
+    if (classified !== undefined) {
+      throw new Error(`${classified.code}: ${classified.message}`);
     }
     logUnexpectedError(error);
     throw new Error(UNEXPECTED_ERROR_TEXT);

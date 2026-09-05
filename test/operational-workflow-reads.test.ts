@@ -399,15 +399,18 @@ function replyHarness(options: { failTrace?: boolean } = {}) {
   const { store } = openStore();
   const ticket = makeTicket();
   store.transaction((unit) => unit.insertTicket(ticket));
+  store.transaction((unit) => unit.transitionImportState("empty", "native"));
   const ids = [
     "40000000-0000-4000-8000-000000000001",
     "40000000-0000-4000-8000-000000000002",
     "40000000-0000-4000-8000-000000000003",
   ];
   const operationalStore = options.failTrace === true
-    ? {
+      ? {
         readTicket: store.readTicket.bind(store),
         readWorkflowSnapshot: store.readWorkflowSnapshot.bind(store),
+        readCommandOutcome: store.readCommandOutcome.bind(store),
+        assertRuntimeMutationsAllowed: store.assertRuntimeMutationsAllowed.bind(store),
         transaction<T>(work: (unit: any) => T): T {
           return store.transaction((unit) => {
             unit.appendTrace = () => { throw new Error("injected reply trace failure"); };

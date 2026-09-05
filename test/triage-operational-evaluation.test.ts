@@ -327,6 +327,7 @@ function openHarness(options: {
       body: "The API still returns 503.",
     });
   });
+  store.transaction((unit) => unit.transitionImportState("empty", "native"));
   const ids = [
     "50000000-0000-4000-8000-000000000001",
     "50000000-0000-4000-8000-000000000002",
@@ -362,6 +363,8 @@ function mutatingStore(
   return {
     readTicket: store.readTicket.bind(store),
     readWorkflowSnapshot: store.readWorkflowSnapshot.bind(store),
+    readCommandOutcome: store.readCommandOutcome.bind(store),
+    assertRuntimeMutationsAllowed: store.assertRuntimeMutationsAllowed.bind(store),
     transaction<T>(work: (unit: any) => T): T {
       if (armed) {
         armed = false;
@@ -376,6 +379,8 @@ function failingTraceStore(store: OperationalSqliteStore): OperationalSqliteStor
   return {
     readTicket: store.readTicket.bind(store),
     readWorkflowSnapshot: store.readWorkflowSnapshot.bind(store),
+    readCommandOutcome: store.readCommandOutcome.bind(store),
+    assertRuntimeMutationsAllowed: store.assertRuntimeMutationsAllowed.bind(store),
     transaction<T>(work: (unit: any) => T): T {
       return store.transaction((unit) => {
         const original = unit.appendTrace.bind(unit);

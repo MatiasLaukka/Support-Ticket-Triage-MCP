@@ -435,6 +435,19 @@ export const OperationalTicketResultSchema = z.object({
   resultingRevision: RevisionNumberSchema.nullable(),
 }).strict().readonly();
 
+export const AutomaticCustomerReplyIntentSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("none") }).strict(),
+  z.object({
+    kind: z.literal("add-customer-reply"),
+    commandId: CommandIdSchema,
+    ticketId: TicketIdSchema,
+    actor: SafeOperationalActorSchema,
+    body: NonBlankStringSchema.max(4_000),
+    source: NonBlankStringSchema.optional(),
+    receivedAt: IsoTimestampSchema,
+  }).strict(),
+]).readonly();
+
 /** The immutable semantic result replayed for a duplicate command. */
 export const OperationalResultReferenceSchema = z.object({
   operation: IdentifierSchema,
@@ -449,6 +462,7 @@ export const OperationalResultReferenceSchema = z.object({
   ticketSnapshot: TicketSchema.optional(),
   auditsBeforeSentEventIds: UniqueOperationalEventIdsSchema.optional(),
   lifecycleAuditEvents: z.array(OperationalLifecycleAuditEventSchema).min(1).optional(),
+  automaticCustomerReplyIntent: AutomaticCustomerReplyIntentSchema.optional(),
 }).strict().superRefine((result, context) => {
   if (result.recommendationId !== undefined && result.recommendationIds !== undefined) {
     context.addIssue({

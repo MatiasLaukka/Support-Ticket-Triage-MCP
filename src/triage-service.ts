@@ -74,7 +74,6 @@ import {
   type ValidatedKnownCauseReference,
 } from "./knowledge-evolution/reusable-context.js";
 import {
-  canonicalRequestHash,
   type CommandReplay,
   type OperationalCommandContext,
 } from "./operational/idempotency.js";
@@ -85,11 +84,19 @@ import type {
   OperationalResultReference,
   OperationalWorkflowSnapshot,
 } from "./operational/domain.js";
-import { OperationalEventSchema } from "./operational/domain.js";
+import {
+  AutomaticCustomerReplyIntentSchema,
+  OperationalEventSchema,
+} from "./operational/domain.js";
 import {
   OperationalStoreError,
   type OperationalUnitOfWork,
 } from "./operational/unit-of-work.js";
+import {
+  OperationalCommandDispatcher,
+  type DispatchableOperationalStore,
+  type PreparedCommandDefinition,
+} from "./operational-command-dispatch.js";
 export type {
   DiagnosisReviewInput,
 } from "./approval-desk/diagnosis-review.js";
@@ -193,6 +200,7 @@ const MarkResponseSentInputSchema = z
     actor: NonBlankStringSchema,
     sentAt: IsoTimestampSchema,
     customerResponse: NonBlankStringSchema,
+    automaticReplyEnabled: z.boolean().optional(),
   })
   .strict();
 
@@ -205,6 +213,9 @@ const AddCustomerReplyInputSchema = z
     source: NonBlankStringSchema.optional(),
   })
   .strict();
+const AddCustomerReplyCommandInputSchema = AddCustomerReplyInputSchema.omit({
+  receivedAt: true,
+});
 export const DiagnosisContextSchema: z.ZodType<DiagnosisContext> = z
   .object({
     status: z.literal("completed"),
@@ -428,7 +439,12 @@ export interface MarkResponseSentInput {
   actor: string;
   sentAt: string;
   customerResponse: string;
+  automaticReplyEnabled?: boolean;
 }
+
+type OperationalMarkResponseSentInput = Omit<MarkResponseSentInput, "customerResponse"> & {
+  customerResponse?: string;
+};
 
 export interface ApproveAndMarkResponseSentInput {
   approval: Approval;
@@ -482,6 +498,12 @@ export interface RecordDiagnosisInput {
     ticketRevision: number;
     customerReplyWatermark: CustomerReplyWatermark;
   };
+}
+
+interface WorkflowRecordDiagnosisInput {
+  ticketId: TicketId;
+  actor: string;
+  workflow: true;
 }
 
 export interface RecordFixInput {
@@ -612,6 +634,14 @@ export function derivedOperationalCommandContext(
   };
 }
 
+function isDispatchableOperationalStore(
+  store: OperationalCommandStore | undefined,
+): store is OperationalCommandStore & DispatchableOperationalStore {
+  return store !== undefined && typeof (
+    store as Partial<DispatchableOperationalStore>
+  ).readCommandOutcome === "function";
+}
+
 /** @deprecated File-backed fixture adapter only until operational cutover. */
 export function customerReplyWatermarkFromAudits(
   audits: readonly AuditEvent[],
@@ -665,10 +695,24 @@ function assertTrustedKnownCauseReference(
 export class TriageService {
   private readonly now: () => Date;
   private readonly uuid: () => string;
+  private readonly commandDispatcher: OperationalCommandDispatcher | undefined;
 
   constructor(private readonly dependencies: TriageServiceDependencies) {
     this.now = dependencies.now ?? (() => new Date());
     this.uuid = dependencies.uuid ?? randomUUID;
+    this.commandDispatcher = isDispatchableOperationalStore(dependencies.operationalStore)
+      ? new OperationalCommandDispatcher(dependencies.operationalStore)
+      : undefined;
+  }
+
+  private operationalDispatcher(): OperationalCommandDispatcher {
+    if (this.commandDispatcher === undefined) {
+      throw new OperationalStoreError(
+        "Operational command replay requires a dispatchable operational store.",
+        "NOT_INITIALIZED",
+      );
+    }
+    return this.commandDispatcher;
   }
 
   async submit(
@@ -890,45 +934,82 @@ export class TriageService {
   ): Promise<TriageRecommendation> {
     const store = this.dependencies.operationalStore;
     if (store === undefined) throw new Error("Operational store is not configured.");
-    const ticket = store.readTicket(parsed.ticketId);
-    const recommendation = this.buildRecommendation(parsed, ticket, classificationConfidence);
+    const { submittedAt: _submittedAt, ...requestWithoutTimestamp } = parsed;
     const request = classificationConfidence === undefined
-      ? parsed
-      : { ...parsed, classificationConfidence };
-    const requestHash = canonicalRequestHash("submit-recommendation", request);
-    return store.transaction((unit) => {
-      const replay = unit.beginCommand(commandContext.commandId, "submit-recommendation", request);
-      if (replay !== "new") return this.replayRecommendation(unit, replay);
-      const snapshot = unit.readWorkflowSnapshot(parsed.ticketId);
-      if (snapshot.ticket.revision !== parsed.sourceRevision) {
-        throw stale("Recommendation source revision is stale.");
-      }
-      const eventId = this.uuid();
-      const [sequence] = unit.allocateEventSequences(parsed.ticketId, 1);
-      unit.appendEvent(this.operationalRecommendationEvent(
-        eventId,
-        parsed.ticketId,
-        sequence!,
-        commandContext.commandId,
-        recommendation,
-        parsed.actor,
-        parsed.submittedAt,
-        "recommendation-submitted",
-      ));
-      unit.insertRecommendation(recommendation);
-      unit.appendRecommendationRevision({
-        recommendation,
-        operationalEventId: eventId,
-        createdAt: parsed.submittedAt,
-      });
-      this.appendEvaluationTraces(unit, eventId, recommendation, parsed.actor, parsed.submittedAt);
-      unit.persistCommandResult(commandContext.commandId, requestHash, {
-        operation: "submit-recommendation",
-        tickets: [{ ticketId: parsed.ticketId, operationalEventIds: [eventId], resultingRevision: null }],
-        recommendationId: recommendation.id,
-      });
-      return recommendation;
-    });
+      ? requestWithoutTimestamp
+      : { ...requestWithoutTimestamp, classificationConfidence };
+    const definition: PreparedCommandDefinition<
+      Omit<z.infer<typeof SubmitRecommendationInputSchema>, "submittedAt"> & {
+        classificationConfidence?: ClassificationConfidence;
+      },
+      TriageRecommendation,
+      TriageRecommendation
+    > = {
+      operation: "submit-recommendation",
+      parse: (raw) => {
+        const rawRecord = z.record(z.string(), z.unknown()).parse(raw);
+        const { classificationConfidence: confidence, ...withoutConfidence } = rawRecord;
+        const parsedInput = SubmitRecommendationInputSchema.parse({
+          ...withoutConfidence,
+          submittedAt: "1970-01-01T00:00:00.000Z",
+        });
+        const { submittedAt: _generatedAt, ...intent } = parsedInput;
+        return {
+          ...intent,
+          ...(confidence === undefined
+            ? {}
+            : { classificationConfidence: ClassificationConfidenceSchema.parse(confidence) }),
+        };
+      },
+      prepare: async (intent) => {
+        const ticket = store.readTicket(intent.ticketId);
+        const { classificationConfidence: confidence, ...recommendationInput } = intent;
+        return this.buildRecommendation(
+          SubmitRecommendationInputSchema.parse({
+            ...recommendationInput,
+            submittedAt: this.now().toISOString(),
+          }),
+          ticket,
+          confidence,
+        );
+      },
+      commit: (unit, recommendation, commandId) => {
+        const snapshot = unit.readWorkflowSnapshot(parsed.ticketId);
+        if (snapshot.ticket.revision !== parsed.sourceRevision) {
+          throw stale("Recommendation source revision is stale.");
+        }
+        const eventId = this.uuid();
+        const [sequence] = unit.allocateEventSequences(parsed.ticketId, 1);
+        unit.appendEvent(this.operationalRecommendationEvent(
+          eventId,
+          parsed.ticketId,
+          sequence!,
+          commandId,
+          recommendation,
+          parsed.actor,
+          recommendation.createdAt,
+          "recommendation-submitted",
+        ));
+        unit.insertRecommendation(recommendation);
+        unit.appendRecommendationRevision({
+          recommendation,
+          operationalEventId: eventId,
+          createdAt: recommendation.createdAt,
+        });
+        this.appendEvaluationTraces(unit, eventId, recommendation, parsed.actor, recommendation.createdAt);
+        return {
+          operation: "submit-recommendation",
+          tickets: [{ ticketId: parsed.ticketId, operationalEventIds: [eventId], resultingRevision: null }],
+          recommendationId: recommendation.id,
+        };
+      },
+      replay: (reader, result) => this.replayRecommendation(reader, { result }),
+    };
+    return this.operationalDispatcher().run(
+      definition,
+      request,
+      commandContext.commandId,
+    );
   }
 
   private async submitOperationalEvaluation(
@@ -940,27 +1021,45 @@ export class TriageService {
   ): Promise<{ recommendation: TriageRecommendation; recommendations: TriageRecommendation[] }> {
     const store = this.dependencies.operationalStore;
     if (store === undefined) throw new Error("Operational store is not configured.");
-    const ticket = store.readTicket(parsed.ticketId);
-    const recommendation = this.buildRecommendation(recommendationInput, ticket, classificationConfidence);
-    const requestHash = canonicalRequestHash("evaluate-ticket", parsed);
-    return store.transaction((unit) => {
-      const replay = unit.beginCommand(commandContext.commandId, "evaluate-ticket", parsed);
-      if (replay !== "new") return this.replayEvaluation(unit, replay);
-      const snapshot = unit.readWorkflowSnapshot(parsed.ticketId);
-      if (snapshot.ticket.revision !== parsed.sourceRevision) throw stale("Recommendation source revision is stale.");
-      if (!operationalCustomerReplyWatermarksMatch(evaluatedCustomerReplyWatermark, snapshot)) {
-        throw stale("Evaluation customer reply snapshot is stale.");
-      }
-      const result = this.commitOperationalEvaluationWriteSet(
+    const { submittedAt: _submittedAt, ...semanticRequest } = parsed;
+    const definition: PreparedCommandDefinition<
+      typeof semanticRequest,
+      PreparedOperationalEvaluation,
+      { recommendation: TriageRecommendation; recommendations: TriageRecommendation[] }
+    > = {
+      operation: "evaluate-ticket",
+      parse: (raw) => {
+        const parsedInput = SubmitEvaluationInputSchema.parse({
+          ...z.record(z.string(), z.unknown()).parse(raw),
+          submittedAt: "1970-01-01T00:00:00.000Z",
+        });
+        const { submittedAt: _generatedAt, ...intent } = parsedInput;
+        return intent;
+      },
+      prepare: async (intent) => {
+        const {
+          evaluatedCustomerReplyWatermark: watermark,
+          classificationConfidence: confidence,
+          ...recommendationInput
+        } = intent;
+        return {
+          recommendationInput,
+          evaluatedCustomerReplyWatermark: watermark,
+          ...(confidence === undefined ? {} : { classificationConfidence: confidence }),
+        };
+      },
+      commit: (unit, prepared, commandId) => this.commitOperationalEvaluation(
         unit,
-        snapshot,
-        parsed,
-        recommendation,
-        commandContext.commandId,
-      );
-      unit.persistCommandResult(commandContext.commandId, requestHash, result);
-      return this.replayEvaluation(unit, { result }, recommendation.id);
-    });
+        prepared,
+        commandId,
+      ),
+      replay: (reader, result) => this.replayEvaluation(reader, { result }),
+    };
+    return this.operationalDispatcher().run(
+      definition,
+      semanticRequest,
+      commandContext.commandId,
+    );
   }
 
   /** Commit an already-prepared evaluation inside the dispatch transaction. */
@@ -1183,11 +1282,11 @@ export class TriageService {
     }
   }
 
-  private replayRecommendation(unit: OperationalUnitOfWork, replay: CommandReplay): TriageRecommendation {
+  private replayRecommendation(reader: OperationalResultReader, replay: CommandReplay): TriageRecommendation {
     const recommendationId = replay.result.recommendationId ?? replay.result.recommendationIds?.[0];
     if (recommendationId === undefined) throw stale("Operational recommendation replay is missing its recommendation reference.");
     const eventIds = new Set(replay.result.tickets.flatMap(({ operationalEventIds }) => operationalEventIds));
-    const snapshot = unit.readWorkflowSnapshot(replay.result.tickets[0]!.ticketId);
+    const snapshot = reader.readWorkflowSnapshot(replay.result.tickets[0]!.ticketId);
     const endSequence = Math.max(
       ...snapshot.events.filter(({ id }) => eventIds.has(id)).map(({ sequence }) => sequence),
     );
@@ -1407,13 +1506,57 @@ export class TriageService {
           "REPOSITORY_ERROR",
         );
       }
-      return this.markOperationalResponseSent(sent, commandContext);
+      const result = await this.markOperationalResponseSent(sent, commandContext);
+      return result.auditEvent;
     }
     return serializeTicket(sent.ticketId, () =>
       serializeRecommendation(sent.recommendationId, () =>
         this.markResponseSentValidated(sent),
       ),
     );
+  }
+
+  async markResponseSentWithAutomaticReply(
+    input: MarkResponseSentInput,
+    commandContext: OperationalCommandContext,
+  ): Promise<{ auditEvent: AuditEvent; automaticReply?: AuditEvent }> {
+    const sent = MarkResponseSentInputSchema.parse(input);
+    const result = await this.markOperationalResponseSent(sent, commandContext);
+    const automaticReply = await this.runAutomaticCustomerReply(result.automaticCustomerReplyIntent);
+    return {
+      auditEvent: result.auditEvent,
+      ...(automaticReply === undefined ? {} : { automaticReply }),
+    };
+  }
+
+  async markResponseSentFromWorkflow(
+    input: {
+      ticketId: TicketId;
+      recommendationId: string;
+      actor: string;
+      automaticReplyEnabled: boolean;
+    },
+    commandContext: OperationalCommandContext,
+  ): Promise<{ auditEvent: AuditEvent; automaticReply?: AuditEvent }> {
+    const result = await this.markOperationalResponseSent({
+      ticketId: input.ticketId,
+      recommendationId: input.recommendationId,
+      actor: input.actor,
+      sentAt: this.now().toISOString(),
+      automaticReplyEnabled: input.automaticReplyEnabled,
+    }, commandContext, {
+      ticketId: input.ticketId,
+      recommendationId: input.recommendationId,
+      actor: input.actor,
+      automaticReplyEnabled: input.automaticReplyEnabled,
+    });
+    const automaticReply = await this.runAutomaticCustomerReply(
+      result.automaticCustomerReplyIntent,
+    );
+    return {
+      auditEvent: result.auditEvent,
+      ...(automaticReply === undefined ? {} : { automaticReply }),
+    };
   }
 
   async approveAndMarkResponseSent(
@@ -1424,6 +1567,7 @@ export class TriageService {
     approvalEvent: AuditEvent;
     sentEvent: AuditEvent;
     auditsBeforeSent: AuditEvent[];
+    automaticReply?: AuditEvent;
   }> {
     const approval = ApprovalSchema.parse(input.approval);
     const responseSent = MarkResponseSentInputSchema.parse(input.responseSent);
@@ -1450,11 +1594,18 @@ export class TriageService {
           "REPOSITORY_ERROR",
         );
       }
-      return this.approveAndMarkOperationalResponseSent(
+      const result = await this.approveAndMarkOperationalResponseSent(
         approval,
         responseSent,
         commandContext,
       );
+      const automaticReply = await this.runAutomaticCustomerReply(
+        result.automaticReplyIntent,
+      );
+      return {
+        ...result,
+        ...(automaticReply === undefined ? {} : { automaticReply }),
+      };
     }
 
     return serializeTicket(approval.ticketId, async () => {
@@ -1528,70 +1679,87 @@ export class TriageService {
       body: reply.body,
       ...(reply.source === undefined ? {} : { source: reply.source }),
     };
-    const requestHash = canonicalRequestHash("add-customer-reply", semanticRequest);
-    return store.transaction((unit) => {
-      const replay = unit.beginCommand(
-        commandContext.commandId,
-        "add-customer-reply",
-        semanticRequest,
+    const dispatcher = this.commandDispatcher;
+    if (dispatcher === undefined) {
+      throw new OperationalStoreError(
+        "Operational command replay requires a dispatchable operational store.",
+        "NOT_INITIALIZED",
       );
-      if (replay !== "new") return this.replayCustomerReply(unit, replay);
-      const snapshot = unit.readWorkflowSnapshot(reply.ticketId);
-      const messageId = this.uuid();
-      const operationalEventId = this.uuid();
-      const [sequence] = unit.allocateEventSequences(reply.ticketId, 1);
-      unit.appendEvent({
-        id: operationalEventId,
-        ticketId: reply.ticketId,
-        sequence: sequence!,
-        occurredAt: reply.receivedAt,
-        actor: reply.actor,
-        action: "customer-reply-received",
-        commandId: commandContext.commandId,
-        facts: { messageId },
-      });
-      const message: ConversationMessage = {
-        id: messageId,
-        ticketId: reply.ticketId,
-        operationalEventId,
-        kind: "customer",
-        createdAt: reply.receivedAt,
-        body: reply.body,
-      };
-      unit.insertMessage(message);
-      unit.appendTrace({
-        id: this.uuid(),
-        operationalEventId,
-        ticketId: reply.ticketId,
-        occurredAt: reply.receivedAt,
-        actor: reply.actor,
-        traceType: "lifecycle",
-        stage: "customer-reply-received",
-        outcome: "success",
-      });
-      unit.persistCommandResult(commandContext.commandId, requestHash, {
-        operation: "add-customer-reply",
-        tickets: [{
-          ticketId: reply.ticketId,
-          operationalEventIds: [operationalEventId],
-          resultingRevision: null,
-        }],
-        messageId,
-        ticketSnapshot: snapshot.ticket,
-      });
-      return operationalCustomerReplyAudit(message, snapshot.ticket, reply.actor);
+    }
+    const definition: PreparedCommandDefinition<
+      z.infer<typeof AddCustomerReplyCommandInputSchema>,
+      z.infer<typeof AddCustomerReplyInputSchema>,
+      AuditEvent
+    > = {
+      operation: "add-customer-reply",
+      parse: (input) => AddCustomerReplyCommandInputSchema.parse(input),
+      prepare: async () => reply,
+      commit: (unit, prepared, commandId) =>
+        this.commitOperationalCustomerReply(unit, prepared, commandId),
+      replay: (reader, result) => this.replayCustomerReply(reader, { result }),
+    };
+    return dispatcher.run(definition, semanticRequest, commandContext.commandId);
+  }
+
+  private commitOperationalCustomerReply(
+    unit: OperationalUnitOfWork,
+    reply: z.infer<typeof AddCustomerReplyInputSchema>,
+    commandId: string,
+  ): OperationalResultReference {
+    const snapshot = unit.readWorkflowSnapshot(reply.ticketId);
+    const messageId = this.uuid();
+    const operationalEventId = this.uuid();
+    const [sequence] = unit.allocateEventSequences(reply.ticketId, 1);
+    unit.appendEvent({
+      id: operationalEventId,
+      ticketId: reply.ticketId,
+      sequence: sequence!,
+      occurredAt: reply.receivedAt,
+      actor: reply.actor,
+      action: "customer-reply-received",
+      commandId,
+      facts: { messageId },
     });
+    const message: ConversationMessage = {
+      id: messageId,
+      ticketId: reply.ticketId,
+      operationalEventId,
+      kind: "customer",
+      createdAt: reply.receivedAt,
+      body: reply.body,
+    };
+    unit.insertMessage(message);
+    unit.appendTrace({
+      id: this.uuid(),
+      operationalEventId,
+      ticketId: reply.ticketId,
+      occurredAt: reply.receivedAt,
+      actor: reply.actor,
+      traceType: "lifecycle",
+      stage: "customer-reply-received",
+      outcome: "success",
+    });
+    return {
+      operation: "add-customer-reply",
+      tickets: [{
+        ticketId: reply.ticketId,
+        operationalEventIds: [operationalEventId],
+        resultingRevision: null,
+      }],
+      messageId,
+      ticketSnapshot: snapshot.ticket,
+    };
   }
 
   private replayCustomerReply(
-    unit: OperationalUnitOfWork,
+    reader: OperationalResultReader,
     replay: CommandReplay,
   ): AuditEvent {
     const ticketResult = replay.result.tickets[0];
     if (ticketResult === undefined || replay.result.messageId === undefined) {
       throw stale("Operational customer-reply replay is missing its message reference.");
     }
-    const snapshot = unit.readWorkflowSnapshot(ticketResult.ticketId);
+    const snapshot = reader.readWorkflowSnapshot(ticketResult.ticketId);
     const message = snapshot.messages.find(({ id }) => id === replay.result.messageId);
     const event = message === undefined
       ? undefined
@@ -1610,108 +1778,118 @@ export class TriageService {
     );
   }
 
-  private approveOperational(
+  private async approveOperational(
     approval: Approval,
     commandContext: OperationalCommandContext,
-  ): { ticket: Ticket; auditEvent: AuditEvent } {
-    const store = this.dependencies.operationalStore;
-    if (store === undefined) throw new Error("Operational store is not configured.");
+  ): Promise<{ ticket: Ticket; auditEvent: AuditEvent }> {
     const { approvedAt: _approvedAt, ...semanticRequest } = approval;
-    const requestHash = canonicalRequestHash("approve-recommendation", semanticRequest);
-    return store.transaction((unit) => {
-      const replay = unit.beginCommand(
-        commandContext.commandId,
-        "approve-recommendation",
-        semanticRequest,
-      );
-      if (replay !== "new") return this.replayOperationalApproval(unit, replay);
-      const snapshot = unit.readWorkflowSnapshot(approval.ticketId);
-      const recommendation = snapshot.recommendations.find(
-        ({ id }) => id === approval.recommendationId,
-      );
-      if (
-        recommendation === undefined
-        || recommendation.resolution !== "pending"
-        || recommendation.ticketId !== approval.ticketId
-      ) {
-        throw stale("Recommendation cannot be applied.");
-      }
-      if (this.hasOperationalCustomerReplyAfterRecommendation(snapshot, recommendation)) {
-        throw stale("Recommendation cannot be applied after a newer customer reply.");
-      }
-      const ticketBefore = snapshot.ticket;
-      if (
-        ticketBefore.revision !== approval.expectedRevision
-        || recommendation.sourceRevision !== approval.expectedRevision
-      ) {
-        throw stale("Approval revision is stale.");
-      }
-      validateOperationalApproval(recommendation, ticketBefore, approval, this.now());
-
-      const approvedRecommendation = recommendationAfterApproval(recommendation, approval);
-      const ticketAfter = approvedTicketProjection(ticketBefore, recommendation, approval);
-      const changesTicket = ticketAfter !== ticketBefore;
-      const approvalFacts = operationalApprovalFacts(ticketBefore, recommendation, approval);
-      const eventId = this.uuid();
-      const [sequence] = unit.allocateEventSequences(approval.ticketId, 1);
-      unit.appendEvent({
-        id: eventId,
-        ticketId: approval.ticketId,
-        sequence: sequence!,
-        occurredAt: approval.approvedAt,
-        actor: approval.actor,
-        action: "recommendation-approved",
-        commandId: commandContext.commandId,
-        facts: {
-          approved: true,
-          approvedFields: approval.approvedFields,
-          resolution: "approved",
-          expectedRevision: approval.expectedRevision,
-          recommendationFields: approvalFacts,
-          ...(changesTicket ? { revision: ticketAfter.revision } : {}),
-        },
-      });
-      unit.updateRecommendation(approvedRecommendation, "pending");
-      unit.appendRecommendationRevision({
-        recommendation: approvedRecommendation,
-        operationalEventId: eventId,
-        createdAt: approval.approvedAt,
-      });
-      if (changesTicket) {
-        unit.updateTicket(ticketAfter, ticketBefore.revision);
-        unit.appendTicketRevision({
-          ticketId: ticketAfter.id,
-          revision: ticketAfter.revision,
-          ticket: ticketAfter,
-          operationalEventId: eventId,
-          createdAt: approval.approvedAt,
+    const definition: PreparedCommandDefinition<
+      typeof semanticRequest,
+      Approval,
+      { ticket: Ticket; auditEvent: AuditEvent }
+    > = {
+      operation: "approve-recommendation",
+      parse: (raw) => {
+        const parsedApproval = ApprovalSchema.parse({
+          ...z.record(z.string(), z.unknown()).parse(raw),
+          approvedAt: "1970-01-01T00:00:00.000Z",
         });
-      }
-      this.appendLifecycleTrace(
-        unit,
-        eventId,
-        approval.ticketId,
-        approval.actor,
-        approval.approvedAt,
-        "recommendation-approved",
-      );
-      const result: OperationalResultReference = {
-        operation: "approve-recommendation",
-        tickets: [{
-          ticketId: approval.ticketId,
-          operationalEventIds: [eventId],
-          resultingRevision: changesTicket ? ticketAfter.revision : null,
-        }],
-        recommendationId: recommendation.id,
-        ticketSnapshot: ticketAfter,
-      };
-      unit.persistCommandResult(commandContext.commandId, requestHash, result);
-      return this.replayOperationalApproval(unit, { result });
-    });
+        const { approvedAt: _generatedAt, ...intent } = parsedApproval;
+        return intent;
+      },
+      prepare: async () => approval,
+      commit: (unit, prepared, commandId) => {
+        const snapshot = unit.readWorkflowSnapshot(prepared.ticketId);
+        const recommendation = snapshot.recommendations.find(
+          ({ id }) => id === prepared.recommendationId,
+        );
+        if (
+          recommendation === undefined
+          || recommendation.resolution !== "pending"
+          || recommendation.ticketId !== prepared.ticketId
+        ) {
+          throw stale("Recommendation cannot be applied.");
+        }
+        if (this.hasOperationalCustomerReplyAfterRecommendation(snapshot, recommendation)) {
+          throw stale("Recommendation cannot be applied after a newer customer reply.");
+        }
+        const ticketBefore = snapshot.ticket;
+        if (
+          ticketBefore.revision !== prepared.expectedRevision
+          || recommendation.sourceRevision !== prepared.expectedRevision
+        ) {
+          throw stale("Approval revision is stale.");
+        }
+        validateOperationalApproval(recommendation, ticketBefore, prepared, this.now());
+        const approvedRecommendation = recommendationAfterApproval(recommendation, prepared);
+        const ticketAfter = approvedTicketProjection(ticketBefore, recommendation, prepared);
+        const changesTicket = ticketAfter !== ticketBefore;
+        const approvalFacts = operationalApprovalFacts(ticketBefore, recommendation, prepared);
+        const eventId = this.uuid();
+        const [sequence] = unit.allocateEventSequences(prepared.ticketId, 1);
+        unit.appendEvent({
+          id: eventId,
+          ticketId: prepared.ticketId,
+          sequence: sequence!,
+          occurredAt: prepared.approvedAt,
+          actor: prepared.actor,
+          action: "recommendation-approved",
+          commandId,
+          facts: {
+            approved: true,
+            approvedFields: prepared.approvedFields,
+            resolution: "approved",
+            expectedRevision: prepared.expectedRevision,
+            recommendationFields: approvalFacts,
+            ...(changesTicket ? { revision: ticketAfter.revision } : {}),
+          },
+        });
+        unit.updateRecommendation(approvedRecommendation, "pending");
+        unit.appendRecommendationRevision({
+          recommendation: approvedRecommendation,
+          operationalEventId: eventId,
+          createdAt: prepared.approvedAt,
+        });
+        if (changesTicket) {
+          unit.updateTicket(ticketAfter, ticketBefore.revision);
+          unit.appendTicketRevision({
+            ticketId: ticketAfter.id,
+            revision: ticketAfter.revision,
+            ticket: ticketAfter,
+            operationalEventId: eventId,
+            createdAt: prepared.approvedAt,
+          });
+        }
+        this.appendLifecycleTrace(
+          unit,
+          eventId,
+          prepared.ticketId,
+          prepared.actor,
+          prepared.approvedAt,
+          "recommendation-approved",
+        );
+        return {
+          operation: "approve-recommendation",
+          tickets: [{
+            ticketId: prepared.ticketId,
+            operationalEventIds: [eventId],
+            resultingRevision: changesTicket ? ticketAfter.revision : null,
+          }],
+          recommendationId: recommendation.id,
+          ticketSnapshot: ticketAfter,
+        };
+      },
+      replay: (reader, result) => this.replayOperationalApproval(reader, { result }),
+    };
+    return this.operationalDispatcher().run(
+      definition,
+      semanticRequest,
+      commandContext.commandId,
+    );
   }
 
   private replayOperationalApproval(
-    unit: OperationalUnitOfWork,
+    reader: OperationalResultReader,
     replay: CommandReplay,
   ): { ticket: Ticket; auditEvent: AuditEvent } {
     const ticketResult = replay.result.tickets[0];
@@ -1720,7 +1898,7 @@ export class TriageService {
     if (ticketResult === undefined || recommendationId === undefined) {
       throw stale("Operational approval replay is missing its semantic references.");
     }
-    const snapshot = unit.readWorkflowSnapshot(ticketResult.ticketId);
+    const snapshot = reader.readWorkflowSnapshot(ticketResult.ticketId);
     const event = snapshot.events.find(
       ({ id, action }) => ticketResult.operationalEventIds.includes(id)
         && action === "recommendation-approved",
@@ -1749,7 +1927,7 @@ export class TriageService {
     };
   }
 
-  private transitionOperationalRecommendation(
+  private async transitionOperationalRecommendation(
     operation: string,
     input: {
       recommendationId: string;
@@ -1762,77 +1940,94 @@ export class TriageService {
     reason: string,
     occurredAt: string,
     commandContext: OperationalCommandContext,
-  ): AuditEvent {
-    const store = this.dependencies.operationalStore;
-    if (store === undefined) throw new Error("Operational store is not configured.");
+  ): Promise<AuditEvent> {
     const semanticRequest = {
       recommendationId: input.recommendationId,
       ticketId: input.ticketId,
       actor: input.actor,
       reason,
     };
-    const requestHash = canonicalRequestHash(operation, semanticRequest);
-    return store.transaction((unit) => {
-      const replay = unit.beginCommand(commandContext.commandId, operation, semanticRequest);
-      if (replay !== "new") return this.replayOperationalTransition(unit, replay, action);
-      const snapshot = unit.readWorkflowSnapshot(input.ticketId);
-      const recommendation = snapshot.recommendations.find(
-        ({ id }) => id === input.recommendationId,
-      );
-      if (
-        recommendation === undefined
-        || recommendation.resolution !== expectedResolution
-        || recommendation.ticketId !== input.ticketId
-      ) {
-        throw stale(operationalTransitionStaleMessage(action));
-      }
-      const updated = TriageRecommendationSchema.parse({
-        ...recommendation,
-        resolution: resultingResolution,
-      });
-      const eventId = this.uuid();
-      const [sequence] = unit.allocateEventSequences(input.ticketId, 1);
-      unit.appendEvent({
-        id: eventId,
-        ticketId: input.ticketId,
-        sequence: sequence!,
-        occurredAt,
-        actor: input.actor,
+    const definition: PreparedCommandDefinition<
+      typeof semanticRequest,
+      typeof semanticRequest & { occurredAt: string },
+      AuditEvent
+    > = {
+      operation,
+      parse: (raw) => z.object({
+        recommendationId: z.uuid(),
+        ticketId: TicketIdSchema,
+        actor: NonBlankStringSchema,
+        reason: NonBlankStringSchema,
+      }).strict().parse(raw),
+      prepare: async (intent) => ({ ...intent, occurredAt }),
+      commit: (unit, prepared, commandId) => {
+        const snapshot = unit.readWorkflowSnapshot(prepared.ticketId);
+        const recommendation = snapshot.recommendations.find(
+          ({ id }) => id === prepared.recommendationId,
+        );
+        if (
+          recommendation === undefined
+          || recommendation.resolution !== expectedResolution
+          || recommendation.ticketId !== prepared.ticketId
+        ) {
+          throw stale(operationalTransitionStaleMessage(action));
+        }
+        const updated = TriageRecommendationSchema.parse({
+          ...recommendation,
+          resolution: resultingResolution,
+        });
+        const eventId = this.uuid();
+        const [sequence] = unit.allocateEventSequences(prepared.ticketId, 1);
+        unit.appendEvent({
+          id: eventId,
+          ticketId: prepared.ticketId,
+          sequence: sequence!,
+          occurredAt: prepared.occurredAt,
+          actor: prepared.actor,
+          action,
+          commandId,
+          facts: { resolution: resultingResolution, reasonCode: prepared.reason },
+        });
+        unit.updateRecommendation(updated, expectedResolution);
+        unit.appendRecommendationRevision({
+          recommendation: updated,
+          operationalEventId: eventId,
+          createdAt: prepared.occurredAt,
+        });
+        this.appendLifecycleTrace(
+          unit,
+          eventId,
+          prepared.ticketId,
+          prepared.actor,
+          prepared.occurredAt,
+          action,
+          prepared.reason,
+        );
+        return {
+          operation,
+          tickets: [{
+            ticketId: prepared.ticketId,
+            operationalEventIds: [eventId],
+            resultingRevision: null,
+          }],
+          recommendationId: prepared.recommendationId,
+        };
+      },
+      replay: (reader, result) => this.replayOperationalTransition(
+        reader,
+        { result },
         action,
-        commandId: commandContext.commandId,
-        facts: { resolution: resultingResolution, reasonCode: reason },
-      });
-      unit.updateRecommendation(updated, expectedResolution);
-      unit.appendRecommendationRevision({
-        recommendation: updated,
-        operationalEventId: eventId,
-        createdAt: occurredAt,
-      });
-      this.appendLifecycleTrace(
-        unit,
-        eventId,
-        input.ticketId,
-        input.actor,
-        occurredAt,
-        action,
-        reason,
-      );
-      const result: OperationalResultReference = {
-        operation,
-        tickets: [{
-          ticketId: input.ticketId,
-          operationalEventIds: [eventId],
-          resultingRevision: null,
-        }],
-        recommendationId: input.recommendationId,
-      };
-      unit.persistCommandResult(commandContext.commandId, requestHash, result);
-      return this.replayOperationalTransition(unit, { result }, action);
-    });
+      ),
+    };
+    return this.operationalDispatcher().run(
+      definition,
+      semanticRequest,
+      commandContext.commandId,
+    );
   }
 
   private replayOperationalTransition(
-    unit: OperationalUnitOfWork,
+    reader: OperationalResultReader,
     replay: CommandReplay,
     action: "recommendation-rejected" | "recommendation-canceled" | "recommendation-superseded",
   ): AuditEvent {
@@ -1841,7 +2036,7 @@ export class TriageService {
     if (ticketResult === undefined || recommendationId === undefined) {
       throw stale("Operational lifecycle replay is missing its semantic references.");
     }
-    const snapshot = unit.readWorkflowSnapshot(ticketResult.ticketId);
+    const snapshot = reader.readWorkflowSnapshot(ticketResult.ticketId);
     const event = snapshot.events.find(
       ({ id, action: candidateAction }) => ticketResult.operationalEventIds.includes(id)
         && candidateAction === action,
@@ -1867,76 +2062,125 @@ export class TriageService {
     );
   }
 
-  private markOperationalResponseSent(
-    sent: MarkResponseSentInput,
+  private async markOperationalResponseSent(
+    sent: OperationalMarkResponseSentInput,
     commandContext: OperationalCommandContext,
-  ): AuditEvent {
-    const store = this.dependencies.operationalStore;
-    if (store === undefined) throw new Error("Operational store is not configured.");
-    const { sentAt: _sentAt, ...semanticRequest } = sent;
-    const requestHash = canonicalRequestHash("mark-response-sent", semanticRequest);
-    return store.transaction((unit) => {
-      const replay = unit.beginCommand(
-        commandContext.commandId,
-        "mark-response-sent",
-        semanticRequest,
-      );
-      if (replay !== "new") return this.replayOperationalResponseSent(unit, replay);
-      const snapshot = unit.readWorkflowSnapshot(sent.ticketId);
-      const recommendation = snapshot.recommendations.find(
-        ({ id }) => id === sent.recommendationId,
-      );
-      assertOperationalResponseMayBeSent(recommendation, sent);
-      if (this.hasOperationalCustomerReplyAfterRecommendation(snapshot, recommendation)) {
-        throw stale("Approved customer response is stale after a newer customer reply.");
-      }
-      assertOperationalResponseNotAlreadySent(snapshot, sent.recommendationId);
-      const eventId = this.uuid();
-      const messageId = this.uuid();
-      const [sequence] = unit.allocateEventSequences(sent.ticketId, 1);
-      unit.appendEvent({
-        id: eventId,
-        ticketId: sent.ticketId,
-        sequence: sequence!,
-        occurredAt: sent.sentAt,
-        actor: sent.actor,
-        action: "customer-response-sent",
-        commandId: commandContext.commandId,
-        facts: { messageId },
-      });
-      unit.insertMessage({
-        id: messageId,
-        ticketId: sent.ticketId,
-        operationalEventId: eventId,
-        kind: "support",
-        createdAt: sent.sentAt,
-        body: sent.customerResponse,
-        recommendationId: sent.recommendationId,
-      });
-      this.appendLifecycleTrace(
-        unit,
-        eventId,
-        sent.ticketId,
-        sent.actor,
-        sent.sentAt,
-        "customer-response-sent",
-      );
-      const result: OperationalResultReference = {
-        operation: "mark-response-sent",
-        tickets: [{
-          ticketId: sent.ticketId,
-          operationalEventIds: [eventId],
-          resultingRevision: null,
-        }],
-        messageId,
-      };
-      unit.persistCommandResult(commandContext.commandId, requestHash, result);
-      return this.replayOperationalResponseSent(unit, { result });
-    });
+    semanticOverride?: unknown,
+  ): Promise<{
+    auditEvent: AuditEvent;
+    automaticCustomerReplyIntent?: z.infer<typeof AutomaticCustomerReplyIntentSchema>;
+  }> {
+    const { automaticReplyForTicket } = await import(
+      "./approval-desk/automatic-customer-replies.js"
+    );
+    const automaticReplyEnabled = sent.automaticReplyEnabled ?? true;
+    const { sentAt: _sentAt, customerResponse: _customerResponse, automaticReplyEnabled: _automaticReplyEnabled, ...semanticFields } = sent;
+    const semanticRequest = semanticOverride ?? { ...semanticFields, automaticReplyEnabled };
+    const definition: PreparedCommandDefinition<
+      unknown,
+      OperationalMarkResponseSentInput,
+      { auditEvent: AuditEvent; automaticCustomerReplyIntent?: z.infer<typeof AutomaticCustomerReplyIntentSchema> }
+    > = {
+      operation: "mark-response-sent",
+      parse: (raw) => z.object({
+        recommendationId: z.uuid(),
+        ticketId: TicketIdSchema,
+        actor: NonBlankStringSchema,
+        automaticReplyEnabled: z.boolean(),
+      }).strict().parse(raw),
+      prepare: async () => sent,
+      commit: (unit, prepared, commandId) => {
+        const snapshot = unit.readWorkflowSnapshot(prepared.ticketId);
+        const recommendation = snapshot.recommendations.find(
+          ({ id }) => id === prepared.recommendationId,
+        );
+        const effectiveSent: MarkResponseSentInput = {
+          ...prepared,
+          customerResponse: prepared.customerResponse
+            ?? recommendation?.draftCustomerResponse
+            ?? "",
+        };
+        assertOperationalResponseMayBeSent(recommendation, effectiveSent);
+        if (this.hasOperationalCustomerReplyAfterRecommendation(snapshot, recommendation)) {
+          throw stale("Approved customer response is stale after a newer customer reply.");
+        }
+        assertOperationalResponseNotAlreadySent(snapshot, prepared.recommendationId);
+        const eventId = this.uuid();
+        const messageId = this.uuid();
+        const [sequence] = unit.allocateEventSequences(prepared.ticketId, 1);
+        unit.appendEvent({
+          id: eventId,
+          ticketId: prepared.ticketId,
+          sequence: sequence!,
+          occurredAt: effectiveSent.sentAt,
+          actor: prepared.actor,
+          action: "customer-response-sent",
+          commandId,
+          facts: { messageId },
+        });
+        unit.insertMessage({
+          id: messageId,
+          ticketId: prepared.ticketId,
+          operationalEventId: eventId,
+          kind: "support",
+          createdAt: effectiveSent.sentAt,
+          body: effectiveSent.customerResponse,
+          recommendationId: effectiveSent.recommendationId,
+        });
+        this.appendLifecycleTrace(
+          unit,
+          eventId,
+          prepared.ticketId,
+          prepared.actor,
+          effectiveSent.sentAt,
+          "customer-response-sent",
+        );
+        const auditsBeforeSent = this.operationalAuditsFromSnapshot(unit, snapshot);
+        const automaticCustomerReplyIntent = this.automaticCustomerReplyIntent(
+          snapshot,
+          recommendation,
+          auditsBeforeSent,
+          effectiveSent,
+          commandId,
+          automaticReplyForTicket,
+        );
+        this.assertAutomaticCustomerReplyIntent(
+          commandId,
+          automaticCustomerReplyIntent,
+        );
+        return {
+          operation: "mark-response-sent",
+          tickets: [{
+            ticketId: prepared.ticketId,
+            operationalEventIds: [eventId],
+            resultingRevision: null,
+          }],
+          messageId,
+          automaticCustomerReplyIntent,
+        };
+      },
+      replay: (reader, result) => {
+        this.assertAutomaticCustomerReplyIntent(
+          commandContext.commandId,
+          result.automaticCustomerReplyIntent,
+        );
+        return {
+          auditEvent: this.replayOperationalResponseSent(reader, { result }),
+          ...(result.automaticCustomerReplyIntent === undefined
+          ? {}
+          : { automaticCustomerReplyIntent: result.automaticCustomerReplyIntent }),
+        };
+      },
+    };
+    return this.operationalDispatcher().run(
+      definition,
+      semanticRequest,
+      commandContext.commandId,
+    );
   }
 
   private replayOperationalResponseSent(
-    unit: OperationalUnitOfWork,
+    reader: OperationalResultReader,
     replay: CommandReplay,
   ): AuditEvent {
     const ticketResult = replay.result.tickets[0];
@@ -1944,15 +2188,15 @@ export class TriageService {
     if (ticketResult === undefined || messageId === undefined) {
       throw stale("Operational support-response replay is missing its semantic references.");
     }
-    const snapshot = unit.readWorkflowSnapshot(ticketResult.ticketId);
+    const snapshot = reader.readWorkflowSnapshot(ticketResult.ticketId);
     const message = snapshot.messages.find(({ id }) => id === messageId);
     const event = message === undefined
       ? undefined
       : snapshot.events.find(({ id }) => id === message.operationalEventId);
     const recommendationId = replay.result.recommendationId ?? message?.recommendationId;
-    const recommendation = recommendationId === undefined
+    const recommendation = recommendationId === undefined || event === undefined
       ? undefined
-      : snapshot.recommendations.find(({ id }) => id === recommendationId);
+      : latestRecommendationBeforeEvent(snapshot, recommendationId, event.sequence);
     if (
       message?.kind !== "support"
       || event?.action !== "customer-response-sent"
@@ -1964,26 +2208,75 @@ export class TriageService {
     return operationalSupportResponseAudit(event, message, recommendation);
   }
 
-  private approveAndMarkOperationalResponseSent(
+  private async approveAndMarkOperationalResponseSent(
     approval: Approval,
     sent: MarkResponseSentInput,
     commandContext: OperationalCommandContext,
-  ): {
+  ): Promise<{
     ticket: Ticket;
     approvalEvent: AuditEvent;
     sentEvent: AuditEvent;
     auditsBeforeSent: AuditEvent[];
-  } {
-    const store = this.dependencies.operationalStore;
-    if (store === undefined) throw new Error("Operational store is not configured.");
+    automaticReplyIntent?: z.infer<typeof AutomaticCustomerReplyIntentSchema>;
+  }> {
+    const { automaticReplyForTicket } = await import(
+      "./approval-desk/automatic-customer-replies.js"
+    );
     const { approvedAt: _approvedAt, ...semanticApproval } = approval;
-    const { sentAt: _sentAt, ...semanticSent } = sent;
-    const semanticRequest = { approval: semanticApproval, responseSent: semanticSent };
+    const { sentAt: _sentAt, automaticReplyEnabled: _automaticReplyEnabled, ...semanticSent } = sent;
+    const semanticRequest = {
+      approval: semanticApproval,
+      responseSent: {
+        ...semanticSent,
+        automaticReplyEnabled: sent.automaticReplyEnabled ?? true,
+      },
+    };
     const operation = "approve-and-mark-response-sent";
-    const requestHash = canonicalRequestHash(operation, semanticRequest);
-    return store.transaction((unit) => {
-      const replay = unit.beginCommand(commandContext.commandId, operation, semanticRequest);
-      if (replay !== "new") return this.replayOperationalApprovalAndSend(unit, replay);
+    const definition: PreparedCommandDefinition<
+      typeof semanticRequest,
+      { approval: Approval; responseSent: MarkResponseSentInput },
+      {
+        ticket: Ticket;
+        approvalEvent: AuditEvent;
+        sentEvent: AuditEvent;
+        auditsBeforeSent: AuditEvent[];
+        automaticReplyIntent?: z.infer<typeof AutomaticCustomerReplyIntentSchema>;
+      }
+    > = {
+      operation,
+      parse: (raw) => {
+        const record = z.object({
+          approval: z.record(z.string(), z.unknown()),
+          responseSent: z.record(z.string(), z.unknown()),
+        }).strict().parse(raw);
+        const parsedApproval = ApprovalSchema.parse({
+          ...record.approval,
+          approvedAt: "1970-01-01T00:00:00.000Z",
+        });
+        const parsedSent = MarkResponseSentInputSchema.parse({
+          ...record.responseSent,
+          sentAt: "1970-01-01T00:00:00.000Z",
+        });
+        const { approvedAt: _approvedAt, ...approvalIntent } = parsedApproval;
+        const { sentAt: _sentAt, ...sentIntent } = parsedSent;
+        return {
+          approval: approvalIntent,
+          responseSent: {
+            ...sentIntent,
+            automaticReplyEnabled: sentIntent.automaticReplyEnabled ?? true,
+          },
+        };
+      },
+      prepare: async () => ({
+        approval,
+        responseSent: {
+          ...sent,
+          automaticReplyEnabled: sent.automaticReplyEnabled ?? true,
+        },
+      }),
+      commit: (unit, prepared, commandId) => {
+      const approval = prepared.approval;
+      const sent = prepared.responseSent;
       const snapshot = unit.readWorkflowSnapshot(approval.ticketId);
       const recommendation = snapshot.recommendations.find(
         ({ id }) => id === approval.recommendationId,
@@ -2023,7 +2316,7 @@ export class TriageService {
         occurredAt: approval.approvedAt,
         actor: approval.actor,
         action: "recommendation-approved",
-        commandId: commandContext.commandId,
+        commandId,
         facts: {
           approved: true,
           approvedFields: approval.approvedFields,
@@ -2064,7 +2357,7 @@ export class TriageService {
         occurredAt: sent.sentAt,
         actor: sent.actor,
         action: "customer-response-sent",
-        commandId: commandContext.commandId,
+        commandId,
         facts: { messageId },
       });
       unit.insertMessage({
@@ -2084,6 +2377,16 @@ export class TriageService {
         sent.sentAt,
         "customer-response-sent",
       );
+      const auditsBeforeSent = this.operationalAuditsFromSnapshot(unit, snapshot);
+      const automaticReplyIntent = this.automaticCustomerReplyIntent(
+        snapshot,
+        recommendation,
+        auditsBeforeSent,
+        sent,
+        commandId,
+        automaticReplyForTicket,
+      );
+      this.assertAutomaticCustomerReplyIntent(commandId, automaticReplyIntent);
       const result: OperationalResultReference = {
         operation,
         tickets: [{
@@ -2098,14 +2401,32 @@ export class TriageService {
           ...snapshot.events.map(({ id }) => id),
           approvalEventId,
         ],
+        automaticCustomerReplyIntent: automaticReplyIntent,
       };
-      unit.persistCommandResult(commandContext.commandId, requestHash, result);
-      return this.replayOperationalApprovalAndSend(unit, { result });
-    });
+      return result;
+      },
+      replay: (reader, result) => {
+        this.assertAutomaticCustomerReplyIntent(
+          commandContext.commandId,
+          result.automaticCustomerReplyIntent,
+        );
+        return {
+          ...this.replayOperationalApprovalAndSend(reader, { result }),
+          ...(result.automaticCustomerReplyIntent === undefined
+          ? {}
+          : { automaticReplyIntent: result.automaticCustomerReplyIntent }),
+        };
+      },
+    };
+    return this.operationalDispatcher().run(
+      definition,
+      semanticRequest,
+      commandContext.commandId,
+    );
   }
 
   private replayOperationalApprovalAndSend(
-    unit: OperationalUnitOfWork,
+    reader: OperationalResultReader,
     replay: CommandReplay,
   ): {
     ticket: Ticket;
@@ -2113,10 +2434,10 @@ export class TriageService {
     sentEvent: AuditEvent;
     auditsBeforeSent: AuditEvent[];
   } {
-    const approved = this.replayOperationalApproval(unit, replay);
-    const sentEvent = this.replayOperationalResponseSent(unit, replay);
+    const approved = this.replayOperationalApproval(reader, replay);
+    const sentEvent = this.replayOperationalResponseSent(reader, replay);
     const ticketResult = replay.result.tickets[0]!;
-    const snapshot = unit.readWorkflowSnapshot(ticketResult.ticketId);
+    const snapshot = reader.readWorkflowSnapshot(ticketResult.ticketId);
     const persistedSentEvent = snapshot.events.find(
       ({ id, action }) => ticketResult.operationalEventIds.includes(id)
         && action === "customer-response-sent",
@@ -2161,11 +2482,91 @@ export class TriageService {
     });
   }
 
+  private automaticCustomerReplyIntent(
+    snapshot: OperationalWorkflowSnapshot,
+    recommendation: TriageRecommendation,
+    auditsBeforeSent: readonly AuditEvent[],
+    sent: MarkResponseSentInput,
+    parentCommandId: string,
+    automaticReplyForTicket: (input: {
+      ticket: Ticket;
+      recommendation: TriageRecommendation;
+      auditsBeforeSent: readonly AuditEvent[];
+    }) => string | undefined,
+  ): z.infer<typeof AutomaticCustomerReplyIntentSchema> {
+    if (sent.automaticReplyEnabled === false) {
+      return { kind: "none" };
+    }
+    const body = automaticReplyForTicket({
+      ticket: snapshot.ticket,
+      recommendation,
+      auditsBeforeSent,
+    });
+    if (body === undefined) {
+      return { kind: "none" };
+    }
+    const child = {
+      commandId: derivedOperationalCommandContext(
+        parentCommandId,
+        "automatic-customer-reply",
+      ).commandId,
+      ticketId: snapshot.ticket.id,
+      actor: snapshot.ticket.requester?.name ?? snapshot.ticket.customer.name,
+      body,
+      source: "demo-auto-reply",
+      receivedAt: plusMilliseconds(sent.sentAt, 1),
+    };
+    return AutomaticCustomerReplyIntentSchema.parse({
+      kind: "add-customer-reply",
+      ...child,
+    });
+  }
+
+  private assertAutomaticCustomerReplyIntent(
+    parentCommandId: string,
+    intent: z.infer<typeof AutomaticCustomerReplyIntentSchema> | undefined,
+  ): void {
+    if (intent === undefined || intent.kind === "none") return;
+    const expectedChildCommandId = derivedOperationalCommandContext(
+      parentCommandId,
+      "automatic-customer-reply",
+    ).commandId;
+    if (intent.commandId !== expectedChildCommandId) {
+      throw new OperationalStoreError(
+        "Persisted automatic customer-reply intent is inconsistent with its parent command.",
+        "PERSISTENCE_ERROR",
+      );
+    }
+  }
+
+  private async runAutomaticCustomerReply(
+    intent: z.infer<typeof AutomaticCustomerReplyIntentSchema> | undefined,
+  ): Promise<AuditEvent | undefined> {
+    if (intent === undefined || intent.kind === "none") return undefined;
+    return this.addCustomerReply({
+      ticketId: intent.ticketId,
+      actor: intent.actor,
+      body: intent.body,
+      source: intent.source,
+      receivedAt: intent.receivedAt,
+    }, { commandId: intent.commandId });
+  }
+
   async recordDiagnosis(
-    input: RecordDiagnosisInput,
+    input: RecordDiagnosisInput | WorkflowRecordDiagnosisInput,
     commandContext?: OperationalCommandContext,
   ): Promise<AuditEvent> {
-    const diagnosis = RecordDiagnosisInputSchema.parse(input);
+    const workflowInput = z.object({
+      ticketId: TicketIdSchema,
+      actor: NonBlankStringSchema,
+      workflow: z.literal(true),
+    }).strict().safeParse(input);
+    const workflow = workflowInput.success;
+    const workflowTicketId = workflowInput.success ? workflowInput.data.ticketId : undefined;
+    const workflowActor = workflowInput.success ? workflowInput.data.actor : undefined;
+    const diagnosis = workflow
+      ? undefined
+      : RecordDiagnosisInputSchema.parse(input);
     if (this.dependencies.operationalStore !== undefined) {
       if (commandContext === undefined) {
         throw new DomainError(
@@ -2173,25 +2574,71 @@ export class TriageService {
           "REPOSITORY_ERROR",
         );
       }
-      const [diagnosisReview, workflowGuidance, workflowReadModel] = await Promise.all([
+      const [diagnosisReview, workflowGuidance, workflowReadModel, diagnosticWorkflow] = await Promise.all([
         import("./approval-desk/diagnosis-review.js"),
         import("./approval-desk/workflow-guidance.js"),
         import("./approval-desk/workflow-read-model.js"),
+        import("./approval-desk/diagnostic-workflow.js"),
       ]);
-      const store = this.dependencies.operationalStore;
-      const { diagnosedAt: _diagnosedAt, ...semanticRequest } = diagnosis;
+      const semanticRequest = workflow
+        ? { ticketId: workflowTicketId!, actor: workflowActor! }
+        : (() => {
+            const { diagnosedAt: _diagnosedAt, ...intent } = diagnosis!;
+            return intent;
+          })();
       const operation = "record-diagnosis";
-      const requestHash = canonicalRequestHash(operation, semanticRequest);
-      return store.transaction((unit) => {
-        const replay = unit.beginCommand(commandContext.commandId, operation, semanticRequest);
-        if (replay !== "new") {
-          return this.replayOperationalLifecycleAudit(replay, [
-            "diagnosis-completed",
-            "diagnostic-escalated",
-          ]);
-        }
-        const snapshot = unit.readWorkflowSnapshot(diagnosis.ticketId);
+      const definition: PreparedCommandDefinition<
+        typeof semanticRequest,
+        RecordDiagnosisInput | undefined,
+        AuditEvent
+      > = {
+        operation,
+        parse: (raw) => workflow
+          ? z.object({
+              ticketId: TicketIdSchema,
+              actor: NonBlankStringSchema,
+            }).strict().parse(raw)
+          : (() => {
+              const parsedInput = RecordDiagnosisInputSchema.parse({
+                ...z.record(z.string(), z.unknown()).parse(raw),
+                diagnosedAt: "1970-01-01T00:00:00.000Z",
+              });
+              const { diagnosedAt: _generatedAt, ...intent } = parsedInput;
+              return intent;
+            })(),
+        prepare: async () => diagnosis,
+        commit: (unit, prepared, commandId) => {
+        const snapshot = unit.readWorkflowSnapshot(
+          prepared?.ticketId ?? workflowTicketId!,
+        );
         const audits = this.operationalAuditsFromSnapshot(unit, snapshot);
+        const diagnosis = prepared ?? (() => {
+          const latest = workflowReadModel.summarizeRecommendationsForTicket(
+            snapshot.ticket,
+            snapshot.recommendations,
+            audits,
+          ).latest;
+          if (latest === undefined) {
+            throw new DomainError(
+              "A completed evaluation is required before diagnosis.",
+              "INVALID_APPROVAL_FIELDS",
+            );
+          }
+          return {
+            ticketId: snapshot.ticket.id,
+            actor: workflowActor!,
+            diagnosedAt: this.now().toISOString(),
+            diagnosis: diagnosticWorkflow.diagnosisContextForTicket(snapshot.ticket, latest, audits),
+            knowledgeArticleIds: latest.knowledgeArticleIds.length > 0
+              ? latest.knowledgeArticleIds
+              : [latest.knownCause ?? "known-cause"],
+            sourceWorkflow: {
+              recommendationId: latest.id,
+              ticketRevision: snapshot.ticket.revision,
+              customerReplyWatermark: customerReplyWatermarkFromSnapshot(snapshot),
+            },
+          } satisfies RecordDiagnosisInput;
+        })();
         if (diagnosis.sourceWorkflow !== undefined) {
           if (snapshot.ticket.revision !== diagnosis.sourceWorkflow.ticketRevision) {
             throw stale("Diagnosis ticket snapshot is stale.");
@@ -2246,7 +2693,7 @@ export class TriageService {
           occurredAt: diagnosis.diagnosedAt,
           actor: diagnosis.actor,
           action: auditEvent.action,
-          commandId: commandContext.commandId,
+           commandId,
           facts: {
             diagnosisOutcome: escalated ? "escalated" : "completed",
             sourceRevision: snapshot.ticket.revision,
@@ -2307,9 +2754,24 @@ export class TriageService {
           diagnosisId: completedDiagnosis.id,
           lifecycleAuditEvents: [auditEvent],
         };
-        unit.persistCommandResult(commandContext.commandId, requestHash, result);
-        return auditEvent;
-      });
+        return result;
+        },
+        replay: (reader, result) => this.replayOperationalLifecycleAudit(
+          { result },
+          ["diagnosis-completed", "diagnostic-escalated"],
+        ),
+      };
+      return this.operationalDispatcher().run(
+        definition,
+        semanticRequest,
+        commandContext.commandId,
+      );
+    }
+    if (diagnosis === undefined) {
+      throw new DomainError(
+        "Workflow diagnosis recording requires the operational store.",
+        "REPOSITORY_ERROR",
+      );
     }
     return serializeTicket(diagnosis.ticketId, async () => {
       const [ticket, audits, recommendations] = await Promise.all([
@@ -2400,6 +2862,13 @@ export class TriageService {
     });
   }
 
+  async recordDiagnosisFromWorkflow(
+    input: { ticketId: TicketId; actor: string },
+    commandContext: OperationalCommandContext,
+  ): Promise<AuditEvent> {
+    return this.recordDiagnosis({ ...input, workflow: true }, commandContext);
+  }
+
   async reviewDiagnosis(
     input: DiagnosisReviewInput,
     commandContext?: OperationalCommandContext,
@@ -2420,15 +2889,25 @@ export class TriageService {
           "REPOSITORY_ERROR",
         );
       }
-      const store = this.dependencies.operationalStore;
       const { reviewedAt: _reviewedAt, ...semanticRequest } = review;
       const operation = "review-diagnosis";
-      const requestHash = canonicalRequestHash(operation, semanticRequest);
-      return store.transaction((unit) => {
-        const replay = unit.beginCommand(commandContext.commandId, operation, semanticRequest);
-        if (replay !== "new") {
-          return this.replayOperationalLifecycleAudit(replay, ["diagnosis-reviewed"]);
-        }
+      const definition: PreparedCommandDefinition<
+        typeof semanticRequest,
+        typeof review,
+        AuditEvent
+      > = {
+        operation,
+        parse: (raw) => {
+          const parsedReview = DiagnosisReviewDecisionSchema.parse({
+            ...z.record(z.string(), z.unknown()).parse(raw),
+            reviewedAt: "1970-01-01T00:00:00.000Z",
+          });
+          const { reviewedAt: _generatedAt, ...intent } = parsedReview;
+          return intent;
+        },
+        prepare: async () => review,
+        commit: (unit, prepared, commandId) => {
+        const review = prepared;
         const snapshot = unit.readWorkflowSnapshot(review.ticketId);
         const audits = this.operationalAuditsFromSnapshot(unit, snapshot);
         if (snapshot.ticket.revision !== review.sourceTicketRevision) {
@@ -2552,7 +3031,7 @@ export class TriageService {
           occurredAt: review.reviewedAt,
           actor: review.actor,
           action: "diagnosis-reviewed",
-          commandId: commandContext.commandId,
+           commandId,
           facts: {
             diagnosisOutcome: review.decision,
             sourceRevision: review.sourceTicketRevision,
@@ -2592,9 +3071,18 @@ export class TriageService {
           }],
           lifecycleAuditEvents: [auditEvent],
         };
-        unit.persistCommandResult(commandContext.commandId, requestHash, result);
-        return auditEvent;
-      });
+        return result;
+        },
+        replay: (_reader, result) => this.replayOperationalLifecycleAudit(
+          { result },
+          ["diagnosis-reviewed"],
+        ),
+      };
+      return this.operationalDispatcher().run(
+        definition,
+        semanticRequest,
+        commandContext.commandId,
+      );
     }
 
     return serializeTicket(review.ticketId, async () => {
@@ -2800,6 +3288,37 @@ export class TriageService {
     return auditEvent;
   }
 
+  async recordFixFromWorkflow(
+    input: { ticketId: TicketId; actor: string },
+    commandContext: OperationalCommandContext,
+  ): Promise<AuditEvent> {
+    const fixedAt = this.now().toISOString();
+    const [auditEvent] = await this.applyDiagnosisFixValidated(
+      ApplyDiagnosisFixInputSchema.parse({
+        diagnosisId: commandContext.commandId,
+        sourceTicketId: input.ticketId,
+        impactSet: {
+          tickets: [{
+            ticketId: input.ticketId,
+            reason: "The source ticket was explicitly selected for the workflow fix operation.",
+          }],
+          actor: input.actor,
+          rationale: "The workflow fix operation selected the source ticket.",
+        },
+        actor: input.actor,
+        fixedAt,
+      }),
+      undefined,
+      commandContext,
+      "record-fix",
+      input,
+    );
+    if (auditEvent === undefined) {
+      throw new DomainError("A scoped fix audit was not created.", "REPOSITORY_ERROR");
+    }
+    return auditEvent;
+  }
+
   /**
    * Record a failed verification as an append-only operational event. The
    * diagnosis remains authoritative until the operator explicitly invalidates
@@ -2828,15 +3347,18 @@ export class TriageService {
     const { latestAuthoritativeDiagnosis: latestAuthoritativeDiagnosisFromGuidance } = await import(
       "./approval-desk/workflow-guidance.js"
     );
-    const store = this.dependencies.operationalStore;
     const { ineffectiveAt: _ineffectiveAt, ...semanticRequest } = ineffective;
     const operation = "record-fix-ineffective";
-    const requestHash = canonicalRequestHash(operation, semanticRequest);
-    return store.transaction((unit) => {
-      const replay = unit.beginCommand(commandContext.commandId, operation, semanticRequest);
-      if (replay !== "new") {
-        return this.replayOperationalLifecycleAudit(replay, ["fix-ineffective"]);
-      }
+    const definition: PreparedCommandDefinition<
+      typeof semanticRequest,
+      RecordFixIneffectiveInput,
+      AuditEvent
+    > = {
+      operation,
+      parse: (raw) => RecordFixIneffectiveInputSchema.omit({ ineffectiveAt: true }).parse(raw),
+      prepare: async () => ineffective,
+      commit: (unit, prepared, commandId) => {
+      const ineffective = prepared;
       const snapshot = unit.readWorkflowSnapshot(ineffective.ticketId);
       const audits = this.operationalAuditsFromSnapshot(unit, snapshot);
       if (snapshot.ticket.revision !== ineffective.sourceTicketRevision) {
@@ -2904,7 +3426,7 @@ export class TriageService {
         occurredAt: ineffective.ineffectiveAt,
         actor: ineffective.actor,
         action: "fix-ineffective",
-        commandId: commandContext.commandId,
+        commandId,
         facts: {
           diagnosisId: ineffective.diagnosisId,
           fixEventId: ineffective.fixEventId,
@@ -2931,9 +3453,18 @@ export class TriageService {
         }],
         lifecycleAuditEvents: [auditEvent],
       };
-      unit.persistCommandResult(commandContext.commandId, requestHash, result);
-      return auditEvent;
-    });
+      return result;
+      },
+      replay: (_reader, result) => this.replayOperationalLifecycleAudit(
+        { result },
+        ["fix-ineffective"],
+      ),
+    };
+    return this.operationalDispatcher().run(
+      definition,
+      semanticRequest,
+      commandContext.commandId,
+    );
   }
 
   /** Explicitly remove current authority from a diagnosis without rewriting history. */
@@ -2960,15 +3491,18 @@ export class TriageService {
     const { latestAuthoritativeDiagnosis: latestAuthoritativeDiagnosisFromGuidance } = await import(
       "./approval-desk/workflow-guidance.js"
     );
-    const store = this.dependencies.operationalStore;
     const { invalidatedAt: _invalidatedAt, ...semanticRequest } = invalidation;
     const operation = "invalidate-diagnosis";
-    const requestHash = canonicalRequestHash(operation, semanticRequest);
-    return store.transaction((unit) => {
-      const replay = unit.beginCommand(commandContext.commandId, operation, semanticRequest);
-      if (replay !== "new") {
-        return this.replayOperationalLifecycleAudit(replay, ["diagnosis-invalidated"]);
-      }
+    const definition: PreparedCommandDefinition<
+      typeof semanticRequest,
+      InvalidateDiagnosisInput,
+      AuditEvent
+    > = {
+      operation,
+      parse: (raw) => InvalidateDiagnosisInputSchema.omit({ invalidatedAt: true }).parse(raw),
+      prepare: async () => invalidation,
+      commit: (unit, prepared, commandId) => {
+      const invalidation = prepared;
       const snapshot = unit.readWorkflowSnapshot(invalidation.ticketId);
       const audits = this.operationalAuditsFromSnapshot(unit, snapshot);
       if (snapshot.ticket.revision !== invalidation.sourceTicketRevision) {
@@ -3034,7 +3568,7 @@ export class TriageService {
         occurredAt: invalidation.invalidatedAt,
         actor: invalidation.actor,
         action: "diagnosis-invalidated",
-        commandId: commandContext.commandId,
+        commandId,
         facts: {
           diagnosisId: invalidation.diagnosisId,
           outcome: "invalidated",
@@ -3060,9 +3594,18 @@ export class TriageService {
         }],
         lifecycleAuditEvents: [auditEvent],
       };
-      unit.persistCommandResult(commandContext.commandId, requestHash, result);
-      return auditEvent;
-    });
+      return result;
+      },
+      replay: (_reader, result) => this.replayOperationalLifecycleAudit(
+        { result },
+        ["diagnosis-invalidated"],
+      ),
+    };
+    return this.operationalDispatcher().run(
+      definition,
+      semanticRequest,
+      commandContext.commandId,
+    );
   }
 
   async recordPlatformMitigation(
@@ -3080,7 +3623,6 @@ export class TriageService {
           "REPOSITORY_ERROR",
         );
       }
-      const store = this.dependencies.operationalStore;
       const semanticRequest = {
         ticketId: input.ticketId,
         eventId,
@@ -3088,18 +3630,24 @@ export class TriageService {
         rationale,
       };
       const operation = "record-platform-mitigation";
-      const requestHash = canonicalRequestHash(operation, semanticRequest);
       const { summarizeRecommendationsForTicket } = await import(
         "./approval-desk/workflow-read-model.js"
       );
-      return store.transaction((unit) => {
-        const replay = unit.beginCommand(commandContext.commandId, operation, semanticRequest);
-        if (replay !== "new") {
-          return this.replayOperationalLifecycleAudit(
-            replay,
-            ["platform-mitigation-available"],
-          );
-        }
+      const definition: PreparedCommandDefinition<
+        typeof semanticRequest,
+        { ticketId: TicketId; eventId: string; actor: string; recordedAt: string; rationale: string },
+        AuditEvent
+      > = {
+        operation,
+        parse: (raw) => z.object({
+          ticketId: TicketIdSchema,
+          eventId: z.string().trim().min(1),
+          actor: NonBlankStringSchema,
+          rationale: NonBlankStringSchema,
+        }).strict().parse(raw),
+        prepare: async () => ({ ticketId: input.ticketId, eventId, actor, recordedAt, rationale }),
+        commit: (unit, prepared, commandId) => {
+        const input = prepared;
         const snapshot = unit.readWorkflowSnapshot(input.ticketId);
         const audits = this.operationalAuditsFromSnapshot(unit, snapshot);
         if (snapshot.ticket.status === "resolved") {
@@ -3158,7 +3706,7 @@ export class TriageService {
           occurredAt: recordedAt,
           actor,
           action: "platform-mitigation-available",
-          commandId: commandContext.commandId,
+           commandId,
           facts: { knownEventId: eventId, outcome: "available" },
         });
         this.appendLifecycleTrace(
@@ -3189,9 +3737,18 @@ export class TriageService {
           }],
           lifecycleAuditEvents: [auditEvent],
         };
-        unit.persistCommandResult(commandContext.commandId, requestHash, result);
-        return auditEvent;
-      });
+        return result;
+        },
+        replay: (_reader, result) => this.replayOperationalLifecycleAudit(
+          { result },
+          ["platform-mitigation-available"],
+        ),
+      };
+      return this.operationalDispatcher().run(
+        definition,
+        semanticRequest,
+        commandContext.commandId,
+      );
     }
     return serializeTicket(input.ticketId, async () => {
       const [ticket, audits, recommendations] = await Promise.all([
@@ -3263,17 +3820,22 @@ export class TriageService {
           "REPOSITORY_ERROR",
         );
       }
-      const store = this.dependencies.operationalStore;
       const { closedAt: _closedAt, ...semanticRequest } = close;
       const operation = "close-ticket";
-      const requestHash = canonicalRequestHash(operation, semanticRequest);
       const [{ closeBlockers, latestAuthoritativeDiagnosis }, { summarizeRecommendationsForTicket }] = await Promise.all([
         import("./approval-desk/workflow-guidance.js"),
         import("./approval-desk/workflow-read-model.js"),
       ]);
-      return store.transaction((unit) => {
-        const replay = unit.beginCommand(commandContext.commandId, operation, semanticRequest);
-        if (replay !== "new") return this.replayOperationalClosure(replay);
+      const definition: PreparedCommandDefinition<
+        typeof semanticRequest,
+        CloseTicketInput,
+        { ticket: Ticket; auditEvent: AuditEvent }
+      > = {
+        operation,
+        parse: (raw) => CloseTicketInputSchema.omit({ closedAt: true }).parse(raw),
+        prepare: async () => close,
+        commit: (unit, prepared, commandId) => {
+        const close = prepared;
         const snapshot = unit.readWorkflowSnapshot(close.ticketId);
         const audits = this.operationalAuditsFromSnapshot(unit, snapshot);
         const recommendation = summarizeRecommendationsForTicket(
@@ -3327,7 +3889,7 @@ export class TriageService {
           occurredAt: close.closedAt,
           actor: close.actor,
           action: "ticket-updated",
-          commandId: commandContext.commandId,
+          commandId,
           facts: {
             status: "resolved",
             expectedRevision: snapshot.ticket.revision,
@@ -3383,9 +3945,15 @@ export class TriageService {
           ticketSnapshot: updated,
           lifecycleAuditEvents: [auditEvent],
         };
-        unit.persistCommandResult(commandContext.commandId, requestHash, result);
-        return { ticket: updated, auditEvent };
-      });
+        return result;
+        },
+        replay: (_reader, result) => this.replayOperationalClosure({ result }),
+      };
+      return this.operationalDispatcher().run(
+        definition,
+        semanticRequest,
+        commandContext.commandId,
+      );
     }
     return serializeTicket(close.ticketId, async () => {
       const [ticket, audits, recommendations] = await Promise.all([
@@ -3480,6 +4048,7 @@ export class TriageService {
     legacy?: { fix: FixContext; knowledgeArticleIds: string[] },
     commandContext?: OperationalCommandContext,
     operation = "apply-diagnosis-fix",
+    semanticOverride?: unknown,
   ): Promise<AuditEvent[]> {
     if (this.dependencies.operationalStore !== undefined) {
       if (commandContext === undefined) {
@@ -3488,28 +4057,49 @@ export class TriageService {
           "REPOSITORY_ERROR",
         );
       }
-      const store = this.dependencies.operationalStore;
       const { fixedAt: _fixedAt, ...scopedSemanticRequest } = input;
-      const semanticRequest = operation === "record-fix" && legacy !== undefined
+      const semanticRequest = semanticOverride ?? (operation === "record-fix" && legacy !== undefined
         ? {
             ticketId: input.sourceTicketId,
             actor: input.actor,
             fix: legacy.fix,
             knowledgeArticleIds: legacy.knowledgeArticleIds,
           }
-        : scopedSemanticRequest;
-      const requestHash = canonicalRequestHash(operation, semanticRequest);
+        : scopedSemanticRequest);
       const { fixBlockers, latestAuthoritativeDiagnosis } = await import(
         "./approval-desk/workflow-guidance.js"
       );
       const { fixContextForTicket } = await import(
         "./approval-desk/diagnostic-workflow.js"
       );
-      return store.transaction((unit) => {
-        const replay = unit.beginCommand(commandContext.commandId, operation, semanticRequest);
-        if (replay !== "new") {
-          return this.replayOperationalLifecycleAudits(replay, "fix-available");
-        }
+      const legacyRecordFix = operation === "record-fix" && legacy !== undefined;
+      const definition: PreparedCommandDefinition<unknown, {
+        input: z.infer<typeof ApplyDiagnosisFixInputSchema>;
+        legacy?: { fix: FixContext; knowledgeArticleIds: string[] };
+      }, AuditEvent[]> = {
+        operation,
+        parse: (raw) => legacyRecordFix
+          ? z.object({
+              ticketId: TicketIdSchema,
+              actor: NonBlankStringSchema,
+              fix: DiagnosisFixContextSchema,
+              knowledgeArticleIds: z.array(NonBlankStringSchema),
+            }).strict().parse(raw)
+          : semanticOverride === undefined
+          ? z.object({
+              diagnosisId: DiagnosisIdSchema,
+              sourceTicketId: TicketIdSchema,
+              impactSet: DiagnosisImpactSetSchema,
+              actor: NonBlankStringSchema,
+            }).strict().parse(raw)
+          : z.object({
+              ticketId: TicketIdSchema,
+              actor: NonBlankStringSchema,
+            }).strict().parse(raw),
+        prepare: async () => ({ input, legacy }),
+        commit: (unit, prepared, commandId) => {
+        const input = prepared.input;
+        const legacy = prepared.legacy;
         const ticketIds = input.impactSet.tickets.map(({ ticketId }) => ticketId);
         const snapshots = ticketIds.map((ticketId) => unit.readWorkflowSnapshot(ticketId));
         const snapshotByTicket = new Map(snapshots.map((snapshot) => [snapshot.ticket.id, snapshot]));
@@ -3584,7 +4174,7 @@ export class TriageService {
             occurredAt: auditEvent.timestamp,
             actor: auditEvent.actor,
             action: "fix-available",
-            commandId: commandContext.commandId,
+            commandId,
             facts: {
               diagnosisOutcome: "approved",
               outcome: "available",
@@ -3619,9 +4209,18 @@ export class TriageService {
           })),
           lifecycleAuditEvents: auditEvents,
         };
-        unit.persistCommandResult(commandContext.commandId, requestHash, result);
-        return auditEvents;
-      });
+        return result;
+        },
+        replay: (_reader, result) => this.replayOperationalLifecycleAudits(
+          { result },
+          "fix-available",
+        ),
+      };
+      return this.operationalDispatcher().run(
+        definition,
+        semanticRequest,
+        commandContext.commandId,
+      );
     }
     const ticketIds = input.impactSet.tickets.map(({ ticketId }) => ticketId);
     return serializeTickets(ticketIds, async () => {
@@ -4638,6 +5237,29 @@ function operationalCustomerReplyWatermarksMatch(
 
 function stableUnique<T>(values: readonly T[]): T[] {
   return [...new Set(values)];
+}
+
+function latestRecommendationBeforeEvent(
+  snapshot: OperationalWorkflowSnapshot,
+  recommendationId: string,
+  endSequence: number,
+): TriageRecommendation | undefined {
+  const revisions = snapshot.recommendationRevisions
+    .map((revision) => ({
+      revision,
+      event: snapshot.events.find(({ id }) => id === revision.operationalEventId),
+    }))
+    .filter(({ revision, event }) =>
+      revision.recommendation.id === recommendationId
+      && event !== undefined
+      && event.sequence < endSequence,
+    )
+    .sort((left, right) => right.event!.sequence - left.event!.sequence);
+  return revisions[0]?.revision.recommendation;
+}
+
+function plusMilliseconds(timestamp: string, milliseconds: number): string {
+  return new Date(new Date(timestamp).getTime() + milliseconds).toISOString();
 }
 
 async function serializeRecommendation<T>(

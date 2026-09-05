@@ -520,12 +520,15 @@ function openHarness(
       createdAt: recommendation.createdAt,
     });
   });
+  store.transaction((unit) => unit.transitionImportState("empty", "native"));
 
   let armed = options.advanceTicketBeforeCommand === true;
   const operationalStore = options.failTrace === true || armed
-    ? ({
+      ? ({
         readTicket: store.readTicket.bind(store),
         readWorkflowSnapshot: store.readWorkflowSnapshot.bind(store),
+        readCommandOutcome: store.readCommandOutcome.bind(store),
+        assertRuntimeMutationsAllowed: store.assertRuntimeMutationsAllowed.bind(store),
         transaction<T>(work: (unit: any) => T): T {
           if (armed) {
             armed = false;

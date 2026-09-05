@@ -415,6 +415,7 @@ function openHarness(options: {
       });
     }
   });
+  store.transaction((unit) => unit.transitionImportState("empty", "native"));
 
   let uuidCounter = 100;
   const operationalStore = options.failTrace === true || options.failTraceOnTicket !== undefined
@@ -666,6 +667,8 @@ function failingTraceStore(
   return {
     readTicket: store.readTicket.bind(store),
     readWorkflowSnapshot: store.readWorkflowSnapshot.bind(store),
+    readCommandOutcome: store.readCommandOutcome.bind(store),
+    assertRuntimeMutationsAllowed: store.assertRuntimeMutationsAllowed.bind(store),
     transaction<T>(work: (unit: any) => T): T {
       return store.transaction((unit) => {
         const original = unit.appendTrace.bind(unit);

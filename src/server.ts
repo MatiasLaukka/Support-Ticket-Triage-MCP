@@ -55,12 +55,12 @@ import {
   latestSupportResponseFromAudits,
   summarizeRecommendationsForTicket,
 } from "./approval-desk/workflow-read-model.js";
+import { automaticReplyForTicket } from "./approval-desk/automatic-customer-replies.js";
 import {
   OperatorGuidanceSchema,
   buildOperatorGuidance,
 } from "./approval-desk/workflow-guidance.js";
 import { LifecycleViewSchema } from "./approval-desk/lifecycle.js";
-import { automaticReplyForTicket } from "./approval-desk/automatic-customer-replies.js";
 import {
   diagnosisContextForTicket,
   fixContextForTicket,
@@ -1276,17 +1276,19 @@ async function markResponseDone(
       actor: input.actor,
       sentAt: deps.now().toISOString(),
       customerResponse,
+      automaticReplyEnabled: true,
     },
-  }, { commandId });
-  const recommendation = await deps.recommendations.get(input.recommendationId);
-  const automaticReply = await maybeAddAutomaticCustomerReplyAfterSent({
-    deps,
-    ticketId: input.ticketId,
-    recommendation,
-    auditsBeforeSent: completed.auditsBeforeSent,
-    sentAt: completed.sentEvent.timestamp,
-    parentCommandId: commandId,
-  });
+    }, { commandId });
+  const automaticReply = deps.operationalCommandDispatcher === undefined
+    ? await maybeAddAutomaticCustomerReplyAfterSent({
+        deps,
+        ticketId: input.ticketId,
+        recommendation: await deps.recommendations.get(input.recommendationId),
+        auditsBeforeSent: completed.auditsBeforeSent,
+        sentAt: completed.sentEvent.timestamp,
+        parentCommandId: commandId,
+      })
+    : completed.automaticReply;
   return MarkResponseDoneOutputSchema.parse({
     ticket: completed.ticket,
     approvalEvent: completed.approvalEvent,
@@ -1301,6 +1303,12 @@ async function recordDiagnosis(
   input: z.infer<typeof WorkflowActionInputSchema>,
 ): Promise<AuditEvent> {
   const { commandId, ...actionInput } = input;
+  if (deps.operationalCommandDispatcher !== undefined) {
+    return deps.service.recordDiagnosisFromWorkflow({
+      ticketId: actionInput.ticketId,
+      actor: actionInput.actor,
+    }, { commandId });
+  }
   const [ticket, audits, recommendations] = await Promise.all([
     deps.tickets.get(actionInput.ticketId),
     deps.audits.list(actionInput.ticketId),
@@ -1339,6 +1347,12 @@ async function markFixAvailable(
   input: z.infer<typeof WorkflowActionInputSchema>,
 ): Promise<AuditEvent> {
   const { commandId, ...actionInput } = input;
+  if (deps.operationalCommandDispatcher !== undefined) {
+    return deps.service.recordFixFromWorkflow({
+      ticketId: actionInput.ticketId,
+      actor: actionInput.actor,
+    }, { commandId });
+  }
   const [ticket, audits, recommendations] = await Promise.all([
     deps.tickets.get(actionInput.ticketId),
     deps.audits.list(actionInput.ticketId),
@@ -1427,6 +1441,7 @@ async function maybeAddAutomaticCustomerReplyAfterSent(input: {
 function plusMilliseconds(timestamp: string, milliseconds: number): string {
   return new Date(new Date(timestamp).getTime() + milliseconds).toISOString();
 }
+
 function registerPrompts(server: McpServer): void {
   server.registerPrompt(
     "triage_ticket",

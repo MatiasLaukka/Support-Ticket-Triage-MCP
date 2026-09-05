@@ -11,6 +11,7 @@ import {
 import { CompletedDiagnosisSchema } from "../src/knowledge-evolution/domain.js";
 import {
   canonicalRequestHash,
+  canonicalRequestHashV2,
   type OperationalCommandContext,
 } from "../src/operational/idempotency.js";
 import { OperationalResultReferenceSchema } from "../src/operational/domain.js";
@@ -121,6 +122,33 @@ describe("canonicalRequestHash", () => {
     expect(canonicalRequestHash("ticket-update", request)).not.toBe(
       canonicalRequestHash("ticket-update", {}),
     );
+  });
+
+  it("preserves selected platform-event identity in v2", () => {
+    const common = {
+      ticketId: "TKT-1010",
+      actor: "reviewer",
+      rationale: "Mitigation is available.",
+    };
+    expect(canonicalRequestHash("record-platform-mitigation", {
+      ...common, eventId: "event-a",
+    })).toBe(canonicalRequestHash("record-platform-mitigation", {
+      ...common, eventId: "event-b",
+    }));
+    expect(canonicalRequestHashV2("record-platform-mitigation", {
+      ...common, eventId: "event-a",
+    })).not.toBe(canonicalRequestHashV2("record-platform-mitigation", {
+      ...common, eventId: "event-b",
+    }));
+  });
+
+  it("preserves nested caller reply identity and order in v2", () => {
+    const reply = { id: "reply-a", createdAt: "2026-09-05T10:00:00Z", body: "Still failing." };
+    const hash = (replies: unknown[]) =>
+      canonicalRequestHashV2("evaluate-ticket", { ticketId: "TKT-1010", replies });
+    expect(hash([reply])).not.toBe(hash([{ ...reply, createdAt: "2026-09-05T10:01:00Z" }]));
+    expect(hash([reply, { ...reply, id: "reply-b" }]))
+      .not.toBe(hash([{ ...reply, id: "reply-b" }, reply]));
   });
 
   it.each([
@@ -254,6 +282,63 @@ describe("persistent operational command idempotency", () => {
     } finally {
       reopened.close();
     }
+  });
+
+  it("persists a version-2 receipt and exposes a detached immutable read", () => {
+    const store = openedStore();
+    store.transaction((unit) => unit.insertTicket(ticket("TKT-0001")));
+    const request = { ticketId: "TKT-0001", eventId: eventIds.semanticRevision };
+    const hash = canonicalRequestHashV2("ticket-update", request);
+    const result = {
+      operation: "ticket-update" as const,
+      tickets: [{
+        ticketId: "TKT-0001" as const,
+        operationalEventIds: [eventIds.semanticRevision],
+        resultingRevision: null,
+      }],
+    };
+    store.transaction((unit) => {
+      expect(unit.beginCommandV2(commandIds.semantic, "ticket-update", request)).toBe("new");
+      const [sequence] = unit.allocateEventSequences("TKT-0001", 1);
+      unit.appendEvent(event("TKT-0001", sequence!, eventIds.semanticRevision, commandIds.semantic));
+      unit.persistCommandResult(commandIds.semantic, hash, result);
+    });
+
+    const receipt = store.readCommandReceipt(commandIds.semantic);
+    expect(receipt).toMatchObject({
+      commandId: commandIds.semantic,
+      requestHashVersion: 2,
+      requestHash: hash,
+      result,
+    });
+    expect(Object.isFrozen(receipt)).toBe(true);
+    expect(Object.isFrozen(receipt?.result)).toBe(true);
+    store.close();
+  });
+
+  it("rejects a version-1 receipt through the version-2 replay boundary", () => {
+    const store = openedStore();
+    store.transaction((unit) => unit.insertTicket(ticket("TKT-0001")));
+    const request = { ticketId: "TKT-0001" };
+    const hash = canonicalRequestHash("ticket-update", request);
+    store.transaction((unit) => {
+      expect(unit.beginCommand(commandIds.compound, "ticket-update", request)).toBe("new");
+      const [sequence] = unit.allocateEventSequences("TKT-0001", 1);
+      unit.appendEvent(event("TKT-0001", sequence!, eventIds.compoundFirst, commandIds.compound));
+      unit.persistCommandResult(commandIds.compound, hash, {
+        operation: "ticket-update",
+        tickets: [{
+          ticketId: "TKT-0001",
+          operationalEventIds: [eventIds.compoundFirst],
+          resultingRevision: null,
+        }],
+      });
+    });
+
+    expect(() => store.transaction((unit) =>
+      unit.beginCommandV2(commandIds.compound, "ticket-update", request),
+    )).toThrowError(expect.objectContaining({ code: "LEGACY_REPLAY_UNAVAILABLE" }));
+    store.close();
   });
 
   it("rejects command reuse with different input or operation and rolls back writes made in the transaction", () => {

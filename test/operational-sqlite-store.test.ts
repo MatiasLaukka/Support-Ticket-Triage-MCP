@@ -46,6 +46,21 @@ describe("OperationalSqliteStore migrations and transaction boundary", () => {
     const database = new Database(databasePath);
     database.exec("DROP INDEX IF EXISTS diagnostic_taxonomy_revisions_event_idx");
     database.exec("DROP TABLE IF EXISTS diagnostic_taxonomy_revisions");
+    database.exec(`
+      ALTER TABLE command_idempotency RENAME TO command_idempotency_current;
+      CREATE TABLE command_idempotency (
+        command_id TEXT PRIMARY KEY NOT NULL,
+        operation TEXT NOT NULL,
+        request_hash TEXT NOT NULL,
+        result_json TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+      INSERT INTO command_idempotency(command_id, operation, request_hash, result_json, created_at)
+      SELECT command_id, operation, request_hash, result_json, created_at
+      FROM command_idempotency_current;
+      DROP TABLE command_idempotency_current;
+      CREATE INDEX command_idempotency_operation_idx ON command_idempotency(operation, command_id);
+    `);
     database.prepare("DELETE FROM schema_migrations WHERE version > 2").run();
     database.prepare(
       "UPDATE operational_metadata SET value = '2' WHERE key = 'schema_version'",
@@ -53,7 +68,31 @@ describe("OperationalSqliteStore migrations and transaction boundary", () => {
     database.close();
   }
 
-  it("migrates an authentic v2 database to v3 without fabricating taxonomy revisions", () => {
+  function downgradeToV3(databasePath: string): void {
+    const database = new Database(databasePath);
+    database.exec(`
+      ALTER TABLE command_idempotency RENAME TO command_idempotency_v4;
+      CREATE TABLE command_idempotency (
+        command_id TEXT PRIMARY KEY NOT NULL,
+        operation TEXT NOT NULL,
+        request_hash TEXT NOT NULL,
+        result_json TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+      INSERT INTO command_idempotency(command_id, operation, request_hash, result_json, created_at)
+      SELECT command_id, operation, request_hash, result_json, created_at
+      FROM command_idempotency_v4;
+      DROP TABLE command_idempotency_v4;
+      CREATE INDEX command_idempotency_operation_idx ON command_idempotency(operation, command_id);
+    `);
+    database.prepare("DELETE FROM schema_migrations WHERE version > 3").run();
+    database.prepare(
+      "UPDATE operational_metadata SET value = '3' WHERE key = 'schema_version'",
+    ).run();
+    database.close();
+  }
+
+  it("migrates an authentic v2 database to v4 without fabricating taxonomy revisions", () => {
     const path = temporaryDatabasePath();
     const initialized = OperationalSqliteStore.open(path);
     initialized.initialize();
@@ -72,10 +111,11 @@ describe("OperationalSqliteStore migrations and transaction boundary", () => {
         { version: 1, name: "initial-operational-schema" },
         { version: 2, name: "immutable-diagnosis-review-payload" },
         { version: 3, name: "diagnostic-taxonomy-revisions" },
+        { version: 4, name: "versioned-command-request-identity" },
       ]);
       expect(inspector.prepare(
         "SELECT value FROM operational_metadata WHERE key = 'schema_version'",
-      ).get()).toEqual({ value: "3" });
+      ).get()).toEqual({ value: "4" });
       expect(inspector.prepare(
         "SELECT COUNT(*) AS count FROM diagnostic_taxonomy_revisions",
       ).get()).toEqual({ count: 0 });
@@ -109,7 +149,7 @@ describe("OperationalSqliteStore migrations and transaction boundary", () => {
     inspector.close();
   });
 
-  it("initializes a fresh database at v3 and validates the v3 physical schema", () => {
+  it("initializes a fresh database at v4 and validates the v4 physical schema", () => {
     const path = temporaryDatabasePath();
     const store = OperationalSqliteStore.open(path);
     store.initialize();
@@ -123,10 +163,63 @@ describe("OperationalSqliteStore migrations and transaction boundary", () => {
     try {
       expect(inspector.prepare(
         "SELECT value FROM operational_metadata WHERE key = 'schema_version'",
-      ).get()).toEqual({ value: "3" });
+      ).get()).toEqual({ value: "4" });
       expect(inspector.prepare(
         "SELECT COUNT(*) AS count FROM diagnostic_taxonomy_revisions",
       ).get()).toEqual({ count: 0 });
+    } finally {
+      inspector.close();
+    }
+  });
+
+  it("migrates v3 receipts additively and preserves legacy receipt bytes", () => {
+    const path = temporaryDatabasePath();
+    const initialized = OperationalSqliteStore.open(path);
+    initialized.initialize();
+    initialized.close();
+
+    const before = new Database(path);
+    before.prepare(`
+      INSERT INTO command_idempotency(command_id, operation, request_hash, result_json, created_at)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(
+      "33333333-3333-4333-8333-333333333333",
+      "ticket-update",
+      "a".repeat(64),
+      JSON.stringify({ operation: "ticket-update", tickets: [{
+        ticketId: "TKT-0001", operationalEventIds: [], resultingRevision: null,
+      }] }),
+      "2026-09-05T10:00:00.000Z",
+    );
+    const beforeRow = before.prepare(
+      "SELECT command_id, operation, request_hash, result_json, created_at FROM command_idempotency",
+    ).get();
+    before.close();
+    downgradeToV3(path);
+
+    const migrated = OperationalSqliteStore.open(path);
+    migrated.initialize();
+    migrated.close();
+
+    const inspector = new Database(path, { readonly: true });
+    try {
+      expect(inspector.prepare(
+        "SELECT command_id, operation, request_hash, result_json, created_at FROM command_idempotency",
+      ).get()).toEqual(beforeRow);
+      expect(inspector.prepare(
+        "SELECT request_hash_version FROM command_idempotency WHERE command_id = ?",
+      ).get("33333333-3333-4333-8333-333333333333")).toEqual({ request_hash_version: 1 });
+      expect(inspector.prepare(
+        "SELECT version, name FROM schema_migrations ORDER BY version",
+      ).all()).toEqual([
+        { version: 1, name: "initial-operational-schema" },
+        { version: 2, name: "immutable-diagnosis-review-payload" },
+        { version: 3, name: "diagnostic-taxonomy-revisions" },
+        { version: 4, name: "versioned-command-request-identity" },
+      ]);
+      expect(inspector.prepare(
+        "SELECT value FROM operational_metadata WHERE key = 'schema_version'",
+      ).get()).toEqual({ value: "4" });
     } finally {
       inspector.close();
     }
@@ -156,10 +249,11 @@ describe("OperationalSqliteStore migrations and transaction boundary", () => {
       { version: 1, name: "initial-operational-schema" },
       { version: 2, name: "immutable-diagnosis-review-payload" },
       { version: 3, name: "diagnostic-taxonomy-revisions" },
+      { version: 4, name: "versioned-command-request-identity" },
     ]);
     expect(metadata).toEqual([
       { key: "import_state", value: "empty" },
-      { key: "schema_version", value: "3" },
+      { key: "schema_version", value: "4" },
     ]);
 
     expect(() => store.transaction((unit) => {

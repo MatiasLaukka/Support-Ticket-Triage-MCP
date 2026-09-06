@@ -12,7 +12,7 @@ afterEach(async () => {
 
 describe("reliability lifecycle command replay", () => {
   it("replays identical direct response commands and conflicts on changed response intent", async () => {
-    const harness = await openReliabilityRuntime();
+    const harness = await openReliabilityRuntime({ enableDemoInjectors: true });
     activeRuntimes.push(harness);
     const evaluated = await harness.post(
       "/api/tickets/TKT-1001/recommendations",
@@ -127,6 +127,50 @@ describe("reliability lifecycle command replay", () => {
     const audits = await harness.runtime.audits.list("TKT-1010");
     expect(audits.filter((audit) => audit.action === "customer-reply-received"))
       .toHaveLength(2);
+  });
+
+  it("replays demo internal confirmation before deriving later diagnosis state", async () => {
+    const harness = await openReliabilityRuntime({ enableDemoInjectors: true });
+    activeRuntimes.push(harness);
+    await harness.runtime.service.recordDiagnosis({
+      ticketId: "TKT-1010",
+      actor: "product-support",
+      diagnosedAt: "2026-08-13T09:00:00.000Z",
+      diagnosis: {
+        status: "completed",
+        causeType: "configuration",
+        customerSafeSummary: "A configuration mismatch affects the campaign editor.",
+        evidenceUsed: ["request-trace"],
+        confidence: "likely",
+        owner: "engineering",
+        recommendedNextAction: "Apply the governed configuration update.",
+        doNotSay: [],
+      },
+      knowledgeArticleIds: ["api-errors"],
+    }, { commandId: randomUUID() });
+
+    const commandId = randomUUID();
+    const path = "/api/demo/tickets/TKT-1010/inject";
+    const input = {
+      action: "internal-confirmation",
+      actor: "product-support",
+      rationale: "The internal platform check confirms the diagnosis.",
+    };
+    const first = await harness.post(path, input, commandId);
+    expect(first.status).toBe(201);
+
+    await harness.runtime.service.addCustomerReply({
+      ticketId: "TKT-1010",
+      actor: "customer",
+      body: "The same issue is still present.",
+      receivedAt: "2026-08-13T09:01:00.000Z",
+    }, { commandId: randomUUID() });
+
+    const replay = await harness.post(path, input, commandId);
+    expect(replay.status).toBe(201);
+    expect(replay.body.auditEvent).toEqual(first.body.auditEvent);
+    const audits = await harness.runtime.audits.list("TKT-1010");
+    expect(audits.filter((audit) => audit.action === "diagnosis-reviewed")).toHaveLength(1);
   });
 
   it("rejects a receipt whose immutable reply reference no longer exists", async () => {
@@ -367,6 +411,63 @@ describe("reliability lifecycle command replay", () => {
       { ticketId: "TKT-1001", actor: "reviewer" },
       commandId,
     );
+    expect(replay.status).toBe(500);
+    expect(replay.body).toMatchObject({
+      error: { code: "OPERATIONAL_INTEGRITY_ERROR" },
+    });
+  });
+
+  it("rejects an automatic-reply intent with altered ticket and payload before child dispatch", async () => {
+    const harness = await openReliabilityRuntime();
+    activeRuntimes.push(harness);
+    const evaluated = await harness.post(
+      "/api/tickets/TKT-1001/recommendations",
+      { actor: "approval-desk", aiPreference: "deterministic" },
+    );
+    const recommendation = evaluated.body.recommendation as {
+      id: string;
+      sourceRevision: number;
+      draftCustomerResponse: string;
+    };
+    const approved = await harness.post(
+      `/api/recommendations/${recommendation.id}/approve`,
+      {
+        ticketId: "TKT-1001",
+        expectedRevision: recommendation.sourceRevision,
+        approvedFields: ["customerResponse"],
+        editedCustomerResponse: recommendation.draftCustomerResponse,
+        actor: "reviewer",
+        confirm: true,
+      },
+    );
+    expect(approved.status).toBe(200);
+
+    const commandId = randomUUID();
+    const path = `/api/recommendations/${recommendation.id}/mark-sent`;
+    const sent = await harness.post(
+      path,
+      { ticketId: "TKT-1001", actor: "reviewer" },
+      commandId,
+    );
+    expect(sent.status).toBe(200);
+
+    const database = new Database(`${harness.root}/operational.sqlite`);
+    try {
+      const receipt = JSON.parse(
+        (database.prepare(
+          "SELECT result_json FROM command_idempotency WHERE command_id = ?",
+        ).get(commandId) as { result_json: string }).result_json,
+      ) as { automaticCustomerReplyIntent?: { ticketId?: string; body?: string } };
+      receipt.automaticCustomerReplyIntent!.ticketId = "TKT-1010";
+      receipt.automaticCustomerReplyIntent!.body = "Tampered reply payload.";
+      database.prepare(
+        "UPDATE command_idempotency SET result_json = ? WHERE command_id = ?",
+      ).run(JSON.stringify(receipt), commandId);
+    } finally {
+      database.close();
+    }
+
+    const replay = await harness.post(path, { ticketId: "TKT-1001", actor: "reviewer" }, commandId);
     expect(replay.status).toBe(500);
     expect(replay.body).toMatchObject({
       error: { code: "OPERATIONAL_INTEGRITY_ERROR" },

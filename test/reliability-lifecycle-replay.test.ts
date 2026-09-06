@@ -11,6 +11,98 @@ afterEach(async () => {
 });
 
 describe("reliability lifecycle command replay", () => {
+  it("replays identical direct response commands and conflicts on changed response intent", async () => {
+    const harness = await openReliabilityRuntime();
+    activeRuntimes.push(harness);
+    const evaluated = await harness.post(
+      "/api/tickets/TKT-1001/recommendations",
+      { actor: "approval-desk", aiPreference: "deterministic" },
+    );
+    const recommendation = evaluated.body.recommendation as {
+      id: string;
+      sourceRevision: number;
+      draftCustomerResponse: string;
+    };
+    const approved = await harness.post(
+      `/api/recommendations/${recommendation.id}/approve`,
+      {
+        ticketId: "TKT-1001",
+        expectedRevision: recommendation.sourceRevision,
+        approvedFields: ["customerResponse"],
+        editedCustomerResponse: recommendation.draftCustomerResponse,
+        actor: "reviewer",
+        confirm: true,
+      },
+    );
+    expect(approved.status).toBe(200);
+
+    const commandId = randomUUID();
+    const first = await harness.runtime.service.markResponseSent({
+      ticketId: "TKT-1001",
+      recommendationId: recommendation.id,
+      actor: "reviewer",
+      sentAt: "2026-08-13T09:00:00.000Z",
+      customerResponse: recommendation.draftCustomerResponse,
+    }, { commandId });
+    await expect(harness.runtime.service.markResponseSent({
+      ticketId: "TKT-1001",
+      recommendationId: recommendation.id,
+      actor: "reviewer",
+      sentAt: "2026-08-13T09:00:00.000Z",
+      customerResponse: recommendation.draftCustomerResponse,
+    }, { commandId })).resolves.toEqual(first);
+
+    await expect(harness.runtime.service.markResponseSent({
+      ticketId: "TKT-1001",
+      recommendationId: recommendation.id,
+      actor: "reviewer",
+      sentAt: "2026-08-13T09:00:00.000Z",
+      customerResponse: `${recommendation.draftCustomerResponse} Changed`,
+    }, { commandId })).rejects.toMatchObject({ code: "IDEMPOTENCY_CONFLICT" });
+  });
+
+  it("keeps direct and workflow response commands distinct under one key", async () => {
+    const harness = await openReliabilityRuntime();
+    activeRuntimes.push(harness);
+    const evaluated = await harness.post(
+      "/api/tickets/TKT-1001/recommendations",
+      { actor: "approval-desk", aiPreference: "deterministic" },
+    );
+    const recommendation = evaluated.body.recommendation as {
+      id: string;
+      sourceRevision: number;
+      draftCustomerResponse: string;
+    };
+    const approved = await harness.post(
+      `/api/recommendations/${recommendation.id}/approve`,
+      {
+        ticketId: "TKT-1001",
+        expectedRevision: recommendation.sourceRevision,
+        approvedFields: ["customerResponse"],
+        editedCustomerResponse: recommendation.draftCustomerResponse,
+        actor: "reviewer",
+        confirm: true,
+      },
+    );
+    expect(approved.status).toBe(200);
+
+    const commandId = randomUUID();
+    await harness.runtime.service.markResponseSent({
+      ticketId: "TKT-1001",
+      recommendationId: recommendation.id,
+      actor: "reviewer",
+      sentAt: "2026-08-13T09:00:00.000Z",
+      customerResponse: recommendation.draftCustomerResponse,
+    }, { commandId });
+
+    await expect(harness.runtime.service.markResponseSentFromWorkflow({
+      ticketId: "TKT-1001",
+      recommendationId: recommendation.id,
+      actor: "reviewer",
+      automaticReplyEnabled: false,
+    }, { commandId })).rejects.toMatchObject({ code: "IDEMPOTENCY_CONFLICT" });
+  });
+
   it("replays the original reply audit after later conversation activity", async () => {
     const harness = await openReliabilityRuntime();
     activeRuntimes.push(harness);
@@ -279,5 +371,118 @@ describe("reliability lifecycle command replay", () => {
     expect(replay.body).toMatchObject({
       error: { code: "OPERATIONAL_INTEGRITY_ERROR" },
     });
+  });
+
+  it("rejects a parent receipt whose automatic-reply intent was removed", async () => {
+    const harness = await openReliabilityRuntime();
+    activeRuntimes.push(harness);
+    const evaluated = await harness.post(
+      "/api/tickets/TKT-1001/recommendations",
+      { actor: "approval-desk", aiPreference: "deterministic" },
+    );
+    const recommendation = evaluated.body.recommendation as {
+      id: string;
+      sourceRevision: number;
+      draftCustomerResponse: string;
+    };
+    const approved = await harness.post(
+      `/api/recommendations/${recommendation.id}/approve`,
+      {
+        ticketId: "TKT-1001",
+        expectedRevision: recommendation.sourceRevision,
+        approvedFields: ["customerResponse"],
+        editedCustomerResponse: recommendation.draftCustomerResponse,
+        actor: "reviewer",
+        confirm: true,
+      },
+    );
+    expect(approved.status).toBe(200);
+
+    const commandId = randomUUID();
+    const sent = await harness.post(
+      `/api/recommendations/${recommendation.id}/mark-sent`,
+      { ticketId: "TKT-1001", actor: "reviewer" },
+      commandId,
+    );
+    expect(sent.status).toBe(200);
+
+    const database = new Database(`${harness.root}/operational.sqlite`);
+    try {
+      const receipt = JSON.parse(
+        (database.prepare(
+          "SELECT result_json FROM command_idempotency WHERE command_id = ?",
+        ).get(commandId) as { result_json: string }).result_json,
+      ) as { automaticCustomerReplyIntent?: unknown };
+      delete receipt.automaticCustomerReplyIntent;
+      database.prepare(
+        "UPDATE command_idempotency SET result_json = ? WHERE command_id = ?",
+      ).run(JSON.stringify(receipt), commandId);
+    } finally {
+      database.close();
+    }
+
+    const replay = await harness.post(
+      `/api/recommendations/${recommendation.id}/mark-sent`,
+      { ticketId: "TKT-1001", actor: "reviewer" },
+      commandId,
+    );
+    expect(replay.status).toBe(500);
+    expect(replay.body).toMatchObject({
+      error: { code: "OPERATIONAL_INTEGRITY_ERROR" },
+    });
+  });
+
+  it("rejects a composite receipt whose immutable pre-send references were removed", async () => {
+    const harness = await openReliabilityRuntime();
+    activeRuntimes.push(harness);
+    const evaluated = await harness.post(
+      "/api/tickets/TKT-1027/recommendations",
+      { actor: "approval-desk", aiPreference: "deterministic" },
+    );
+    const recommendation = evaluated.body.recommendation as {
+      id: string;
+      sourceRevision: number;
+      draftCustomerResponse: string;
+    };
+    const commandId = randomUUID();
+    const input = {
+      approval: {
+        ticketId: "TKT-1027" as const,
+        recommendationId: recommendation.id,
+        expectedRevision: recommendation.sourceRevision,
+        approvedFields: ["customerResponse"] as const,
+        editedCustomerResponse: recommendation.draftCustomerResponse,
+        actor: "reviewer",
+        approvedAt: "2026-08-13T09:00:00.000Z",
+        confirm: true,
+      },
+      responseSent: {
+        ticketId: "TKT-1027" as const,
+        recommendationId: recommendation.id,
+        actor: "reviewer",
+        sentAt: "2026-08-13T09:00:01.000Z",
+        customerResponse: recommendation.draftCustomerResponse,
+      },
+    };
+    const first = await harness.runtime.service.approveAndMarkResponseSent(input, { commandId });
+    expect(first.sentEvent.action).toBe("customer-response-sent");
+
+    const database = new Database(`${harness.root}/operational.sqlite`);
+    try {
+      const receipt = JSON.parse(
+        (database.prepare(
+          "SELECT result_json FROM command_idempotency WHERE command_id = ?",
+        ).get(commandId) as { result_json: string }).result_json,
+      ) as { auditsBeforeSentEventIds?: unknown };
+      delete receipt.auditsBeforeSentEventIds;
+      database.prepare(
+        "UPDATE command_idempotency SET result_json = ? WHERE command_id = ?",
+      ).run(JSON.stringify(receipt), commandId);
+    } finally {
+      database.close();
+    }
+
+    await expect(harness.runtime.service.approveAndMarkResponseSent(input, { commandId }))
+      .rejects.toMatchObject({ code: "OPERATIONAL_INTEGRITY_ERROR" });
   });
 });

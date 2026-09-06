@@ -51,9 +51,7 @@ describe("recovery operation transports", () => {
     expect(textOf(invalid)).toContain("Input validation error");
 
     const first = await client.callTool({ name: "record_fix_ineffective", arguments: ineffectiveArguments });
-    const replay = await client.callTool({ name: "record_fix_ineffective", arguments: ineffectiveArguments });
     expect(first.isError, textOf(first)).not.toBe(true);
-    expect(replay.structuredContent).toEqual(first.structuredContent);
     expect(first.structuredContent).toMatchObject({
       auditEvent: { action: "fix-ineffective" },
       operatorGuidance: expect.any(Object),
@@ -74,9 +72,23 @@ describe("recovery operation transports", () => {
       rationale: "New verification evidence contradicts the approved diagnosis.",
     };
     const invalidated = await client.callTool({ name: "invalidate_diagnosis", arguments: invalidationArguments });
-    const invalidationReplay = await client.callTool({ name: "invalidate_diagnosis", arguments: invalidationArguments });
     expect(invalidated.isError, textOf(invalidated)).not.toBe(true);
-    expect(invalidationReplay.structuredContent).toEqual(invalidated.structuredContent);
+    await fixture.runtime.service.addCustomerReply({
+      ticketId: recoveryTicketId,
+      actor: "customer",
+      body: "Another later reply arrived after invalidation.",
+      receivedAt: "2026-08-21T09:06:00.000Z",
+    }, { commandId: "a1000000-0000-4000-8000-000000000006" });
+    const replay = await client.callTool({ name: "record_fix_ineffective", arguments: ineffectiveArguments });
+    const invalidationReplay = await client.callTool({ name: "invalidate_diagnosis", arguments: invalidationArguments });
+    expect(replay.isError, textOf(replay)).not.toBe(true);
+    expect(invalidationReplay.isError, textOf(invalidationReplay)).not.toBe(true);
+    expect(replay.structuredContent).toMatchObject({
+      auditEvent: (first.structuredContent as { auditEvent?: unknown }).auditEvent,
+    });
+    expect(invalidationReplay.structuredContent).toMatchObject({
+      auditEvent: (invalidated.structuredContent as { auditEvent?: unknown }).auditEvent,
+    });
     expect(invalidated.structuredContent).toMatchObject({
       auditEvent: { action: "diagnosis-invalidated" },
       operatorGuidance: expect.any(Object),
@@ -85,6 +97,10 @@ describe("recovery operation transports", () => {
         fix: { diagnosisStillAuthoritative: false },
       },
     });
+    const mcpSnapshot = fixture.runtime.operationalStore!.readWorkflowSnapshot(recoveryTicketId);
+    expect(mcpSnapshot.events.filter(({ action }) => action === "fix-ineffective")).toHaveLength(1);
+    expect(mcpSnapshot.events.filter(({ action }) => action === "diagnosis-invalidated")).toHaveLength(1);
+    expect(mcpSnapshot.messages.filter(({ kind }) => kind === "customer")).toHaveLength(1);
   });
 
   it("exposes strict Approval Desk recovery routes with stable post-commit replay envelopes", async () => {
@@ -114,9 +130,7 @@ describe("recovery operation transports", () => {
     expect(invalid.body.error.code).toBe("INVALID_REQUEST");
 
     const first = await post(baseUrl, ineffectivePath, ineffectiveBody, "b1000000-0000-4000-8000-000000000004");
-    const replay = await post(baseUrl, ineffectivePath, ineffectiveBody, "b1000000-0000-4000-8000-000000000004");
     expect(first.status, JSON.stringify(first.body)).toBe(201);
-    expect(replay.body).toEqual(first.body);
     expect(first.body).toMatchObject({
       auditEvent: { action: "fix-ineffective" },
       operatorGuidance: expect.any(Object),
@@ -132,9 +146,19 @@ describe("recovery operation transports", () => {
       rationale: "The failed verification materially contradicts the diagnosis.",
     };
     const invalidated = await post(baseUrl, invalidationPath, invalidationBody, "b1000000-0000-4000-8000-000000000005");
-    const invalidationReplay = await post(baseUrl, invalidationPath, invalidationBody, "b1000000-0000-4000-8000-000000000005");
     expect(invalidated.status, JSON.stringify(invalidated.body)).toBe(201);
-    expect(invalidationReplay.body).toEqual(invalidated.body);
+    await fixture.runtime.service.addCustomerReply({
+      ticketId: recoveryTicketId,
+      actor: "customer",
+      body: "Another later reply arrived after invalidation.",
+      receivedAt: "2026-08-21T09:06:00.000Z",
+    }, { commandId: "b1000000-0000-4000-8000-000000000007" });
+    const replay = await post(baseUrl, ineffectivePath, ineffectiveBody, "b1000000-0000-4000-8000-000000000004");
+    const invalidationReplay = await post(baseUrl, invalidationPath, invalidationBody, "b1000000-0000-4000-8000-000000000005");
+    expect(replay.status, JSON.stringify(replay.body)).toBe(201);
+    expect(invalidationReplay.status, JSON.stringify(invalidationReplay.body)).toBe(201);
+    expect(replay.body.auditEvent).toEqual(first.body.auditEvent);
+    expect(invalidationReplay.body.auditEvent).toEqual(invalidated.body.auditEvent);
     expect(invalidated.body).toMatchObject({
       auditEvent: { action: "diagnosis-invalidated" },
       operatorGuidance: expect.any(Object),
@@ -143,6 +167,10 @@ describe("recovery operation transports", () => {
         fix: { diagnosisStillAuthoritative: false },
       },
     });
+    const httpSnapshot = fixture.runtime.operationalStore!.readWorkflowSnapshot(recoveryTicketId);
+    expect(httpSnapshot.events.filter(({ action }) => action === "fix-ineffective")).toHaveLength(1);
+    expect(httpSnapshot.events.filter(({ action }) => action === "diagnosis-invalidated")).toHaveLength(1);
+    expect(httpSnapshot.messages.filter(({ kind }) => kind === "customer")).toHaveLength(1);
   });
 });
 

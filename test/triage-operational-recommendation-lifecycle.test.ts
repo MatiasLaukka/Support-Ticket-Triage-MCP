@@ -146,8 +146,10 @@ describe("transactional operational recommendation lifecycle", () => {
         outcome: "success",
       });
 
+      advanceTicket(harness.store);
+      const afterLaterTicketState = harness.store.readWorkflowSnapshot(ticketId);
       await expect(testCase.invoke(harness.service, commandId)).resolves.toEqual(first);
-      expect(harness.store.readWorkflowSnapshot(ticketId)).toEqual(snapshot);
+      expect(harness.store.readWorkflowSnapshot(ticketId)).toEqual(afterLaterTicketState);
     } finally {
       harness.store.close();
     }
@@ -189,6 +191,8 @@ describe("transactional operational recommendation lifecycle", () => {
         after: { customerResponse: "The reviewed response is ready." },
       });
 
+      advanceTicket(harness.store);
+      const afterLaterTicketState = harness.store.readWorkflowSnapshot(ticketId);
       await expect(harness.service.markResponseSent({
         recommendationId,
         ticketId,
@@ -196,7 +200,7 @@ describe("transactional operational recommendation lifecycle", () => {
         sentAt: "2026-08-11T12:20:00.000Z",
         customerResponse: "The reviewed response is ready.",
       }, { commandId })).resolves.toEqual(sent);
-      expect(harness.store.readWorkflowSnapshot(ticketId)).toEqual(snapshot);
+      expect(harness.store.readWorkflowSnapshot(ticketId)).toEqual(afterLaterTicketState);
     } finally {
       harness.store.close();
     }
@@ -289,9 +293,10 @@ describe("transactional operational recommendation lifecycle", () => {
         "recommendation-approved",
       ]);
 
+      advanceTicket(harness.store);
       await expect(harness.service.approveAndMarkResponseSent(input, { commandId }))
         .resolves.toEqual(result);
-      expect(harness.store.readWorkflowSnapshot(ticketId)).toEqual(snapshot);
+      expect(harness.store.readWorkflowSnapshot(ticketId).ticket.revision).toBe(1);
     } finally {
       harness.store.close();
     }

@@ -68,8 +68,9 @@ describe("transactional operational diagnosis and verification lifecycle", () =>
         },
       }]);
 
+      appendSupportResponse(harness.store, sourceTicketId, recommendationId, 12);
       await expect(harness.service.recordDiagnosis(input, { commandId })).resolves.toEqual(first);
-      expect(harness.store.readWorkflowSnapshot(sourceTicketId)).toEqual(snapshot);
+      expect(harness.store.readWorkflowSnapshot(sourceTicketId).diagnoses).toEqual(snapshot.diagnoses);
     } finally {
       harness.store.close();
     }
@@ -153,6 +154,10 @@ describe("transactional operational diagnosis and verification lifecycle", () =>
       await expect(approved.service.reviewDiagnosis(revalidationInput, {
         commandId: command(23),
       })).resolves.toEqual(revalidated);
+      appendSupportResponse(approved.store, sourceTicketId, recommendationId, 26);
+      await expect(approved.service.reviewDiagnosis(revalidationInput, {
+        commandId: command(23),
+      })).resolves.toEqual(revalidated);
 
       const rejectedOriginal = await rejected.service.recordDiagnosis(
         recordDiagnosisInput(),
@@ -232,8 +237,10 @@ describe("transactional operational diagnosis and verification lifecycle", () =>
         relatedEvents[0]!.id,
       ]);
 
+      appendSupportResponse(harness.store, sourceTicketId, recommendationId, 46);
       await expect(harness.service.applyDiagnosisFix(input, { commandId })).resolves.toEqual(first);
-      expect(harness.store.readWorkflowSnapshot(sourceTicketId)).toEqual(source);
+      expect(harness.store.readWorkflowSnapshot(sourceTicketId).events.length)
+        .toBe(source.events.length + 1);
       expect(harness.store.readWorkflowSnapshot(relatedTicketId)).toEqual(related);
     } finally {
       harness.store.close();
@@ -290,6 +297,14 @@ describe("transactional operational diagnosis and verification lifecycle", () =>
         action: "fix-available",
         after: { diagnosisId, sourceTicketId },
       });
+      appendSupportResponse(fixHarness.store, sourceTicketId, recommendationId, 67);
+      await expect(fixHarness.service.recordFix({
+        ticketId: sourceTicketId,
+        actor: "operator",
+        fixedAt: "2026-08-11T12:09:00.000Z",
+        fix: fixContext(),
+        knowledgeArticleIds: ["api-errors"],
+      }, { commandId: command(64) })).resolves.toEqual(fixed);
 
       const mitigation = await mitigationHarness.service.recordPlatformMitigation({
         ticketId: sourceTicketId,
@@ -312,6 +327,14 @@ describe("transactional operational diagnosis and verification lifecycle", () =>
           outcomeStatus: "available",
         },
       }]);
+      appendSupportResponse(mitigationHarness.store, sourceTicketId, recommendationId, 66);
+      await expect(mitigationHarness.service.recordPlatformMitigation({
+        ticketId: sourceTicketId,
+        eventId: "EVT-2026-06-10-WEBHOOK-LATENCY",
+        actor: "incident-owner",
+        recordedAt: "2026-08-11T12:06:00.000Z",
+        rationale: "The governed mitigation is available.",
+      }, { commandId: command(65) })).resolves.toEqual(mitigation);
     } finally {
       fixHarness.store.close();
       mitigationHarness.store.close();
@@ -356,8 +379,10 @@ describe("transactional operational diagnosis and verification lifecycle", () =>
         },
       });
 
+      advanceSourceTicket(harness.store);
       await expect(harness.service.closeTicket(input, { commandId })).resolves.toEqual(first);
-      expect(harness.store.readWorkflowSnapshot(sourceTicketId)).toEqual(snapshot);
+      expect(harness.store.readWorkflowSnapshot(sourceTicketId).ticket.revision)
+        .toBe(snapshot.ticket.revision + 1);
     } finally {
       harness.store.close();
     }
@@ -624,6 +649,38 @@ function appendSupportResponse(
       createdAt: "2026-08-11T12:08:00.000Z",
       body: "We have confirmed the issue is resolved.",
       recommendationId: currentRecommendationId,
+    });
+  });
+}
+
+function advanceSourceTicket(store: OperationalSqliteStore): void {
+  store.transaction((unit) => {
+    const current = unit.readTicket(sourceTicketId);
+    const eventId = "30000000-0000-4000-8000-000000009998";
+    const [sequence] = unit.allocateEventSequences(sourceTicketId, 1);
+    const updated = TicketSchema.parse({
+      ...current,
+      revision: current.revision + 1,
+      updatedAt: "2026-08-11T12:11:00.000Z",
+      assignee: "later-owner@example.test",
+    });
+    unit.appendEvent({
+      id: eventId,
+      ticketId: sourceTicketId,
+      sequence: sequence!,
+      occurredAt: updated.updatedAt,
+      actor: "later-command",
+      action: "ticket-updated",
+      commandId: command(96),
+      facts: { expectedRevision: current.revision, revision: updated.revision },
+    });
+    unit.updateTicket(updated, current.revision);
+    unit.appendTicketRevision({
+      ticketId: sourceTicketId,
+      revision: updated.revision,
+      ticket: updated,
+      operationalEventId: eventId,
+      createdAt: updated.updatedAt,
     });
   });
 }

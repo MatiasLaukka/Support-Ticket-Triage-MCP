@@ -210,6 +210,10 @@ export class OperationalSqliteStore {
             () => unit.readWorkflowSnapshot(ticketId),
             "Operational command result read could not complete",
           ),
+          readCommandResult: (commandId) => this.normalizeDeferredRead(
+            () => unit.readCommandResult(commandId),
+            "Operational command result read could not complete",
+          ),
         };
         projectionStarted = true;
         return project(receipt, reader);

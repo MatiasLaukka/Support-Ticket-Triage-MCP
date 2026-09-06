@@ -1294,7 +1294,7 @@ export class TriageService {
     const recommendationId = replay.result.recommendationId ?? replay.result.recommendationIds?.[0];
     if (recommendationId === undefined) throw replayIntegrity("Operational recommendation replay is missing its recommendation reference.");
     const eventIds = new Set(replay.result.tickets.flatMap(({ operationalEventIds }) => operationalEventIds));
-    const snapshot = reader.readWorkflowSnapshot(replay.result.tickets[0]!.ticketId);
+    const snapshot = readReplayWorkflowSnapshot(reader, replay.result.tickets[0]!.ticketId);
     const endSequence = Math.max(
       ...snapshot.events.filter(({ id }) => eventIds.has(id)).map(({ sequence }) => sequence),
     );
@@ -1771,7 +1771,7 @@ export class TriageService {
     ) {
       throw replayIntegrity("Operational customer-reply replay is missing its immutable result references.");
     }
-    const snapshot = reader.readWorkflowSnapshot(ticketResult.ticketId);
+    const snapshot = readReplayWorkflowSnapshot(reader, ticketResult.ticketId);
     const message = snapshot.messages.find(({ id }) => id === replay.result.messageId);
     const event = message === undefined
       ? undefined
@@ -1900,10 +1900,10 @@ export class TriageService {
     );
   }
 
-  private replayOperationalApproval(
-    reader: OperationalResultReader,
-    replay: CommandReplay,
-  ): { ticket: Ticket; auditEvent: AuditEvent } {
+ private replayOperationalApproval(
+   reader: OperationalResultReader,
+   replay: CommandReplay,
+ ): { ticket: Ticket; auditEvent: AuditEvent } {
     const ticketResult = replay.result.tickets[0];
     const recommendationId = replay.result.recommendationId
       ?? replay.result.recommendationIds?.[0];
@@ -1914,7 +1914,7 @@ export class TriageService {
     ) {
       throw replayIntegrity("Operational approval replay is missing its immutable result references.");
     }
-    const snapshot = reader.readWorkflowSnapshot(ticketResult.ticketId);
+    const snapshot = readReplayWorkflowSnapshot(reader, ticketResult.ticketId);
     const event = snapshot.events.find(
       ({ id, action }) => ticketResult.operationalEventIds.includes(id)
         && action === "recommendation-approved",
@@ -2039,9 +2039,9 @@ export class TriageService {
     );
   }
 
-  private replayOperationalTransition(
-    reader: OperationalResultReader,
-    replay: CommandReplay,
+ private replayOperationalTransition(
+   reader: OperationalResultReader,
+   replay: CommandReplay,
     action: "recommendation-rejected" | "recommendation-canceled" | "recommendation-superseded",
   ): AuditEvent {
     const ticketResult = replay.result.tickets[0];
@@ -2049,7 +2049,7 @@ export class TriageService {
     if (ticketResult === undefined || recommendationId === undefined) {
       throw replayIntegrity("Operational lifecycle replay is missing its semantic references.");
     }
-    const snapshot = reader.readWorkflowSnapshot(ticketResult.ticketId);
+    const snapshot = readReplayWorkflowSnapshot(reader, ticketResult.ticketId);
     const event = snapshot.events.find(
       ({ id, action: candidateAction }) => ticketResult.operationalEventIds.includes(id)
         && candidateAction === action,
@@ -2195,6 +2195,7 @@ export class TriageService {
           reader,
           result,
           automaticReplyForTicket,
+          automaticReplyEnabled,
         );
         return {
           auditEvent: this.replayOperationalResponseSent(reader, { result }),
@@ -2210,16 +2211,16 @@ export class TriageService {
     );
   }
 
-  private replayOperationalResponseSent(
-    reader: OperationalResultReader,
-    replay: CommandReplay,
+ private replayOperationalResponseSent(
+   reader: OperationalResultReader,
+   replay: CommandReplay,
   ): AuditEvent {
     const ticketResult = replay.result.tickets[0];
     const messageId = replay.result.messageId;
     if (ticketResult === undefined || messageId === undefined) {
       throw replayIntegrity("Operational support-response replay is missing its semantic references.");
     }
-    const snapshot = reader.readWorkflowSnapshot(ticketResult.ticketId);
+    const snapshot = readReplayWorkflowSnapshot(reader, ticketResult.ticketId);
     const message = snapshot.messages.find(({ id }) => id === messageId);
     const event = message === undefined
       ? undefined
@@ -2444,6 +2445,7 @@ export class TriageService {
           reader,
           result,
           automaticReplyForTicket,
+          sent.automaticReplyEnabled ?? true,
         );
         return {
           ...this.replayOperationalApprovalAndSend(reader, { result }),
@@ -2458,9 +2460,9 @@ export class TriageService {
     );
   }
 
-  private replayOperationalApprovalAndSend(
-    reader: OperationalResultReader,
-    replay: CommandReplay,
+ private replayOperationalApprovalAndSend(
+   reader: OperationalResultReader,
+   replay: CommandReplay,
   ): {
     ticket: Ticket;
     approvalEvent: AuditEvent;
@@ -2470,7 +2472,7 @@ export class TriageService {
     const approved = this.replayOperationalApproval(reader, replay);
     const sentEvent = this.replayOperationalResponseSent(reader, replay);
     const ticketResult = replay.result.tickets[0]!;
-    const snapshot = reader.readWorkflowSnapshot(ticketResult.ticketId);
+    const snapshot = readReplayWorkflowSnapshot(reader, ticketResult.ticketId);
     const persistedSentEvent = snapshot.events.find(
       ({ id, action }) => ticketResult.operationalEventIds.includes(id)
         && action === "customer-response-sent",
@@ -2489,7 +2491,10 @@ export class TriageService {
       auditsBeforeSent: operationalConversationAuditsForEventIds(
         snapshot,
         auditsBeforeSentEventIds,
-        { requireImmutableRecommendations: true },
+        {
+          requireImmutableRecommendations: true,
+          readCommandResult: (commandId) => reader.readCommandResult(commandId),
+        },
       ),
     };
   }
@@ -2579,8 +2584,8 @@ export class TriageService {
     }
   }
 
-  private assertPersistedAutomaticCustomerReplyIntent(
-    parentCommandId: string,
+ private assertPersistedAutomaticCustomerReplyIntent(
+   parentCommandId: string,
     reader: OperationalResultReader,
     result: OperationalResultReference,
     automaticReplyForTicket: (input: {
@@ -2588,6 +2593,7 @@ export class TriageService {
       recommendation: TriageRecommendation;
       auditsBeforeSent: readonly AuditEvent[];
     }) => string | undefined,
+    expectedAutomaticReplyEnabled: boolean,
   ): void {
     this.assertAutomaticCustomerReplyIntent(
       parentCommandId,
@@ -2603,13 +2609,14 @@ export class TriageService {
       || recommendationId === undefined
       || sourceTicket === undefined
       || preSendEventIds === undefined
+      || result.automaticCustomerReplyEnabled !== expectedAutomaticReplyEnabled
     ) {
       throw new OperationalStoreError(
         "Persisted automatic customer-reply intent is missing its immutable parent references.",
         "PERSISTENCE_ERROR",
       );
     }
-    const snapshot = reader.readWorkflowSnapshot(ticketResult.ticketId);
+    const snapshot = readReplayWorkflowSnapshot(reader, ticketResult.ticketId);
     const sentEvent = snapshot.events.find(
       ({ id, action }) => ticketResult.operationalEventIds.includes(id)
         && action === "customer-response-sent",
@@ -2630,6 +2637,9 @@ export class TriageService {
         );
     if (
       sourceTicket.id !== ticketResult.ticketId
+      || result.ticketSnapshot === undefined
+      || (result.operation !== "approve-and-mark-response-sent"
+        && !sameStructuredValue(sourceTicket, result.ticketSnapshot))
       || sentEvent === undefined
       || sentMessage?.kind !== "support"
       || sentMessage.operationalEventId !== sentEvent.id
@@ -2642,10 +2652,29 @@ export class TriageService {
         "PERSISTENCE_ERROR",
       );
     }
+    if (
+      result.operation === "approve-and-mark-response-sent"
+      && !compositeAutomaticReplySourceTicketMatchesHistory(
+        snapshot,
+        result,
+        ticketResult,
+        sourceTicket,
+        recommendationEvent,
+        recommendation,
+      )
+    ) {
+      throw new OperationalStoreError(
+        "Persisted automatic customer-reply source ticket is inconsistent with immutable parent history.",
+        "PERSISTENCE_ERROR",
+      );
+    }
     const auditsBeforeSent = operationalConversationAuditsForEventIds(
       snapshot,
       preSendEventIds,
-      { requireImmutableRecommendations: true },
+      {
+        requireImmutableRecommendations: true,
+        readCommandResult: (commandId) => reader.readCommandResult(commandId),
+      },
     );
     const expectedBody = automaticReplyForTicket({
       ticket: TicketSchema.parse(sourceTicket),
@@ -2895,8 +2924,10 @@ export class TriageService {
         return result;
         },
         replay: (reader, result) => this.replayOperationalLifecycleAudit(
+          reader,
           { result },
           ["diagnosis-completed", "diagnostic-escalated"],
+          commandContext.commandId,
         ),
       };
       return this.operationalDispatcher().run(
@@ -3056,9 +3087,11 @@ export class TriageService {
             latestDiagnosisReview,
           },
         ),
-        replay: (_reader, result) => this.replayOperationalLifecycleAudit(
+        replay: (reader, result) => this.replayOperationalLifecycleAudit(
+          reader,
           { result },
           ["diagnosis-reviewed"],
+          commandContext.commandId,
         ),
       };
       return this.operationalDispatcher().run(
@@ -3442,9 +3475,11 @@ export class TriageService {
           latestDiagnosisReview,
         },
       ),
-      replay: (_reader, result) => this.replayOperationalLifecycleAudit(
+      replay: (reader, result) => this.replayOperationalLifecycleAudit(
+        reader,
         { result },
         ["diagnosis-reviewed"],
+        commandContext.commandId,
       ),
     };
     return this.operationalDispatcher().run(
@@ -3705,9 +3740,11 @@ export class TriageService {
       };
       return result;
       },
-      replay: (_reader, result) => this.replayOperationalLifecycleAudit(
+      replay: (reader, result) => this.replayOperationalLifecycleAudit(
+        reader,
         { result },
         ["fix-ineffective"],
+        commandContext.commandId,
       ),
     };
     return this.operationalDispatcher().run(
@@ -3846,9 +3883,11 @@ export class TriageService {
       };
       return result;
       },
-      replay: (_reader, result) => this.replayOperationalLifecycleAudit(
+      replay: (reader, result) => this.replayOperationalLifecycleAudit(
+        reader,
         { result },
         ["diagnosis-invalidated"],
+        commandContext.commandId,
       ),
     };
     return this.operationalDispatcher().run(
@@ -3989,9 +4028,11 @@ export class TriageService {
         };
         return result;
         },
-        replay: (_reader, result) => this.replayOperationalLifecycleAudit(
+        replay: (reader, result) => this.replayOperationalLifecycleAudit(
+          reader,
           { result },
           ["platform-mitigation-available"],
+          commandContext.commandId,
         ),
       };
       return this.operationalDispatcher().run(
@@ -4197,7 +4238,11 @@ export class TriageService {
         };
         return result;
         },
-        replay: (_reader, result) => this.replayOperationalClosure({ result }),
+        replay: (reader, result) => this.replayOperationalClosure(
+          reader,
+          { result },
+          commandContext.commandId,
+        ),
       };
       return this.operationalDispatcher().run(
         definition,
@@ -4461,9 +4506,11 @@ export class TriageService {
         };
         return result;
         },
-        replay: (_reader, result) => this.replayOperationalLifecycleAudits(
+        replay: (reader, result) => this.replayOperationalLifecycleAudits(
+          reader,
           { result },
           "fix-available",
+          commandContext.commandId,
         ),
       };
       return this.operationalDispatcher().run(
@@ -4597,8 +4644,10 @@ export class TriageService {
   }
 
   private replayOperationalLifecycleAudits(
+    reader: OperationalResultReader,
     replay: CommandReplay,
     expectedAction: AuditEvent["action"],
+    commandId: string,
   ): AuditEvent[] {
     const audits = replay.result.lifecycleAuditEvents?.map((event) =>
       AuditEventSchema.parse(event)
@@ -4610,12 +4659,15 @@ export class TriageService {
     ) {
       throw replayIntegrity("Operational lifecycle replay is missing its persisted audit result.");
     }
+    this.assertLifecycleReplayReferences(reader, replay.result, audits, commandId);
     return audits;
   }
 
   private replayOperationalLifecycleAudit(
+    reader: OperationalResultReader,
     replay: CommandReplay,
     expectedActions: readonly AuditEvent["action"][],
+    commandId: string,
   ): AuditEvent {
     const audits = replay.result.lifecycleAuditEvents?.map((event) =>
       AuditEventSchema.parse(event)
@@ -4628,20 +4680,68 @@ export class TriageService {
     ) {
       throw replayIntegrity("Operational lifecycle replay is missing its persisted audit result.");
     }
+    this.assertLifecycleReplayReferences(reader, replay.result, audits, commandId);
     return audit;
   }
 
-  private replayOperationalClosure(
+ private replayOperationalClosure(
+   reader: OperationalResultReader,
     replay: CommandReplay,
+    commandId: string,
   ): { ticket: Ticket; auditEvent: AuditEvent } {
     const ticket = replay.result.ticketSnapshot;
-    if (ticket === undefined) {
+    const ticketResult = replay.result.tickets[0];
+    if (ticket === undefined || ticketResult === undefined || ticketResult.resultingRevision === null) {
       throw replayIntegrity("Operational closure replay is missing its persisted ticket snapshot.");
+    }
+    const auditEvent = this.replayOperationalLifecycleAudit(
+      reader,
+      replay,
+      ["ticket-updated"],
+      commandId,
+    );
+    const snapshot = readReplayWorkflowSnapshot(reader, ticketResult.ticketId);
+    const ticketRevision = snapshot.ticketRevisions.find(
+      (revision) => revision.ticketId === ticketResult.ticketId
+        && revision.revision === ticketResult.resultingRevision
+        && revision.operationalEventId === auditEvent.id,
+    );
+    if (ticketRevision === undefined || !sameStructuredValue(ticketRevision.ticket, ticket)) {
+      throw replayIntegrity("Operational closure replay is inconsistent with its immutable ticket revision.");
     }
     return {
       ticket: TicketSchema.parse(ticket),
-      auditEvent: this.replayOperationalLifecycleAudit(replay, ["ticket-updated"]),
+      auditEvent,
     };
+  }
+
+ private assertLifecycleReplayReferences(
+   reader: OperationalResultReader,
+    result: OperationalResultReference,
+    audits: readonly AuditEvent[],
+    commandId: string,
+  ): void {
+    const auditsById = new Map(audits.map((audit) => [audit.id, audit] as const));
+    for (const ticketResult of result.tickets) {
+      const snapshot = readReplayWorkflowSnapshot(reader, ticketResult.ticketId);
+      for (const eventId of ticketResult.operationalEventIds) {
+        const event = snapshot.events.find(({ id }) => id === eventId);
+        const audit = auditsById.get(eventId);
+        if (
+          event === undefined
+          || audit === undefined
+          || event.commandId !== commandId
+          || event.ticketId !== ticketResult.ticketId
+          || audit.id !== event.id
+          || audit.ticketId !== event.ticketId
+          || audit.action !== event.action
+          || audit.actor !== event.actor
+          || audit.timestamp !== event.occurredAt
+        ) {
+          throw replayIntegrity("Operational lifecycle replay is inconsistent with its immutable causal event.");
+        }
+      }
+    }
   }
 
   async supersedeRecommendation(
@@ -5360,7 +5460,10 @@ function operationalExpectedResolution(
 export function operationalConversationAuditsForEventIds(
   snapshot: OperationalWorkflowSnapshot,
   eventIds: readonly string[],
-  options: { requireImmutableRecommendations?: boolean } = {},
+  options: {
+    requireImmutableRecommendations?: boolean;
+    readCommandResult?: (commandId: string) => OperationalResultReference | undefined;
+  } = {},
 ): AuditEvent[] {
   const requireImmutableRecommendations = options.requireImmutableRecommendations === true;
   const includedEventIds = new Set(eventIds);
@@ -5375,6 +5478,11 @@ export function operationalConversationAuditsForEventIds(
   }
   return snapshot.events.flatMap((event) => {
     if (!includedEventIds.has(event.id)) return [];
+    const lifecycleAudit = options.readCommandResult?.(event.commandId)
+      ?.lifecycleAuditEvents?.find(({ id }) => id === event.id);
+    if (lifecycleAudit !== undefined) {
+      return [AuditEventSchema.parse(lifecycleAudit)];
+    }
     const message = snapshot.messages.find(
       ({ operationalEventId }) => operationalEventId === event.id,
     );
@@ -5550,12 +5658,68 @@ function replayIntegrity(message: string): OperationalStoreError {
   return new OperationalStoreError(message, "PERSISTENCE_ERROR");
 }
 
+function readReplayWorkflowSnapshot(
+  reader: OperationalResultReader,
+  ticketId: string,
+): OperationalWorkflowSnapshot {
+  try {
+    return reader.readWorkflowSnapshot(ticketId);
+  } catch (error) {
+    if (error instanceof OperationalStoreError && error.code === "NOT_FOUND") {
+      throw replayIntegrity("Operational replay references a missing ticket history.");
+    }
+    throw error;
+  }
+}
+
 function invalidDiagnosisReview(message: string): DomainError {
   return new DomainError(message, "INVALID_APPROVAL_FIELDS");
 }
 
 function sameStructuredValue(left: unknown, right: unknown): boolean {
   return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function compositeAutomaticReplySourceTicketMatchesHistory(
+  snapshot: OperationalWorkflowSnapshot,
+  result: OperationalResultReference,
+  ticketResult: OperationalResultReference["tickets"][number],
+  sourceTicket: Ticket,
+  approvalEvent: OperationalWorkflowSnapshot["events"][number] | undefined,
+  recommendation: TriageRecommendation | undefined,
+): boolean {
+  const ticketSnapshot = result.ticketSnapshot;
+  if (ticketSnapshot === undefined || approvalEvent === undefined || recommendation === undefined) {
+    return false;
+  }
+  if (ticketResult.resultingRevision === null) {
+    return sameStructuredValue(sourceTicket, ticketSnapshot);
+  }
+  const ticketRevision = snapshot.ticketRevisions.find(
+    (revision) => revision.ticketId === ticketResult.ticketId
+      && revision.revision === ticketResult.resultingRevision
+      && revision.operationalEventId === approvalEvent.id,
+  );
+  if (
+    ticketRevision === undefined
+    || !sameStructuredValue(ticketRevision.ticket, ticketSnapshot)
+  ) {
+    return false;
+  }
+  const expectedRevision = readNonnegativeInteger(approvalEvent.facts.expectedRevision);
+  if (expectedRevision === undefined) return false;
+  const before = approvalAuditValues(approvalEvent, recommendation).before;
+  const reconstructed = TicketSchema.safeParse({
+    ...ticketSnapshot,
+    ...Object.fromEntries(
+      Object.entries(before).filter(([key]) => key in ticketSnapshot),
+    ),
+    revision: expectedRevision,
+  });
+  if (!reconstructed.success) return false;
+  const { updatedAt: _sourceUpdatedAt, ...sourceWithoutUpdatedAt } = sourceTicket;
+  const { updatedAt: _reconstructedUpdatedAt, ...reconstructedWithoutUpdatedAt } = reconstructed.data;
+  return sameStructuredValue(sourceWithoutUpdatedAt, reconstructedWithoutUpdatedAt);
 }
 
 function readNonnegativeInteger(value: unknown): number | undefined {

@@ -11,6 +11,7 @@ import {
 
 export interface OperationalResultReader {
   readWorkflowSnapshot(ticketId: string): OperationalWorkflowSnapshot;
+  readCommandResult(commandId: string): OperationalResultReference | undefined;
 }
 
 export interface PreparedCommandDefinition<I, P, R> {

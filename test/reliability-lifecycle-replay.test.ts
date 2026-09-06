@@ -28,10 +28,10 @@ describe("reliability lifecycle command replay", () => {
       {
         ticketId: "TKT-1001",
         expectedRevision: recommendation.sourceRevision,
-        approvedFields: ["customerResponse"],
+        approvedFields: ["customerResponse"] as ("customerResponse")[],
         editedCustomerResponse: recommendation.draftCustomerResponse,
         actor: "reviewer",
-        confirm: true,
+        confirm: true as const,
       },
     );
     expect(approved.status).toBe(200);
@@ -157,7 +157,7 @@ describe("reliability lifecycle command replay", () => {
       rationale: "The internal platform check confirms the diagnosis.",
     };
     const first = await harness.post(path, input, commandId);
-    expect(first.status).toBe(201);
+    expect(first.status, JSON.stringify(first.body)).toBe(201);
 
     await harness.runtime.service.addCustomerReply({
       ticketId: "TKT-1010",
@@ -551,11 +551,11 @@ describe("reliability lifecycle command replay", () => {
         ticketId: "TKT-1027" as const,
         recommendationId: recommendation.id,
         expectedRevision: recommendation.sourceRevision,
-        approvedFields: ["customerResponse"] as const,
+        approvedFields: ["customerResponse"] as ("customerResponse")[],
         editedCustomerResponse: recommendation.draftCustomerResponse,
         actor: "reviewer",
         approvedAt: "2026-08-13T09:00:00.000Z",
-        confirm: true,
+        confirm: true as const,
       },
       responseSent: {
         ticketId: "TKT-1027" as const,
@@ -584,6 +584,6 @@ describe("reliability lifecycle command replay", () => {
     }
 
     await expect(harness.runtime.service.approveAndMarkResponseSent(input, { commandId }))
-      .rejects.toMatchObject({ code: "OPERATIONAL_INTEGRITY_ERROR" });
+      .rejects.toMatchObject({ code: "PERSISTENCE_ERROR" });
   });
 });

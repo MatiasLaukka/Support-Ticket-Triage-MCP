@@ -446,6 +446,14 @@ type OperationalMarkResponseSentInput = Omit<MarkResponseSentInput, "customerRes
   customerResponse?: string;
 };
 
+type DiagnosisReviewCommandHelpers = Pick<
+  typeof import("./approval-desk/diagnosis-review.js"),
+  | "compareAuditCausalOrder"
+  | "customerReplyWatermarksMatch"
+  | "isDiagnosisStale"
+  | "latestDiagnosisReview"
+>;
+
 export interface ApproveAndMarkResponseSentInput {
   approval: Approval;
   responseSent: MarkResponseSentInput;
@@ -1549,7 +1557,7 @@ export class TriageService {
       recommendationId: input.recommendationId,
       actor: input.actor,
       automaticReplyEnabled: input.automaticReplyEnabled,
-    });
+    }, "mark-response-sent-workflow");
     const automaticReply = await this.runAutomaticCustomerReply(
       result.automaticCustomerReplyIntent,
     );
@@ -2071,26 +2079,37 @@ export class TriageService {
     sent: OperationalMarkResponseSentInput,
     commandContext: OperationalCommandContext,
     semanticOverride?: unknown,
+    operation = "mark-response-sent",
   ): Promise<{
     auditEvent: AuditEvent;
     automaticCustomerReplyIntent?: z.infer<typeof AutomaticCustomerReplyIntentSchema>;
+    automaticCustomerReplyTicketSnapshot?: Ticket;
   }> {
     const { automaticReplyForTicket } = await import(
       "./approval-desk/automatic-customer-replies.js"
     );
     const automaticReplyEnabled = sent.automaticReplyEnabled ?? true;
-    const { sentAt: _sentAt, customerResponse: _customerResponse, automaticReplyEnabled: _automaticReplyEnabled, ...semanticFields } = sent;
+    const {
+      sentAt: _sentAt,
+      automaticReplyEnabled: _automaticReplyEnabled,
+      ...semanticFields
+    } = sent;
     const semanticRequest = semanticOverride ?? { ...semanticFields, automaticReplyEnabled };
     const definition: PreparedCommandDefinition<
       unknown,
       OperationalMarkResponseSentInput,
-      { auditEvent: AuditEvent; automaticCustomerReplyIntent?: z.infer<typeof AutomaticCustomerReplyIntentSchema> }
+      {
+        auditEvent: AuditEvent;
+        automaticCustomerReplyIntent?: z.infer<typeof AutomaticCustomerReplyIntentSchema>;
+        automaticCustomerReplyTicketSnapshot?: Ticket;
+      }
     > = {
-      operation: "mark-response-sent",
+      operation,
       parse: (raw) => z.object({
         recommendationId: z.uuid(),
         ticketId: TicketIdSchema,
         actor: NonBlankStringSchema,
+        customerResponse: NonBlankStringSchema.max(20_000).optional(),
         automaticReplyEnabled: z.boolean(),
       }).strict().parse(raw),
       prepare: async () => sent,
@@ -2153,27 +2172,34 @@ export class TriageService {
           commandId,
           automaticCustomerReplyIntent,
         );
-        return {
-          operation: "mark-response-sent",
+        const result: OperationalResultReference = {
+          operation,
           tickets: [{
             ticketId: prepared.ticketId,
             operationalEventIds: [eventId],
             resultingRevision: null,
           }],
+          recommendationId: prepared.recommendationId,
           messageId,
+          ticketSnapshot: snapshot.ticket,
+          automaticCustomerReplyTicketSnapshot: snapshot.ticket,
+          automaticCustomerReplyEnabled: automaticReplyEnabled,
+          auditsBeforeSentEventIds: snapshot.events.map(({ id }) => id),
           automaticCustomerReplyIntent,
         };
+        return result;
       },
       replay: (reader, result) => {
-        this.assertAutomaticCustomerReplyIntent(
+        this.assertPersistedAutomaticCustomerReplyIntent(
           commandContext.commandId,
-          result.automaticCustomerReplyIntent,
+          reader,
+          result,
+          automaticReplyForTicket,
         );
         return {
           auditEvent: this.replayOperationalResponseSent(reader, { result }),
-          ...(result.automaticCustomerReplyIntent === undefined
-          ? {}
-          : { automaticCustomerReplyIntent: result.automaticCustomerReplyIntent }),
+          automaticCustomerReplyIntent: result.automaticCustomerReplyIntent!,
+          automaticCustomerReplyTicketSnapshot: result.automaticCustomerReplyTicketSnapshot!,
         };
       },
     };
@@ -2402,6 +2428,8 @@ export class TriageService {
         recommendationId: recommendation.id,
         messageId,
         ticketSnapshot: ticketAfter,
+        automaticCustomerReplyTicketSnapshot: snapshot.ticket,
+        automaticCustomerReplyEnabled: sent.automaticReplyEnabled ?? true,
         auditsBeforeSentEventIds: [
           ...snapshot.events.map(({ id }) => id),
           approvalEventId,
@@ -2411,15 +2439,15 @@ export class TriageService {
       return result;
       },
       replay: (reader, result) => {
-        this.assertAutomaticCustomerReplyIntent(
+        this.assertPersistedAutomaticCustomerReplyIntent(
           commandContext.commandId,
-          result.automaticCustomerReplyIntent,
+          reader,
+          result,
+          automaticReplyForTicket,
         );
         return {
           ...this.replayOperationalApprovalAndSend(reader, { result }),
-          ...(result.automaticCustomerReplyIntent === undefined
-          ? {}
-          : { automaticReplyIntent: result.automaticCustomerReplyIntent }),
+          automaticReplyIntent: result.automaticCustomerReplyIntent!,
         };
       },
     };
@@ -2450,10 +2478,10 @@ export class TriageService {
     if (persistedSentEvent === undefined) {
       throw replayIntegrity("Operational approval and send replay is missing its sent event.");
     }
-    const auditsBeforeSentEventIds = replay.result.auditsBeforeSentEventIds
-      ?? snapshot.events
-        .filter(({ sequence }) => sequence < persistedSentEvent.sequence)
-        .map(({ id }) => id);
+    const auditsBeforeSentEventIds = replay.result.auditsBeforeSentEventIds;
+    if (auditsBeforeSentEventIds === undefined) {
+      throw replayIntegrity("Operational approval and send replay is missing its immutable pre-send references.");
+    }
     return {
       ticket: approved.ticket,
       approvalEvent: approved.auditEvent,
@@ -2461,6 +2489,7 @@ export class TriageService {
       auditsBeforeSent: operationalConversationAuditsForEventIds(
         snapshot,
         auditsBeforeSentEventIds,
+        { requireImmutableRecommendations: true },
       ),
     };
   }
@@ -2531,7 +2560,13 @@ export class TriageService {
     parentCommandId: string,
     intent: z.infer<typeof AutomaticCustomerReplyIntentSchema> | undefined,
   ): void {
-    if (intent === undefined || intent.kind === "none") return;
+    if (intent === undefined) {
+      throw new OperationalStoreError(
+        "Persisted automatic customer-reply intent is missing from its parent command result.",
+        "PERSISTENCE_ERROR",
+      );
+    }
+    if (intent.kind === "none") return;
     const expectedChildCommandId = derivedOperationalCommandContext(
       parentCommandId,
       "automatic-customer-reply",
@@ -2539,6 +2574,104 @@ export class TriageService {
     if (intent.commandId !== expectedChildCommandId) {
       throw new OperationalStoreError(
         "Persisted automatic customer-reply intent is inconsistent with its parent command.",
+        "PERSISTENCE_ERROR",
+      );
+    }
+  }
+
+  private assertPersistedAutomaticCustomerReplyIntent(
+    parentCommandId: string,
+    reader: OperationalResultReader,
+    result: OperationalResultReference,
+    automaticReplyForTicket: (input: {
+      ticket: Ticket;
+      recommendation: TriageRecommendation;
+      auditsBeforeSent: readonly AuditEvent[];
+    }) => string | undefined,
+  ): void {
+    this.assertAutomaticCustomerReplyIntent(
+      parentCommandId,
+      result.automaticCustomerReplyIntent,
+    );
+    const ticketResult = result.tickets[0];
+    const recommendationId = result.recommendationId;
+    const sourceTicket = result.automaticCustomerReplyTicketSnapshot;
+    const preSendEventIds = result.auditsBeforeSentEventIds;
+    if (
+      ticketResult === undefined
+      || result.messageId === undefined
+      || recommendationId === undefined
+      || sourceTicket === undefined
+      || preSendEventIds === undefined
+    ) {
+      throw new OperationalStoreError(
+        "Persisted automatic customer-reply intent is missing its immutable parent references.",
+        "PERSISTENCE_ERROR",
+      );
+    }
+    const snapshot = reader.readWorkflowSnapshot(ticketResult.ticketId);
+    const sentEvent = snapshot.events.find(
+      ({ id, action }) => ticketResult.operationalEventIds.includes(id)
+        && action === "customer-response-sent",
+    );
+    const sentMessage = snapshot.messages.find(({ id }) => id === result.messageId);
+    const recommendationEvent = result.operation === "approve-and-mark-response-sent"
+      ? snapshot.events.find(
+          ({ id, action }) => ticketResult.operationalEventIds.includes(id)
+            && action === "recommendation-approved",
+        )
+      : sentEvent;
+    const recommendation = recommendationEvent === undefined
+      ? undefined
+      : latestRecommendationBeforeEvent(
+          snapshot,
+          recommendationId,
+          recommendationEvent.sequence,
+        );
+    if (
+      sourceTicket.id !== ticketResult.ticketId
+      || sentEvent === undefined
+      || sentMessage?.kind !== "support"
+      || sentMessage.operationalEventId !== sentEvent.id
+      || sentMessage.ticketId !== ticketResult.ticketId
+      || sentMessage.recommendationId !== recommendationId
+      || recommendation === undefined
+    ) {
+      throw new OperationalStoreError(
+        "Persisted automatic customer-reply intent is inconsistent with its parent command result.",
+        "PERSISTENCE_ERROR",
+      );
+    }
+    const auditsBeforeSent = operationalConversationAuditsForEventIds(
+      snapshot,
+      preSendEventIds,
+      { requireImmutableRecommendations: true },
+    );
+    const expectedBody = automaticReplyForTicket({
+      ticket: TicketSchema.parse(sourceTicket),
+      recommendation,
+      auditsBeforeSent,
+    });
+    const effectiveExpectedBody = result.automaticCustomerReplyEnabled === false
+      ? undefined
+      : expectedBody;
+    const expectedIntent = effectiveExpectedBody === undefined
+      ? { kind: "none" as const }
+      : AutomaticCustomerReplyIntentSchema.parse({
+          kind: "add-customer-reply",
+          commandId: derivedOperationalCommandContext(
+            parentCommandId,
+            "automatic-customer-reply",
+          ).commandId,
+          ticketId: sourceTicket.id,
+          actor: sourceTicket.requester?.name ?? sourceTicket.customer.name,
+          body: effectiveExpectedBody,
+          source: "demo-auto-reply",
+          receivedAt: plusMilliseconds(sentEvent.occurredAt, 1),
+        });
+    if (!sameStructuredValue(result.automaticCustomerReplyIntent, expectedIntent)) {
+      throw new OperationalStoreError(
+        "Persisted automatic customer-reply intent is inconsistent with immutable parent history.",
         "PERSISTENCE_ERROR",
       );
     }
@@ -2911,173 +3044,18 @@ export class TriageService {
           return intent;
         },
         prepare: async () => review,
-        commit: (unit, prepared, commandId) => {
-        const review = prepared;
-        const snapshot = unit.readWorkflowSnapshot(review.ticketId);
-        const audits = this.operationalAuditsFromSnapshot(unit, snapshot);
-        if (snapshot.ticket.revision !== review.sourceTicketRevision) {
-          throw stale("Diagnosis review ticket revision is stale.");
-        }
-        const currentConversationWatermark = customerReplyWatermarkFromSnapshot(snapshot);
-        if (!customerReplyWatermarksMatch(
-          review.sourceConversationWatermark,
-          currentConversationWatermark,
-        )) {
-          throw stale("Diagnosis review conversation snapshot is stale.");
-        }
-        const originalRecord = snapshot.diagnoses.find(
-          (record) =>
-            record.operationalEventId === review.diagnosisId
-            && record.diagnosis.ticketId === review.ticketId,
-        );
-        const milestone = snapshot.events.find(
-          (event) =>
-            event.id === review.diagnosisId
-            && event.ticketId === review.ticketId
-            && (event.action === "diagnosis-completed" || event.action === "diagnostic-escalated"),
-        );
-        if (
-          originalRecord === undefined
-          || milestone === undefined
-          || originalRecord.originalAudit.id !== milestone.id
-          || originalRecord.originalAudit.ticketId !== milestone.ticketId
-          || originalRecord.originalAudit.action !== milestone.action
-          || originalRecord.originalAudit.actor !== milestone.actor
-          || originalRecord.originalAudit.timestamp !== milestone.occurredAt
-        ) {
-          throw new DomainError(
-            "Operational diagnosis persistence is inconsistent.",
-            "REPOSITORY_ERROR",
-          );
-        }
-        const original = originalRecord.originalAudit;
-        const originalDiagnosis = DiagnosisContextSchema.safeParse(original?.after.diagnosis);
-        if (original === undefined || !originalDiagnosis.success) {
-          throw invalidDiagnosisReview("Diagnosis review must reference an original diagnosis audit.");
-        }
-        const diagnosticState = originalDiagnosis.data.diagnosticState?.state;
-        if (
-          review.decision !== "reject"
-          && (original.action === "diagnostic-escalated"
-            || diagnosticState === "ambiguous"
-            || diagnosticState === "escalated")
-        ) {
-          throw invalidDiagnosisReview(
-            "An ambiguous or escalated diagnosis cannot become authoritative.",
-          );
-        }
-        const previousReview = latestDiagnosisReview(audits, original.id);
-        const previousDiagnosis = previousReview?.editedDiagnosis ?? originalDiagnosis.data;
-        if (
-          review.decision === "revalidate"
-          && !sameStructuredValue(review.editedDiagnosis, previousDiagnosis)
-        ) {
-          throw invalidDiagnosisReview(
-            "Revalidation must preserve the previously reviewed diagnosis fields.",
-          );
-        }
-        const originalSourceRevision = readNonnegativeInteger(
-          original.after.sourceTicketRevision,
-        ) ?? review.sourceTicketRevision;
-        const originalConversationWatermark = CustomerReplyWatermarkSchema.safeParse(
-          original.after.sourceConversationWatermark,
-        ).data ?? conversationWatermarkAt(audits, original.id);
-        const originalPosition = {
-          event: original,
-          index: audits.findIndex((event) => event.id === original.id),
-        };
-        const newerDiagnoses = audits.filter(
-          (event, index) =>
-            event.id !== original.id
-            && (event.action === "diagnosis-completed" || event.action === "diagnostic-escalated")
-            && compareAuditCausalOrder({ event, index }, originalPosition) > 0,
-        );
-        const staleDiagnosis = isDiagnosisStale({
-          diagnosisTimestamp: original.timestamp,
-          diagnosisTicketRevision: originalSourceRevision,
-          diagnosisConversationWatermark: originalConversationWatermark,
-          currentTicketRevision: snapshot.ticket.revision,
-          latestConversationWatermark: currentConversationWatermark,
-          ...(newerDiagnoses[0] === undefined
-            ? {}
-            : { newerDiagnosisAt: newerDiagnoses[0].timestamp }),
-        });
-        if (
-          review.decision === "approve"
-          && (staleDiagnosis.stale || newerDiagnoses.length > 0)
-        ) {
-          throw invalidDiagnosisReview(
-            "A stale diagnosis must be re-evaluated or revalidated before approval.",
-          );
-        }
-        if (review.decision === "revalidate" && newerDiagnoses.length > 0) {
-          throw invalidDiagnosisReview("A superseded diagnosis cannot be revalidated.");
-        }
-        const eventId = this.uuid();
-        const auditEvent = AuditEventSchema.parse({
-          id: eventId,
-          timestamp: review.reviewedAt,
-          actor: review.actor,
-          action: "diagnosis-reviewed",
-          ticketId: review.ticketId,
-          before: { diagnosisId: original.id, previousReview: previousReview ?? null },
-          after: { diagnosisReview: review },
-          rationale: review.rationale ?? (review.decision === "approve"
-            ? "Diagnosis approved by the operator."
-            : "Diagnosis review recorded by the operator."),
-          knowledgeArticleIds: original.knowledgeArticleIds,
-          result: "success",
-        });
-        const [sequence] = unit.allocateEventSequences(review.ticketId, 1);
-        unit.appendEvent({
-          id: eventId,
-          ticketId: review.ticketId,
-          sequence: sequence!,
-          occurredAt: review.reviewedAt,
-          actor: review.actor,
-          action: "diagnosis-reviewed",
-           commandId,
-          facts: {
-            diagnosisOutcome: review.decision,
-            sourceRevision: review.sourceTicketRevision,
-          },
-        });
-        this.appendLifecycleTrace(
+        commit: (unit, prepared, commandId) => this.commitOperationalDiagnosisReview(
           unit,
-          eventId,
-          review.ticketId,
-          review.actor,
-          review.reviewedAt,
-          "diagnosis-reviewed",
-          `Diagnosis review decision: ${review.decision}.`,
-        );
-        if (review.decision === "approve") {
-          this.appendLearningOutbox(unit, {
-            operationalEventId: eventId,
-            deliveryKey: eventId,
-            occurredAt: review.reviewedAt,
-            actor: review.actor,
-            ticketId: review.ticketId,
-            eventType: "diagnosis-approved",
-            diagnosisId: original.id,
-            evidenceIds: stableUnique(
-              (originalDiagnosis.data.evidenceReferences ?? []).map(({ id }) => id),
-            ),
-            knowledgeArticleIds: stableUnique(original.knowledgeArticleIds),
-            provenance: "Sanitized operational outcome: diagnosis-reviewed.",
-          });
-        }
-        const result: OperationalResultReference = {
+          prepared,
+          commandId,
           operation,
-          tickets: [{
-            ticketId: review.ticketId,
-            operationalEventIds: [eventId],
-            resultingRevision: null,
-          }],
-          lifecycleAuditEvents: [auditEvent],
-        };
-        return result;
-        },
+          {
+            compareAuditCausalOrder,
+            customerReplyWatermarksMatch,
+            isDiagnosisStale,
+            latestDiagnosisReview,
+          },
+        ),
         replay: (_reader, result) => this.replayOperationalLifecycleAudit(
           { result },
           ["diagnosis-reviewed"],
@@ -3207,6 +3185,273 @@ export class TriageService {
       await this.dependencies.audit.append(auditEvent);
       return auditEvent;
     });
+  }
+
+  private commitOperationalDiagnosisReview(
+    unit: OperationalUnitOfWork,
+    review: DiagnosisReviewInput,
+    commandId: string,
+    operation: string,
+    helpers: DiagnosisReviewCommandHelpers,
+  ): OperationalResultReference {
+    const snapshot = unit.readWorkflowSnapshot(review.ticketId);
+    const audits = this.operationalAuditsFromSnapshot(unit, snapshot);
+    if (snapshot.ticket.revision !== review.sourceTicketRevision) {
+      throw stale("Diagnosis review ticket revision is stale.");
+    }
+    const currentConversationWatermark = customerReplyWatermarkFromSnapshot(snapshot);
+    if (!helpers.customerReplyWatermarksMatch(
+      review.sourceConversationWatermark,
+      currentConversationWatermark,
+    )) {
+      throw stale("Diagnosis review conversation snapshot is stale.");
+    }
+    const originalRecord = snapshot.diagnoses.find(
+      (record) =>
+        record.operationalEventId === review.diagnosisId
+        && record.diagnosis.ticketId === review.ticketId,
+    );
+    const milestone = snapshot.events.find(
+      (event) =>
+        event.id === review.diagnosisId
+        && event.ticketId === review.ticketId
+        && (event.action === "diagnosis-completed" || event.action === "diagnostic-escalated"),
+    );
+    if (
+      originalRecord === undefined
+      || milestone === undefined
+      || originalRecord.originalAudit.id !== milestone.id
+      || originalRecord.originalAudit.ticketId !== milestone.ticketId
+      || originalRecord.originalAudit.action !== milestone.action
+      || originalRecord.originalAudit.actor !== milestone.actor
+      || originalRecord.originalAudit.timestamp !== milestone.occurredAt
+    ) {
+      throw new DomainError(
+        "Operational diagnosis persistence is inconsistent.",
+        "REPOSITORY_ERROR",
+      );
+    }
+    const original = originalRecord.originalAudit;
+    const originalDiagnosis = DiagnosisContextSchema.safeParse(original.after.diagnosis);
+    if (!originalDiagnosis.success) {
+      throw invalidDiagnosisReview("Diagnosis review must reference an original diagnosis audit.");
+    }
+    const diagnosticState = originalDiagnosis.data.diagnosticState?.state;
+    if (
+      review.decision !== "reject"
+      && (original.action === "diagnostic-escalated"
+        || diagnosticState === "ambiguous"
+        || diagnosticState === "escalated")
+    ) {
+      throw invalidDiagnosisReview(
+        "An ambiguous or escalated diagnosis cannot become authoritative.",
+      );
+    }
+    const previousReview = helpers.latestDiagnosisReview(audits, original.id);
+    const previousDiagnosis = previousReview?.editedDiagnosis ?? originalDiagnosis.data;
+    if (
+      review.decision === "revalidate"
+      && !sameStructuredValue(review.editedDiagnosis, previousDiagnosis)
+    ) {
+      throw invalidDiagnosisReview(
+        "Revalidation must preserve the previously reviewed diagnosis fields.",
+      );
+    }
+    const originalSourceRevision = readNonnegativeInteger(
+      original.after.sourceTicketRevision,
+    ) ?? review.sourceTicketRevision;
+    const originalConversationWatermark = CustomerReplyWatermarkSchema.safeParse(
+      original.after.sourceConversationWatermark,
+    ).data ?? conversationWatermarkAt(audits, original.id);
+    const originalPosition = {
+      event: original,
+      index: audits.findIndex((event) => event.id === original.id),
+    };
+    const newerDiagnoses = audits.filter(
+      (event, index) =>
+        event.id !== original.id
+        && (event.action === "diagnosis-completed" || event.action === "diagnostic-escalated")
+        && helpers.compareAuditCausalOrder({ event, index }, originalPosition) > 0,
+    );
+    const staleDiagnosis = helpers.isDiagnosisStale({
+      diagnosisTimestamp: original.timestamp,
+      diagnosisTicketRevision: originalSourceRevision,
+      diagnosisConversationWatermark: originalConversationWatermark,
+      currentTicketRevision: snapshot.ticket.revision,
+      latestConversationWatermark: currentConversationWatermark,
+      ...(newerDiagnoses[0] === undefined
+        ? {}
+        : { newerDiagnosisAt: newerDiagnoses[0].timestamp }),
+    });
+    if (
+      review.decision === "approve"
+      && (staleDiagnosis.stale || newerDiagnoses.length > 0)
+    ) {
+      throw invalidDiagnosisReview(
+        "A stale diagnosis must be re-evaluated or revalidated before approval.",
+      );
+    }
+    if (review.decision === "revalidate" && newerDiagnoses.length > 0) {
+      throw invalidDiagnosisReview("A superseded diagnosis cannot be revalidated.");
+    }
+    const eventId = this.uuid();
+    const auditEvent = AuditEventSchema.parse({
+      id: eventId,
+      timestamp: review.reviewedAt,
+      actor: review.actor,
+      action: "diagnosis-reviewed",
+      ticketId: review.ticketId,
+      before: { diagnosisId: original.id, previousReview: previousReview ?? null },
+      after: { diagnosisReview: review },
+      rationale: review.rationale ?? (review.decision === "approve"
+        ? "Diagnosis approved by the operator."
+        : "Diagnosis review recorded by the operator."),
+      knowledgeArticleIds: original.knowledgeArticleIds,
+      result: "success",
+    });
+    const [sequence] = unit.allocateEventSequences(review.ticketId, 1);
+    unit.appendEvent({
+      id: eventId,
+      ticketId: review.ticketId,
+      sequence: sequence!,
+      occurredAt: review.reviewedAt,
+      actor: review.actor,
+      action: "diagnosis-reviewed",
+      commandId,
+      facts: {
+        diagnosisOutcome: review.decision,
+        sourceRevision: review.sourceTicketRevision,
+      },
+    });
+    this.appendLifecycleTrace(
+      unit,
+      eventId,
+      review.ticketId,
+      review.actor,
+      review.reviewedAt,
+      "diagnosis-reviewed",
+      `Diagnosis review decision: ${review.decision}.`,
+    );
+    if (review.decision === "approve") {
+      this.appendLearningOutbox(unit, {
+        operationalEventId: eventId,
+        deliveryKey: eventId,
+        occurredAt: review.reviewedAt,
+        actor: review.actor,
+        ticketId: review.ticketId,
+        eventType: "diagnosis-approved",
+        diagnosisId: original.id,
+        evidenceIds: stableUnique(
+          (originalDiagnosis.data.evidenceReferences ?? []).map(({ id }) => id),
+        ),
+        knowledgeArticleIds: stableUnique(original.knowledgeArticleIds),
+        provenance: "Sanitized operational outcome: diagnosis-reviewed.",
+      });
+    }
+    return {
+      operation,
+      tickets: [{
+        ticketId: review.ticketId,
+        operationalEventIds: [eventId],
+        resultingRevision: null,
+      }],
+      lifecycleAuditEvents: [auditEvent],
+    };
+  }
+
+  async reviewDiagnosisFromWorkflow(
+    input: { ticketId: TicketId; actor: string; rationale?: string },
+    commandContext: OperationalCommandContext,
+  ): Promise<AuditEvent> {
+    if (this.dependencies.operationalStore === undefined) {
+      throw new DomainError(
+        "Workflow diagnosis reviews require the operational store.",
+        "REPOSITORY_ERROR",
+      );
+    }
+    const {
+      DiagnosisReviewDecisionSchema,
+      compareAuditCausalOrder,
+      customerReplyWatermarksMatch,
+      isDiagnosisStale,
+      latestDiagnosisReview,
+    } = await import("./approval-desk/diagnosis-review.js");
+    const { diagnosisContextFromAudit } = await import("./approval-desk/diagnostic-workflow.js");
+    const rationale = input.rationale ?? "Demo internal confirmation was recorded.";
+    const semanticRequest = {
+      ticketId: input.ticketId,
+      actor: input.actor,
+      rationale,
+    };
+    const operation = "review-diagnosis-workflow";
+    const definition: PreparedCommandDefinition<
+      typeof semanticRequest,
+      DiagnosisReviewInput,
+      AuditEvent
+    > = {
+      operation,
+      parse: (raw) => z.object({
+        ticketId: TicketIdSchema,
+        actor: NonBlankStringSchema,
+        rationale: NonBlankStringSchema,
+      }).strict().parse(raw),
+      prepare: async () => {
+        const snapshot = this.dependencies.operationalStore!.readWorkflowSnapshot(input.ticketId);
+        const original = snapshot.diagnoses
+          .map((record) => ({
+            record,
+            event: snapshot.events.find(({ id }) => id === record.operationalEventId),
+          }))
+          .filter(({ record, event }) =>
+            record.diagnosis.ticketId === input.ticketId
+            && event !== undefined
+            && (event.action === "diagnosis-completed" || event.action === "diagnostic-escalated"),
+          )
+          .sort((left, right) => right.event!.sequence - left.event!.sequence)
+          .at(0)?.record.originalAudit;
+        const diagnosis = original === undefined
+          ? undefined
+          : diagnosisContextFromAudit(original);
+        if (original === undefined || diagnosis === undefined) {
+          throw new DomainError(
+            "Internal confirmation requires a recorded diagnosis.",
+            "INVALID_APPROVAL_FIELDS",
+          );
+        }
+        return DiagnosisReviewDecisionSchema.parse({
+          decision: "approve",
+          diagnosisId: original.id,
+          ticketId: input.ticketId,
+          sourceTicketRevision: snapshot.ticket.revision,
+          sourceConversationWatermark: customerReplyWatermarkFromSnapshot(snapshot),
+          editedDiagnosis: { ...diagnosis, confidence: "confirmed" },
+          actor: input.actor,
+          rationale,
+          reviewedAt: this.now().toISOString(),
+        });
+      },
+      commit: (unit, prepared, commandId) => this.commitOperationalDiagnosisReview(
+        unit,
+        prepared,
+        commandId,
+        operation,
+        {
+          compareAuditCausalOrder,
+          customerReplyWatermarksMatch,
+          isDiagnosisStale,
+          latestDiagnosisReview,
+        },
+      ),
+      replay: (_reader, result) => this.replayOperationalLifecycleAudit(
+        { result },
+        ["diagnosis-reviewed"],
+      ),
+    };
+    return this.operationalDispatcher().run(
+      definition,
+      semanticRequest,
+      commandContext.commandId,
+    );
   }
 
   async recordFix(
@@ -5115,7 +5360,9 @@ function operationalExpectedResolution(
 export function operationalConversationAuditsForEventIds(
   snapshot: OperationalWorkflowSnapshot,
   eventIds: readonly string[],
+  options: { requireImmutableRecommendations?: boolean } = {},
 ): AuditEvent[] {
+  const requireImmutableRecommendations = options.requireImmutableRecommendations === true;
   const includedEventIds = new Set(eventIds);
   const persistedEventIds = snapshot.events
     .filter(({ id }) => includedEventIds.has(id))
@@ -5137,7 +5384,13 @@ export function operationalConversationAuditsForEventIds(
     if (message?.kind === "support") {
       const recommendation = message.recommendationId === undefined
         ? undefined
-        : snapshot.recommendations.find(({ id }) => id === message.recommendationId);
+        : latestRecommendationBeforeEvent(snapshot, message.recommendationId, event.sequence)
+          ?? (requireImmutableRecommendations
+            ? undefined
+            : snapshot.recommendations.find(({ id }) => id === message.recommendationId));
+      if (recommendation === undefined && requireImmutableRecommendations) {
+        throw replayIntegrity("Operational support-response audit replay is missing its immutable recommendation.");
+      }
       return recommendation === undefined ? [] : [operationalSupportResponseAudit(event, message, recommendation)];
     }
     const revision = snapshot.recommendationRevisions.find(

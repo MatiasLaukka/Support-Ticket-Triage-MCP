@@ -1803,10 +1803,25 @@ export class OperationalUnitOfWork {
       }
     }
     if (writeSet.orderedIds.length === 0) {
-      if (result.recommendationId !== undefined || result.recommendationIds !== undefined) {
+      if (result.recommendationIds !== undefined) {
         throw this.semanticReferenceError(
-          "Operational command result must not reference recommendations when it wrote none.",
+          "Operational command result cannot use plural recommendation references without recommendation writes.",
         );
+      }
+      if (result.recommendationId !== undefined) {
+        const recommendation = this.database.prepare(`
+          SELECT id, ticket_id
+          FROM recommendations
+          WHERE id = ?
+        `).get(result.recommendationId) as { id: string; ticket_id: string } | undefined;
+        if (
+          recommendation === undefined
+          || !resultTicketIds.has(recommendation.ticket_id)
+        ) {
+          throw this.semanticReferenceError(
+            "Operational command result recommendation references must belong to an affected ticket.",
+          );
+        }
       }
       return;
     }

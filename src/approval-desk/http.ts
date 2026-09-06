@@ -56,7 +56,6 @@ import { loadDiagnosticEvaluationScenarios } from "./diagnostic-evaluation-scena
 import type { DiagnosticEvaluationScenario } from "./diagnostic-evaluation.js";
 import {
   diagnosisContextForTicket,
-  diagnosisContextFromAudit,
   fixContextForTicket,
   hasCustomerReplyAfterRecommendation,
   selectPersistedDiagnosticWorkflowContext,
@@ -79,7 +78,7 @@ import {
   summarizeRecommendationsForTicket,
 } from "./workflow-read-model.js";
 import { LifecycleViewSchema } from "./lifecycle.js";
-import { latestDiagnosisAudit, OperatorGuidanceSchema } from "./workflow-guidance.js";
+import { OperatorGuidanceSchema } from "./workflow-guidance.js";
 import {
   KnowledgeCandidateApprovalOutputSchema,
   KnowledgeCandidateDefermentOutputSchema,
@@ -1088,7 +1087,14 @@ async function demoInject(
       };
     }
     case "internal-confirmation": {
-      const auditEvent = await demoConfirmDiagnosis(deps, ticketId, input, commandContext, timestamp);
+      if (commandContext === undefined) {
+        throw invalidRequest("Idempotency-Key is required for operational mutations.");
+      }
+      const auditEvent = await deps.service.reviewDiagnosisFromWorkflow({
+        ticketId,
+        actor: input.actor,
+        rationale: input.rationale,
+      }, commandContext);
       return {
         action: input.action,
         command: "review-diagnosis",
@@ -1193,38 +1199,6 @@ async function demoInject(
       };
     }
   }
-}
-
-async function demoConfirmDiagnosis(
-  deps: RuntimeDependencies,
-  ticketId: TicketId,
-  input: z.infer<typeof DemoInjectorBodySchema>,
-  commandContext: ReturnType<typeof commandContextFromRequest>,
-  reviewedAt: string,
-): Promise<AuditEvent> {
-  const [ticket, audits] = await Promise.all([
-    deps.tickets.get(ticketId),
-    deps.audits.list(ticketId),
-  ]);
-  const original = latestDiagnosisAudit(audits);
-  const diagnosis = diagnosisContextFromAudit(original);
-  if (original === undefined || diagnosis === undefined) {
-    throw invalidRequest("Internal confirmation requires a recorded diagnosis.");
-  }
-  return deps.service.reviewDiagnosis({
-    decision: "approve",
-    diagnosisId: original.id,
-    ticketId,
-    sourceTicketRevision: ticket.revision,
-    sourceConversationWatermark: customerReplyWatermarkFromAudits(audits),
-    editedDiagnosis: {
-      ...diagnosis,
-      confidence: "confirmed",
-    },
-    actor: input.actor,
-    rationale: input.rationale ?? "Demo internal confirmation was recorded.",
-    reviewedAt,
-  }, commandContext);
 }
 
 async function recordDiagnosis(

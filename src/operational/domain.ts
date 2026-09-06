@@ -460,6 +460,8 @@ export const OperationalResultReferenceSchema = z.object({
   diagnosisId: IdentifierSchema.optional(),
   messageId: MessageIdSchema.optional(),
   ticketSnapshot: TicketSchema.optional(),
+  automaticCustomerReplyTicketSnapshot: TicketSchema.optional(),
+  automaticCustomerReplyEnabled: z.boolean().optional(),
   auditsBeforeSentEventIds: UniqueOperationalEventIdsSchema.optional(),
   lifecycleAuditEvents: z.array(OperationalLifecycleAuditEventSchema).min(1).optional(),
   automaticCustomerReplyIntent: AutomaticCustomerReplyIntentSchema.optional(),
@@ -507,6 +509,84 @@ export const OperationalResultReferenceSchema = z.object({
       path: ["auditsBeforeSentEventIds"],
       message: "A pre-send audit view requires one affected ticket and a canonical support message.",
     });
+  }
+  if ([
+    "mark-response-sent",
+    "mark-response-sent-workflow",
+    "approve-and-mark-response-sent",
+  ].includes(result.operation)) {
+    if (result.recommendationId === undefined) {
+      context.addIssue({
+        code: "custom",
+        path: ["recommendationId"],
+        message: "Automatic-reply parent results require one recommendation reference.",
+      });
+    }
+    if (result.messageId === undefined) {
+      context.addIssue({
+        code: "custom",
+        path: ["messageId"],
+        message: "Automatic-reply parent results require their support message reference.",
+      });
+    }
+    if (result.ticketSnapshot === undefined) {
+      context.addIssue({
+        code: "custom",
+        path: ["ticketSnapshot"],
+        message: "Automatic-reply parent results require their committed ticket snapshot.",
+      });
+    }
+    if (result.automaticCustomerReplyTicketSnapshot === undefined) {
+      context.addIssue({
+        code: "custom",
+        path: ["automaticCustomerReplyTicketSnapshot"],
+        message: "Automatic-reply parent results require the pre-send ticket snapshot.",
+      });
+    }
+    if (result.auditsBeforeSentEventIds === undefined) {
+      context.addIssue({
+        code: "custom",
+        path: ["auditsBeforeSentEventIds"],
+        message: "Automatic-reply parent results require immutable pre-send event references.",
+      });
+    }
+    if (result.automaticCustomerReplyIntent === undefined) {
+      context.addIssue({
+        code: "custom",
+        path: ["automaticCustomerReplyIntent"],
+        message: "Automatic-reply parent results require a persisted child intent.",
+      });
+    }
+    if (result.automaticCustomerReplyEnabled === undefined) {
+      context.addIssue({
+        code: "custom",
+        path: ["automaticCustomerReplyEnabled"],
+        message: "Automatic-reply parent results require their enablement decision.",
+      });
+    }
+    const parentTicketId = result.tickets[0]?.ticketId;
+    if (
+      parentTicketId !== undefined
+      && result.automaticCustomerReplyTicketSnapshot !== undefined
+      && result.automaticCustomerReplyTicketSnapshot.id !== parentTicketId
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["automaticCustomerReplyTicketSnapshot", "id"],
+        message: "The automatic-reply source ticket must match the parent result ticket.",
+      });
+    }
+    if (
+      parentTicketId !== undefined
+      && result.automaticCustomerReplyIntent?.kind === "add-customer-reply"
+      && result.automaticCustomerReplyIntent.ticketId !== parentTicketId
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["automaticCustomerReplyIntent", "ticketId"],
+        message: "The automatic-reply child ticket must match the parent result ticket.",
+      });
+    }
   }
   if (result.lifecycleAuditEvents !== undefined) {
     const referencedEvents = new Map(

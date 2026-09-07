@@ -21,6 +21,7 @@ import {
 const eventId = "11111111-1111-4111-8111-111111111111";
 const secondEventId = "12111111-1111-4111-8111-111111111111";
 const messageId = "22222222-2222-4222-8222-222222222222";
+const recommendationId = "23222222-2222-4222-8222-222222222222";
 const commandId = "33333333-3333-4333-8333-333333333333";
 const requestHash = "a".repeat(64);
 
@@ -223,8 +224,13 @@ describe("operational persistence domain", () => {
     expect(OperationalResultReferenceSchema.safeParse({
       operation: "approve-and-mark-response-sent",
       tickets: [{ ticketId: "TKT-0001", operationalEventIds: [eventId, secondEventId], resultingRevision: null }],
+      recommendationId,
       messageId,
+      ticketSnapshot: ticket,
+      automaticCustomerReplyTicketSnapshot: ticket,
+      automaticCustomerReplyEnabled: false,
       auditsBeforeSentEventIds: [eventId],
+      automaticCustomerReplyIntent: { kind: "none" },
     }).success).toBe(true);
     expect(OperationalResultReferenceSchema.safeParse({
       operation: "approve-and-mark-response-sent",

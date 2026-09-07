@@ -57,7 +57,10 @@ function store(): {
     },
     readCommandOutcome(id, project) {
       if (receipt === undefined || id !== receipt.commandId) return undefined;
-      return project(receipt, { readWorkflowSnapshot: () => { throw new Error("not needed"); } });
+      return project(receipt, {
+        readWorkflowSnapshot: () => { throw new Error("not needed"); },
+        readCommandResult: () => undefined,
+      });
     },
   };
   return {

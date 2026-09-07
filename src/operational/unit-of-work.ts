@@ -1,4 +1,5 @@
 import type Database from "better-sqlite3";
+import { z } from "zod";
 import {
   IsoTimestampSchema,
   TicketIdSchema,
@@ -1397,7 +1398,14 @@ export class OperationalUnitOfWork {
         { cause: error },
       );
     }
-    const parsed = CommandIdempotencyRecordSchema.safeParse({
+    const envelope = z.object({
+      commandId: CommandIdSchema,
+      operation: z.string().trim().min(1).max(160).regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
+      requestHash: RequestHashSchema,
+      requestHashVersion: RequestHashVersionSchema,
+      result: z.unknown(),
+      createdAt: IsoTimestampSchema,
+    }).strict().safeParse({
       commandId: row.command_id,
       operation: row.operation,
       requestHash: row.request_hash,
@@ -1409,6 +1417,19 @@ export class OperationalUnitOfWork {
       result,
       createdAt: row.created_at,
     });
+    if (!envelope.success) {
+      throw new OperationalStoreError(
+        "Operational command result data is corrupt.",
+        "PERSISTENCE_ERROR",
+        { cause: envelope.error },
+      );
+    }
+    if (envelope.data.requestHashVersion === 1) {
+      // Legacy receipts are intentionally not replayable, but their original
+      // result JSON remains available for compatibility and audit tooling.
+      return envelope.data as CommandIdempotencyRecord;
+    }
+    const parsed = CommandIdempotencyRecordSchema.safeParse(envelope.data);
     if (!parsed.success) {
       throw new OperationalStoreError(
         "Operational command result data is corrupt.",
@@ -1803,10 +1824,25 @@ export class OperationalUnitOfWork {
       }
     }
     if (writeSet.orderedIds.length === 0) {
-      if (result.recommendationId !== undefined || result.recommendationIds !== undefined) {
+      if (result.recommendationIds !== undefined) {
         throw this.semanticReferenceError(
-          "Operational command result must not reference recommendations when it wrote none.",
+          "Operational command result cannot use plural recommendation references without recommendation writes.",
         );
+      }
+      if (result.recommendationId !== undefined) {
+        const recommendation = this.database.prepare(`
+          SELECT id, ticket_id
+          FROM recommendations
+          WHERE id = ?
+        `).get(result.recommendationId) as { id: string; ticket_id: string } | undefined;
+        if (
+          recommendation === undefined
+          || !resultTicketIds.has(recommendation.ticket_id)
+        ) {
+          throw this.semanticReferenceError(
+            "Operational command result recommendation references must belong to an affected ticket.",
+          );
+        }
       }
       return;
     }

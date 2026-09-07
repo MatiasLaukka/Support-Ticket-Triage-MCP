@@ -9,11 +9,10 @@ import { DomainError } from "../errors.js";
 import type { AuditPage, AuditPageInput } from "../audit-repository.js";
 import type { PaginatedTickets, TicketFilter } from "../ticket-repository.js";
 import { operationalAuditEventsFromSnapshot } from "../triage-service.js";
-import { operationalDiagnosisAudits } from "../approval-desk/diagnosis-review.js";
 import { OperationalSqliteStore } from "./sqlite-store.js";
 import {
   DiagnosisAuditIntegrityError,
-  receiptBackedDiagnosisAuditForEvent,
+  projectDiagnosisAudits,
 } from "./diagnosis-audit.js";
 import { OperationalStoreError } from "./unit-of-work.js";
 import type { OperationalWorkflowSnapshot } from "./domain.js";
@@ -87,42 +86,36 @@ export class OperationalAuditRepository {
 
   async list(ticketId?: TicketId): Promise<AuditEvent[]> {
     try {
-      const snapshots = ticketId === undefined
-        ? this.store.listWorkflowSnapshots()
-        : [this.store.readWorkflowSnapshot(TicketIdSchema.parse(ticketId))];
-      return this.store.transaction((unit) => snapshots.flatMap((snapshot) => {
-        const fallbackAudits = operationalAuditEventsFromSnapshot(snapshot);
-        const authoritativeDiagnosisAudits = operationalDiagnosisAudits({
-          ticket: snapshot.ticket,
-          audits: fallbackAudits,
-          originalDiagnoses: snapshot.diagnoses,
-        });
-        return snapshot.events.flatMap((event) => {
-          const diagnosisAudit = authoritativeDiagnosisAudits.find(({ id }) => id === event.id);
-          let receiptAudit: AuditEvent | undefined;
+      return this.store.transaction((unit) => {
+        const snapshots = ticketId === undefined
+          ? unit.readTicketIds().map((id) => unit.readWorkflowSnapshot(id))
+          : [unit.readWorkflowSnapshot(TicketIdSchema.parse(ticketId))];
+        const receiptResults = unit.readCommandResults(
+          snapshots.flatMap(({ events }) => events.map(({ commandId }) => commandId)),
+        );
+        return snapshots.flatMap((snapshot) => {
+          const fallbackAudits = operationalAuditEventsFromSnapshot(snapshot);
+          const fallbackAuditsByEventId = new Map(snapshot.events.map((event) => [
+            event.id,
+            operationalAuditEventsFromSnapshot({ ...snapshot, events: [event] }),
+          ] as const));
           try {
-            receiptAudit = receiptBackedDiagnosisAuditForEvent(
-              event,
-              unit.readCommandResult(event.commandId),
-              "legacy",
-            );
+            return projectDiagnosisAudits({
+              events: snapshot.events,
+              receiptResults,
+              fallbackAudits,
+              fallbackAuditsByEventId,
+              originalAudits: snapshot.diagnoses.map(({ originalAudit }) => originalAudit),
+              policy: "strict",
+            });
           } catch (error) {
             if (error instanceof DiagnosisAuditIntegrityError) {
               throw new OperationalStoreError(error.message, "PERSISTENCE_ERROR", { cause: error });
             }
             throw error;
           }
-          return event.action === "diagnosis-completed"
-              || event.action === "diagnostic-escalated"
-            ? diagnosisAudit === undefined ? [] : [diagnosisAudit]
-            : receiptAudit === undefined
-              ? operationalAuditEventsFromSnapshot({
-                  ...snapshot,
-                  events: [event],
-                })
-              : [receiptAudit];
         });
-      }));
+      });
     } catch (error) {
       throw mapReadError(
         error,
@@ -152,7 +145,6 @@ export class OperationalDiagnosisRepository {
       const snapshots = ticketId === undefined
         ? this.store.listWorkflowSnapshots()
         : [this.store.readWorkflowSnapshot(TicketIdSchema.parse(ticketId))];
-
       return snapshots
         .flatMap(({ diagnoses }) => diagnoses)
         .map((record) => structuredClone(record));
@@ -173,6 +165,8 @@ function mapReadError(
   if (error instanceof OperationalStoreError) {
     return error.code === "NOT_FOUND" && notFoundMessage !== undefined
       ? new DomainError(notFoundMessage, notFoundCode)
+      : error.code === "PERSISTENCE_ERROR"
+        ? error
       : new DomainError("Operational persistence is unavailable.", "REPOSITORY_ERROR");
   }
   return error instanceof Error ? error : new DomainError("Operational persistence is unavailable.", "REPOSITORY_ERROR");

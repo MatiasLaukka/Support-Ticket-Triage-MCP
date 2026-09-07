@@ -93,6 +93,10 @@ import {
   type OperationalUnitOfWork,
 } from "./operational/unit-of-work.js";
 import {
+  DiagnosisAuditIntegrityError,
+  projectDiagnosisAudits,
+} from "./operational/diagnosis-audit.js";
+import {
   OperationalCommandDispatcher,
   type DispatchableOperationalStore,
   type PreparedCommandDefinition,
@@ -4633,14 +4637,29 @@ export class TriageService {
     unit: OperationalUnitOfWork,
     snapshot: OperationalWorkflowSnapshot,
   ): AuditEvent[] {
-    return snapshot.events.flatMap((event) => {
-      const lifecycleAudit = unit.readCommandResult(event.commandId)
-        ?.lifecycleAuditEvents?.find(({ id }) => id === event.id);
-      if (lifecycleAudit !== undefined) {
-        return [AuditEventSchema.parse(lifecycleAudit)];
+    const fallbackAudits = operationalAuditEventsFromSnapshot(snapshot);
+    const receiptResults = unit.readCommandResults(
+      snapshot.events.map(({ commandId }) => commandId),
+    );
+    const fallbackAuditsByEventId = new Map(snapshot.events.map((event) => [
+      event.id,
+      operationalAuditEventsFromSnapshot({ ...snapshot, events: [event] }),
+    ] as const));
+    try {
+      return projectDiagnosisAudits({
+        events: snapshot.events,
+        receiptResults,
+        fallbackAudits,
+        fallbackAuditsByEventId,
+        originalAudits: snapshot.diagnoses.map(({ originalAudit }) => originalAudit),
+        policy: "strict",
+      });
+    } catch (error) {
+      if (error instanceof DiagnosisAuditIntegrityError) {
+        throw new OperationalStoreError(error.message, "PERSISTENCE_ERROR", { cause: error });
       }
-      return operationalConversationAuditsForEventIds(snapshot, [event.id]);
-    });
+      throw error;
+    }
   }
 
   private replayOperationalLifecycleAudits(

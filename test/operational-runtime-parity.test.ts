@@ -8,7 +8,8 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { afterEach, describe, expect, it } from "vitest";
-import { TicketSchema, TriageRecommendationSchema, type Ticket } from "../src/domain.js";
+import { AuditEventSchema, TicketSchema, TriageRecommendationSchema, type Ticket } from "../src/domain.js";
+import { classifyCommandError } from "../src/command-errors.js";
 import { createApprovalDeskHttpServer } from "../src/approval-desk/http.js";
 import {
   createControlledClassificationProvider,
@@ -18,6 +19,12 @@ import type { ClassificationReasoningProvider } from "../src/approval-desk/class
 import type { CustomerResponseDraftProvider } from "../src/approval-desk/draft-response-provider.js";
 import { importOperationalData, type OperationalImportAggregate } from "../src/operational/import.js";
 import { OperationalSqliteStore } from "../src/operational/sqlite-store.js";
+import { OperationalAuditRepository } from "../src/operational/runtime-repositories.js";
+import {
+  OperationalEventSchema,
+  OperationalWorkflowSnapshotSchema,
+  type OperationalResultReference,
+} from "../src/operational/domain.js";
 import { createRuntimeDependencies, type RuntimeDependencies } from "../src/runtime.js";
 import { createTriageServer } from "../src/server.js";
 
@@ -37,6 +44,177 @@ afterEach(async () => {
 });
 
 describe("production operational runtime parity", () => {
+  it("preserves integrity classification for corrupt authority audits", async () => {
+    const commandId = "87000000-0000-4000-8000-000000000001";
+    const eventId = "87000000-0000-4000-8000-000000000002";
+    const ticketId = "TKT-0001";
+    const event = OperationalEventSchema.parse({
+      id: eventId,
+      ticketId,
+      sequence: 1,
+      occurredAt: fixedNow,
+      actor: "reviewer",
+      action: "diagnosis-reviewed",
+      commandId,
+      facts: { diagnosisOutcome: "approve", sourceRevision: 0 },
+    });
+    const redirected = AuditEventSchema.parse({
+      id: eventId,
+      timestamp: fixedNow,
+      actor: "reviewer",
+      action: "diagnosis-invalidated",
+      ticketId,
+      before: { diagnosisId: "diagnosis-missing" },
+      after: { diagnosisInvalidated: true },
+      rationale: "Tampered authority audit.",
+      knowledgeArticleIds: [],
+      result: "success",
+    });
+    const result: OperationalResultReference = {
+      operation: "review-diagnosis",
+      tickets: [{ ticketId, operationalEventIds: [eventId], resultingRevision: null }],
+      lifecycleAuditEvents: [redirected],
+    };
+    const snapshot = OperationalWorkflowSnapshotSchema.parse({
+      ticket: importedTicket(),
+      ticketRevisions: [],
+      recommendations: [],
+      recommendationRevisions: [],
+      diagnosticTaxonomyRevisions: [],
+      messages: [],
+      diagnoses: [],
+      events: [event],
+      traces: [],
+      customerReplyWatermark: { state: "none" },
+    });
+    const store = {
+      listWorkflowSnapshots: () => [snapshot],
+      readWorkflowSnapshot: () => snapshot,
+      transaction: <T>(work: (unit: unknown) => T) => work({
+        readTicketIds: () => [ticketId],
+        readWorkflowSnapshot: () => snapshot,
+        readCommandResults: () => new Map([[commandId, result]]),
+      }),
+    } as unknown as OperationalSqliteStore;
+    let caught: unknown;
+    try {
+      await new OperationalAuditRepository(store).list();
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toMatchObject({ code: "PERSISTENCE_ERROR" });
+    expect(classifyCommandError(caught)).toMatchObject({
+      code: "OPERATIONAL_INTEGRITY_ERROR",
+      retryable: false,
+    });
+  });
+
+  it("fails closed when an operational authority receipt is missing", async () => {
+    const commandId = "87000000-0000-4000-8000-000000000011";
+    const eventId = "87000000-0000-4000-8000-000000000012";
+    const ticketId = "TKT-0001";
+    const event = OperationalEventSchema.parse({
+      id: eventId,
+      ticketId,
+      sequence: 1,
+      occurredAt: fixedNow,
+      actor: "reviewer",
+      action: "diagnosis-reviewed",
+      commandId,
+      facts: { diagnosisOutcome: "approve", sourceRevision: 0 },
+    });
+    const snapshot = OperationalWorkflowSnapshotSchema.parse({
+      ticket: importedTicket(),
+      ticketRevisions: [],
+      recommendations: [],
+      recommendationRevisions: [],
+      diagnosticTaxonomyRevisions: [],
+      messages: [],
+      diagnoses: [],
+      events: [event],
+      traces: [],
+      customerReplyWatermark: { state: "none" },
+    });
+    const store = {
+      transaction: <T>(work: (unit: unknown) => T) => work({
+        readTicketIds: () => [ticketId],
+        readWorkflowSnapshot: () => snapshot,
+        readCommandResults: () => new Map(),
+      }),
+    } as unknown as OperationalSqliteStore;
+
+    await expect(new OperationalAuditRepository(store).list())
+      .rejects.toMatchObject({ code: "PERSISTENCE_ERROR" });
+  });
+
+  it("rejects receipt audits whose nested diagnosis review is redirected", async () => {
+    const commandId = "87000000-0000-4000-8000-000000000021";
+    const eventId = "87000000-0000-4000-8000-000000000022";
+    const ticketId = "TKT-0001";
+    const event = OperationalEventSchema.parse({
+      id: eventId,
+      ticketId,
+      sequence: 1,
+      occurredAt: fixedNow,
+      actor: "reviewer",
+      action: "diagnosis-reviewed",
+      commandId,
+      facts: { diagnosisOutcome: "reject", sourceRevision: 0 },
+    });
+    const redirected = AuditEventSchema.parse({
+      id: eventId,
+      timestamp: fixedNow,
+      actor: "reviewer",
+      action: "diagnosis-reviewed",
+      ticketId,
+      before: { diagnosisId: "diagnosis-87000000-0000-4000-8000-000000000023" },
+      after: {
+        diagnosisReview: {
+          decision: "reject",
+          diagnosisId: "diagnosis-87000000-0000-4000-8000-000000000023",
+          ticketId: "TKT-9999",
+          sourceTicketRevision: 0,
+          sourceConversationWatermark: { state: "none" },
+          editedDiagnosis: {},
+          actor: "redirected-actor",
+          rationale: "Rejected.",
+          reviewedAt: fixedNow,
+        },
+      },
+      rationale: "Tampered review.",
+      knowledgeArticleIds: [],
+      result: "success",
+    });
+    const result: OperationalResultReference = {
+      operation: "review-diagnosis",
+      tickets: [{ ticketId, operationalEventIds: [eventId], resultingRevision: null }],
+      lifecycleAuditEvents: [redirected],
+    };
+    const snapshot = OperationalWorkflowSnapshotSchema.parse({
+      ticket: importedTicket(),
+      ticketRevisions: [],
+      recommendations: [],
+      recommendationRevisions: [],
+      diagnosticTaxonomyRevisions: [],
+      messages: [],
+      diagnoses: [],
+      events: [event],
+      traces: [],
+      customerReplyWatermark: { state: "none" },
+    });
+    const store = {
+      transaction: <T>(work: (unit: unknown) => T) => work({
+        readTicketIds: () => [ticketId],
+        readWorkflowSnapshot: () => snapshot,
+        readCommandResults: () => new Map([[commandId, result]]),
+      }),
+    } as unknown as OperationalSqliteStore;
+
+    await expect(new OperationalAuditRepository(store).list())
+      .rejects.toMatchObject({ code: "PERSISTENCE_ERROR" });
+  });
+
   it("blocks evaluation before provider work while a readable import is incomplete", async () => {
     const fixture = await runtimeFixture();
     const database = join(fixture.root, "partial-import.sqlite");

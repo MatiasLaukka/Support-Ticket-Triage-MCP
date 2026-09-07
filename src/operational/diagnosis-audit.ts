@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import { AuditEventSchema, type AuditEvent } from "../domain.js";
 import type { OperationalEvent, OperationalResultReference } from "./domain.js";
 
@@ -8,12 +9,30 @@ export const DIAGNOSIS_AUTHORITY_AUDIT_ACTIONS = [
   "fix-ineffective",
 ] as const satisfies readonly AuditEvent["action"][];
 
+export const DIAGNOSIS_ORIGIN_AUDIT_ACTIONS = [
+  "diagnosis-completed",
+  "diagnostic-escalated",
+] as const satisfies readonly AuditEvent["action"][];
+
 export type DiagnosisAuthorityAuditAction = (typeof DIAGNOSIS_AUTHORITY_AUDIT_ACTIONS)[number];
+export type DiagnosisOriginAuditAction = (typeof DIAGNOSIS_ORIGIN_AUDIT_ACTIONS)[number];
 
 export function isDiagnosisAuthorityAuditAction(
   action: AuditEvent["action"] | OperationalEvent["action"],
 ): action is DiagnosisAuthorityAuditAction {
   return (DIAGNOSIS_AUTHORITY_AUDIT_ACTIONS as readonly string[]).includes(action);
+}
+
+export function isDiagnosisOriginAuditAction(
+  action: AuditEvent["action"] | OperationalEvent["action"],
+): action is DiagnosisOriginAuditAction {
+  return (DIAGNOSIS_ORIGIN_AUDIT_ACTIONS as readonly string[]).includes(action);
+}
+
+export function isDiagnosisReceiptBackedAuditAction(
+  action: AuditEvent["action"] | OperationalEvent["action"],
+): action is DiagnosisAuthorityAuditAction | DiagnosisOriginAuditAction {
+  return isDiagnosisAuthorityAuditAction(action) || isDiagnosisOriginAuditAction(action);
 }
 
 export class DiagnosisAuditIntegrityError extends Error {
@@ -24,13 +43,15 @@ export class DiagnosisAuditIntegrityError extends Error {
 }
 
 export function receiptBackedDiagnosisAuditForEvent(
-  event: Pick<OperationalEvent, "id" | "ticketId" | "action" | "actor" | "occurredAt">,
+  event: Pick<OperationalEvent, "id" | "ticketId" | "action" | "actor" | "occurredAt" | "facts">,
   result: OperationalResultReference | undefined,
   policy: "strict" | "legacy",
 ): AuditEvent | undefined {
   const lifecycleAudit = result?.lifecycleAuditEvents?.find(({ id }) => id === event.id);
-  if (!isDiagnosisAuthorityAuditAction(event.action)) {
-    return lifecycleAudit === undefined ? undefined : AuditEventSchema.parse(lifecycleAudit);
+  if (!isDiagnosisReceiptBackedAuditAction(event.action)) {
+    return lifecycleAudit === undefined
+      ? undefined
+      : validateDiagnosisAuthorityAudit(event, lifecycleAudit);
   }
   if (lifecycleAudit === undefined) {
     if (policy === "legacy") return undefined;
@@ -38,11 +59,34 @@ export function receiptBackedDiagnosisAuditForEvent(
       `Persisted diagnosis lifecycle audit for event ${event.id} is missing.`,
     );
   }
+  if (
+    isDiagnosisOriginAuditAction(event.action)
+    && result?.diagnosisId !== `diagnosis-${event.id}`
+  ) {
+    throw new DiagnosisAuditIntegrityError(
+      `Persisted diagnosis receipt for event ${event.id} has an inconsistent diagnosis identity.`,
+    );
+  }
+  if (result === undefined || !allowedReceiptOperations(event.action).includes(result.operation)) {
+    throw new DiagnosisAuditIntegrityError(
+      `Persisted diagnosis receipt for event ${event.id} has an inconsistent command operation.`,
+    );
+  }
+  if (
+    result.tickets.length !== 1
+    || result.tickets[0]?.ticketId !== event.ticketId
+    || result.tickets[0].operationalEventIds.length !== 1
+    || result.tickets[0].operationalEventIds[0] !== event.id
+  ) {
+    throw new DiagnosisAuditIntegrityError(
+      `Persisted diagnosis receipt for event ${event.id} has an inconsistent causal command reference.`,
+    );
+  }
   return validateDiagnosisAuthorityAudit(event, lifecycleAudit);
 }
 
 export function validateDiagnosisAuthorityAudit(
-  event: Pick<OperationalEvent, "id" | "ticketId" | "action" | "actor" | "occurredAt">,
+  event: Pick<OperationalEvent, "id" | "ticketId" | "action" | "actor" | "occurredAt" | "facts">,
   rawAudit: unknown,
 ): AuditEvent {
   const audit = AuditEventSchema.safeParse(rawAudit);
@@ -62,5 +106,159 @@ export function validateDiagnosisAuthorityAudit(
       `Persisted diagnosis lifecycle audit for event ${event.id} does not match its causal event.`,
     );
   }
+  validateReceiptAuditPayload(event, audit.data);
   return audit.data;
+}
+
+function validateReceiptAuditPayload(
+  event: Pick<OperationalEvent, "action" | "actor" | "ticketId" | "occurredAt" | "facts">,
+  audit: AuditEvent,
+): void {
+  const facts = eventFacts(event);
+  if (event.action === "diagnosis-completed" || event.action === "diagnostic-escalated") {
+    if (typeof audit.after.diagnosis !== "object" || audit.after.diagnosis === null) {
+      throw new DiagnosisAuditIntegrityError(
+        "Persisted diagnosis origin audit is missing its diagnosis payload.",
+      );
+    }
+    return;
+  }
+  if (event.action === "diagnosis-reviewed") {
+    const review = audit.after.diagnosisReview;
+    const reviewRecord = typeof review === "object" && review !== null
+      ? review as Record<string, unknown>
+      : undefined;
+    if (
+      reviewRecord === undefined
+      || reviewRecord.ticketId !== event.ticketId
+      || reviewRecord.actor !== event.actor
+      || reviewRecord.reviewedAt !== event.occurredAt
+      || audit.before.diagnosisId !== reviewRecord.diagnosisId
+      || facts.diagnosisOutcome !== reviewRecord.decision
+      || !isRevision(reviewRecord.sourceTicketRevision)
+      || facts.sourceRevision !== reviewRecord.sourceTicketRevision
+    ) {
+      throw new DiagnosisAuditIntegrityError(
+        "Persisted diagnosis review audit does not match its causal event.",
+      );
+    }
+    return;
+  }
+  if (event.action === "diagnosis-invalidated") {
+    if (
+      audit.before.diagnosisId !== facts.diagnosisId
+      || audit.after.diagnosisInvalidated !== true
+      || facts.outcome !== "invalidated"
+      || !isRevision(audit.before.sourceTicketRevision)
+      || !isRevision(facts.sourceRevision)
+      || audit.before.sourceTicketRevision !== facts.sourceRevision
+    ) {
+      throw new DiagnosisAuditIntegrityError(
+        "Persisted diagnosis invalidation audit does not match its causal event.",
+      );
+    }
+    return;
+  }
+  if (event.action === "fix-ineffective" && (
+    audit.before.diagnosisId !== facts.diagnosisId
+    || audit.before.fixEventId !== facts.fixEventId
+    || audit.after.outcome !== "ineffective"
+    || facts.outcome !== "ineffective"
+  )) {
+    throw new DiagnosisAuditIntegrityError(
+      "Persisted ineffective-fix audit does not match its causal event.",
+    );
+  }
+}
+
+function eventFacts(event: Pick<OperationalEvent, "action" | "facts">): Record<string, unknown> {
+  return event.facts;
+}
+
+function isRevision(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0;
+}
+
+export interface DiagnosisAuditProjectionInput {
+  readonly events: readonly OperationalEvent[];
+  readonly receiptResults: ReadonlyMap<string, OperationalResultReference | undefined>;
+  readonly fallbackAudits: readonly AuditEvent[];
+  readonly fallbackAuditsByEventId?: ReadonlyMap<string, readonly AuditEvent[]>;
+  readonly originalAudits: readonly AuditEvent[];
+  readonly policy: "strict" | "legacy";
+}
+
+/**
+ * Projects operational audits from one receipt map and explicit compatibility
+ * fallbacks. Diagnosis lifecycle actions are receipt-backed under strict
+ * policy; legacy policy is only allowed to use the supplied fallback audit.
+ */
+export function projectDiagnosisAudits({
+  events,
+  receiptResults,
+  fallbackAudits,
+  fallbackAuditsByEventId,
+  originalAudits,
+  policy,
+}: DiagnosisAuditProjectionInput): AuditEvent[] {
+  const originalById = uniqueAuditMap(originalAudits, "original diagnosis");
+  const fallbackById = uniqueAuditMap(
+    fallbackAudits.filter((audit) => !originalById.has(audit.id)),
+    "fallback",
+  );
+  return events.flatMap((event) => {
+    const fallbackAudit = originalById.get(event.id) ?? fallbackById.get(event.id);
+    const eventFallbackAudits = fallbackAuditsByEventId?.get(event.id) ?? (
+      fallbackAudit === undefined ? [] : [fallbackAudit]
+    );
+    const receiptAudit = receiptBackedDiagnosisAuditForEvent(
+      event,
+      receiptResults.get(event.commandId),
+      isDiagnosisReceiptBackedAuditAction(event.action) ? policy : "legacy",
+    );
+    if (receiptAudit !== undefined) {
+      if (
+        isDiagnosisReceiptBackedAuditAction(event.action)
+        && isDiagnosisOriginAuditAction(event.action)
+        && fallbackAudit !== undefined
+        && !isDeepStrictEqual(receiptAudit, fallbackAudit)
+      ) {
+        throw new DiagnosisAuditIntegrityError(
+          `Persisted diagnosis audit for event ${event.id} disagrees with its stored diagnosis history.`,
+        );
+      }
+      return [receiptAudit];
+    }
+    return eventFallbackAudits;
+  });
+}
+
+function uniqueAuditMap(audits: readonly AuditEvent[], label: string): Map<string, AuditEvent> {
+  const byId = new Map<string, AuditEvent>();
+  for (const audit of audits) {
+    const existing = byId.get(audit.id);
+    if (existing !== undefined && !isDeepStrictEqual(existing, audit)) {
+      throw new DiagnosisAuditIntegrityError(
+        `Persisted ${label} audits contain contradictory identity ${audit.id}.`,
+      );
+    }
+    byId.set(audit.id, audit);
+  }
+  return byId;
+}
+
+function allowedReceiptOperations(action: OperationalEvent["action"]): readonly string[] {
+  switch (action) {
+    case "diagnosis-completed":
+    case "diagnostic-escalated":
+      return ["record-diagnosis"];
+    case "diagnosis-reviewed":
+      return ["review-diagnosis", "review-diagnosis-workflow"];
+    case "diagnosis-invalidated":
+      return ["invalidate-diagnosis"];
+    case "fix-ineffective":
+      return ["record-fix-ineffective"];
+    default:
+      return [];
+  }
 }

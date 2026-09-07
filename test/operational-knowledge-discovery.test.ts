@@ -1,8 +1,11 @@
 import { mkdtemp, rm } from "node:fs/promises";
+import Database from "better-sqlite3";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { AuditEventSchema, TicketSchema, type AuditEvent, type Ticket } from "../src/domain.js";
 import { createApprovalDeskHttpServer } from "../src/approval-desk/http.js";
 import { resetOperationalDemoState } from "../src/demo-reset.js";
@@ -11,10 +14,13 @@ import {
   OperationalDiagnosisRecordSchema,
   OperationalEventSchema,
   OperationalWorkflowSnapshotSchema,
+  type OperationalEvent,
   type OperationalResultReference,
   type OperationalWorkflowSnapshot,
 } from "../src/operational/domain.js";
+import { OperationalUnitOfWork } from "../src/operational/unit-of-work.js";
 import { createRuntimeDependencies, type RuntimeDependencies } from "../src/runtime.js";
+import { createTriageServer } from "../src/server.js";
 
 const roots: string[] = [];
 const ticketId = "TKT-1010";
@@ -24,10 +30,175 @@ afterEach(async () => {
 });
 
 describe("operational knowledge discovery", () => {
+  it("rejects discovery when the original diagnosis receipt is missing", () => {
+    const diagnosis = diagnosisRecord();
+    const event = diagnosisEvent(diagnosis);
+    const snapshot = operationalSnapshotWithDiagnosis(
+      diagnosis,
+      [diagnosis.originalAudit],
+      [event],
+    );
+
+    expect(() => authoritativeOperationalAudits({ readCommandResults: () => new Map() }, snapshot))
+      .toThrow(/persisted diagnosis lifecycle audit/i);
+  });
+
+  it("rejects an original diagnosis receipt whose diagnosis payload is redirected", () => {
+    const diagnosis = diagnosisRecord();
+    const event = diagnosisEvent(diagnosis);
+    const redirected = AuditEventSchema.parse({
+      ...diagnosis.originalAudit,
+      after: {
+        ...diagnosis.originalAudit.after,
+        diagnosis: {
+          ...(diagnosis.originalAudit.after.diagnosis as Record<string, unknown>),
+          customerSafeSummary: "A redirected diagnosis payload.",
+        },
+      },
+    });
+    const result: OperationalResultReference = {
+      operation: "record-diagnosis",
+      tickets: [{ ticketId, operationalEventIds: [event.id], resultingRevision: null }],
+      diagnosisId: diagnosis.diagnosis.id,
+      lifecycleAuditEvents: [redirected],
+    };
+    const snapshot = operationalSnapshotWithDiagnosis(
+      diagnosis,
+      [diagnosis.originalAudit],
+      [event],
+    );
+
+    expect(() => {
+      const audits = authoritativeOperationalAudits({
+        readCommandResults: () => new Map([[event.commandId, result]]),
+      }, snapshot);
+      return eligibleCompletedDiagnoses({
+        ticket: snapshot.ticket,
+        audits,
+        diagnoses: snapshot.diagnoses,
+        events: snapshot.events,
+      });
+    }).toThrow(/diagnosis|integrity|causal/i);
+  });
+
+  it("rejects an original diagnosis receipt with the wrong command operation", () => {
+    const diagnosis = diagnosisRecord();
+    const event = diagnosisEvent(diagnosis);
+    const result: OperationalResultReference = {
+      operation: "review-diagnosis",
+      tickets: [{ ticketId, operationalEventIds: [event.id], resultingRevision: null }],
+      diagnosisId: diagnosis.diagnosis.id,
+      lifecycleAuditEvents: [diagnosis.originalAudit],
+    };
+    const snapshot = operationalSnapshotWithDiagnosis(
+      diagnosis,
+      [diagnosis.originalAudit],
+      [event],
+    );
+
+    expect(() => authoritativeOperationalAudits({
+      readCommandResults: () => new Map([[event.commandId, result]]),
+    }, snapshot))
+      .toThrow(/operation|command/i);
+  });
+
+  it("rejects a schema-valid diagnosis row that disagrees with its original receipt", () => {
+    const diagnosis = diagnosisRecord();
+    const event = diagnosisEvent(diagnosis);
+    const redirectedDiagnosis = {
+      ...diagnosis,
+      diagnosis: {
+        ...diagnosis.diagnosis,
+        problem: "A different persisted diagnosis.",
+      },
+    };
+    const snapshot = operationalSnapshotWithDiagnosis(
+      redirectedDiagnosis,
+      [diagnosis.originalAudit],
+      [event],
+    );
+
+    expect(() => eligibleCompletedDiagnoses({
+      ticket: snapshot.ticket,
+      audits: authoritativeOperationalAudits({
+        readCommandResults: () => new Map([[event.commandId, originReceiptResult(diagnosis, event)]]),
+      }, snapshot),
+      diagnoses: snapshot.diagnoses,
+      events: snapshot.events,
+    })).toThrow(/inconsistent|diagnosis|integrity/i);
+  });
+
+  it("rejects a review receipt whose nested actor or ticket is redirected", () => {
+    const { diagnosis, review, snapshot } = operationalSnapshotWithReview("reject");
+    const reviewPayload = review.after.diagnosisReview as Record<string, unknown>;
+    const redirected = AuditEventSchema.parse({
+      ...review,
+      after: {
+        ...review.after,
+        diagnosisReview: {
+          ...reviewPayload,
+          ticketId: "TKT-9999",
+          actor: "redirected-actor",
+        },
+      },
+    });
+    const result: OperationalResultReference = {
+      operation: "review-diagnosis",
+      tickets: [{ ticketId, operationalEventIds: [review.id], resultingRevision: null }],
+      lifecycleAuditEvents: [redirected],
+    };
+
+    expect(() => eligibleCompletedDiagnoses({
+      ticket: snapshot.ticket,
+      audits: authoritativeOperationalAudits({
+        readCommandResults: () => new Map([
+          [snapshot.events[0]!.commandId, originReceiptResult(diagnosis, snapshot.events[0]!)],
+          [snapshot.events[1]!.commandId, result],
+        ]),
+      }, snapshot),
+      diagnoses: snapshot.diagnoses,
+      events: snapshot.events,
+    })).toThrow(/inconsistent|diagnosis|review/i);
+  });
+
+  it("rejects a diagnosis receipt that carries extra ticket or event references", () => {
+    const diagnosis = diagnosisRecord();
+    const event = diagnosisEvent(diagnosis);
+    const result: OperationalResultReference = {
+      operation: "record-diagnosis",
+      tickets: [
+        { ticketId, operationalEventIds: [event.id], resultingRevision: null },
+        { ticketId: "TKT-9999", operationalEventIds: ["90000000-0000-4000-8000-000000000003"], resultingRevision: null },
+      ],
+      diagnosisId: diagnosis.diagnosis.id,
+      lifecycleAuditEvents: [diagnosis.originalAudit],
+    };
+    const snapshot = operationalSnapshotWithDiagnosis(diagnosis, [diagnosis.originalAudit], [event]);
+
+    expect(() => authoritativeOperationalAudits({
+      readCommandResults: () => new Map([[event.commandId, result]]),
+    }, snapshot)).toThrow(/causal|command|ticket/i);
+  });
+
+  it("rejects an original diagnosis event redirected to another ticket", () => {
+    const diagnosis = diagnosisRecord();
+    const event = diagnosisEvent(diagnosis, { ticketId: "TKT-9999" });
+    const snapshot = {
+      ...completedDiagnosisSnapshot(diagnosis, [diagnosis.originalAudit]),
+      events: [event],
+    };
+
+    expect(() => eligibleCompletedDiagnoses(snapshot)).toThrow(/inconsistent|causal|diagnosis/i);
+  });
+
   it("rejects discovery when an authority-bearing diagnosis review receipt is missing", () => {
     const { diagnosis, snapshot } = operationalSnapshotWithReview("reject");
     expect(() => {
-      const audits = authoritativeOperationalAudits({ readCommandResult: () => undefined }, snapshot);
+      const audits = authoritativeOperationalAudits({
+        readCommandResults: () => new Map([
+          [snapshot.events[0]!.commandId, originReceiptResult(diagnosis, snapshot.events[0]!)],
+        ]),
+      }, snapshot);
       return eligibleCompletedDiagnoses({
         ticket: snapshot.ticket,
         audits,
@@ -35,6 +206,30 @@ describe("operational knowledge discovery", () => {
       });
     }).toThrow(/persisted diagnosis lifecycle audit/i);
     expect(diagnosis.diagnosis.id).toBe("diagnosis-60000000-0000-4000-8000-000000000001");
+  });
+
+  it("uses one bulk receipt lookup for all diagnosis lifecycle events", () => {
+    const { diagnosis, review, snapshot } = operationalSnapshotWithReview("reject");
+    const reviewResult: OperationalResultReference = {
+      operation: "review-diagnosis",
+      tickets: [{ ticketId, operationalEventIds: [review.id], resultingRevision: null }],
+      lifecycleAuditEvents: [review],
+    };
+    const readCommandResults = vi.fn((commandIds: readonly string[]) => new Map(
+      commandIds.map((commandId) => [
+        commandId,
+        commandId === snapshot.events[0]!.commandId
+          ? originReceiptResult(diagnosis, snapshot.events[0]!)
+          : reviewResult,
+      ] as const),
+    ));
+    authoritativeOperationalAudits({ readCommandResults }, snapshot);
+
+    expect(readCommandResults).toHaveBeenCalledTimes(1);
+    expect(readCommandResults).toHaveBeenCalledWith([
+      snapshot.events[0]!.commandId,
+      snapshot.events[1]!.commandId,
+    ]);
   });
 
   it("rejects discovery when an authority-bearing diagnosis audit is causally redirected", () => {
@@ -50,7 +245,12 @@ describe("operational knowledge discovery", () => {
     };
 
     expect(() => {
-      const audits = authoritativeOperationalAudits({ readCommandResult: () => result }, snapshot);
+      const audits = authoritativeOperationalAudits({
+        readCommandResults: () => new Map([
+          [snapshot.events[0]!.commandId, originReceiptResult(snapshot.diagnoses[0]!, snapshot.events[0]!)],
+          [snapshot.events[1]!.commandId, result],
+        ]),
+      }, snapshot);
       return eligibleCompletedDiagnoses({
         ticket: snapshot.ticket,
         audits,
@@ -80,14 +280,19 @@ describe("operational knowledge discovery", () => {
     };
 
     expect(() => {
-      const audits = authoritativeOperationalAudits({ readCommandResult: () => result }, snapshot);
+      const audits = authoritativeOperationalAudits({
+        readCommandResults: () => new Map([
+          [snapshot.events[0]!.commandId, originReceiptResult(snapshot.diagnoses[0]!, snapshot.events[0]!)],
+          [snapshot.events[1]!.commandId, result],
+        ]),
+      }, snapshot);
       return eligibleCompletedDiagnoses({
         ticket: snapshot.ticket,
         audits,
         diagnoses: snapshot.diagnoses,
         events: snapshot.events,
       });
-    }).toThrow(/inconsistent diagnosis/i);
+    }).toThrow(/inconsistent|causal|diagnosis/i);
   });
 
   it("keeps pending-review and absent-investigation diagnoses advisory-eligible", () => {
@@ -96,6 +301,12 @@ describe("operational knowledge discovery", () => {
     const snapshot = completedDiagnosisSnapshot(diagnosis, [original]);
 
     expect(eligibleCompletedDiagnoses(snapshot)).toEqual([diagnosis.diagnosis]);
+  });
+
+  it("preserves the production owner mapping for customer-owned diagnoses", () => {
+    const diagnosis = diagnosisRecord({ owner: "customer" });
+    expect(eligibleCompletedDiagnoses(completedDiagnosisSnapshot(diagnosis, [diagnosis.originalAudit])))
+      .toEqual([diagnosis.diagnosis]);
   });
 
   it("excludes rejected, invalidated, escalated, and explicitly stale diagnoses without rewriting history", () => {
@@ -137,6 +348,57 @@ describe("operational knowledge discovery", () => {
     ];
 
     expect(eligibleCompletedDiagnoses(completedDiagnosisSnapshot(diagnosis, audits))).toEqual([diagnosis.diagnosis]);
+  });
+
+  it("rejects an invalidation receipt whose source revision disagrees with its event", () => {
+    const diagnosis = diagnosisRecord();
+    const event = diagnosisEvent(diagnosis, {
+      id: "60000000-0000-4000-8000-000000000103",
+      sequence: 2,
+      commandId: "90000000-0000-4000-8000-000000000002",
+      action: "diagnosis-invalidated",
+      facts: {
+        diagnosisId: diagnosis.originalAudit.id,
+        outcome: "invalidated",
+        sourceRevision: 2,
+      },
+    });
+    const invalidation = AuditEventSchema.parse({
+      id: event.id,
+      timestamp: event.occurredAt,
+      actor: event.actor,
+      action: event.action,
+      ticketId,
+      before: { diagnosisId: diagnosis.originalAudit.id, sourceTicketRevision: 1 },
+      after: { diagnosisInvalidated: true },
+      rationale: "A persisted invalidation.",
+      knowledgeArticleIds: [],
+      result: "success",
+    });
+    const result: OperationalResultReference = {
+      operation: "invalidate-diagnosis",
+      tickets: [{ ticketId, operationalEventIds: [event.id], resultingRevision: null }],
+      lifecycleAuditEvents: [invalidation],
+    };
+    const snapshot = operationalSnapshotWithDiagnosis(
+      diagnosis,
+      [diagnosis.originalAudit, invalidation],
+      [diagnosisEvent(diagnosis), event],
+    );
+    expect(() => {
+      const audits = authoritativeOperationalAudits({
+        readCommandResults: () => new Map([
+          [snapshot.events[0]!.commandId, originReceiptResult(diagnosis, snapshot.events[0]!)],
+          [snapshot.events[1]!.commandId, result],
+        ]),
+      }, snapshot);
+      return eligibleCompletedDiagnoses({
+        ticket: snapshot.ticket,
+        audits,
+        diagnoses: snapshot.diagnoses,
+        events: snapshot.events,
+      });
+    }).toThrow(/revision|invalidation|causal/i);
   });
 
   it("discovers a completed diagnosis through the runtime-created knowledge service", async () => {
@@ -245,6 +507,73 @@ describe("operational knowledge discovery", () => {
         `known-cause-diagnosis-${recorded.auditEvent.id}`,
       );
       expect(candidate.supportingDiagnosisIds).toContain(`diagnosis-${recorded.auditEvent.id}`);
+
+      const diagnosisEvent = operationalStore(runtime).readWorkflowSnapshot(ticketId).events
+        .find(({ id }) => id === recorded.auditEvent.id);
+      expect(diagnosisEvent).toBeDefined();
+      const bulkReceiptRead = vi.spyOn(OperationalUnitOfWork.prototype, "readCommandResults");
+      try {
+        await runtime.knowledgeEvolution.service.discover({
+          includeGpt: false,
+          actorId: "support-lead",
+        });
+        expect(bulkReceiptRead).toHaveBeenCalledTimes(1);
+        expect(bulkReceiptRead.mock.calls[0]?.[0]).toEqual([diagnosisEvent!.commandId]);
+      } finally {
+        bulkReceiptRead.mockRestore();
+      }
+      const database = new Database(operationalDatabase);
+      try {
+        database.pragma("foreign_keys = OFF");
+        database.prepare("UPDATE diagnoses SET operational_event_id = ? WHERE id = ?")
+          .run("ffffffff-ffff-4fff-8fff-ffffffffffff", `diagnosis-${recorded.auditEvent.id}`);
+      } finally {
+        database.close();
+      }
+      await expect(runtime.knowledgeEvolution.service.discover({
+        includeGpt: false,
+        actorId: "support-lead",
+      })).rejects.toMatchObject({ code: "PERSISTENCE_ERROR" });
+
+      const mcpServer = createTriageServer(runtime);
+      const client = new Client({ name: "operational-discovery-integrity", version: "1.0.0" });
+      const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+      await mcpServer.connect(serverTransport);
+      await client.connect(clientTransport);
+      try {
+        const httpCorruption = await fetch(`${baseUrl}/api/knowledge-candidates`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ actor: "support-lead", includeGpt: false }),
+        });
+        const httpBody = await httpCorruption.json() as { error?: { code?: string } };
+        expect(httpCorruption.status).toBe(500);
+        expect(httpBody).toEqual({ error: expect.objectContaining({ code: "OPERATIONAL_INTEGRITY_ERROR" }) });
+
+        const mcpCorruption = await client.callTool({
+          name: "discover_knowledge_candidates",
+          arguments: { actor: "support-lead", includeGpt: false },
+        });
+        expect(mcpCorruption.isError).toBe(true);
+        expect(JSON.stringify(mcpCorruption)).toContain("OPERATIONAL_INTEGRITY_ERROR");
+      } finally {
+        await Promise.allSettled([client.close(), mcpServer.close()]);
+      }
+
+      const restoredDatabase = new Database(operationalDatabase);
+      try {
+        restoredDatabase.pragma("foreign_keys = OFF");
+        restoredDatabase.prepare("UPDATE diagnoses SET operational_event_id = ? WHERE id = ?")
+          .run(diagnosisEvent!.id, `diagnosis-${recorded.auditEvent.id}`);
+        restoredDatabase.prepare("DELETE FROM command_idempotency WHERE command_id = ?")
+          .run(diagnosisEvent!.commandId);
+      } finally {
+        restoredDatabase.close();
+      }
+      await expect(runtime.knowledgeEvolution.service.discover({
+        includeGpt: false,
+        actorId: "support-lead",
+      })).rejects.toMatchObject({ code: "PERSISTENCE_ERROR" });
     } finally {
       await closeServer(server);
       runtime.close();
@@ -266,6 +595,57 @@ function completedDiagnosisSnapshot(
     ticket: TicketSchema.parse({ ...makeTicket(), ...ticketOverrides }),
     audits,
     diagnoses,
+  };
+}
+
+function operationalSnapshotWithDiagnosis(
+  diagnosis: ReturnType<typeof diagnosisRecord>,
+  audits: readonly AuditEvent[],
+  events: readonly OperationalWorkflowSnapshot["events"][number][],
+): OperationalWorkflowSnapshot {
+  return OperationalWorkflowSnapshotSchema.parse({
+    ticket: makeTicket(),
+    ticketRevisions: [],
+    recommendations: [],
+    recommendationRevisions: [],
+    diagnosticTaxonomyRevisions: [],
+    messages: [],
+    diagnoses: [diagnosis],
+    events,
+    traces: [],
+    customerReplyWatermark: { state: "none" },
+  });
+}
+
+function diagnosisEvent(
+  diagnosis: ReturnType<typeof diagnosisRecord>,
+  overrides: Omit<Partial<OperationalEvent>, "facts"> & { facts?: Record<string, unknown> } = {},
+) {
+  return OperationalEventSchema.parse({
+    id: diagnosis.originalAudit.id,
+    ticketId,
+    sequence: 1,
+    occurredAt: diagnosis.originalAudit.timestamp,
+    actor: diagnosis.originalAudit.actor,
+    action: diagnosis.originalAudit.action,
+    commandId: "90000000-0000-4000-8000-000000000001",
+    facts: {
+      diagnosisOutcome: diagnosis.originalAudit.action === "diagnostic-escalated" ? "escalated" : "completed",
+      sourceRevision: 0,
+    },
+    ...overrides,
+  });
+}
+
+function originReceiptResult(
+  diagnosis: ReturnType<typeof diagnosisRecord>,
+  event: OperationalWorkflowSnapshot["events"][number],
+): OperationalResultReference {
+  return {
+    operation: "record-diagnosis",
+    tickets: [{ ticketId, operationalEventIds: [event.id], resultingRevision: null }],
+    diagnosisId: diagnosis.diagnosis.id,
+    lifecycleAuditEvents: [diagnosis.originalAudit],
   };
 }
 
@@ -313,6 +693,7 @@ function operationalSnapshotWithReview(
 function diagnosisRecord(options: {
   id?: string;
   diagnosticState?: "escalated";
+  owner?: "engineering" | "customer";
 } = {}) {
   const auditId = options.id ?? "60000000-0000-4000-8000-000000000001";
   const originalAudit = AuditEventSchema.parse({
@@ -329,11 +710,12 @@ function diagnosisRecord(options: {
         customerSafeSummary: "A governed configuration change caused the API failure.",
         evidenceUsed: ["request-trace"],
         confidence: "confirmed",
-        owner: "engineering",
+        owner: options.owner ?? "engineering",
         recommendedNextAction: "Apply the governed configuration update.",
         doNotSay: [],
         ...(options.diagnosticState === undefined ? {} : { diagnosticState: { state: options.diagnosticState, hypotheses: [{ id: "configuration", label: "Configuration issue", status: "plausible", evidenceUsed: ["request-trace"], evidenceToConfirm: ["configuration-diff"] }], evidenceToRequest: ["configuration-diff"], diagnosticAttempts: 2, escalationReason: "diagnostic-ambiguity", specialistTeam: "api-platform" } }),
       },
+      sourceTicketRevision: 0,
     },
     rationale: "A governed diagnosis was recorded.",
     knowledgeArticleIds: [],
@@ -343,13 +725,13 @@ function diagnosisRecord(options: {
     diagnosis: {
       id: `diagnosis-${auditId}`,
       ticketId,
-      problem: "API requests fail after a configuration change.",
-      symptoms: ["Requests return a server error."],
+      problem: "A governed configuration change caused the API failure.",
+      symptoms: ["configuration", "request-trace"],
       evidenceUsed: ["request-trace"],
       evidenceReferences: [],
-      ownerTeam: "api-platform",
-      fixSteps: ["Apply the governed configuration update."],
-      verificationSteps: ["Confirm recovery."],
+      ownerTeam: options.owner === "customer" ? "support" : "api-platform",
+      fixSteps: ["Apply the completed diagnosis next action through the governed support workflow."],
+      verificationSteps: ["Confirm the customer-safe outcome after the governed next action."],
       completedAt: "2026-08-13T10:00:00.000Z",
     },
     originalAudit,

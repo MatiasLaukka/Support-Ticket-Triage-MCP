@@ -11,11 +11,7 @@ import {
   type TicketId,
   type TriageRecommendation,
 } from "../domain.js";
-import {
-  DiagnosisAuditIntegrityError,
-  isDiagnosisAuthorityAuditAction,
-  receiptBackedDiagnosisAuditForEvent,
-} from "./diagnosis-audit.js";
+import { DiagnosisAuditIntegrityError, projectDiagnosisAudits } from "./diagnosis-audit.js";
 import {
   CompletedDiagnosisSchema,
   type CompletedDiagnosis,
@@ -410,6 +406,40 @@ export class OperationalUnitOfWork {
     return record === undefined
       ? undefined
       : immutableCommandReplay(record.result).result;
+  }
+
+  readCommandResults(commandIds: readonly string[]): ReadonlyMap<string, OperationalResultReference | undefined> {
+    this.assertActive();
+    const parsedCommandIds = [...new Set(commandIds)].map((commandId) => parseWith(
+      CommandIdSchema,
+      commandId,
+      "Operational command ID is invalid.",
+    ));
+    if (parsedCommandIds.length === 0) return new Map();
+    const placeholders = parsedCommandIds.map(() => "?").join(", ");
+    const rows = this.database.prepare(`
+      SELECT command_id, operation, request_hash, request_hash_version, result_json, created_at
+      FROM command_idempotency
+      WHERE command_id IN (${placeholders})
+      ORDER BY command_id ASC
+    `).all(...parsedCommandIds) as CommandRow[];
+    const records = new Map<string, CommandIdempotencyRecord>();
+    for (const row of rows) {
+      if (records.has(row.command_id)) {
+        throw new OperationalStoreError(
+          `Operational command receipt ${row.command_id} is duplicated.`,
+          "PERSISTENCE_ERROR",
+        );
+      }
+      const record = this.parseCommandRow(row);
+      records.set(record.commandId, record);
+    }
+    return new Map(parsedCommandIds.map((commandId) => [
+      commandId,
+      records.get(commandId) === undefined
+        ? undefined
+        : immutableCommandReplay(records.get(commandId)!.result).result,
+    ] as const));
   }
 
   readCommandReceipt(commandId: string): CommandIdempotencyRecord | undefined {
@@ -1095,13 +1125,20 @@ export class OperationalUnitOfWork {
   }> {
     this.assertActive();
     const diagnosisRows = this.database.prepare(`
-      SELECT diagnoses.ticket_id, diagnoses.id, diagnoses.payload_json
+      SELECT diagnoses.ticket_id, diagnoses.id, diagnoses.operational_event_id,
+        diagnoses.completed_at, diagnoses.payload_json
       FROM diagnoses
-      JOIN operational_events AS events
+      LEFT JOIN operational_events AS events
         ON events.id = diagnoses.operational_event_id
        AND events.ticket_id = diagnoses.ticket_id
-      ORDER BY diagnoses.ticket_id ASC, events.sequence ASC, diagnoses.id ASC
-    `).all() as Array<{ ticket_id: string; id: string; payload_json: string }>;
+      ORDER BY diagnoses.ticket_id ASC, COALESCE(events.sequence, 2147483647) ASC, diagnoses.id ASC
+    `).all() as Array<{
+      ticket_id: string;
+      id: string;
+      operational_event_id: string;
+      completed_at: string;
+      payload_json: string;
+    }>;
     if (diagnosisRows.length === 0) return [];
 
     const ticketIds = [...new Set(diagnosisRows.map(({ ticket_id }) =>
@@ -1153,12 +1190,21 @@ export class OperationalUnitOfWork {
       if (message.ticketId !== parsedTicketId || message.kind !== "customer") {
         throw new OperationalStoreError("Operational customer reply binding is corrupt.", "PERSISTENCE_ERROR");
       }
+      const messageEvent = (eventsByTicket.get(parsedTicketId) ?? [])
+        .find(({ id }) => id === message.operationalEventId);
+      if (messageEvent === undefined || !isCanonicalConversationEventPair(messageEvent, message)) {
+        throw new OperationalStoreError(
+          "Operational customer reply causal binding is corrupt.",
+          "PERSISTENCE_ERROR",
+        );
+      }
       const messages = messagesByTicket.get(parsedTicketId) ?? [];
       messages.push(message);
       messagesByTicket.set(parsedTicketId, messages);
     }
 
     const diagnosesByTicket = new Map<TicketId, OperationalWorkflowSnapshot["diagnoses"]>();
+    const diagnosisEventIds = new Set<string>();
     for (const row of diagnosisRows) {
       const parsedTicketId = parseWith(TicketIdSchema, row.ticket_id, "Operational ticket ID is corrupt.");
       const diagnosis = parseStoredJson(
@@ -1166,10 +1212,43 @@ export class OperationalUnitOfWork {
         OperationalDiagnosisRecordSchema,
         "Operational diagnosis data is corrupt.",
       );
+      const event = (eventsByTicket.get(parsedTicketId) ?? [])
+        .find(({ id }) => id === row.operational_event_id);
+      if (
+        row.id !== diagnosis.diagnosis.id
+        || row.operational_event_id !== diagnosis.operationalEventId
+        || row.completed_at !== diagnosis.diagnosis.completedAt
+        || event === undefined
+        || event.ticketId !== parsedTicketId
+        || (event.action !== "diagnosis-completed" && event.action !== "diagnostic-escalated")
+        || diagnosisEventIds.has(event.id)
+        || event.facts.diagnosisOutcome !== (
+          event.action === "diagnostic-escalated" ? "escalated" : "completed"
+        )
+        || !isNonnegativeRevision(event.facts.sourceRevision)
+        || !isNonnegativeRevision(diagnosis.originalAudit.after.sourceTicketRevision)
+        || event.facts.sourceRevision !== diagnosis.originalAudit.after.sourceTicketRevision
+      ) {
+        throw new OperationalStoreError(
+          `Operational diagnosis row ${row.id} has an invalid causal event or revision binding.`,
+          "PERSISTENCE_ERROR",
+        );
+      }
+      diagnosisEventIds.add(event.id);
       const diagnoses = diagnosesByTicket.get(parsedTicketId) ?? [];
       diagnoses.push(diagnosis);
       diagnosesByTicket.set(parsedTicketId, diagnoses);
     }
+
+    const allEvents = [...eventsByTicket.values()].flat();
+    const receiptCommandIds = allEvents
+      .filter(({ action }) => action === "diagnosis-completed"
+        || action === "diagnostic-escalated"
+        || action === "diagnosis-reviewed"
+        || action === "diagnosis-invalidated"
+        || action === "fix-ineffective")
+      .map(({ commandId }) => commandId);
+    const receiptResults = this.readCommandResults(receiptCommandIds);
 
     return ticketIds.map((ticketId) => {
       const ticket = tickets.get(ticketId);
@@ -1177,15 +1256,6 @@ export class OperationalUnitOfWork {
       const diagnoses = diagnosesByTicket.get(ticketId) ?? [];
       if (ticket === undefined || events.length === 0 || diagnoses.length === 0) {
         throw new OperationalStoreError("Operational diagnosis discovery state is incomplete.", "PERSISTENCE_ERROR");
-      }
-      const diagnosisAudits = new Map(
-        diagnoses.map((diagnosis) => [diagnosis.originalAudit.id, diagnosis.originalAudit] as const),
-      );
-      if (diagnosisAudits.size !== diagnoses.length) {
-        throw new OperationalStoreError(
-          "Operational diagnosis records contain duplicate causal audits.",
-          "PERSISTENCE_ERROR",
-        );
       }
       const customerMessages = messagesByTicket.get(ticketId) ?? [];
       const messages = new Map(
@@ -1197,46 +1267,36 @@ export class OperationalUnitOfWork {
           "PERSISTENCE_ERROR",
         );
       }
-      const audits: AuditEvent[] = [];
-      for (const event of events) {
-        const originalAudit = diagnosisAudits.get(event.id);
-        if (originalAudit !== undefined) {
-          audits.push(originalAudit);
-          continue;
+      const fallbackAudits = customerMessages.map((message) => AuditEventSchema.parse({
+        id: message.id,
+        timestamp: message.createdAt,
+        actor: events.find(({ id }) => id === message.operationalEventId)?.actor ?? "operational-store",
+        action: "customer-reply-received",
+        ticketId,
+        before: {},
+        after: { body: message.body },
+        rationale: "Customer reply added to ticket conversation.",
+        knowledgeArticleIds: [],
+        result: "success",
+      }));
+      const fallbackAuditsByEventId = new Map(
+        customerMessages.map((message, index) => [message.operationalEventId, [fallbackAudits[index]!] as const]),
+      );
+      let audits: AuditEvent[];
+      try {
+        audits = projectDiagnosisAudits({
+          events,
+          receiptResults,
+          fallbackAudits,
+          fallbackAuditsByEventId,
+          originalAudits: diagnoses.map(({ originalAudit }) => originalAudit),
+          policy: "strict",
+        });
+      } catch (error) {
+        if (error instanceof DiagnosisAuditIntegrityError) {
+          throw new OperationalStoreError(error.message, "PERSISTENCE_ERROR", { cause: error });
         }
-        try {
-          const receiptAudit = isDiagnosisAuthorityAuditAction(event.action)
-            ? receiptBackedDiagnosisAuditForEvent(
-                event,
-                this.readCommandResult(event.commandId),
-                "strict",
-              )
-            : undefined;
-          if (receiptAudit !== undefined) {
-            audits.push(receiptAudit);
-            continue;
-          }
-        } catch (error) {
-          if (error instanceof DiagnosisAuditIntegrityError) {
-            throw new OperationalStoreError(error.message, "PERSISTENCE_ERROR", { cause: error });
-          }
-          throw error;
-        }
-        const message = messages.get(event.id);
-        if (message !== undefined) {
-          audits.push(AuditEventSchema.parse({
-            id: message.id,
-            timestamp: message.createdAt,
-            actor: event.actor,
-            action: "customer-reply-received",
-            ticketId: event.ticketId,
-            before: {},
-            after: { body: message.body },
-            rationale: "Customer reply added to ticket conversation.",
-            knowledgeArticleIds: [],
-            result: "success",
-          }));
-        }
+        throw error;
       }
       return { ticket, audits, diagnoses, events };
     });
@@ -1553,6 +1613,10 @@ export class OperationalUnitOfWork {
       FROM command_idempotency WHERE command_id = ?
     `).get(commandId) as CommandRow | undefined;
     if (row === undefined) return undefined;
+    return this.parseCommandRow(row);
+  }
+
+  private parseCommandRow(row: CommandRow): CommandIdempotencyRecord {
     let result: unknown;
     try {
       result = JSON.parse(row.result_json) as unknown;
@@ -2270,4 +2334,8 @@ function latestMessageByEventSequence(
       entry.event !== undefined && isCanonicalConversationEventPair(entry.event, entry.message))
     .sort((left, right) => left.event.sequence - right.event.sequence)
     .at(-1)?.message;
+}
+
+function isNonnegativeRevision(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0;
 }

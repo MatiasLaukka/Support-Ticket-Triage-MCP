@@ -1,8 +1,8 @@
+import { isDeepStrictEqual } from "node:util";
 import type { AuditEvent, Ticket } from "../domain.js";
 import {
   diagnosisReviewViews,
   DiagnosisReviewDecisionSchema,
-  operationalDiagnosisAudits,
 } from "../approval-desk/diagnosis-review.js";
 import {
   auditCausalPositions,
@@ -16,7 +16,7 @@ import type { OperationalWorkflowSnapshot } from "../operational/domain.js";
 import {
   DiagnosisAuditIntegrityError,
   isDiagnosisAuthorityAuditAction,
-  receiptBackedDiagnosisAuditForEvent,
+  projectDiagnosisAudits,
 } from "../operational/diagnosis-audit.js";
 import { OperationalStoreError, type OperationalUnitOfWork } from "../operational/unit-of-work.js";
 import type { CompletedDiagnosis } from "./domain.js";
@@ -80,51 +80,58 @@ export class OperationalCompletedDiagnosisSource implements CompletedDiagnosisSo
 
 /** Build the same receipt-backed audit view used by OperationalAuditRepository. */
 export function authoritativeOperationalAudits(
-  unit: Pick<OperationalUnitOfWork, "readCommandResult">,
+  unit: Pick<OperationalUnitOfWork, "readCommandResults">,
   snapshot: OperationalWorkflowSnapshot,
 ): AuditEvent[] {
   const fallbackAudits = operationalAuditEventsFromSnapshot(snapshot);
-  const authoritativeDiagnosisAudits = operationalDiagnosisAudits({
-    ticket: snapshot.ticket,
-    audits: fallbackAudits,
-    originalDiagnoses: snapshot.diagnoses,
-  });
-  return snapshot.events.flatMap((event) => {
-    if (event.action === "diagnosis-completed" || event.action === "diagnostic-escalated") {
-      return authoritativeDiagnosisAudits.filter(({ id }) => id === event.id);
+  try {
+    const commandIds = [...new Set(snapshot.events.map(({ commandId }) => commandId))];
+    const receiptResults = unit.readCommandResults(commandIds);
+    const fallbackAuditsByEventId = new Map(snapshot.events.map((event) => [
+      event.id,
+      operationalAuditEventsFromSnapshot({ ...snapshot, events: [event] }),
+    ] as const));
+    return projectDiagnosisAudits({
+      events: snapshot.events,
+      receiptResults,
+      fallbackAudits,
+      fallbackAuditsByEventId,
+      originalAudits: snapshot.diagnoses.map(({ originalAudit }) => originalAudit),
+      policy: "strict",
+    });
+  } catch (error) {
+    if (error instanceof DiagnosisAuditIntegrityError) {
+      throw new OperationalStoreError(error.message, "PERSISTENCE_ERROR", { cause: error });
     }
-    try {
-      const receiptAudit = receiptBackedDiagnosisAuditForEvent(
-        event,
-        unit.readCommandResult(event.commandId),
-        isDiagnosisAuthorityAuditAction(event.action) ? "strict" : "legacy",
-      );
-      return receiptAudit === undefined
-        ? operationalAuditEventsFromSnapshot({ ...snapshot, events: [event] })
-        : [receiptAudit];
-    } catch (error) {
-      if (error instanceof DiagnosisAuditIntegrityError) {
-        throw new OperationalStoreError(error.message, "PERSISTENCE_ERROR", { cause: error });
-      }
-      throw error;
-    }
-  });
+    throw error;
+  }
 }
 
 function validateDiagnosisAuthorityReferences(
   snapshot: CompletedDiagnosisReadSnapshot,
 ): void {
   const diagnosisIds = new Set(snapshot.diagnoses.map(({ originalAudit }) => originalAudit.id));
+  const auditsById = new Map(snapshot.audits.map((audit) => [audit.id, audit] as const));
+  if (auditsById.size !== snapshot.audits.length) {
+    throw new OperationalStoreError(
+      "Persisted diagnosis history contains duplicate audit identities.",
+      "PERSISTENCE_ERROR",
+    );
+  }
   for (const record of snapshot.diagnoses) {
+    const authoritativeOriginalAudit = auditsById.get(record.originalAudit.id);
     if (
-      record.diagnosis.ticketId !== snapshot.ticket.id
+      authoritativeOriginalAudit === undefined
+      || !isDeepStrictEqual(authoritativeOriginalAudit, record.originalAudit)
+      || !diagnosisRecordMatchesOriginalAudit(record)
+      || record.diagnosis.ticketId !== snapshot.ticket.id
       || record.originalAudit.ticketId !== snapshot.ticket.id
       || record.originalAudit.id !== record.operationalEventId
       || (record.originalAudit.action !== "diagnosis-completed"
         && record.originalAudit.action !== "diagnostic-escalated")
     ) {
       throw new OperationalStoreError(
-        `Persisted diagnosis record ${record.diagnosis.id} has inconsistent ticket or causal-event identity.`,
+        `Persisted diagnosis record ${record.diagnosis.id} has inconsistent audit, ticket, or causal-event identity.`,
         "PERSISTENCE_ERROR",
       );
     }
@@ -150,6 +157,9 @@ function validateDiagnosisAuthorityReferences(
         || event.action !== record.originalAudit.action
         || event.actor !== record.originalAudit.actor
         || event.occurredAt !== record.originalAudit.timestamp
+        || !isSourceRevision(event.facts.sourceRevision)
+        || !isSourceRevision(record.originalAudit.after.sourceTicketRevision)
+        || event.facts.sourceRevision !== record.originalAudit.after.sourceTicketRevision
       ) {
         throw new OperationalStoreError(
           `Persisted diagnosis record ${record.diagnosis.id} does not match its causal milestone.`,
@@ -172,9 +182,13 @@ function validateDiagnosisAuthorityReferences(
       if (
         !review.success
         || !diagnosisIds.has(review.data.diagnosisId)
+        || review.data.ticketId !== audit.ticketId
+        || review.data.actor !== audit.actor
+        || review.data.reviewedAt !== audit.timestamp
         || audit.before.diagnosisId !== review.data.diagnosisId
         || (event !== undefined && (
           event.facts.diagnosisOutcome !== review.data.decision
+          || !isSourceRevision(event.facts.sourceRevision)
           || event.facts.sourceRevision !== review.data.sourceTicketRevision
         ))
       ) {
@@ -203,9 +217,12 @@ function validateDiagnosisAuthorityReferences(
       if (
         audit.after.diagnosisInvalidated !== true
         || event.facts.outcome !== "invalidated"
+        || !isSourceRevision(event.facts.sourceRevision)
+        || !isSourceRevision(audit.before.sourceTicketRevision)
+        || event.facts.sourceRevision !== audit.before.sourceTicketRevision
       ) {
         throw new OperationalStoreError(
-          `Persisted diagnosis invalidation audit ${audit.id} has inconsistent outcome data.`,
+          `Persisted diagnosis invalidation audit ${audit.id} has inconsistent outcome or source revision data.`,
           "PERSISTENCE_ERROR",
         );
       }
@@ -225,9 +242,38 @@ function validateDiagnosisAuthorityReferences(
   }
 }
 
+function diagnosisRecordMatchesOriginalAudit(record: OperationalDiagnosisRecord): boolean {
+  const context = DiagnosisContextSchema.safeParse(record.originalAudit.after.diagnosis);
+  if (!context.success) return false;
+  const completedDiagnosis = record.diagnosis;
+  const expectedOwnerTeam = context.data.owner === "engineering"
+    ? "api-platform"
+    : context.data.owner === "integration-partner"
+      ? "integrations"
+      : "support";
+  return completedDiagnosis.id === `diagnosis-${record.originalAudit.id}`
+    && completedDiagnosis.ticketId === record.originalAudit.ticketId
+    && completedDiagnosis.problem === context.data.customerSafeSummary
+    && isDeepStrictEqual(completedDiagnosis.symptoms, [context.data.causeType, ...context.data.evidenceUsed])
+    && isDeepStrictEqual(completedDiagnosis.evidenceUsed, context.data.evidenceUsed)
+    && isDeepStrictEqual(completedDiagnosis.evidenceReferences, context.data.evidenceReferences ?? [])
+    && completedDiagnosis.ownerTeam === expectedOwnerTeam
+    && isDeepStrictEqual(completedDiagnosis.fixSteps, [
+      "Apply the completed diagnosis next action through the governed support workflow.",
+    ])
+    && isDeepStrictEqual(completedDiagnosis.verificationSteps, [
+      "Confirm the customer-safe outcome after the governed next action.",
+    ])
+    && completedDiagnosis.completedAt === record.originalAudit.timestamp;
+}
+
 function isEligibleInvestigation(originalAudit: AuditEvent): boolean {
   const parsed = DiagnosisContextSchema.safeParse(originalAudit.after.diagnosis);
   if (!parsed.success) return false;
   const state = parsed.data.diagnosticState?.state;
   return state === undefined || state === "working-diagnosis" || state === "confirmed";
+}
+
+function isSourceRevision(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0;
 }

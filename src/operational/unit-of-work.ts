@@ -5,11 +5,17 @@ import {
   TicketIdSchema,
   TicketSchema,
   TriageRecommendationSchema,
+  AuditEventSchema,
   type AuditEvent,
   type Ticket,
   type TicketId,
   type TriageRecommendation,
 } from "../domain.js";
+import {
+  DiagnosisAuditIntegrityError,
+  isDiagnosisAuthorityAuditAction,
+  receiptBackedDiagnosisAuditForEvent,
+} from "./diagnosis-audit.js";
 import {
   CompletedDiagnosisSchema,
   type CompletedDiagnosis,
@@ -1075,6 +1081,165 @@ export class OperationalUnitOfWork {
     this.assertActive();
     return (this.database.prepare("SELECT id FROM tickets ORDER BY id ASC").all() as Array<{ id: string }>)
       .map(({ id }) => parseWith(TicketIdSchema, id, "Operational ticket ID is corrupt."));
+  }
+
+  /**
+   * Read only the operational data needed to discover completed diagnoses.
+   * The caller owns the surrounding transaction, so every ticket observes one
+   * coherent database snapshot without reconstructing unrelated projections.
+   */
+  readCompletedDiagnosisSnapshots(): Array<{
+    readonly ticket: Ticket;
+    readonly audits: readonly AuditEvent[];
+    readonly diagnoses: readonly OperationalWorkflowSnapshot["diagnoses"][number][];
+  }> {
+    this.assertActive();
+    const diagnosisRows = this.database.prepare(`
+      SELECT diagnoses.ticket_id, diagnoses.id, diagnoses.payload_json
+      FROM diagnoses
+      JOIN operational_events AS events
+        ON events.id = diagnoses.operational_event_id
+       AND events.ticket_id = diagnoses.ticket_id
+      ORDER BY diagnoses.ticket_id ASC, events.sequence ASC, diagnoses.id ASC
+    `).all() as Array<{ ticket_id: string; id: string; payload_json: string }>;
+    if (diagnosisRows.length === 0) return [];
+
+    const ticketIds = [...new Set(diagnosisRows.map(({ ticket_id }) =>
+      parseWith(TicketIdSchema, ticket_id, "Operational ticket ID is corrupt.")))];
+    const placeholders = ticketIds.map(() => "?").join(", ");
+    const ticketRows = this.database.prepare(`
+      SELECT id, payload_json
+      FROM tickets
+      WHERE id IN (${placeholders})
+      ORDER BY id ASC
+    `).all(...ticketIds) as Array<{ id: string; payload_json: string }>;
+    const tickets = new Map(ticketRows.map((row) => [
+      parseWith(TicketIdSchema, row.id, "Operational ticket ID is corrupt."),
+      parseStoredJson(row.payload_json, TicketSchema, "Operational ticket data is corrupt."),
+    ] as const));
+
+    const eventRows = this.database.prepare(`
+      SELECT ticket_id, event_json
+      FROM operational_events
+      WHERE ticket_id IN (${placeholders})
+      ORDER BY ticket_id ASC, sequence ASC
+    `).all(...ticketIds) as Array<{ ticket_id: string; event_json: string }>;
+    const eventsByTicket = new Map<TicketId, OperationalEvent[]>();
+    for (const row of eventRows) {
+      const parsedTicketId = parseWith(TicketIdSchema, row.ticket_id, "Operational ticket ID is corrupt.");
+      const event = parseStoredJson(row.event_json, OperationalEventSchema, "Operational event data is corrupt.");
+      if (event.ticketId !== parsedTicketId) {
+        throw new OperationalStoreError("Operational event ticket binding is corrupt.", "PERSISTENCE_ERROR");
+      }
+      const events = eventsByTicket.get(parsedTicketId) ?? [];
+      events.push(event);
+      eventsByTicket.set(parsedTicketId, events);
+    }
+
+    const messageRows = this.database.prepare(`
+      SELECT ticket_id, payload_json
+      FROM conversation_messages
+      WHERE ticket_id IN (${placeholders}) AND kind = 'customer'
+      ORDER BY ticket_id ASC, created_at ASC, id ASC
+    `).all(...ticketIds) as Array<{ ticket_id: string; payload_json: string }>;
+    const messagesByTicket = new Map<TicketId, ConversationMessage[]>();
+    for (const row of messageRows) {
+      const parsedTicketId = parseWith(TicketIdSchema, row.ticket_id, "Operational ticket ID is corrupt.");
+      const message = parseStoredJson(
+        row.payload_json,
+        ConversationMessageSchema,
+        "Operational conversation message data is corrupt.",
+      );
+      if (message.ticketId !== parsedTicketId || message.kind !== "customer") {
+        throw new OperationalStoreError("Operational customer reply binding is corrupt.", "PERSISTENCE_ERROR");
+      }
+      const messages = messagesByTicket.get(parsedTicketId) ?? [];
+      messages.push(message);
+      messagesByTicket.set(parsedTicketId, messages);
+    }
+
+    const diagnosesByTicket = new Map<TicketId, OperationalWorkflowSnapshot["diagnoses"]>();
+    for (const row of diagnosisRows) {
+      const parsedTicketId = parseWith(TicketIdSchema, row.ticket_id, "Operational ticket ID is corrupt.");
+      const diagnosis = parseStoredJson(
+        row.payload_json,
+        OperationalDiagnosisRecordSchema,
+        "Operational diagnosis data is corrupt.",
+      );
+      const diagnoses = diagnosesByTicket.get(parsedTicketId) ?? [];
+      diagnoses.push(diagnosis);
+      diagnosesByTicket.set(parsedTicketId, diagnoses);
+    }
+
+    return ticketIds.map((ticketId) => {
+      const ticket = tickets.get(ticketId);
+      const events = eventsByTicket.get(ticketId) ?? [];
+      const diagnoses = diagnosesByTicket.get(ticketId) ?? [];
+      if (ticket === undefined || events.length === 0 || diagnoses.length === 0) {
+        throw new OperationalStoreError("Operational diagnosis discovery state is incomplete.", "PERSISTENCE_ERROR");
+      }
+      const diagnosisAudits = new Map(
+        diagnoses.map((diagnosis) => [diagnosis.originalAudit.id, diagnosis.originalAudit] as const),
+      );
+      if (diagnosisAudits.size !== diagnoses.length) {
+        throw new OperationalStoreError(
+          "Operational diagnosis records contain duplicate causal audits.",
+          "PERSISTENCE_ERROR",
+        );
+      }
+      const customerMessages = messagesByTicket.get(ticketId) ?? [];
+      const messages = new Map(
+        customerMessages.map((message) => [message.operationalEventId, message] as const),
+      );
+      if (messages.size !== customerMessages.length) {
+        throw new OperationalStoreError(
+          "Operational customer replies contain duplicate causal events.",
+          "PERSISTENCE_ERROR",
+        );
+      }
+      const audits: AuditEvent[] = [];
+      for (const event of events) {
+        const originalAudit = diagnosisAudits.get(event.id);
+        if (originalAudit !== undefined) {
+          audits.push(originalAudit);
+          continue;
+        }
+        try {
+          const receiptAudit = isDiagnosisAuthorityAuditAction(event.action)
+            ? receiptBackedDiagnosisAuditForEvent(
+                event,
+                this.readCommandResult(event.commandId),
+                "strict",
+              )
+            : undefined;
+          if (receiptAudit !== undefined) {
+            audits.push(receiptAudit);
+            continue;
+          }
+        } catch (error) {
+          if (error instanceof DiagnosisAuditIntegrityError) {
+            throw new OperationalStoreError(error.message, "PERSISTENCE_ERROR", { cause: error });
+          }
+          throw error;
+        }
+        const message = messages.get(event.id);
+        if (message !== undefined) {
+          audits.push(AuditEventSchema.parse({
+            id: message.id,
+            timestamp: message.createdAt,
+            actor: event.actor,
+            action: "customer-reply-received",
+            ticketId: event.ticketId,
+            before: {},
+            after: { body: message.body },
+            rationale: "Customer reply added to ticket conversation.",
+            knowledgeArticleIds: [],
+            result: "success",
+          }));
+        }
+      }
+      return { ticket, audits, diagnoses, events };
+    });
   }
 
   readRecommendation(id: string): TriageRecommendation | undefined {

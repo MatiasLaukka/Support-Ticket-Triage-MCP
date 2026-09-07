@@ -6,8 +6,14 @@ import { afterEach, describe, expect, it } from "vitest";
 import { AuditEventSchema, TicketSchema, type AuditEvent, type Ticket } from "../src/domain.js";
 import { createApprovalDeskHttpServer } from "../src/approval-desk/http.js";
 import { resetOperationalDemoState } from "../src/demo-reset.js";
-import { eligibleCompletedDiagnoses } from "../src/knowledge-evolution/completed-diagnosis-source.js";
-import { OperationalDiagnosisRecordSchema, type OperationalWorkflowSnapshot } from "../src/operational/domain.js";
+import { authoritativeOperationalAudits, eligibleCompletedDiagnoses } from "../src/knowledge-evolution/completed-diagnosis-source.js";
+import {
+  OperationalDiagnosisRecordSchema,
+  OperationalEventSchema,
+  OperationalWorkflowSnapshotSchema,
+  type OperationalResultReference,
+  type OperationalWorkflowSnapshot,
+} from "../src/operational/domain.js";
 import { createRuntimeDependencies, type RuntimeDependencies } from "../src/runtime.js";
 
 const roots: string[] = [];
@@ -18,6 +24,72 @@ afterEach(async () => {
 });
 
 describe("operational knowledge discovery", () => {
+  it("rejects discovery when an authority-bearing diagnosis review receipt is missing", () => {
+    const { diagnosis, snapshot } = operationalSnapshotWithReview("reject");
+    expect(() => {
+      const audits = authoritativeOperationalAudits({ readCommandResult: () => undefined }, snapshot);
+      return eligibleCompletedDiagnoses({
+        ticket: snapshot.ticket,
+        audits,
+        diagnoses: snapshot.diagnoses,
+      });
+    }).toThrow(/persisted diagnosis lifecycle audit/i);
+    expect(diagnosis.diagnosis.id).toBe("diagnosis-60000000-0000-4000-8000-000000000001");
+  });
+
+  it("rejects discovery when an authority-bearing diagnosis audit is causally redirected", () => {
+    const { snapshot, review } = operationalSnapshotWithReview("reject");
+    const redirected = AuditEventSchema.parse({
+      ...review,
+      action: "diagnosis-invalidated",
+    });
+    const result: OperationalResultReference = {
+      operation: "review-diagnosis",
+      tickets: [{ ticketId, operationalEventIds: [review.id], resultingRevision: null }],
+      lifecycleAuditEvents: [redirected],
+    };
+
+    expect(() => {
+      const audits = authoritativeOperationalAudits({ readCommandResult: () => result }, snapshot);
+      return eligibleCompletedDiagnoses({
+        ticket: snapshot.ticket,
+        audits,
+        diagnoses: snapshot.diagnoses,
+      });
+    }).toThrow(/causal event/i);
+  });
+
+  it("rejects a receipt whose diagnosis review payload points at another diagnosis", () => {
+    const { snapshot, review } = operationalSnapshotWithReview("reject");
+    const reviewPayload = review.after.diagnosisReview as Record<string, unknown>;
+    const redirected = AuditEventSchema.parse({
+      ...review,
+      before: { diagnosisId: "diagnosis-60000000-0000-4000-8000-000000000099" },
+      after: {
+        ...review.after,
+        diagnosisReview: {
+          ...reviewPayload,
+          diagnosisId: "diagnosis-60000000-0000-4000-8000-000000000099",
+        },
+      },
+    });
+    const result: OperationalResultReference = {
+      operation: "review-diagnosis",
+      tickets: [{ ticketId, operationalEventIds: [review.id], resultingRevision: null }],
+      lifecycleAuditEvents: [redirected],
+    };
+
+    expect(() => {
+      const audits = authoritativeOperationalAudits({ readCommandResult: () => result }, snapshot);
+      return eligibleCompletedDiagnoses({
+        ticket: snapshot.ticket,
+        audits,
+        diagnoses: snapshot.diagnoses,
+        events: snapshot.events,
+      });
+    }).toThrow(/inconsistent diagnosis/i);
+  });
+
   it("keeps pending-review and absent-investigation diagnoses advisory-eligible", () => {
     const diagnosis = diagnosisRecord();
     const original = diagnosis.originalAudit;
@@ -195,6 +267,47 @@ function completedDiagnosisSnapshot(
     audits,
     diagnoses,
   };
+}
+
+function operationalSnapshotWithReview(
+  decision: "approve" | "reject" | "revalidate",
+): { diagnosis: ReturnType<typeof diagnosisRecord>; review: AuditEvent; snapshot: OperationalWorkflowSnapshot } {
+  const diagnosis = diagnosisRecord();
+  const review = reviewAudits(diagnosis.originalAudit, decision)[0]!;
+  const snapshot = OperationalWorkflowSnapshotSchema.parse({
+    ticket: makeTicket(),
+    ticketRevisions: [],
+    recommendations: [],
+    recommendationRevisions: [],
+    diagnosticTaxonomyRevisions: [],
+    messages: [],
+    diagnoses: [diagnosis],
+    events: [
+      OperationalEventSchema.parse({
+        id: diagnosis.originalAudit.id,
+        ticketId,
+        sequence: 1,
+        occurredAt: diagnosis.originalAudit.timestamp,
+        actor: diagnosis.originalAudit.actor,
+        action: "diagnosis-completed",
+        commandId: "90000000-0000-4000-8000-000000000001",
+        facts: {},
+      }),
+      OperationalEventSchema.parse({
+        id: review.id,
+        ticketId,
+        sequence: 2,
+        occurredAt: review.timestamp,
+        actor: review.actor,
+        action: "diagnosis-reviewed",
+        commandId: "90000000-0000-4000-8000-000000000002",
+        facts: { diagnosisOutcome: decision, sourceRevision: 0 },
+      }),
+    ],
+    traces: [],
+    customerReplyWatermark: { state: "none" },
+  });
+  return { diagnosis, review, snapshot };
 }
 
 function diagnosisRecord(options: {

@@ -1,5 +1,4 @@
 import {
-  AuditEventSchema,
   TicketIdSchema,
   type AuditEvent,
   type Ticket,
@@ -12,6 +11,10 @@ import type { PaginatedTickets, TicketFilter } from "../ticket-repository.js";
 import { operationalAuditEventsFromSnapshot } from "../triage-service.js";
 import { operationalDiagnosisAudits } from "../approval-desk/diagnosis-review.js";
 import { OperationalSqliteStore } from "./sqlite-store.js";
+import {
+  DiagnosisAuditIntegrityError,
+  receiptBackedDiagnosisAuditForEvent,
+} from "./diagnosis-audit.js";
 import { OperationalStoreError } from "./unit-of-work.js";
 import type { OperationalWorkflowSnapshot } from "./domain.js";
 
@@ -96,17 +99,28 @@ export class OperationalAuditRepository {
         });
         return snapshot.events.flatMap((event) => {
           const diagnosisAudit = authoritativeDiagnosisAudits.find(({ id }) => id === event.id);
-          const lifecycleAudit = unit.readCommandResult(event.commandId)
-            ?.lifecycleAuditEvents?.find((candidate) => candidate.id === event.id);
+          let receiptAudit: AuditEvent | undefined;
+          try {
+            receiptAudit = receiptBackedDiagnosisAuditForEvent(
+              event,
+              unit.readCommandResult(event.commandId),
+              "legacy",
+            );
+          } catch (error) {
+            if (error instanceof DiagnosisAuditIntegrityError) {
+              throw new OperationalStoreError(error.message, "PERSISTENCE_ERROR", { cause: error });
+            }
+            throw error;
+          }
           return event.action === "diagnosis-completed"
               || event.action === "diagnostic-escalated"
             ? diagnosisAudit === undefined ? [] : [diagnosisAudit]
-            : lifecycleAudit === undefined
+            : receiptAudit === undefined
               ? operationalAuditEventsFromSnapshot({
                   ...snapshot,
                   events: [event],
                 })
-              : [AuditEventSchema.parse(lifecycleAudit)];
+              : [receiptAudit];
         });
       }));
     } catch (error) {

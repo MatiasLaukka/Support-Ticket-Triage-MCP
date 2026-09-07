@@ -1,6 +1,7 @@
-import { AuditEventSchema, type AuditEvent, type Ticket } from "../domain.js";
+import type { AuditEvent, Ticket } from "../domain.js";
 import {
   diagnosisReviewViews,
+  DiagnosisReviewDecisionSchema,
   operationalDiagnosisAudits,
 } from "../approval-desk/diagnosis-review.js";
 import {
@@ -12,7 +13,12 @@ import {
   operationalAuditEventsFromSnapshot,
 } from "../triage-service.js";
 import type { OperationalWorkflowSnapshot } from "../operational/domain.js";
-import type { OperationalUnitOfWork } from "../operational/unit-of-work.js";
+import {
+  DiagnosisAuditIntegrityError,
+  isDiagnosisAuthorityAuditAction,
+  receiptBackedDiagnosisAuditForEvent,
+} from "../operational/diagnosis-audit.js";
+import { OperationalStoreError, type OperationalUnitOfWork } from "../operational/unit-of-work.js";
 import type { CompletedDiagnosis } from "./domain.js";
 
 type OperationalDiagnosisRecord = OperationalWorkflowSnapshot["diagnoses"][number];
@@ -25,11 +31,13 @@ export interface CompletedDiagnosisReadSnapshot {
   ticket: Ticket;
   audits: readonly AuditEvent[];
   diagnoses: readonly OperationalDiagnosisRecord[];
+  events?: readonly OperationalWorkflowSnapshot["events"][number][];
 }
 
 export function eligibleCompletedDiagnoses(
   snapshot: CompletedDiagnosisReadSnapshot,
 ): CompletedDiagnosis[] {
+  validateDiagnosisAuthorityReferences(snapshot);
   const viewsByOriginalId = new Map(
     diagnosisReviewViews({
       ticket: snapshot.ticket,
@@ -85,12 +93,136 @@ export function authoritativeOperationalAudits(
     if (event.action === "diagnosis-completed" || event.action === "diagnostic-escalated") {
       return authoritativeDiagnosisAudits.filter(({ id }) => id === event.id);
     }
-    const lifecycleAudit = unit.readCommandResult(event.commandId)
-      ?.lifecycleAuditEvents?.find((candidate) => candidate.id === event.id);
-    return lifecycleAudit === undefined
-      ? operationalAuditEventsFromSnapshot({ ...snapshot, events: [event] })
-      : [AuditEventSchema.parse(lifecycleAudit)];
+    try {
+      const receiptAudit = receiptBackedDiagnosisAuditForEvent(
+        event,
+        unit.readCommandResult(event.commandId),
+        isDiagnosisAuthorityAuditAction(event.action) ? "strict" : "legacy",
+      );
+      return receiptAudit === undefined
+        ? operationalAuditEventsFromSnapshot({ ...snapshot, events: [event] })
+        : [receiptAudit];
+    } catch (error) {
+      if (error instanceof DiagnosisAuditIntegrityError) {
+        throw new OperationalStoreError(error.message, "PERSISTENCE_ERROR", { cause: error });
+      }
+      throw error;
+    }
   });
+}
+
+function validateDiagnosisAuthorityReferences(
+  snapshot: CompletedDiagnosisReadSnapshot,
+): void {
+  const diagnosisIds = new Set(snapshot.diagnoses.map(({ originalAudit }) => originalAudit.id));
+  for (const record of snapshot.diagnoses) {
+    if (
+      record.diagnosis.ticketId !== snapshot.ticket.id
+      || record.originalAudit.ticketId !== snapshot.ticket.id
+      || record.originalAudit.id !== record.operationalEventId
+      || (record.originalAudit.action !== "diagnosis-completed"
+        && record.originalAudit.action !== "diagnostic-escalated")
+    ) {
+      throw new OperationalStoreError(
+        `Persisted diagnosis record ${record.diagnosis.id} has inconsistent ticket or causal-event identity.`,
+        "PERSISTENCE_ERROR",
+      );
+    }
+  }
+  if (snapshot.events !== undefined) {
+    const eventsById = new Map(snapshot.events.map((event) => [event.id, event] as const));
+    const milestoneIds = new Set(
+      snapshot.events
+        .filter(({ action }) => action === "diagnosis-completed" || action === "diagnostic-escalated")
+        .map(({ id }) => id),
+    );
+    if (milestoneIds.size !== diagnosisIds.size || [...milestoneIds].some((id) => !diagnosisIds.has(id))) {
+      throw new OperationalStoreError(
+        "Persisted diagnosis records do not match the operational diagnosis milestones.",
+        "PERSISTENCE_ERROR",
+      );
+    }
+    for (const record of snapshot.diagnoses) {
+      const event = eventsById.get(record.originalAudit.id);
+      if (
+        event === undefined
+        || event.ticketId !== record.originalAudit.ticketId
+        || event.action !== record.originalAudit.action
+        || event.actor !== record.originalAudit.actor
+        || event.occurredAt !== record.originalAudit.timestamp
+      ) {
+        throw new OperationalStoreError(
+          `Persisted diagnosis record ${record.diagnosis.id} does not match its causal milestone.`,
+          "PERSISTENCE_ERROR",
+        );
+      }
+    }
+  }
+  for (const audit of snapshot.audits) {
+    if (!isDiagnosisAuthorityAuditAction(audit.action)) continue;
+    const event = snapshot.events?.find(({ id }) => id === audit.id);
+    if (snapshot.events !== undefined && (event === undefined || event.ticketId !== audit.ticketId)) {
+      throw new OperationalStoreError(
+        `Persisted diagnosis lifecycle audit ${audit.id} has no matching causal event.`,
+        "PERSISTENCE_ERROR",
+      );
+    }
+    if (audit.action === "diagnosis-reviewed") {
+      const review = DiagnosisReviewDecisionSchema.safeParse(audit.after.diagnosisReview);
+      if (
+        !review.success
+        || !diagnosisIds.has(review.data.diagnosisId)
+        || audit.before.diagnosisId !== review.data.diagnosisId
+        || (event !== undefined && (
+          event.facts.diagnosisOutcome !== review.data.decision
+          || event.facts.sourceRevision !== review.data.sourceTicketRevision
+        ))
+      ) {
+        throw new OperationalStoreError(
+          `Persisted diagnosis review audit ${audit.id} references inconsistent diagnosis or revision data.`,
+          "PERSISTENCE_ERROR",
+        );
+      }
+      continue;
+    }
+    const diagnosisId = audit.before.diagnosisId;
+    if (typeof diagnosisId !== "string" || !diagnosisIds.has(diagnosisId)) {
+      throw new OperationalStoreError(
+        `Persisted diagnosis lifecycle audit ${audit.id} references an unknown diagnosis.`,
+        "PERSISTENCE_ERROR",
+      );
+    }
+    if (event !== undefined && event.facts.diagnosisId !== diagnosisId) {
+      throw new OperationalStoreError(
+        `Persisted diagnosis lifecycle audit ${audit.id} disagrees with its causal diagnosis reference.`,
+        "PERSISTENCE_ERROR",
+      );
+    }
+    if (event === undefined) continue;
+    if (audit.action === "diagnosis-invalidated") {
+      if (
+        audit.after.diagnosisInvalidated !== true
+        || event.facts.outcome !== "invalidated"
+      ) {
+        throw new OperationalStoreError(
+          `Persisted diagnosis invalidation audit ${audit.id} has inconsistent outcome data.`,
+          "PERSISTENCE_ERROR",
+        );
+      }
+    } else if (
+      audit.before.fixEventId !== event.facts.fixEventId
+      || snapshot.events!.find(({ id, action, ticketId }) =>
+        id === audit.before.fixEventId && action === "fix-available" && ticketId === audit.ticketId,
+      ) === undefined
+      || audit.after.outcome !== "ineffective"
+      || event.facts.outcome !== "ineffective"
+    ) {
+      throw new OperationalStoreError(
+        `Persisted fix verification audit ${audit.id} has inconsistent causal references.`,
+        "PERSISTENCE_ERROR",
+      );
+    }
+  }
 }
 
 function isEligibleInvestigation(originalAudit: AuditEvent): boolean {

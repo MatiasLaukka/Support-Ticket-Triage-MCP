@@ -691,6 +691,23 @@ describe("OperationalSqliteStore migrations and transaction boundary", () => {
     store.close();
   });
 
+  it("normalizes SQLite locks while discovering completed diagnoses", () => {
+    const path = temporaryDatabasePath();
+    const store = OperationalSqliteStore.open(path, { busyTimeoutMs: 80 });
+    store.initialize();
+    const raw = new Database(path);
+    raw.exec("BEGIN EXCLUSIVE");
+    try {
+      expect(() => store.readCompletedDiagnosisSnapshots()).toThrowError(
+        expect.objectContaining({ code: "PERSISTENCE_ERROR" }),
+      );
+    } finally {
+      raw.exec("ROLLBACK");
+      raw.close();
+      store.close();
+    }
+  });
+
   it("stores taxonomy revision identity as single-column unique keys in schema v3", () => {
     const path = temporaryDatabasePath();
 

@@ -671,7 +671,7 @@ function operationalSnapshotWithReview(
         actor: diagnosis.originalAudit.actor,
         action: "diagnosis-completed",
         commandId: "90000000-0000-4000-8000-000000000001",
-        facts: {},
+        facts: { diagnosisOutcome: "completed", sourceRevision: 0 },
       }),
       OperationalEventSchema.parse({
         id: review.id,

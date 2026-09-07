@@ -127,7 +127,12 @@ function validateReceiptAuditPayload(
 ): void {
   const facts = eventFacts(event);
   if (event.action === "diagnosis-completed" || event.action === "diagnostic-escalated") {
-    if (!OperationalDiagnosisContextSchema.safeParse(audit.after.diagnosis).success) {
+    if (
+      !OperationalDiagnosisContextSchema.safeParse(audit.after.diagnosis).success
+      || !isRevision(audit.after.sourceTicketRevision)
+      || !isRevision(facts.sourceRevision)
+      || audit.after.sourceTicketRevision !== facts.sourceRevision
+    ) {
       throw new DiagnosisAuditIntegrityError(
         "Persisted diagnosis origin audit has an invalid diagnosis payload.",
       );
@@ -185,8 +190,20 @@ function validateReceiptAuditPayload(
 
 function isDiagnosisReviewRecord(review: Record<string, unknown>): boolean {
   const decision = review.decision;
+  const allowedKeys = new Set([
+    "decision",
+    "diagnosisId",
+    "ticketId",
+    "sourceTicketRevision",
+    "sourceConversationWatermark",
+    "editedDiagnosis",
+    "actor",
+    "rationale",
+    "reviewedAt",
+  ]);
   return (
-    (decision === "approve" || decision === "reject" || decision === "revalidate")
+    Object.keys(review).every((key) => allowedKeys.has(key))
+    && (decision === "approve" || decision === "reject" || decision === "revalidate")
     && DiagnosisIdSchema.safeParse(review.diagnosisId).success
     && TicketIdSchema.safeParse(review.ticketId).success
     && isRevision(review.sourceTicketRevision)
@@ -238,7 +255,8 @@ export function projectDiagnosisAudits({
     fallbackAudits.filter((audit) => !originalById.has(audit.id)),
     "fallback",
   );
-  return events.flatMap((event) => {
+  const receiptAudits = new Map<string, AuditEvent>();
+  const projectedAudits = events.flatMap((event) => {
     const fallbackAudit = originalById.get(event.id) ?? fallbackById.get(event.id);
     const eventFallbackAudits = fallbackAuditsByEventId?.get(event.id) ?? (
       fallbackAudit === undefined ? [] : [fallbackAudit]
@@ -249,7 +267,7 @@ export function projectDiagnosisAudits({
       isDiagnosisReceiptBackedAuditAction(event.action) ? policy : "legacy",
     );
     if (receiptAudit !== undefined) {
-      validateCrossRecordReferences(event, receiptAudit, events, originalAudits);
+      receiptAudits.set(event.id, receiptAudit);
       if (
         isDiagnosisReceiptBackedAuditAction(event.action)
         && isDiagnosisOriginAuditAction(event.action)
@@ -264,6 +282,14 @@ export function projectDiagnosisAudits({
     }
     return eventFallbackAudits;
   });
+  const projectedById = uniqueAuditMap(projectedAudits, "projected");
+  for (const event of events) {
+    const receiptAudit = receiptAudits.get(event.id);
+    if (receiptAudit !== undefined) {
+      validateCrossRecordReferences(event, receiptAudit, events, originalAudits, projectedById);
+    }
+  }
+  return projectedAudits;
 }
 
 function validateCrossRecordReferences(
@@ -271,6 +297,7 @@ function validateCrossRecordReferences(
   audit: AuditEvent,
   events: readonly OperationalEvent[],
   originalAudits: readonly AuditEvent[],
+  projectedAudits: ReadonlyMap<string, AuditEvent>,
 ): void {
   if (!isDiagnosisAuthorityAuditAction(event.action)) return;
   const diagnosisId = audit.before.diagnosisId;
@@ -289,7 +316,14 @@ function validateCrossRecordReferences(
         id === audit.before.fixEventId
         && ticketId === event.ticketId
         && action === "fix-available",
-      ) === false)
+      ) === false
+      || (() => {
+        const fixEvent = events.find(({ id }) => id === audit.before.fixEventId);
+        const fixAudit = projectedAudits.get(audit.before.fixEventId as string);
+        return fixEvent === undefined
+          || fixAudit?.before.diagnosisId !== diagnosisId
+          || fixEvent.sequence >= event.sequence;
+      })())
   ) {
     throw new DiagnosisAuditIntegrityError(
       `Persisted ineffective-fix audit ${event.id} references an unknown fix event.`,

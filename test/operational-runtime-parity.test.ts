@@ -215,6 +215,120 @@ describe("production operational runtime parity", () => {
       .rejects.toMatchObject({ code: "PERSISTENCE_ERROR" });
   });
 
+  it("rejects malformed and cross-record authority receipt payloads", async () => {
+    const scenarios = [
+      {
+        commandId: "87000000-0000-4000-8000-000000000031",
+        eventId: "87000000-0000-4000-8000-000000000032",
+        action: "diagnosis-completed" as const,
+        facts: { diagnosisOutcome: "completed", sourceRevision: 0 },
+        result: {
+          operation: "record-diagnosis" as const,
+          diagnosisId: "diagnosis-87000000-0000-4000-8000-000000000032",
+          before: {},
+          after: { diagnosis: { status: "completed" } },
+        },
+      },
+      {
+        commandId: "87000000-0000-4000-8000-000000000041",
+        eventId: "87000000-0000-4000-8000-000000000042",
+        action: "diagnosis-reviewed" as const,
+        facts: { diagnosisOutcome: "reject", sourceRevision: 0 },
+        result: {
+          operation: "review-diagnosis" as const,
+          diagnosisId: undefined,
+          before: { diagnosisId: "87000000-0000-4000-8000-000000000043" },
+          after: {
+            diagnosisReview: {
+              decision: "reject",
+              diagnosisId: "87000000-0000-4000-8000-000000000043",
+              ticketId: "TKT-0001",
+              sourceTicketRevision: 0,
+              sourceConversationWatermark: { state: "none" },
+              editedDiagnosis: {},
+              actor: "reviewer",
+              rationale: "Rejected.",
+              reviewedAt: fixedNow,
+            },
+          },
+        },
+      },
+      {
+        commandId: "87000000-0000-4000-8000-000000000051",
+        eventId: "87000000-0000-4000-8000-000000000052",
+        action: "fix-ineffective" as const,
+        facts: {
+          diagnosisId: "87000000-0000-4000-8000-000000000053",
+          fixEventId: "87000000-0000-4000-8000-000000000054",
+          outcome: "ineffective",
+          sourceRevision: 0,
+        },
+        result: {
+          operation: "record-fix-ineffective" as const,
+          diagnosisId: undefined,
+          before: {
+            diagnosisId: "87000000-0000-4000-8000-000000000053",
+            fixEventId: "87000000-0000-4000-8000-000000000054",
+          },
+          after: { outcome: "ineffective" },
+        },
+      },
+    ];
+
+    for (const scenario of scenarios) {
+      const event = OperationalEventSchema.parse({
+        id: scenario.eventId,
+        ticketId: "TKT-0001",
+        sequence: 1,
+        occurredAt: fixedNow,
+        actor: "reviewer",
+        action: scenario.action,
+        commandId: scenario.commandId,
+        facts: scenario.facts,
+      });
+      const audit = AuditEventSchema.parse({
+        id: scenario.eventId,
+        timestamp: fixedNow,
+        actor: "reviewer",
+        action: scenario.action,
+        ticketId: "TKT-0001",
+        before: scenario.result.before,
+        after: scenario.result.after,
+        rationale: "Tampered authority payload.",
+        knowledgeArticleIds: [],
+        result: "success",
+      });
+      const result: OperationalResultReference = {
+        operation: scenario.result.operation,
+        tickets: [{ ticketId: "TKT-0001", operationalEventIds: [scenario.eventId], resultingRevision: null }],
+        ...(scenario.result.diagnosisId === undefined ? {} : { diagnosisId: scenario.result.diagnosisId }),
+        lifecycleAuditEvents: [audit],
+      };
+      const snapshot = OperationalWorkflowSnapshotSchema.parse({
+        ticket: importedTicket(),
+        ticketRevisions: [],
+        recommendations: [],
+        recommendationRevisions: [],
+        diagnosticTaxonomyRevisions: [],
+        messages: [],
+        diagnoses: [],
+        events: [event],
+        traces: [],
+        customerReplyWatermark: { state: "none" },
+      });
+      const store = {
+        transaction: <T>(work: (unit: unknown) => T) => work({
+          readTicketIds: () => ["TKT-0001"],
+          readWorkflowSnapshot: () => snapshot,
+          readCommandResults: () => new Map([[scenario.commandId, result]]),
+        }),
+      } as unknown as OperationalSqliteStore;
+
+      await expect(new OperationalAuditRepository(store).list())
+        .rejects.toMatchObject({ code: "PERSISTENCE_ERROR" });
+    }
+  });
+
   it("blocks evaluation before provider work while a readable import is incomplete", async () => {
     const fixture = await runtimeFixture();
     const database = join(fixture.root, "partial-import.sqlite");

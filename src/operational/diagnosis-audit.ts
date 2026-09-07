@@ -1,6 +1,17 @@
 import { isDeepStrictEqual } from "node:util";
-import { AuditEventSchema, type AuditEvent } from "../domain.js";
-import type { OperationalEvent, OperationalResultReference } from "./domain.js";
+import {
+  AuditEventSchema,
+  CustomerReplyWatermarkSchema,
+  DiagnosisIdSchema,
+  IsoTimestampSchema,
+  TicketIdSchema,
+  type AuditEvent,
+} from "../domain.js";
+import {
+  OperationalDiagnosisContextSchema,
+  type OperationalEvent,
+  type OperationalResultReference,
+} from "./domain.js";
 
 /** Diagnosis lifecycle actions whose persisted payload can affect authority. */
 export const DIAGNOSIS_AUTHORITY_AUDIT_ACTIONS = [
@@ -116,9 +127,9 @@ function validateReceiptAuditPayload(
 ): void {
   const facts = eventFacts(event);
   if (event.action === "diagnosis-completed" || event.action === "diagnostic-escalated") {
-    if (typeof audit.after.diagnosis !== "object" || audit.after.diagnosis === null) {
+    if (!OperationalDiagnosisContextSchema.safeParse(audit.after.diagnosis).success) {
       throw new DiagnosisAuditIntegrityError(
-        "Persisted diagnosis origin audit is missing its diagnosis payload.",
+        "Persisted diagnosis origin audit has an invalid diagnosis payload.",
       );
     }
     return;
@@ -130,6 +141,7 @@ function validateReceiptAuditPayload(
       : undefined;
     if (
       reviewRecord === undefined
+      || !isDiagnosisReviewRecord(reviewRecord)
       || reviewRecord.ticketId !== event.ticketId
       || reviewRecord.actor !== event.actor
       || reviewRecord.reviewedAt !== event.occurredAt
@@ -169,6 +181,26 @@ function validateReceiptAuditPayload(
       "Persisted ineffective-fix audit does not match its causal event.",
     );
   }
+}
+
+function isDiagnosisReviewRecord(review: Record<string, unknown>): boolean {
+  const decision = review.decision;
+  return (
+    (decision === "approve" || decision === "reject" || decision === "revalidate")
+    && DiagnosisIdSchema.safeParse(review.diagnosisId).success
+    && TicketIdSchema.safeParse(review.ticketId).success
+    && isRevision(review.sourceTicketRevision)
+    && CustomerReplyWatermarkSchema.safeParse(review.sourceConversationWatermark).success
+    && OperationalDiagnosisContextSchema.safeParse(review.editedDiagnosis).success
+    && isNonBlankString(review.actor)
+    && IsoTimestampSchema.safeParse(review.reviewedAt).success
+    && (review.rationale === undefined || isNonBlankString(review.rationale))
+    && (decision === "approve" || review.rationale !== undefined)
+  );
+}
+
+function isNonBlankString(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
 }
 
 function eventFacts(event: Pick<OperationalEvent, "action" | "facts">): Record<string, unknown> {
@@ -217,6 +249,7 @@ export function projectDiagnosisAudits({
       isDiagnosisReceiptBackedAuditAction(event.action) ? policy : "legacy",
     );
     if (receiptAudit !== undefined) {
+      validateCrossRecordReferences(event, receiptAudit, events, originalAudits);
       if (
         isDiagnosisReceiptBackedAuditAction(event.action)
         && isDiagnosisOriginAuditAction(event.action)
@@ -231,6 +264,37 @@ export function projectDiagnosisAudits({
     }
     return eventFallbackAudits;
   });
+}
+
+function validateCrossRecordReferences(
+  event: OperationalEvent,
+  audit: AuditEvent,
+  events: readonly OperationalEvent[],
+  originalAudits: readonly AuditEvent[],
+): void {
+  if (!isDiagnosisAuthorityAuditAction(event.action)) return;
+  const diagnosisId = audit.before.diagnosisId;
+  const diagnosisIds = new Set(originalAudits
+    .filter(({ action }) => isDiagnosisOriginAuditAction(action))
+    .map(({ id }) => id));
+  if (typeof diagnosisId !== "string" || !diagnosisIds.has(diagnosisId)) {
+    throw new DiagnosisAuditIntegrityError(
+      `Persisted diagnosis audit ${event.id} references an unknown diagnosis.`,
+    );
+  }
+  if (
+    event.action === "fix-ineffective"
+    && (typeof audit.before.fixEventId !== "string"
+      || events.some(({ id, ticketId, action }) =>
+        id === audit.before.fixEventId
+        && ticketId === event.ticketId
+        && action === "fix-available",
+      ) === false)
+  ) {
+    throw new DiagnosisAuditIntegrityError(
+      `Persisted ineffective-fix audit ${event.id} references an unknown fix event.`,
+    );
+  }
 }
 
 function uniqueAuditMap(audits: readonly AuditEvent[], label: string): Map<string, AuditEvent> {

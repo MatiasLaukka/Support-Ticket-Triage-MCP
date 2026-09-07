@@ -6,6 +6,10 @@ import { RecommendationRepository } from "./recommendation-repository.js";
 import { TicketRepository } from "./ticket-repository.js";
 import { TriageService, type OperationalCommandStore } from "./triage-service.js";
 import { DiagnosisRepository } from "./knowledge-evolution/diagnosis-repository.js";
+import {
+  OperationalCompletedDiagnosisSource,
+  type CompletedDiagnosisSource,
+} from "./knowledge-evolution/completed-diagnosis-source.js";
 import { KnowledgeEvolutionService } from "./knowledge-evolution/service.js";
 import type { CandidateDraftProvider } from "./knowledge-evolution/candidate-draft-provider.js";
 import { createControlledKnowledgeCandidateDraftProvider } from "./approval-desk/controlled-evaluation-providers.js";
@@ -84,7 +88,7 @@ export interface RuntimeDependencies {
   recommendations: RecommendationRepository | OperationalRecommendationRepository;
   audits: AuditRepository | OperationalAuditRepository;
   operationalDiagnoses?: OperationalDiagnosisRepository;
-  knowledgeEvolution: { diagnoses: DiagnosisRepository; objects: SqliteKnowledgeEvolutionStore; audits: SqliteKnowledgeEvolutionStore; ledger: SqliteLearningLedger; service: KnowledgeEvolutionService };
+  knowledgeEvolution: { diagnoses: DiagnosisRepository; diagnosisSource: CompletedDiagnosisSource; objects: SqliteKnowledgeEvolutionStore; audits: SqliteKnowledgeEvolutionStore; ledger: SqliteLearningLedger; service: KnowledgeEvolutionService };
   service: TriageService;
   operationalStore?: OperationalCommandStore;
   operationalCommandDispatcher?: OperationalCommandDispatcher;
@@ -281,25 +285,31 @@ export async function createRuntimeDependencies(
     }
   }
   const knowledgeEvolution = ledger !== undefined && store !== undefined
-    ? {
-        diagnoses,
-        objects: store,
-        audits: store,
-        ledger,
-        service: new KnowledgeEvolutionService({
-          tickets,
-          knowledge,
+    ? (() => {
+        const diagnosisSource = useOperationalRepositories
+          ? new OperationalCompletedDiagnosisSource(sqliteOperationalStore!)
+          : diagnoses;
+        return {
           diagnoses,
+          diagnosisSource,
           objects: store,
           audits: store,
-          promotionAuthorizer: (actorId) => approvers.has(actorId),
-          ...(knowledgeCandidateDraftProvider === undefined
-            ? {}
-            : { draftProvider: knowledgeCandidateDraftProvider }),
           ledger,
-          now,
-        }),
-      }
+          service: new KnowledgeEvolutionService({
+            tickets,
+            knowledge,
+            diagnoses: diagnosisSource,
+            objects: store,
+            audits: store,
+            promotionAuthorizer: (actorId) => approvers.has(actorId),
+            ...(knowledgeCandidateDraftProvider === undefined
+              ? {}
+              : { draftProvider: knowledgeCandidateDraftProvider }),
+            ledger,
+            now,
+          }),
+        };
+      })()
     : unavailableKnowledgeEvolution(diagnoses);
   const serviceOperationalStore = isImportStateAwareOperationalStore(runtimeOperationalStore)
     ? createRuntimeOperationalStore(runtimeOperationalStore)
@@ -396,6 +406,7 @@ function unavailableKnowledgeEvolution(
   const component = unavailableLearningComponent<SqliteKnowledgeEvolutionStore>();
   return {
     diagnoses,
+    diagnosisSource: diagnoses,
     objects: component,
     audits: component,
     ledger: unavailableLearningComponent<SqliteLearningLedger>({

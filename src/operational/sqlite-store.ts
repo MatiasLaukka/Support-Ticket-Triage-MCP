@@ -17,6 +17,8 @@ import type {
 import type {
   OperationalResultReader,
 } from "../operational-command-dispatch.js";
+import type { CompletedDiagnosisReadSnapshot } from "../knowledge-evolution/completed-diagnosis-source.js";
+import { authoritativeOperationalAudits } from "../knowledge-evolution/completed-diagnosis-source.js";
 import {
   OperationalStoreError,
   OperationalUnitOfWork,
@@ -247,6 +249,28 @@ export class OperationalSqliteStore {
     const read = this.database.transaction(() => this.withReader((reader) =>
       reader.readTicketIds().map((ticketId) => reader.readWorkflowSnapshot(ticketId))));
     return read();
+  }
+
+  readCompletedDiagnosisSnapshots(): CompletedDiagnosisReadSnapshot[] {
+    this.assertInitialized();
+    const read = this.database.transaction(() => {
+      const unit = new OperationalUnitOfWork(this.database);
+      try {
+        return unit.readTicketIds().flatMap((ticketId) => {
+          const snapshot = unit.readWorkflowSnapshot(ticketId);
+          return snapshot.diagnoses.length === 0
+            ? []
+            : [{
+                ticket: snapshot.ticket,
+                audits: authoritativeOperationalAudits(unit, snapshot),
+                diagnoses: snapshot.diagnoses,
+              }];
+        });
+      } finally {
+        unit.closeScope();
+      }
+    });
+    return read().map((snapshot) => structuredClone(snapshot));
   }
 
   readOutbox(id: string): OperationalOutboxRow | undefined {

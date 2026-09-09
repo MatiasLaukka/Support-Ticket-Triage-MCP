@@ -44,6 +44,7 @@ describe("reliability lifecycle command replay", () => {
       sentAt: "2026-08-13T09:00:00.000Z",
       customerResponse: recommendation.draftCustomerResponse,
     }, { commandId });
+    await harness.restart();
     await expect(harness.runtime.service.markResponseSent({
       ticketId: "TKT-1001",
       recommendationId: recommendation.id,

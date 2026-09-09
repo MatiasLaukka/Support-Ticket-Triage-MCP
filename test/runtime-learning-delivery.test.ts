@@ -143,7 +143,16 @@ describe("production runtime learning delivery", () => {
       diagnosisId: "diagnosis-runtime-delivery",
     }]);
     expect((runtime.operationalStore as OperationalSqliteStore).readOutbox("98000000-0000-4000-8000-000000000001"))
-      .toMatchObject({ status: "delivered", attempts: 2 });
+      .toMatchObject({
+        status: "delivered",
+        attempts: 2,
+        deliveryKey: "99000000-0000-4000-8000-000000000002",
+        envelope: {
+          deliveryKey: "99000000-0000-4000-8000-000000000002",
+          operationalEventId: "99000000-0000-4000-8000-000000000001",
+          diagnosisId: "diagnosis-runtime-delivery",
+        },
+      });
   });
 
   it("waits for active delivery before closing its stores and joins repeated close calls", async () => {

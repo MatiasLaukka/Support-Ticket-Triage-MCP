@@ -252,6 +252,64 @@ describe("reliability command replay", () => {
     }
   });
 
+  it("keeps legacy rejection and v2 replay stable across a runtime restart", async () => {
+    let providerCalls = 0;
+    const harness = await openReliabilityRuntime({
+      classificationReasoningProvider: {
+        async reason(input) {
+          providerCalls += 1;
+          return createControlledClassificationProvider().reason(input);
+        },
+      },
+      draftProvider: {
+        async draft(input) {
+          providerCalls += 1;
+          return createControlledDraftProvider().draft(input);
+        },
+      },
+    });
+    activeRuntimes.push(harness);
+    const legacyKey = randomUUID();
+    insertLegacyEvaluationReceipt(harness.root, legacyKey);
+    const legacyInput = { actor: "approval-desk", aiPreference: "auto" };
+
+    const legacyBeforeRestart = await harness.post(
+      "/api/tickets/TKT-1010/recommendations",
+      legacyInput,
+      legacyKey,
+    );
+    expect(legacyBeforeRestart.status).toBe(409);
+    await harness.restart();
+    const legacyAfterRestart = await harness.post(
+      "/api/tickets/TKT-1010/recommendations",
+      legacyInput,
+      legacyKey,
+    );
+    expect(legacyAfterRestart.status).toBe(409);
+    expect(legacyAfterRestart.body.error).toMatchObject({ code: "LEGACY_REPLAY_UNAVAILABLE" });
+    expect(providerCalls).toBe(0);
+
+    const v2Key = randomUUID();
+    const committed = await harness.post(
+      "/api/tickets/TKT-1010/recommendations",
+      { actor: "approval-desk", aiPreference: "deterministic" },
+      v2Key,
+    );
+    const receipt = (harness.runtime.operationalStore as OperationalSqliteStore)
+      .readCommandReceipt(v2Key);
+    await harness.restart();
+    const replay = await harness.post(
+      "/api/tickets/TKT-1010/recommendations",
+      { actor: "approval-desk", aiPreference: "deterministic" },
+      v2Key,
+    );
+
+    expect(committed.status).toBe(201);
+    expect(receipt?.requestHashVersion).toBe(2);
+    expect(replay.status).toBe(201);
+    expect(replay.body.recommendation).toEqual(committed.body.recommendation);
+  });
+
   it("shares the frozen evaluation preparation and replay across HTTP and MCP", async () => {
     const classification = createControlledClassificationProvider();
     const drafting = createControlledDraftProvider();

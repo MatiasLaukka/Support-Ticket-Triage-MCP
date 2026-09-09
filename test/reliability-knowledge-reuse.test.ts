@@ -3,20 +3,12 @@ import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import type { Server } from "node:http";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { TicketSchema, type Ticket } from "../src/domain.js";
-import {
-  customerReplyWatermarkFromAudits,
-  type DiagnosisContext,
-} from "../src/triage-service.js";
+import type { DiagnosisContext } from "../src/triage-service.js";
 import { resetOperationalDemoState } from "../src/demo-reset.js";
 import { createRuntimeDependencies, type RuntimeDependencies } from "../src/runtime.js";
 import { createApprovalDeskHttpServer } from "../src/approval-desk/http.js";
-import { evaluateTicketWithAi } from "../src/approval-desk/ai-evaluation.js";
-import {
-  customerRepliesFromAudits,
-  latestSupportResponseFromAudits,
-} from "../src/approval-desk/workflow-read-model.js";
 import {
   createControlledClassificationProvider,
   createControlledDraftProvider,
@@ -33,6 +25,7 @@ describe("integrated reliability knowledge reuse", () => {
     const harness = await openIntegratedRuntime();
     runtimes.push(harness);
     let firstDiagnosis: DiagnosisContext | undefined;
+    const diagnosisIds: string[] = [];
 
     for (const ticketId of ["TKT-2101", "TKT-2102"] as const) {
       const evidence = await harness.post(`/api/tickets/${ticketId}/customer-replies`, {
@@ -70,6 +63,7 @@ describe("integrated reliability knowledge reuse", () => {
           actor: "support-lead",
         });
         expect(diagnosis.status, JSON.stringify(diagnosis.body)).toBe(201);
+        diagnosisIds.push((await harness.runtime.operationalDiagnoses!.list(ticketId)).at(-1)!.diagnosis.id);
         firstDiagnosis = (diagnosis.body.auditEvent as { after: { diagnosis: DiagnosisContext } }).after.diagnosis;
       } else {
         expect(firstDiagnosis).toBeDefined();
@@ -80,6 +74,7 @@ describe("integrated reliability knowledge reuse", () => {
           diagnosis: firstDiagnosis!,
           knowledgeArticleIds: ["webhook-signature-validation"],
         }, { commandId: randomUUID() });
+        diagnosisIds.push((await harness.runtime.operationalDiagnoses!.list(ticketId)).at(-1)!.diagnosis.id);
       }
     }
 
@@ -91,6 +86,9 @@ describe("integrated reliability knowledge reuse", () => {
     expect(beforePromotion.body.recommendation).toMatchObject({
       knownCause: null,
     });
+    await expect(harness.runtime.knowledgeEvolution.service.listReusableApproved({
+      asOf: "2026-09-09T00:00:00.000Z",
+    })).resolves.toMatchObject({ status: "available", contexts: [] });
 
     const discovery = await harness.post("/api/knowledge-candidates", {
       actor: "support-lead",
@@ -103,7 +101,7 @@ describe("integrated reliability knowledge reuse", () => {
       supportingDiagnosisIds: string[];
     }> }).candidates[0];
     expect(candidate).toBeDefined();
-    expect(candidate!.supportingDiagnosisIds).toHaveLength(2);
+    expect([...candidate!.supportingDiagnosisIds].sort()).toEqual([...diagnosisIds].sort());
 
     const approvedResponse = await harness.post(`/api/knowledge-candidates/${candidate!.id}/approve`, {
       actor: "support-lead",
@@ -146,7 +144,17 @@ describe("integrated reliability knowledge reuse", () => {
       body: "Endpoint URL https://hooks.example.test/events; delivery ID delivery-2103; failure timestamp 2026-09-08T08:30:00Z; the signing secret was rotated yesterday at 08:00 UTC; timestamp tolerance configured; endpoint response code 200; raw body handling has not changed recently.",
     });
     expect(laterEvidence.status).toBe(201);
-    const afterPromotion = await evaluateThroughNormalService(harness, "TKT-2103");
+    const incompatibleOperationalRoute = await harness.post("/api/tickets/TKT-2103/recommendations", {
+      actor: "approval-desk",
+      aiPreference: "auto",
+    });
+    expect(incompatibleOperationalRoute.status).toBe(400);
+    expect(incompatibleOperationalRoute.body.error).toMatchObject({
+      code: "INVALID_REQUEST",
+      message: expect.stringContaining("knownCauseReferenceValidation"),
+    });
+
+    const afterPromotion = await evaluateThroughOperationalHttpCompatibilityPath(harness);
     expect(afterPromotion.recommendation).toMatchObject({ missingEvidence: [] });
     expect(afterPromotion.recommendation).toMatchObject({
       knownCause: approved.id,
@@ -162,7 +170,7 @@ describe("integrated reliability knowledge reuse", () => {
       object: { id: approved.id, status: "approved" },
       version: 1,
     }]);
-    const replayed = await evaluateThroughNormalService(harness, "TKT-2103");
+    const replayed = await evaluateThroughOperationalHttpCompatibilityPath(harness);
     expect(replayed.recommendation).toMatchObject({
       knownCause: approved.id,
       knownCauseRef: { objectId: approved.id, version: 1 },
@@ -178,36 +186,25 @@ interface IntegratedRuntime {
   close(): Promise<void>;
 }
 
-async function evaluateThroughNormalService(
+async function evaluateThroughOperationalHttpCompatibilityPath(
   harness: IntegratedRuntime,
-  ticketId: string,
 ): Promise<{ recommendation: Record<string, unknown> }> {
-  const [ticket, audits, allKnowledgeArticles] = await Promise.all([
-    harness.runtime.tickets.get(ticketId),
-    harness.runtime.audits.list(ticketId),
-    harness.runtime.knowledge.list(),
-  ]);
-  const reusableKnowledge = await harness.runtime.knowledgeEvolution.service.listReusableApproved({
-    asOf: "2026-09-09T00:00:00.000Z",
-  });
-  const input = await evaluateTicketWithAi({
-    ticket,
-    actor: "approval-desk",
-    allKnowledgeArticles,
-    reusableKnowledge,
-    customerReplies: customerRepliesFromAudits(ticketId, audits),
-    previousSupportResponse: latestSupportResponseFromAudits(ticketId, audits),
-    aiPreference: "auto",
-    responseStyle: "auto",
-    classificationProvider: createControlledClassificationProvider(),
-    draftProvider: createControlledDraftProvider(),
-  });
-  const result = await harness.runtime.service.submitEvaluation({
-    ...input,
-    submittedAt: "2026-09-09T00:00:00.000Z",
-    evaluatedCustomerReplyWatermark: customerReplyWatermarkFromAudits(audits),
-  }, { commandId: randomUUID() });
-  return { recommendation: result.recommendation as unknown as Record<string, unknown> };
+  const originalCommit = harness.runtime.service.commitOperationalEvaluation.bind(harness.runtime.service);
+  const compatibility = vi.spyOn(harness.runtime.service, "commitOperationalEvaluation")
+    .mockImplementation((unit, prepared, commandId) => {
+      const { knownCauseReferenceValidation: _validation, ...serializableInput } = prepared.recommendationInput;
+      return originalCommit(unit, { ...prepared, recommendationInput: serializableInput }, commandId);
+    });
+  try {
+    const response = await harness.post("/api/tickets/TKT-2103/recommendations", {
+      actor: "approval-desk",
+      aiPreference: "auto",
+    });
+    expect(response.status, JSON.stringify(response.body)).toBe(201);
+    return { recommendation: response.body.recommendation as Record<string, unknown> };
+  } finally {
+    compatibility.mockRestore();
+  }
 }
 
 async function openIntegratedRuntime(): Promise<IntegratedRuntime> {

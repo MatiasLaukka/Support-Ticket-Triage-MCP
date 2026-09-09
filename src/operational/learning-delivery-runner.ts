@@ -84,7 +84,7 @@ export class LearningDeliveryRunner implements LearningDeliveryRunner {
       const results = await this.options.worker.drainDue(query);
       this.applyResults(results);
     } catch (error) {
-      this.reportError(error);
+      this.reportPassError(error);
     } finally {
       this.runningPass = undefined;
       if (!this.stopped) this.scheduleNext();
@@ -143,8 +143,22 @@ export class LearningDeliveryRunner implements LearningDeliveryRunner {
     const delay = Math.max(1, nearest);
     this.timer = this.scheduler.schedule(delay, () => {
       this.timer = undefined;
-      void this.launchPass();
+      void this.launchPass().catch((error: unknown) => {
+        this.reportPassError(error);
+      });
     });
+  }
+
+  private reportPassError(error: unknown): void {
+    try {
+      this.reportError(error);
+    } catch {
+      try {
+        console.error("Learning delivery runner pass failed.");
+      } catch {
+        // Diagnostics must not turn a bounded background pass into an unhandled rejection.
+      }
+    }
   }
 
   private cancelTimer(): void {

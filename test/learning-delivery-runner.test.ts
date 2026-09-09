@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   LearningDeliveryRunner,
   retryDelayMs,
@@ -165,6 +165,32 @@ describe("learning delivery runner", () => {
     await scheduler.advanceBy(1_000);
     expect(calls).toBe(2);
     await runner.stop();
+  });
+
+  it("contains reporter failures for initial and scheduled passes", async () => {
+    const scheduler = new FakeScheduler();
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    let calls = 0;
+    const runner = new LearningDeliveryRunner({
+      scheduler,
+      reportError: () => { throw new Error("reporter failed"); },
+      worker: {
+        async drainDue() {
+          calls += 1;
+          if (calls === 1) throw new Error("pass failed");
+          return [];
+        },
+      },
+    });
+
+    try {
+      await expect(runner.start()).resolves.toBeUndefined();
+      await scheduler.advanceBy(1_000);
+      expect(calls).toBe(2);
+    } finally {
+      await runner.stop();
+      consoleError.mockRestore();
+    }
   });
 
   it("cancels the pending schedule on repeated stop", async () => {

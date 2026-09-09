@@ -1741,6 +1741,54 @@ describe("approvalDeskHtml", () => {
     expect(app.el("diagnosisPanel").innerHTML).not.toContain("Later review result.");
   });
 
+  it("retains the first diagnosis review after a rapid duplicate gesture and retries its uncertain attempt", async () => {
+    const app = await startApprovalDeskApp({
+      ticketDetailRecommendation: fixtureRecommendation,
+      ticketDetail: {
+        lifecycle: fixtureLifecycle({
+          phase: "diagnosis-review",
+          primaryAction: "review-diagnosis",
+          actions: [lifecycleAction("review-diagnosis", "primary")],
+        }),
+      },
+      diagnoses: [fixtureDiagnosisView()],
+      diagnosisReviewPlans: {
+        "TKT-1001": [
+          { delayTicks: 40, status: 503, error: "The diagnosis review response was lost." },
+          { diagnoses: [fixtureDiagnosisView({ summary: "Recovered review result." })] },
+        ],
+      },
+    });
+
+    await app.selectFirstTicket();
+    app.openDiagnosisInspection();
+    const reviewEvent = {
+      target: { dataset: { action: "review-diagnosis", decision: "approve" } },
+    };
+    app.el("diagnosisPanel").dispatch("click", reviewEvent);
+    app.el("diagnosisPanel").dispatch("click", reviewEvent);
+    await app.wait(50);
+
+    const reviewRequests = () => app.requests.filter((request) =>
+      /\/api\/tickets\/TKT-1001\/diagnoses\/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa\/review$/.test(request.path),
+    );
+    expect(reviewRequests()).toHaveLength(1);
+    expect(app.el("refreshQueue").textContent).toBe("Retry action");
+
+    await app.refreshQueue();
+
+    expect(reviewRequests()).toHaveLength(2);
+    const first = reviewRequests()[0]!;
+    const second = reviewRequests()[1]!;
+    expect(second.path).toBe(first.path);
+    expect(second.init?.body).toBe(first.init?.body);
+    expect(new Headers(second.init?.headers).get("Idempotency-Key")).toBe(
+      new Headers(first.init?.headers).get("Idempotency-Key"),
+    );
+    expect(app.el("diagnosisPanel").innerHTML).toContain("Recovered review result.");
+    expect(app.el("refreshQueue").textContent).toBe("Refresh");
+  });
+
   it("keeps a later scoped-fix result when an earlier same-diagnosis review fails last", async () => {
     const app = await startApprovalDeskApp({
       ticketDetailRecommendation: fixtureRecommendation,

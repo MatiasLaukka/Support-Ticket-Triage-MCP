@@ -2984,6 +2984,9 @@ export const approvalDeskHtml = `<!doctype html>
         const ticketId = state.selectedTicket.id;
         const diagnosisId = view.originalDiagnosis.id;
         const ticketSelectionToken = state.ticketSelectionToken;
+        if (state.governedMutationToken !== null) {
+          return;
+        }
         const mutationToken = beginDiagnosisMutation(ticketId, diagnosisId);
         const body = {
           decision,

@@ -21,6 +21,7 @@ import type { CompletedDiagnosisReadSnapshot } from "../knowledge-evolution/comp
 import {
   OperationalStoreError,
   OperationalUnitOfWork,
+  type DueOutboxQuery,
   type OperationalImportSourceMetadata,
 } from "./unit-of-work.js";
 
@@ -164,6 +165,9 @@ export class OperationalSqliteStore {
           // Preserve the authoritative transaction failure.
         }
       }
+      if (isSqliteLockError(error)) {
+        throw this.mapPersistenceError(error, "Operational transaction could not complete");
+      }
       throw error;
     } finally {
       unit.closeScope();
@@ -268,12 +272,23 @@ export class OperationalSqliteStore {
 
   readOutbox(id: string): OperationalOutboxRow | undefined {
     this.assertInitialized();
-    return this.withReader((reader) => reader.readOutbox(id));
+    return this.normalizeDeferredRead(
+      () => this.withReader((reader) => reader.readOutbox(id)),
+      "Operational outbox read could not complete",
+    );
   }
 
   listPendingOutbox(staleBefore?: string): OperationalOutboxRow[] {
     this.assertInitialized();
     return this.withReader((reader) => reader.listPendingOutbox(staleBefore));
+  }
+
+  listDueOutbox(input: DueOutboxQuery): OperationalOutboxRow[] {
+    this.assertInitialized();
+    return this.normalizeDeferredRead(
+      () => this.withReader((reader) => reader.listDueOutbox(input)),
+      "Operational due outbox read could not complete",
+    );
   }
 
   readImportState(): ImportState {

@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import Database from "better-sqlite3";
 import { afterEach, describe, expect, it } from "vitest";
 import { TicketSchema } from "../src/domain.js";
 import { LearningCaptureService } from "../src/knowledge-evolution/learning-capture.js";
@@ -15,8 +16,13 @@ import type {
   OperationalOutboxRow,
 } from "../src/operational/domain.js";
 import { OperationalOutboxRowSchema } from "../src/operational/domain.js";
-import { LearningOutboxWorker } from "../src/operational/learning-outbox.js";
+import {
+  LearningOutboxWorker,
+  type OperationalLearningOutboxStore,
+} from "../src/operational/learning-outbox.js";
 import { OperationalSqliteStore } from "../src/operational/sqlite-store.js";
+import type { OperationalUnitOfWork } from "../src/operational/unit-of-work.js";
+import { OperationalStoreError } from "../src/operational/unit-of-work.js";
 import { createRuntimeDependencies } from "../src/runtime.js";
 
 const ticketId = "TKT-4501" as const;
@@ -29,6 +35,357 @@ afterEach(() => {
 });
 
 describe("durable operational learning outbox", () => {
+  it("selects a bounded deferred set in deterministic order", () => {
+    const harness = openHarness();
+    try {
+      const envelopes = manyCaptureEnvelopes(26);
+      appendRows(harness.store, envelopes);
+
+      const due = harness.store.listDueOutbox({
+        now: "2026-08-11T15:00:00.000+02:00",
+        staleBefore: "2026-08-11T14:59:00.000+02:00",
+        limit: 25,
+        deferredUntil: { [outboxId(envelopes[0]!.operationalEventId)]: "2026-08-11T15:01:00.000+02:00" },
+      });
+
+      expect(due).toHaveLength(25);
+      expect(due.map((row) => row.id)).toEqual(
+        envelopes.slice(1).map((envelope) => outboxId(envelope.operationalEventId)),
+      );
+      for (const limit of [0, -1, 1.5, 26]) {
+        expect(() => harness.store.listDueOutbox({
+          now: "2026-08-11T13:00:00.000Z",
+          staleBefore: "2026-08-11T12:59:00.000Z",
+          limit,
+          deferredUntil: {},
+        })).toThrow(/limit/i);
+      }
+      expect(() => harness.store.listDueOutbox({
+        now: "2026-08-11T13:00:00.000Z",
+        staleBefore: "2026-08-11T13:01:00.000Z",
+        limit: 25,
+        deferredUntil: {},
+      })).toThrow(/later than the current timestamp/i);
+    } finally {
+      harness.ledger.close();
+      harness.store.close();
+    }
+  });
+
+  it("applies the SQL bound before parsing a later payload", () => {
+    const harness = openHarness();
+    try {
+      const envelopes = manyCaptureEnvelopes(26);
+      appendRows(harness.store, envelopes);
+      const raw = new Database(join(harness.root, "operational.sqlite"));
+      try {
+        raw.prepare("UPDATE learning_capture_outbox SET envelope_json = ? WHERE id = ?")
+          .run("{malformed", outboxId(envelopes[25]!.operationalEventId));
+      } finally {
+        raw.close();
+      }
+
+      const due = harness.store.listDueOutbox({
+        now: "2026-08-11T13:00:00.000Z",
+        staleBefore: "2026-08-11T12:59:00.000Z",
+        limit: 25,
+        deferredUntil: {},
+      });
+
+      expect(due.map((row) => row.id)).toEqual(
+        envelopes.slice(0, 25).map((envelope) => outboxId(envelope.operationalEventId)),
+      );
+    } finally {
+      harness.ledger.close();
+      harness.store.close();
+    }
+  });
+
+  it("propagates corruption in a selected payload before claiming it", async () => {
+    const harness = openHarness();
+    try {
+      const [envelope] = manyCaptureEnvelopes(1);
+      appendRows(harness.store, [envelope!]);
+      const raw = new Database(join(harness.root, "operational.sqlite"));
+      try {
+        raw.prepare("UPDATE learning_capture_outbox SET envelope_json = ? WHERE id = ?")
+          .run("{malformed", outboxId(envelope!.operationalEventId));
+      } finally {
+        raw.close();
+      }
+      let deliveryCalls = 0;
+      const worker = new LearningOutboxWorker({
+        store: harness.store,
+        delivery: {
+          async deliverEnvelope() {
+            deliveryCalls += 1;
+            return "delivered" as const;
+          },
+        },
+      });
+
+      await expect(worker.drainDue({
+        now: "2026-08-11T13:00:00.000Z",
+        staleBefore: "2026-08-11T12:59:00.000Z",
+        limit: 25,
+        deferredUntil: {},
+      })).rejects.toMatchObject({ code: "PERSISTENCE_ERROR" });
+      expect(deliveryCalls).toBe(0);
+      const inspection = new Database(join(harness.root, "operational.sqlite"));
+      try {
+        expect(inspection.prepare("SELECT claimed_by FROM learning_capture_outbox WHERE id = ?")
+          .get(outboxId(envelope!.operationalEventId))).toMatchObject({ claimed_by: null });
+      } finally {
+        inspection.close();
+      }
+    } finally {
+      harness.ledger.close();
+      harness.store.close();
+    }
+  });
+
+  it("excludes fresh claims and includes expired claims", () => {
+    const harness = openHarness();
+    try {
+      const envelopes = manyCaptureEnvelopes(3);
+      appendRows(harness.store, envelopes);
+      expect(harness.store.transaction((unit) => unit.claimPendingOutbox(
+        outboxId(envelopes[0]!.operationalEventId),
+        "fresh-worker",
+        "2026-08-11T12:59:30.000Z",
+      ))).toBe(true);
+      expect(harness.store.transaction((unit) => unit.claimPendingOutbox(
+        outboxId(envelopes[1]!.operationalEventId),
+        "expired-worker",
+        "2026-08-11T12:58:00.000Z",
+      ))).toBe(true);
+
+      const due = harness.store.listDueOutbox({
+        now: "2026-08-11T13:00:00.000Z",
+        staleBefore: "2026-08-11T12:59:00.000Z",
+        limit: 25,
+        deferredUntil: {},
+      });
+
+      expect(due.map((row) => row.id)).toEqual([
+        outboxId(envelopes[1]!.operationalEventId),
+        outboxId(envelopes[2]!.operationalEventId),
+      ]);
+    } finally {
+      harness.ledger.close();
+      harness.store.close();
+    }
+  });
+
+  it("returns an outcome for every due row and continues after retryable failure", async () => {
+    const harness = openHarness();
+    try {
+      const envelopes = manyCaptureEnvelopes(3);
+      appendRows(harness.store, envelopes);
+      const worker = new LearningOutboxWorker({
+        store: harness.store,
+        delivery: {
+          async deliverEnvelope(envelope) {
+            if (envelope.operationalEventId === envelopes[0]!.operationalEventId) {
+              throw new LearningLedgerError("temporary ledger failure", "PERSISTENCE_ERROR");
+            }
+            if (envelope.operationalEventId === envelopes[2]!.operationalEventId) {
+              throw new LearningLedgerError("invalid immutable payload", "INVALID_EVENT");
+            }
+            return "delivered" as const;
+          },
+        },
+        now: () => new Date("2026-08-11T13:00:00.000Z"),
+        claimToken: (() => {
+          let index = 0;
+          return () => `worker-${++index}`;
+        })(),
+      });
+
+      await expect(worker.drainDue({
+        now: "2026-08-11T13:00:00.000Z",
+        staleBefore: "2026-08-11T12:59:00.000Z",
+        limit: 25,
+        deferredUntil: {},
+      })).resolves.toEqual([
+        { id: outboxId(envelopes[0]!.operationalEventId), outcome: "retryable" },
+        { id: outboxId(envelopes[1]!.operationalEventId), outcome: "delivered" },
+        { id: outboxId(envelopes[2]!.operationalEventId), outcome: "dead-letter" },
+      ]);
+      expect(harness.store.readOutbox(outboxId(envelopes[0]!.operationalEventId))).toMatchObject({
+        status: "pending",
+        attempts: 1,
+      });
+      expect(harness.store.readOutbox(outboxId(envelopes[1]!.operationalEventId))).toMatchObject({
+        status: "delivered",
+        attempts: 1,
+      });
+      expect(harness.store.readOutbox(outboxId(envelopes[2]!.operationalEventId))).toMatchObject({
+        status: "dead-letter",
+        attempts: 1,
+      });
+    } finally {
+      harness.ledger.close();
+      harness.store.close();
+    }
+  });
+
+  it("reports a candidate that loses its claim before delivery", async () => {
+    const harness = openHarness();
+    const secondStore = OperationalSqliteStore.open(join(harness.root, "operational.sqlite"));
+    secondStore.initialize();
+    try {
+      const [envelope] = manyCaptureEnvelopes(1);
+      appendRows(harness.store, [envelope!]);
+      let deliveryCalls = 0;
+      const worker = new LearningOutboxWorker({
+        store: harness.store,
+        delivery: {
+          async deliverEnvelope() {
+            deliveryCalls += 1;
+            return "delivered" as const;
+          },
+        },
+        claimToken: () => {
+          expect(secondStore.transaction((unit) => unit.claimPendingOutbox(
+            outboxId(envelope!.operationalEventId),
+            "other-worker",
+            "2026-08-11T13:00:00.000Z",
+          ))).toBe(true);
+          return "this-worker";
+        },
+      });
+
+      await expect(worker.drainDue({
+        now: "2026-08-11T13:00:00.000Z",
+        staleBefore: "2026-08-11T12:59:00.000Z",
+        limit: 25,
+        deferredUntil: {},
+      })).resolves.toEqual([{
+        id: outboxId(envelope!.operationalEventId),
+        outcome: "not-claimed",
+      }]);
+      expect(deliveryCalls).toBe(0);
+    } finally {
+      secondStore.close();
+      harness.ledger.close();
+      harness.store.close();
+    }
+  });
+
+  it("leaves a recoverable claim when acknowledgement fails after delivery", async () => {
+    const harness = openHarness();
+    try {
+      const [envelope] = manyCaptureEnvelopes(1);
+      appendRows(harness.store, [envelope!]);
+      let transactionCount = 0;
+      const store: OperationalLearningOutboxStore = {
+        transaction<T>(work: (unit: OperationalUnitOfWork) => T): T {
+          transactionCount += 1;
+          return harness.store.transaction((unit) => {
+            if (transactionCount !== 2) return work(unit);
+            const wrapped = new Proxy(unit, {
+              get(target, property, receiver) {
+                if (property !== "markOutboxDelivered") return Reflect.get(target, property, receiver);
+                return (...args: Parameters<OperationalUnitOfWork["markOutboxDelivered"]>) => {
+                  target.markOutboxDelivered(...args);
+                  throw new OperationalStoreError(
+                    "acknowledgement connection lost",
+                    "PERSISTENCE_ERROR",
+                    { cause: { code: "SQLITE_LOCKED" } },
+                  );
+                };
+              },
+            }) as OperationalUnitOfWork;
+            return work(wrapped);
+          });
+        },
+        readOutbox: harness.store.readOutbox.bind(harness.store),
+        listPendingOutbox: harness.store.listPendingOutbox.bind(harness.store),
+        listDueOutbox: harness.store.listDueOutbox.bind(harness.store),
+      };
+      const worker = new LearningOutboxWorker({
+        store,
+        delivery: {
+          async deliverEnvelope() {
+            return "delivered" as const;
+          },
+        },
+        now: () => new Date("2026-08-11T13:00:00.000Z"),
+        claimToken: () => "ack-worker",
+      });
+
+      await expect(worker.drainDue({
+        now: "2026-08-11T13:00:00.000Z",
+        staleBefore: "2026-08-11T12:59:00.000Z",
+        limit: 25,
+        deferredUntil: {},
+      })).resolves.toEqual([{
+        id: outboxId(envelope!.operationalEventId),
+        outcome: "retryable",
+      }]);
+      expect(harness.store.readOutbox(outboxId(envelope!.operationalEventId))).toMatchObject({
+        status: "pending",
+        claimedBy: "ack-worker",
+        attempts: 1,
+      });
+    } finally {
+      harness.ledger.close();
+      harness.store.close();
+    }
+  });
+
+  it("continues to later due rows after a normalized transient claim failure", async () => {
+    const harness = openHarness();
+    try {
+      const envelopes = manyCaptureEnvelopes(2);
+      appendRows(harness.store, envelopes);
+      let transactionCount = 0;
+      const store: OperationalLearningOutboxStore = {
+        transaction<T>(work: (unit: OperationalUnitOfWork) => T): T {
+          transactionCount += 1;
+          if (transactionCount === 1) {
+            throw new OperationalStoreError(
+              "temporary SQLite lock",
+              "PERSISTENCE_ERROR",
+              { cause: { code: "SQLITE_BUSY" } },
+            );
+          }
+          return harness.store.transaction(work);
+        },
+        readOutbox: harness.store.readOutbox.bind(harness.store),
+        listPendingOutbox: harness.store.listPendingOutbox.bind(harness.store),
+        listDueOutbox: harness.store.listDueOutbox.bind(harness.store),
+      };
+      const worker = new LearningOutboxWorker({
+        store,
+        delivery: {
+          async deliverEnvelope() {
+            return "delivered" as const;
+          },
+        },
+        now: () => new Date("2026-08-11T13:00:00.000Z"),
+        claimToken: (() => {
+          let index = 0;
+          return () => `lock-worker-${++index}`;
+        })(),
+      });
+
+      await expect(worker.drainDue({
+        now: "2026-08-11T13:00:00.000Z",
+        staleBefore: "2026-08-11T12:59:00.000Z",
+        limit: 25,
+        deferredUntil: {},
+      })).resolves.toEqual([
+        { id: outboxId(envelopes[0]!.operationalEventId), outcome: "retryable" },
+        { id: outboxId(envelopes[1]!.operationalEventId), outcome: "delivered" },
+      ]);
+    } finally {
+      harness.ledger.close();
+      harness.store.close();
+    }
+  });
+
   it("rejects inconsistent claim, retry, delivery, and dead-letter row states", () => {
     const [envelope] = captureEnvelopes();
     const pending = outboxRow(envelope!);
@@ -502,6 +859,20 @@ function captureEnvelopes(): LearningCaptureEnvelope[] {
       provenance: "Sanitized operational outcome: ticket-updated.",
     },
   ];
+}
+
+function manyCaptureEnvelopes(count: number): LearningCaptureEnvelope[] {
+  const templates = captureEnvelopes();
+  return Array.from({ length: count }, (_, index) => {
+    const template = templates[index % templates.length]!;
+    const id = eventId(index + 1);
+    return {
+      ...template,
+      operationalEventId: id,
+      deliveryKey: id,
+      occurredAt: `2026-08-11T12:${String(index).padStart(2, "0")}:00.000Z`,
+    };
+  });
 }
 
 function outboxRow(envelope: LearningCaptureEnvelope): OperationalOutboxRow {

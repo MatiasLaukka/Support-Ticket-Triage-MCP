@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { TicketSchema, type Ticket } from "../src/domain.js";
 import type { LearningCaptureEnvelope, OperationalOutboxRow } from "../src/operational/domain.js";
 import { OperationalSqliteStore } from "../src/operational/sqlite-store.js";
+import { resetOperationalDemoState } from "../src/demo-reset.js";
 import { createRuntimeDependencies } from "../src/runtime.js";
 import type { DeliveryScheduler } from "../src/operational/learning-delivery-runner.js";
 
@@ -22,10 +23,14 @@ describe("production runtime learning delivery", () => {
     const root = await mkdtemp(join(tmpdir(), "runtime-learning-delivery-"));
     roots.push(root);
     const database = join(root, "operational.sqlite");
+    resetOperationalDemoState({
+      dataRoot: root,
+      seedFile: resolve("data/seed/tickets.json"),
+      operationalDatabase: database,
+    });
     const store = OperationalSqliteStore.open(database);
     store.initialize();
     const ticket = seedTicket();
-    store.transaction((unit) => unit.insertTicket(ticket));
     const scheduler = new FakeScheduler();
     const runtime = await createRuntimeDependencies({
       operationalStore: store,
@@ -37,26 +42,46 @@ describe("production runtime learning delivery", () => {
 
     expect(runtime.learningDeliveryRunner).toBeDefined();
     expect(await runtime.knowledgeEvolution.ledger.list()).toEqual([]);
-    appendLearningRow(store, ticket);
+    const recordedDiagnosis = await runtime.service.recordDiagnosis({
+      ticketId: ticket.id,
+      actor: "runtime-test",
+      diagnosedAt: "2026-09-09T00:00:01.000Z",
+      diagnosis: {
+        status: "completed",
+        causeType: "platform-delay",
+        customerSafeSummary: "The event-processing delay is understood.",
+        evidenceUsed: ["request trace"],
+        confidence: "confirmed",
+        owner: "engineering",
+        recommendedNextAction: "Apply the governed mitigation.",
+        doNotSay: [],
+      },
+      knowledgeArticleIds: ["api-reference"],
+    }, { commandId: "97000000-0000-4000-8000-000000000001" });
 
     await scheduler.advanceBy(1_000);
 
     await expect(runtime.knowledgeEvolution.ledger.list()).resolves.toMatchObject([{
       eventType: "diagnosis-recorded",
       ticketId: ticket.id,
-      diagnosisId: "diagnosis-runtime-delivery",
+      diagnosisId: recordedDiagnosis.id,
     }]);
   });
 
   it("keeps operational runtime mutations available when learning is unavailable", async () => {
     const root = await mkdtemp(join(tmpdir(), "runtime-learning-unavailable-"));
     roots.push(root);
+    const database = join(root, "operational.sqlite");
     const badLedger = join(root, "learning.sqlite");
+    resetOperationalDemoState({
+      dataRoot: root,
+      seedFile: resolve("data/seed/tickets.json"),
+      operationalDatabase: database,
+    });
     await writeFile(badLedger, "not a sqlite database\n", "utf8");
     const runtime = await createRuntimeDependencies({
-      legacyFixtureRepositories: true,
       env: {
-        ...runtimeEnv(root, join(root, "unused.sqlite")),
+        ...runtimeEnv(root, database),
         TRIAGE_LEARNING_LEDGER_PATH: badLedger,
       },
     });
@@ -70,17 +95,69 @@ describe("production runtime learning delivery", () => {
       body: "Operational state remains available.",
       receivedAt: "2026-09-09T00:00:00.000Z",
       source: "runtime-test",
-    })).resolves.toMatchObject({ action: "customer-reply-received" });
+    }, { commandId: "97000000-0000-4000-8000-000000000002" })).resolves.toMatchObject({ action: "customer-reply-received" });
+  });
+
+  it("recovers a pending expired claim when a runtime restarts", async () => {
+    const root = await mkdtemp(join(tmpdir(), "runtime-learning-restart-"));
+    roots.push(root);
+    const database = join(root, "operational.sqlite");
+    resetOperationalDemoState({
+      dataRoot: root,
+      seedFile: resolve("data/seed/tickets.json"),
+      operationalDatabase: database,
+    });
+    const store = OperationalSqliteStore.open(database);
+    store.initialize();
+    const ticket = seedTicket();
+    const firstRuntime = await createRuntimeDependencies({
+      operationalStore: store,
+      scheduler: new FakeScheduler(),
+      now: () => new Date("2026-09-09T00:00:00.000Z"),
+      env: runtimeEnv(root, database),
+    });
+    runtimes.push(firstRuntime);
+    await firstRuntime.close();
+
+    const restartedStore = OperationalSqliteStore.open(database);
+    restartedStore.initialize();
+    appendLearningRow(restartedStore, ticket);
+    expect(restartedStore.transaction((unit) => unit.claimPendingOutbox(
+      "98000000-0000-4000-8000-000000000001",
+      "expired-runtime-claim",
+      "2026-09-09T00:00:00.000Z",
+    ))).toBe(true);
+    restartedStore.close();
+
+    const scheduler = new FakeScheduler();
+    scheduler.time = Date.parse("2026-09-09T00:10:00.000Z");
+    const runtime = await createRuntimeDependencies({
+      scheduler,
+      now: () => scheduler.now(),
+      env: runtimeEnv(root, database),
+    });
+    runtimes.push(runtime);
+
+    await expect(runtime.knowledgeEvolution.ledger.list()).resolves.toMatchObject([{
+      eventType: "diagnosis-recorded",
+      diagnosisId: "diagnosis-runtime-delivery",
+    }]);
+    expect((runtime.operationalStore as OperationalSqliteStore).readOutbox("98000000-0000-4000-8000-000000000001"))
+      .toMatchObject({ status: "delivered", attempts: 2 });
   });
 
   it("waits for active delivery before closing its stores and joins repeated close calls", async () => {
     const root = await mkdtemp(join(tmpdir(), "runtime-learning-close-"));
     roots.push(root);
     const database = join(root, "operational.sqlite");
+    resetOperationalDemoState({
+      dataRoot: root,
+      seedFile: resolve("data/seed/tickets.json"),
+      operationalDatabase: database,
+    });
     const store = OperationalSqliteStore.open(database);
     store.initialize();
     const ticket = seedTicket();
-    store.transaction((unit) => unit.insertTicket(ticket));
     const scheduler = new FakeScheduler();
     const runtime = await createRuntimeDependencies({
       operationalStore: store,
@@ -103,7 +180,22 @@ describe("production runtime learning delivery", () => {
       });
     const storeClose = vi.spyOn(store, "close");
     const ledgerClose = vi.spyOn(runtime.knowledgeEvolution.ledger, "close");
-    appendLearningRow(store, ticket);
+    await runtime.service.recordDiagnosis({
+      ticketId: ticket.id,
+      actor: "runtime-test",
+      diagnosedAt: "2026-09-09T00:00:01.000Z",
+      diagnosis: {
+        status: "completed",
+        causeType: "platform-delay",
+        customerSafeSummary: "The event-processing delay is understood.",
+        evidenceUsed: ["request trace"],
+        confidence: "confirmed",
+        owner: "engineering",
+        recommendedNextAction: "Apply the governed mitigation.",
+        doNotSay: [],
+      },
+      knowledgeArticleIds: ["api-reference"],
+    }, { commandId: "97000000-0000-4000-8000-000000000003" });
 
     const advancing = scheduler.advanceBy(1_000);
     for (let attempt = 0; attempt < 20 && !deliveryStarted; attempt += 1) {

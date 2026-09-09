@@ -72,44 +72,42 @@ async function main(): Promise<void> {
   const host = approvalDeskHost(process.env);
   const port = approvalDeskPort(process.env);
   const deps = await createRuntimeDependencies();
-  if (deps.learningAvailability.status === "unavailable") {
-    console.error(`[${deps.learningAvailability.code}] ${deps.learningAvailability.message}`);
-  }
-  const server = createApprovalDeskHttpServer(deps);
   let closePromise: Promise<void> | undefined;
-  let shutdownPromise: Promise<void> | undefined;
   const closeRuntime = (): Promise<void> => closePromise ??= deps.close();
-  const closeServerAndRuntime = (): Promise<void> => shutdownPromise ??= (async () => {
-    await new Promise<void>((resolveClose, rejectClose) => {
-      if (!server.listening) {
-        resolveClose();
-        return;
-      }
-      server.close((error) => error === undefined
-        ? resolveClose()
-        : rejectClose(error));
-    });
-    await closeRuntime();
-  })();
-  server.once("close", () => {
-    void closeRuntime().catch((error: unknown) => {
-      console.error(safeShutdownDetail(error));
-      process.exitCode = 1;
-    });
-  });
-  for (const signal of ["SIGINT", "SIGTERM"] as const) {
-    process.once(signal, () => {
-      void closeServerAndRuntime().then(
-        () => { process.exitCode = 0; },
-        (error: unknown) => {
-          console.error(safeShutdownDetail(error));
-          process.exitCode = 1;
-        },
-      );
-    });
-  }
-
   try {
+    if (deps.learningAvailability.status === "unavailable") {
+      console.error(`[${deps.learningAvailability.code}] ${deps.learningAvailability.message}`);
+    }
+    const server = createApprovalDeskHttpServer(deps);
+    let resolveServerClosed!: () => void;
+    const serverClosed = new Promise<void>((resolve) => {
+      resolveServerClosed = resolve;
+    });
+    let shutdownPromise: Promise<void> | undefined;
+    const closeServerAndRuntime = (): Promise<void> => shutdownPromise ??= (async () => {
+      await new Promise<void>((resolveClose, rejectClose) => {
+        if (!server.listening) {
+          resolveClose();
+          return;
+        }
+        server.close((error) => error === undefined
+          ? resolveClose()
+          : rejectClose(error));
+      });
+      await closeRuntime();
+    })();
+    server.once("close", resolveServerClosed);
+    for (const signal of ["SIGINT", "SIGTERM"] as const) {
+      process.once(signal, () => {
+        void closeServerAndRuntime().then(
+          () => { process.exitCode = 0; },
+          (error: unknown) => {
+            console.error(safeShutdownDetail(error));
+            process.exitCode = 1;
+          },
+        );
+      });
+    }
     await new Promise<void>((resolveListen, rejectListen) => {
       server.once("error", rejectListen);
       server.listen(port, host, () => {
@@ -122,10 +120,19 @@ async function main(): Promise<void> {
         resolveListen();
       });
     });
+    await serverClosed;
+    await closeRuntime();
   } catch (error) {
-    await closeRuntime().catch((cleanupError: unknown) => {
-      throw new AggregateError([error, cleanupError], "Approval Desk startup cleanup failed.");
-    });
+    try {
+      await closeRuntime();
+    } catch (cleanupError) {
+      if (cleanupError !== error) {
+        throw new AggregateError(
+          [error, cleanupError],
+          "Approval Desk startup and cleanup failed.",
+        );
+      }
+    }
     throw error;
   }
 }

@@ -107,6 +107,104 @@ async function runStartupProcess(
   }
 }
 
+async function runSignalDuringStartup(
+  entrypoint: "index" | "approval-desk",
+  delayMode: "connect" | "listen",
+): Promise<ProcessResult> {
+  const root = await mkdtemp(join(tmpdir(), "triage-entrypoint-signal-"));
+  temporaryRoots.push(root);
+  const marker = resolve(root, "signal-handler-registered");
+  const preload = resolve(root, "signal-preload.mjs");
+  await writeFile(
+    preload,
+    [
+      'import { writeFileSync } from "node:fs";',
+      'import process from "node:process";',
+      'const marker = process.env.TRIAGE_SIGNAL_MARKER;',
+      'const originalOnce = process.once.bind(process);',
+      'process.once = (event, listener) => {',
+      '  const result = originalOnce(event, listener);',
+      '  if (event === "SIGTERM" && marker !== undefined) writeFileSync(marker, "registered");',
+      '  return result;',
+      '};',
+      delayMode === "connect"
+        ? [
+            `const { McpServer } = await import(${JSON.stringify(pathToFileURL(resolve("node_modules/@modelcontextprotocol/sdk/dist/esm/server/mcp.js")).href)});`,
+            'const originalConnect = McpServer.prototype.connect;',
+            'McpServer.prototype.connect = async function(transport) {',
+            '  await new Promise((resolve) => setTimeout(resolve, 1_000));',
+            '  return originalConnect.call(this, transport);',
+            '};',
+          ].join("\n")
+        : [
+            'const { Server } = await import("node:http");',
+            'const originalListen = Server.prototype.listen;',
+            'Server.prototype.listen = function(...args) {',
+            '  setTimeout(() => Reflect.apply(originalListen, this, args), 1_000);',
+            '  return this;',
+            '};',
+          ].join("\n"),
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+  const child = spawn(process.execPath, [
+    "--import",
+    pathToFileURL(preload).href,
+    resolve("dist", "src", `${entrypoint}.js`),
+  ], {
+    cwd: process.cwd(),
+    env: {
+      ...process.env,
+      TRIAGE_DATA_ROOT: root,
+      TRIAGE_SEED_FILE: resolve("data", "seed", "tickets.json"),
+      TRIAGE_KNOWLEDGE_ROOT: resolve("data", "knowledge"),
+      TRIAGE_MINUTES_SAVED: "8",
+      APPROVAL_DESK_PORT: "0",
+      TRIAGE_SIGNAL_MARKER: marker,
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+    windowsHide: true,
+  });
+  let stdout = "";
+  let stderr = "";
+  child.stdout.setEncoding("utf8");
+  child.stderr.setEncoding("utf8");
+  child.stdout.on("data", (chunk: string) => { stdout += chunk; });
+  child.stderr.on("data", (chunk: string) => { stderr += chunk; });
+  const close = new Promise<number | null>((resolveExit, rejectExit) => {
+    child.once("error", rejectExit);
+    child.once("close", resolveExit);
+  });
+  try {
+    const deadline = Date.now() + PROCESS_TIMEOUT_MS;
+    while (Date.now() < deadline) {
+      try {
+        await stat(marker);
+        break;
+      } catch {
+        await new Promise((resolveDelay) => setTimeout(resolveDelay, 10));
+      }
+    }
+    try {
+      await stat(marker);
+    } catch (error) {
+      throw new Error(
+        `Signal handler marker was not created. stdout=${stdout || "<empty>"}; stderr=${stderr || "<empty>"}`,
+        { cause: error },
+      );
+    }
+    child.kill("SIGTERM");
+    const code = await withTimeout(close, "signal-during-startup process", 5_000);
+    return { code, stdout, stderr };
+  } finally {
+    if (child.exitCode === null && child.signalCode === null) {
+      child.kill();
+      await withTimeout(close, "signal-during-startup process shutdown", PROCESS_SHUTDOWN_TIMEOUT_MS);
+    }
+  }
+}
+
 afterEach(async () => {
   await Promise.all(
     temporaryRoots
@@ -279,6 +377,22 @@ describe("compiled stdio entrypoint", () => {
     expect(result.stderr).not.toContain(leakedPath);
     expect(result.stderr).not.toContain("Cannot access");
     expect(result.stderr).not.toContain("at ");
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("does not continue MCP startup after termination during connect", async () => {
+    const result = await runSignalDuringStartup("index", "connect");
+
+    expect([0, null]).toContain(result.code);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toBe("");
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("does not continue HTTP startup after termination during listen", async () => {
+    const result = await runSignalDuringStartup("approval-desk", "listen");
+
+    expect([0, null]).toContain(result.code);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toBe("");
   }, INTEGRATION_TEST_TIMEOUT_MS);
 });
 

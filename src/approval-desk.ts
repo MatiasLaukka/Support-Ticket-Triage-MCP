@@ -74,6 +74,7 @@ async function main(): Promise<void> {
   const deps = await createRuntimeDependencies();
   let closePromise: Promise<void> | undefined;
   const closeRuntime = (): Promise<void> => closePromise ??= deps.close();
+  let closeServerAndRuntime: (() => Promise<void>) | undefined;
   try {
     if (deps.learningAvailability.status === "unavailable") {
       console.error(`[${deps.learningAvailability.code}] ${deps.learningAvailability.message}`);
@@ -83,8 +84,9 @@ async function main(): Promise<void> {
     const serverClosed = new Promise<void>((resolve) => {
       resolveServerClosed = resolve;
     });
+    let shutdownRequested = false;
     let shutdownPromise: Promise<void> | undefined;
-    const closeServerAndRuntime = (): Promise<void> => shutdownPromise ??= (async () => {
+    const closeServer = async (): Promise<void> => {
       await new Promise<void>((resolveClose, rejectClose) => {
         if (!server.listening) {
           resolveClose();
@@ -94,12 +96,17 @@ async function main(): Promise<void> {
           ? resolveClose()
           : rejectClose(error));
       });
+    };
+    const closeServerAndRuntimeNow = (): Promise<void> => shutdownPromise ??= (async () => {
+      await closeServer();
       await closeRuntime();
     })();
+    closeServerAndRuntime = closeServerAndRuntimeNow;
     server.once("close", resolveServerClosed);
     for (const signal of ["SIGINT", "SIGTERM"] as const) {
       process.once(signal, () => {
-        void closeServerAndRuntime().then(
+        shutdownRequested = true;
+        void closeServerAndRuntimeNow().then(
           () => { process.exitCode = 0; },
           (error: unknown) => {
             console.error(safeShutdownDetail(error));
@@ -107,6 +114,10 @@ async function main(): Promise<void> {
           },
         );
       });
+    }
+    if (shutdownRequested) {
+      await closeServerAndRuntimeNow();
+      return;
     }
     await new Promise<void>((resolveListen, rejectListen) => {
       server.once("error", rejectListen);
@@ -120,11 +131,21 @@ async function main(): Promise<void> {
         resolveListen();
       });
     });
+    if (shutdownRequested) {
+      await closeServerAndRuntimeNow();
+      await closeServer();
+      await closeRuntime();
+      return;
+    }
     await serverClosed;
     await closeRuntime();
   } catch (error) {
     try {
-      await closeRuntime();
+      if (closeServerAndRuntime !== undefined) {
+        await closeServerAndRuntime();
+      } else {
+        await closeRuntime();
+      }
     } catch (cleanupError) {
       if (cleanupError !== error) {
         throw new AggregateError(

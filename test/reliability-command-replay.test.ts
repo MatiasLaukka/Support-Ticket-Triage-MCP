@@ -499,7 +499,7 @@ describe("reliability command replay", () => {
     activeRuntimes.push({
       async close() {
         await closeServer(secondServer);
-        secondRuntime.close();
+        await secondRuntime.close();
         await rm(secondRoot, { recursive: true, force: true });
       },
     });

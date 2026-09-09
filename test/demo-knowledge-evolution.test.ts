@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { runKnowledgeEvolutionShowcase } from "../scripts/demo-knowledge-evolution.js";
+import { acquireDemoStateResetLease } from "../src/demo-state-lease.js";
 
 const roots: string[] = [];
 
@@ -46,6 +47,9 @@ describe("knowledge evolution showcase", () => {
     });
     expect(report.output).toContain("Future-ticket reuse");
     expect(report.output).toContain("Historical recommendation: byte-for-byte unchanged");
+
+    const resetLease = acquireDemoStateResetLease(dataRoot);
+    resetLease.release();
   });
 
   it("prints sanitized evidence and audit detail in verbose mode", async () => {

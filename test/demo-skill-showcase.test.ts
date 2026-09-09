@@ -16,6 +16,7 @@ import {
 import { OpenAiClassificationReasoningProvider } from "../src/approval-desk/classification-reasoning-provider.js";
 import { OpenAiCustomerResponseDraftProvider } from "../src/approval-desk/draft-response-provider.js";
 import { RecommendationRepository } from "../src/recommendation-repository.js";
+import { acquireDemoStateResetLease } from "../src/demo-state-lease.js";
 
 const roots: string[] = [];
 const SHOWCASE_TEST_TIMEOUT_MS = 15_000;
@@ -162,6 +163,9 @@ it("uses no providers in deterministic mode and preserves skipped local drafting
   )).toBe(true);
   expect(report.finalTicketStatus).toBe("resolved");
   expect(verifySkillShowcaseReport(report)).toEqual([]);
+
+  const resetLease = acquireDemoStateResetLease(dataRoot);
+  resetLease.release();
 }, SHOWCASE_TEST_TIMEOUT_MS);
 
 it("requires an explicit API key before constructing live providers", () => {

@@ -117,7 +117,14 @@ export class LearningOutboxWorker {
     try {
       row = this.options.store.readOutbox(candidate.id);
     } catch (error) {
-      if (isRetryablePersistence(error)) return { id: candidate.id, outcome: "retryable" };
+      if (isRetryablePersistence(error)) {
+        try {
+          this.releaseForRetry(candidate.id, token, "DELIVERY_ERROR");
+        } catch (releaseError) {
+          if (!isRetryablePersistence(releaseError)) throw releaseError;
+        }
+        return { id: candidate.id, outcome: "retryable" };
+      }
       throw error;
     }
     if (row === undefined) {

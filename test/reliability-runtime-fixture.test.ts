@@ -13,7 +13,7 @@ describe("reliability runtime fixture cleanup", () => {
       },
     } as Pick<Server, "close">;
     const runtime = {
-      close(): void {
+      async close(): Promise<void> {
         runtimeClosed = true;
         throw runtimeError;
       },

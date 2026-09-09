@@ -14,28 +14,86 @@ function safeErrorDetail(error: unknown): string {
   return "Unexpected startup error.";
 }
 
+function safeShutdownDetail(error: unknown): string {
+  if (error instanceof StartupConfigError || error instanceof DomainError) {
+    return error.message;
+  }
+  return "Unexpected shutdown error.";
+}
+
 async function main(): Promise<void> {
   const deps = await createRuntimeDependencies();
-  if (deps.learningAvailability.status === "unavailable") {
-    console.error(`[${deps.learningAvailability.code}] ${deps.learningAvailability.message}`);
-  }
-  const server = createTriageServer(deps);
-  let closed = false;
-  const closeRuntime = (): void => {
-    if (closed) return;
-    closed = true;
-    deps.close();
-  };
-  process.once("exit", closeRuntime);
-  for (const signal of ["SIGINT", "SIGTERM"] as const) {
-    process.once(signal, () => {
-      void server.close().finally(() => {
-        closeRuntime();
-        process.exitCode = 0;
-      });
+  let closePromise: Promise<void> | undefined;
+  const closeRuntime = (): Promise<void> => closePromise ??= deps.close();
+  let server!: ReturnType<typeof createTriageServer>;
+  let transport!: StdioServerTransport;
+  let shutdown: (() => Promise<void>) | undefined;
+  try {
+    if (deps.learningAvailability.status === "unavailable") {
+      console.error(`[${deps.learningAvailability.code}] ${deps.learningAvailability.message}`);
+    }
+    server = createTriageServer(deps);
+    transport = new StdioServerTransport();
+    let resolveTransportClosed!: () => void;
+    const transportClosed = new Promise<void>((resolve) => {
+      resolveTransportClosed = resolve;
     });
+    let shutdownRequested = false;
+    let shutdownPromise: Promise<void> | undefined;
+    const shutdownNow = (): Promise<void> => shutdownPromise ??= (async () => {
+      await server.close();
+      await transport.close();
+      await closeRuntime();
+    })();
+    shutdown = shutdownNow;
+    transport.onclose = () => {
+      resolveTransportClosed();
+    };
+    const handleSignal = (): void => {
+      shutdownRequested = true;
+      void shutdownNow().then(
+        () => { process.exitCode = 0; },
+        (error: unknown) => {
+          console.error(safeShutdownDetail(error));
+          process.exitCode = 1;
+        },
+      );
+    };
+    for (const signal of ["SIGINT", "SIGTERM"] as const) {
+      process.once(signal, handleSignal);
+    }
+    if (shutdownRequested) {
+      await shutdownNow();
+      return;
+    }
+    await server.connect(transport);
+    if (shutdownRequested) {
+      await shutdownNow();
+      await server.close();
+      await transport.close();
+      return;
+    }
+    await transportClosed;
+    await closeRuntime();
+  } catch (error) {
+    try {
+      if (shutdown !== undefined) {
+        await shutdown();
+        await server.close();
+        await transport.close();
+      } else {
+        await closeRuntime();
+      }
+    } catch (cleanupError) {
+      if (cleanupError !== error) {
+        throw new AggregateError(
+          [error, cleanupError],
+          "MCP startup and cleanup failed.",
+        );
+      }
+    }
+    throw error;
   }
-  await server.connect(new StdioServerTransport());
 }
 
 main().catch((error: unknown) => {

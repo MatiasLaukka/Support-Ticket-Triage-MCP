@@ -335,6 +335,53 @@ describe("durable operational learning outbox", () => {
     }
   });
 
+  it("releases a claim when a transient read fails after claiming", async () => {
+    const harness = openHarness();
+    try {
+      const [envelope] = manyCaptureEnvelopes(1);
+      appendRows(harness.store, [envelope!]);
+      let readAttempts = 0;
+      const store: OperationalLearningOutboxStore = {
+        transaction: harness.store.transaction.bind(harness.store),
+        readOutbox(id) {
+          readAttempts += 1;
+          if (readAttempts === 1) {
+            throw new OperationalStoreError(
+              "temporary SQLite read lock",
+              "PERSISTENCE_ERROR",
+              { cause: { code: "SQLITE_BUSY" } },
+            );
+          }
+          return harness.store.readOutbox(id);
+        },
+        listPendingOutbox: harness.store.listPendingOutbox.bind(harness.store),
+        listDueOutbox: harness.store.listDueOutbox.bind(harness.store),
+      };
+      const worker = new LearningOutboxWorker({
+        store,
+        delivery: { async deliverEnvelope() { return "delivered" as const; } },
+        now: () => new Date("2026-08-11T13:00:00.000Z"),
+        claimToken: () => "read-lock-worker",
+      });
+
+      await expect(worker.drainDue({
+        now: "2026-08-11T13:00:00.000Z",
+        staleBefore: "2026-08-11T12:59:00.000Z",
+        limit: 25,
+        deferredUntil: {},
+      })).resolves.toEqual([{
+        id: outboxId(envelope!.operationalEventId),
+        outcome: "retryable",
+      }]);
+      const row = harness.store.readOutbox(outboxId(envelope!.operationalEventId));
+      expect(row).toMatchObject({ status: "pending", attempts: 1 });
+      expect(row).not.toHaveProperty("claimedBy");
+    } finally {
+      harness.ledger.close();
+      harness.store.close();
+    }
+  });
+
   it("propagates a non-transient acknowledgement persistence failure", async () => {
     const harness = openHarness();
     try {
@@ -813,9 +860,8 @@ describe("durable operational learning outbox", () => {
         eventType: "diagnosis-recorded",
       }]);
     } finally {
-      deps.knowledgeEvolution.ledger.close();
+      await deps.close();
       harness.ledger.close();
-      harness.store.close();
     }
   });
 });

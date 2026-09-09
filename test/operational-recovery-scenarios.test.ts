@@ -8,11 +8,11 @@ import {
 import { createRecoveryFixture, recoveryTicketId } from "./recovery-fixture.js";
 
 const roots: string[] = [];
-const runtimes: Array<{ close(): void }> = [];
+const runtimes: Array<{ close(): Promise<void> }> = [];
 let fixtureSequence = 1;
 
 afterEach(async () => {
-  for (const runtime of runtimes.splice(0)) runtime.close();
+  await Promise.all(runtimes.splice(0).map((runtime) => runtime.close()));
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 

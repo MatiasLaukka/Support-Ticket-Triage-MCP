@@ -141,7 +141,7 @@ describe("operational diagnosis persistence", () => {
       });
 
       await closeServer(server);
-      runtime.close();
+      await runtime.close();
 
       runtime = await createRuntimeDependencies({ env, now });
       server = createApprovalDeskHttpServer(runtime);
@@ -189,7 +189,7 @@ describe("operational diagnosis persistence", () => {
       >;
 
       await closeServer(server);
-      runtime.close();
+      await runtime.close();
       runtime = await createRuntimeDependencies({ env, now });
       server = createApprovalDeskHttpServer(runtime);
       baseUrl = await listen(server);
@@ -252,7 +252,7 @@ describe("operational diagnosis persistence", () => {
       });
 
       await closeServer(server);
-      runtime.close();
+      await runtime.close();
       runtime = await createRuntimeDependencies({ env, now });
       server = createApprovalDeskHttpServer(runtime);
       baseUrl = await listen(server);
@@ -329,7 +329,7 @@ describe("operational diagnosis persistence", () => {
       });
 
       await closeServer(server);
-      runtime.close();
+      await runtime.close();
       runtime = await createRuntimeDependencies({ env, now });
       server = createApprovalDeskHttpServer(runtime);
       baseUrl = await listen(server);
@@ -368,7 +368,7 @@ describe("operational diagnosis persistence", () => {
       });
 
       await closeServer(server);
-      runtime.close();
+      await runtime.close();
       runtime = await createRuntimeDependencies({ env, now });
       server = createApprovalDeskHttpServer(runtime);
       baseUrl = await listen(server);
@@ -388,7 +388,7 @@ describe("operational diagnosis persistence", () => {
       });
     } finally {
       await closeServer(server);
-      runtime.close();
+      await runtime.close();
     }
   });
 
@@ -508,7 +508,7 @@ describe("operational diagnosis persistence", () => {
       );
 
       await closeServer(server);
-      runtime.close();
+      await runtime.close();
       runtime = await createRuntimeDependencies({ env, now });
       server = createApprovalDeskHttpServer(runtime);
       baseUrl = await listen(server);
@@ -602,7 +602,7 @@ describe("operational diagnosis persistence", () => {
       });
 
       await closeServer(server);
-      runtime.close();
+      await runtime.close();
       runtime = await createRuntimeDependencies({ env, now });
       server = createApprovalDeskHttpServer(runtime);
       baseUrl = await listen(server);
@@ -672,7 +672,7 @@ describe("operational diagnosis persistence", () => {
       expect(resumedEvaluation.recommendation).toMatchObject({ ticketId });
 
       await closeServer(server);
-      runtime.close();
+      await runtime.close();
       runtime = await createRuntimeDependencies({ env, now });
       server = createApprovalDeskHttpServer(runtime);
       baseUrl = await listen(server);
@@ -696,7 +696,7 @@ describe("operational diagnosis persistence", () => {
       });
     } finally {
       await closeServer(server);
-      runtime.close();
+      await runtime.close();
     }
   });
 });

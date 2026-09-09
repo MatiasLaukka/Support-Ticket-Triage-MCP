@@ -576,7 +576,7 @@ describe("operational knowledge discovery", () => {
       })).rejects.toMatchObject({ code: "PERSISTENCE_ERROR" });
     } finally {
       await closeServer(server);
-      runtime.close();
+      await runtime.close();
     }
   });
 });

@@ -17,7 +17,7 @@ import { createRuntimeDependencies } from "../src/runtime.js";
 
 const temporaryRoots: string[] = [];
 const servers: Array<ReturnType<typeof createApprovalDeskHttpServer>> = [];
-const ledgers: Array<{ close: () => void }> = [];
+const runtimes: Array<{ close: () => Promise<void> }> = [];
 
 afterEach(async () => {
   await Promise.allSettled(
@@ -30,9 +30,7 @@ afterEach(async () => {
         }),
     ),
   );
-  for (const ledger of ledgers.splice(0)) {
-    ledger.close();
-  }
+  await Promise.all(runtimes.splice(0).map((runtime) => runtime.close()));
   await Promise.all(
     temporaryRoots.splice(0).map((root) => rm(root, { recursive: true, force: true })),
   );
@@ -428,7 +426,7 @@ async function startFixture(): Promise<{
     },
     now: () => new Date("2026-06-10T09:00:00.000Z"),
   });
-  ledgers.push(deps.knowledgeEvolution.ledger);
+  runtimes.push(deps);
   const server = createApprovalDeskHttpServer(deps);
   servers.push(server);
   await new Promise<void>((resolveListen) => {

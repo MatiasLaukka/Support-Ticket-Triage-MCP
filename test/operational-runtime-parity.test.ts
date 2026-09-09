@@ -40,7 +40,7 @@ afterEach(async () => {
   await Promise.allSettled(clients.splice(0).map((client) => client.close()));
   await Promise.allSettled(mcpServers.splice(0).map((server) => server.close()));
   await Promise.allSettled(httpServers.splice(0).map((server) => closeHttp(server)));
-  for (const runtime of runtimes.splice(0)) closeRuntime(runtime);
+  for (const runtime of runtimes.splice(0)) await closeRuntime(runtime);
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
@@ -728,9 +728,9 @@ describe("production operational runtime parity", () => {
     }, { commandId: "81000000-0000-4000-8000-000000000001" }))
       .rejects.toMatchObject({ code: "OPERATIONAL_NOT_READY" });
 
-    closeRuntime(runtime);
+    await closeRuntime(runtime);
     expect(() => operationalStore(runtime).readImportState()).toThrow(/closed/i);
-    expect(() => closeRuntime(runtime)).not.toThrow();
+    await expect(closeRuntime(runtime)).resolves.toBeUndefined();
   });
 
   it("shares HTTP and MCP command replay and reloads identical causal state after restart", async () => {
@@ -783,8 +783,8 @@ describe("production operational runtime parity", () => {
       decisionTimeline: httpWorkflow.decisionTimeline,
     });
 
-    closeRuntime(httpRuntime);
-    closeRuntime(mcpRuntime);
+    await closeRuntime(httpRuntime);
+    await closeRuntime(mcpRuntime);
     const restarted = await openRuntime(fixture, database, "restart-learning.sqlite");
     const afterRestart = restarted.operationalStore!.readWorkflowSnapshot("TKT-0001");
     expect(afterRestart).toEqual(beforeRestart);
@@ -916,7 +916,7 @@ describe("production operational runtime parity", () => {
 
     await rm(corruptLearning, { force: true });
     await writeFile(corruptLearning, "closed learning handle\n", "utf8");
-    closeRuntime(runtime);
+    await closeRuntime(runtime);
     const reopened = OperationalSqliteStore.open(database);
     reopened.initialize();
     expect(reopened.readWorkflowSnapshot("TKT-0001").messages).toHaveLength(1);
@@ -1031,13 +1031,8 @@ async function openRuntime(
   return runtime;
 }
 
-function closeRuntime(runtime: RuntimeDependencies): void {
-  const closable = runtime as RuntimeDependencies & { close?: () => void };
-  if (closable.close !== undefined) closable.close();
-  else {
-    (runtime.operationalStore as OperationalSqliteStore | undefined)?.close();
-    runtime.knowledgeEvolution.ledger.close();
-  }
+async function closeRuntime(runtime: RuntimeDependencies): Promise<void> {
+  await runtime.close();
 }
 
 async function startHttp(
@@ -1182,9 +1177,7 @@ function runApprovalWorker(input: {
       } catch (error) {
         parentPort.postMessage({ ok: false, code: error?.code });
       } finally {
-        runtime.close?.();
-        runtime.operationalStore?.close?.();
-        runtime.knowledgeEvolution.ledger.close();
+        await runtime.close?.();
       }
       })().catch((error) => { throw error; });
     `, { eval: true, workerData: input });

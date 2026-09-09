@@ -190,7 +190,7 @@ describe("operational recovery commands", () => {
         code: "STALE_APPROVAL",
       });
     } finally {
-      runtime.close();
+      await runtime.close();
     }
   });
 });

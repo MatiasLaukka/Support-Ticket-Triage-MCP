@@ -39,12 +39,12 @@ export async function runOperationalPersistenceShowcase(): Promise<Record<string
   const first = await createRuntimeDependencies({ env });
   const beforeRestart = first.operationalStore!.readWorkflowSnapshot("TKT-9001");
   const timeline = buildDecisionTimeline(beforeRestart);
-  first.close();
+  await first.close();
 
   const restarted = await createRuntimeDependencies({ env });
   const afterRestart = restarted.operationalStore!.readWorkflowSnapshot("TKT-9001");
   const learningEvents = await restarted.knowledgeEvolution.ledger.list();
-  restarted.close();
+  await restarted.close();
 
   const report = {
     importState: imported.state,

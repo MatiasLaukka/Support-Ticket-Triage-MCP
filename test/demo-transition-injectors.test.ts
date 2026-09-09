@@ -19,7 +19,7 @@ afterEach(async () => {
   await Promise.allSettled(servers.splice(0).map((server) => new Promise<void>((done) => {
     server.close(() => done());
   })));
-  for (const runtime of runtimes.splice(0)) runtime.close();
+  await Promise.all(runtimes.splice(0).map((runtime) => runtime.close()));
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 

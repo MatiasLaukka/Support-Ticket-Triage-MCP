@@ -320,7 +320,7 @@ describe("Approval Desk lifecycle contract", () => {
       expect(app.el("actionBarTitle").textContent).toBe("Resolved");
     } finally {
       await new Promise<void>((resolveClose) => server.close(() => resolveClose()));
-      deps.close();
+      await deps.close();
       await rm(dataRoot, { recursive: true, force: true });
     }
   }, 30000);

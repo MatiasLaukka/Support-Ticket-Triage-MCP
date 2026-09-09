@@ -274,7 +274,7 @@ describe("operational demo reset", () => {
         /operational demo state is active/i,
       );
     } finally {
-      runtime.close();
+      await runtime.close();
     }
 
     expect(() => resetOperationalDemoState(harness.input)).not.toThrow();
@@ -294,7 +294,7 @@ describe("operational demo reset", () => {
       firstWorkflow = await readApprovalDeskWorkflow(firstRuntime, "TKT-1010");
       assertPristineApprovalDeskWorkflow(firstRuntime, firstWorkflow);
     } finally {
-      firstRuntime.close();
+      await firstRuntime.close();
     }
 
     const restartedRuntime = await createResetRuntime(harness);
@@ -306,7 +306,7 @@ describe("operational demo reset", () => {
       assertPristineApprovalDeskWorkflow(restartedRuntime, restartedWorkflow);
       expect(restartedWorkflow).toEqual(firstWorkflow!);
     } finally {
-      restartedRuntime.close();
+      await restartedRuntime.close();
     }
   });
 
@@ -366,7 +366,7 @@ describe("learning demo reset", () => {
       );
       expect(learningResourceSnapshot(harness)).toEqual(before);
     } finally {
-      runtime.close();
+      await runtime.close();
     }
   });
 

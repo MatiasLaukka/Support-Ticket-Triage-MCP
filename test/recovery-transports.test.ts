@@ -19,7 +19,7 @@ describe("recovery operation transports", () => {
   it("exposes strict MCP recovery tools with stable post-commit replay envelopes", async () => {
     const fixture = await createRecoveryFixture();
     roots.push(fixture.root);
-    cleanup.push(() => fixture.runtime.close());
+    cleanup.push(async () => { await fixture.runtime.close(); });
     const fix = fixture.seedFix({
       fixEventId: "a1000000-0000-4000-8000-000000000001",
       commandId: "a1000000-0000-4000-8000-000000000002",
@@ -106,7 +106,7 @@ describe("recovery operation transports", () => {
   it("exposes strict Approval Desk recovery routes with stable post-commit replay envelopes", async () => {
     const fixture = await createRecoveryFixture();
     roots.push(fixture.root);
-    cleanup.push(() => fixture.runtime.close());
+    cleanup.push(async () => { await fixture.runtime.close(); });
     const fix = fixture.seedFix({
       fixEventId: "b1000000-0000-4000-8000-000000000001",
       commandId: "b1000000-0000-4000-8000-000000000002",

@@ -699,7 +699,7 @@ async function closeRuntime(
   try {
     await closeServer(state.server);
   } finally {
-    state.deps.close();
+    await state.deps.close();
   }
 }
 

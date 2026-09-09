@@ -61,6 +61,13 @@ function listenUrl(host: string, port: number): string {
   return `http://${formattedHost}:${port}`;
 }
 
+function safeShutdownDetail(error: unknown): string {
+  if (error instanceof StartupConfigError || error instanceof DomainError) {
+    return error.message;
+  }
+  return "Unexpected approval desk shutdown error.";
+}
+
 async function main(): Promise<void> {
   const host = approvalDeskHost(process.env);
   const port = approvalDeskPort(process.env);
@@ -69,25 +76,58 @@ async function main(): Promise<void> {
     console.error(`[${deps.learningAvailability.code}] ${deps.learningAvailability.message}`);
   }
   const server = createApprovalDeskHttpServer(deps);
-  server.once("close", () => deps.close());
-  for (const signal of ["SIGINT", "SIGTERM"] as const) {
-    process.once(signal, () => server.close(() => {
-      process.exitCode = 0;
-    }));
-  }
-
-  await new Promise<void>((resolveListen, rejectListen) => {
-    server.once("error", rejectListen);
-    server.listen(port, host, () => {
-      server.off("error", rejectListen);
-      const address = server.address();
-      const boundPort = typeof address === "object" && address !== null
-        ? (address as AddressInfo).port
-        : port;
-      console.log(`Approval Desk listening at ${listenUrl(host, boundPort)}.`);
-      resolveListen();
+  let closePromise: Promise<void> | undefined;
+  let shutdownPromise: Promise<void> | undefined;
+  const closeRuntime = (): Promise<void> => closePromise ??= deps.close();
+  const closeServerAndRuntime = (): Promise<void> => shutdownPromise ??= (async () => {
+    await new Promise<void>((resolveClose, rejectClose) => {
+      if (!server.listening) {
+        resolveClose();
+        return;
+      }
+      server.close((error) => error === undefined
+        ? resolveClose()
+        : rejectClose(error));
+    });
+    await closeRuntime();
+  })();
+  server.once("close", () => {
+    void closeRuntime().catch((error: unknown) => {
+      console.error(safeShutdownDetail(error));
+      process.exitCode = 1;
     });
   });
+  for (const signal of ["SIGINT", "SIGTERM"] as const) {
+    process.once(signal, () => {
+      void closeServerAndRuntime().then(
+        () => { process.exitCode = 0; },
+        (error: unknown) => {
+          console.error(safeShutdownDetail(error));
+          process.exitCode = 1;
+        },
+      );
+    });
+  }
+
+  try {
+    await new Promise<void>((resolveListen, rejectListen) => {
+      server.once("error", rejectListen);
+      server.listen(port, host, () => {
+        server.off("error", rejectListen);
+        const address = server.address();
+        const boundPort = typeof address === "object" && address !== null
+          ? (address as AddressInfo).port
+          : port;
+        console.log(`Approval Desk listening at ${listenUrl(host, boundPort)}.`);
+        resolveListen();
+      });
+    });
+  } catch (error) {
+    await closeRuntime().catch((cleanupError: unknown) => {
+      throw new AggregateError([error, cleanupError], "Approval Desk startup cleanup failed.");
+    });
+    throw error;
+  }
 }
 
 main().catch((error: unknown) => {

@@ -114,14 +114,14 @@ describe("runtime configuration", () => {
     let resetLease: ReturnType<typeof acquireDemoStateResetLease> | undefined;
 
     try {
-      expect(() => deps.close()).toThrow("injected operational close failure");
+      await expect(deps.close()).rejects.toThrow("injected operational close failure");
       expect(() => {
         resetLease = acquireDemoStateResetLease(dataRoot);
       }).not.toThrow();
     } finally {
       resetLease?.release();
-      deps.close();
       closeSpy.mockRestore();
+      (store as OperationalSqliteStore).close();
     }
   });
 
@@ -181,7 +181,7 @@ describe("runtime configuration", () => {
       expect(existsSync(operationalDatabase)).toBe(true);
       expect(existsSync(learningDatabase)).toBe(true);
     } finally {
-      deps.close();
+      await deps.close();
     }
   });
 

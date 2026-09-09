@@ -21,6 +21,10 @@ import {
   LearningOutboxWorker,
   type OperationalLearningOutboxStore,
 } from "./operational/learning-outbox.js";
+import {
+  LearningDeliveryRunner,
+  type DeliveryScheduler,
+} from "./operational/learning-delivery-runner.js";
 import { createRuntimeOperationalStore } from "./operational/import.js";
 import { OperationalSqliteStore } from "./operational/sqlite-store.js";
 import {
@@ -64,6 +68,7 @@ export interface RuntimeOptions {
   env?: RuntimeEnvironment;
   cwd?: string;
   now?: () => Date;
+  scheduler?: DeliveryScheduler;
   knowledgeCandidateDraftProvider?: CandidateDraftProvider;
   operationalStore?: OperationalCommandStore;
   /** Explicit compatibility mode for focused legacy repository fixtures only. */
@@ -94,11 +99,12 @@ export interface RuntimeDependencies {
   operationalCommandDispatcher?: OperationalCommandDispatcher;
   evaluationGuard?: TicketEvaluationGuard;
   learningOutbox?: LearningOutboxWorker;
+  learningDeliveryRunner?: LearningDeliveryRunner;
   learningAvailability: LearningAvailability;
   now: () => Date;
   minutesPerAcceptedRecommendation: number;
   paths: RuntimePaths;
-  close(): void;
+  close(): Promise<void>;
 }
 
 export type LearningAvailability =
@@ -217,6 +223,7 @@ export async function createRuntimeDependencies(
     ? options.operationalStore
     : undefined;
   let ledger: SqliteLearningLedger | undefined;
+  let learningDeliveryRunner: LearningDeliveryRunner | undefined;
   try {
   if (runtimeOperationalStore === undefined && options.legacyFixtureRepositories !== true) {
     sqliteOperationalStore = OperationalSqliteStore.open(operationalDatabase);
@@ -276,13 +283,12 @@ export async function createRuntimeDependencies(
       })
     : undefined;
   if (learningOutbox !== undefined) {
-    try {
-      await learningOutbox.drainPending();
-    } catch (error) {
-      ledger?.close();
-      sqliteOperationalStore?.close();
-      throw error;
-    }
+    learningDeliveryRunner = new LearningDeliveryRunner({
+      worker: learningOutbox,
+      ...(options.scheduler === undefined ? {} : { scheduler: options.scheduler }),
+      reportError: reportLearningDeliveryError,
+    });
+    await learningDeliveryRunner.start();
   }
   const knowledgeEvolution = ledger !== undefined && store !== undefined
     ? (() => {
@@ -340,6 +346,7 @@ export async function createRuntimeDependencies(
     ...(operationalCommandDispatcher === undefined ? {} : { operationalCommandDispatcher }),
     evaluationGuard,
     ...(learningOutbox === undefined ? {} : { learningOutbox }),
+    ...(learningDeliveryRunner === undefined ? {} : { learningDeliveryRunner }),
     learningAvailability,
     now,
     minutesPerAcceptedRecommendation,
@@ -352,13 +359,24 @@ export async function createRuntimeDependencies(
       operationalDatabase,
       knowledgeEvolution: knowledgeEvolutionPaths,
     },
-    close() {
-      closeRuntimeResources({ sqliteOperationalStore, ledger, usageLease });
-    },
+    close: (() => {
+      let closePromise: Promise<void> | undefined;
+      return () => closePromise ??= closeRuntimeResourcesAsync({
+        learningDeliveryRunner,
+        sqliteOperationalStore,
+        ledger,
+        usageLease,
+      });
+    })(),
   };
   } catch (error) {
     try {
-      closeRuntimeResources({ sqliteOperationalStore, ledger, usageLease });
+      await closeRuntimeResourcesAsync({
+        learningDeliveryRunner,
+        sqliteOperationalStore,
+        ledger,
+        usageLease,
+      });
     } catch (cleanupError) {
       throw new AggregateError(
         [error, cleanupError],
@@ -398,6 +416,44 @@ function closeRuntimeResources(input: {
   if (errors.length > 1) {
     throw new AggregateError(errors, "Runtime resources could not be closed cleanly.");
   }
+}
+
+async function closeRuntimeResourcesAsync(input: {
+  readonly learningDeliveryRunner: LearningDeliveryRunner | undefined;
+  readonly sqliteOperationalStore: OperationalSqliteStore | undefined;
+  readonly ledger: SqliteLearningLedger | undefined;
+  readonly usageLease: DemoStateUsageLease;
+}): Promise<void> {
+  let stopFailed = false;
+  let stopError: unknown;
+  try {
+    await input.learningDeliveryRunner?.stop();
+  } catch (error) {
+    stopFailed = true;
+    stopError = error;
+  }
+
+  let cleanupFailed = false;
+  let cleanupError: unknown;
+  try {
+    closeRuntimeResources({
+      sqliteOperationalStore: input.sqliteOperationalStore,
+      ledger: input.ledger,
+      usageLease: input.usageLease,
+    });
+  } catch (error) {
+    cleanupFailed = true;
+    cleanupError = error;
+  }
+
+  if (stopFailed && cleanupFailed) {
+    throw new AggregateError(
+      [stopError, cleanupError],
+      "Learning delivery stop and runtime cleanup failed.",
+    );
+  }
+  if (stopFailed) throw stopError;
+  if (cleanupFailed) throw cleanupError;
 }
 
 function unavailableKnowledgeEvolution(
@@ -445,7 +501,12 @@ function isOperationalLearningOutboxStore(
   if (store === undefined) return false;
   const candidate = store as Partial<OperationalLearningOutboxStore>;
   return typeof candidate.readOutbox === "function"
-    && typeof candidate.listPendingOutbox === "function";
+    && typeof candidate.listPendingOutbox === "function"
+    && typeof candidate.listDueOutbox === "function";
+}
+
+function reportLearningDeliveryError(): void {
+  console.error("[LEARNING_DELIVERY_ERROR] Learning delivery runner pass failed.");
 }
 
 function invalidMinutesSaved(): StartupConfigError {

@@ -18,11 +18,14 @@ import { createTriageServer } from "../src/server.js";
 import { createRuntimeDependencies } from "../src/runtime.js";
 import { OperationalSqliteStore } from "../src/operational/sqlite-store.js";
 import { createApprovalDeskHttpServer } from "../src/approval-desk/http.js";
+import { TicketSchema } from "../src/domain.js";
 
 const activeRuntimes: Array<{ close(): Promise<void> }> = [];
+const temporaryRoots: string[] = [];
 
 afterEach(async () => {
   await Promise.all(activeRuntimes.splice(0).map((runtime) => runtime.close()));
+  await Promise.all(temporaryRoots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
 describe("reliability command replay", () => {
@@ -249,6 +252,168 @@ describe("reliability command replay", () => {
         .readWorkflowSnapshot("TKT-1010")).toEqual(before);
     } finally {
       await Promise.allSettled([client.close(), server.close()]);
+    }
+  });
+
+  it("keeps legacy rejection and v2 replay stable across a runtime restart", async () => {
+    let providerCalls = 0;
+    const harness = await openReliabilityRuntime({
+      classificationReasoningProvider: {
+        async reason(input) {
+          providerCalls += 1;
+          return createControlledClassificationProvider().reason(input);
+        },
+      },
+      draftProvider: {
+        async draft(input) {
+          providerCalls += 1;
+          return createControlledDraftProvider().draft(input);
+        },
+      },
+    });
+    activeRuntimes.push(harness);
+    const legacyKey = randomUUID();
+    insertLegacyEvaluationReceipt(harness.root, legacyKey);
+    const legacyInput = { actor: "approval-desk", aiPreference: "auto" };
+
+    const legacyBeforeRestart = await harness.post(
+      "/api/tickets/TKT-1010/recommendations",
+      legacyInput,
+      legacyKey,
+    );
+    expect(legacyBeforeRestart.status).toBe(409);
+    await harness.restart();
+    const legacyAfterRestart = await harness.post(
+      "/api/tickets/TKT-1010/recommendations",
+      legacyInput,
+      legacyKey,
+    );
+    expect(legacyAfterRestart.status).toBe(409);
+    expect(legacyAfterRestart.body.error).toMatchObject({ code: "LEGACY_REPLAY_UNAVAILABLE" });
+    expect(providerCalls).toBe(0);
+
+    const v2Key = randomUUID();
+    const committed = await harness.post(
+      "/api/tickets/TKT-1010/recommendations",
+      { actor: "approval-desk", aiPreference: "deterministic" },
+      v2Key,
+    );
+    const receipt = (harness.runtime.operationalStore as OperationalSqliteStore)
+      .readCommandReceipt(v2Key);
+    await harness.restart();
+    const replay = await harness.post(
+      "/api/tickets/TKT-1010/recommendations",
+      { actor: "approval-desk", aiPreference: "deterministic" },
+      v2Key,
+    );
+
+    expect(committed.status).toBe(201);
+    expect(receipt?.requestHashVersion).toBe(2);
+    expect(replay.status).toBe(201);
+    expect(replay.body.recommendation).toEqual(committed.body.recommendation);
+  });
+
+  it("preserves populated v3 history, revisions, receipt, and outbox bytes during v4 migration", async () => {
+    const root = await mkdtemp(join(tmpdir(), "triage-r1-v3-migration-"));
+    temporaryRoots.push(root);
+    const path = join(root, "operational.sqlite");
+    const initialized = OperationalSqliteStore.open(path);
+    initialized.initialize();
+    initialized.close();
+
+    const ticketId = "TKT-1010";
+    const eventId = "a1000000-0000-4000-8000-000000000001";
+    const recommendationId = "a2000000-0000-4000-8000-000000000001";
+    const receiptId = "a3000000-0000-4000-8000-000000000001";
+    const outboxId = "a4000000-0000-4000-8000-000000000001";
+    const deliveryKey = "a5000000-0000-4000-8000-000000000001";
+    const ticket = TicketSchema.parse({
+      id: ticketId,
+      createdAt: "2026-09-08T07:00:00.000Z",
+      updatedAt: "2026-09-08T08:00:00.000Z",
+      customer: { name: "Migration fixture", plan: "starter", region: "eu", vip: false },
+      subject: "Migration fixture",
+      description: "Representative populated v3 ticket.",
+      status: "in-progress",
+      tags: ["migration-fixture"],
+      sla: { responseDueAt: "2026-09-08T12:00:00.000Z", breached: false },
+      revision: 1,
+    });
+    const eventJson = JSON.stringify({ id: eventId, ticketId, sequence: 1, action: "ticket-updated" });
+    const ticketRevisionJson = JSON.stringify({ ...ticket, revision: 1 });
+    const recommendationJson = JSON.stringify({ id: recommendationId, ticketId, sourceRevision: 1 });
+    const recommendationRevisionJson = JSON.stringify({ id: recommendationId, eventId, revision: 1 });
+    const resultJson = JSON.stringify({ operation: "evaluate-ticket", tickets: [{ ticketId, operationalEventIds: [eventId], resultingRevision: 1 }] });
+    const envelopeJson = JSON.stringify({
+      operationalEventId: eventId,
+      deliveryKey,
+      eventType: "diagnosis-recorded",
+      occurredAt: "2026-09-08T08:00:00.000Z",
+      actor: "support-lead",
+      ticketId,
+      diagnosisId: "diagnosis-migration-fixture",
+      evidenceIds: ["request-trace"],
+      knowledgeArticleIds: ["api-reference"],
+      provenance: "Representative populated v3 envelope.",
+    });
+    const beforeDatabase = new Database(path);
+    beforeDatabase.exec("BEGIN");
+    beforeDatabase.prepare("INSERT INTO tickets(id, revision, updated_at, payload_json) VALUES (?, ?, ?, ?)")
+      .run(ticket.id, ticket.revision, ticket.updatedAt, JSON.stringify(ticket));
+    beforeDatabase.prepare(`
+      INSERT INTO operational_events(id, ticket_id, sequence, occurred_at, actor, action, command_id, facts_json, event_json)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(eventId, ticketId, 1, "2026-09-08T08:00:00.000Z", "support-lead", "ticket-updated", receiptId, JSON.stringify({ status: "in-progress" }), eventJson);
+    beforeDatabase.prepare(`
+      INSERT INTO ticket_revisions(ticket_id, revision, operational_event_id, created_at, payload_json)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(ticketId, 1, eventId, "2026-09-08T08:00:00.000Z", ticketRevisionJson);
+    beforeDatabase.prepare(`
+      INSERT INTO recommendations(id, ticket_id, source_revision, resolution, created_at, payload_json)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(recommendationId, ticketId, 1, "pending", "2026-09-08T08:00:00.000Z", recommendationJson);
+    beforeDatabase.prepare(`
+      INSERT INTO recommendation_revisions(recommendation_id, ticket_id, operational_event_id, created_at, payload_json)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(recommendationId, ticketId, eventId, "2026-09-08T08:00:00.000Z", recommendationRevisionJson);
+    beforeDatabase.prepare(`
+      INSERT INTO command_idempotency(command_id, operation, request_hash, result_json, created_at)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(receiptId, "evaluate-ticket", "b".repeat(64), resultJson, "2026-09-08T08:00:00.000Z");
+    beforeDatabase.prepare(`
+      INSERT INTO learning_capture_outbox(id, operational_event_id, delivery_key, status, attempts, created_at, envelope_json)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(outboxId, eventId, deliveryKey, "pending", 0, "2026-09-08T08:00:00.000Z", envelopeJson);
+    beforeDatabase.exec("COMMIT");
+    const before = {
+      events: beforeDatabase.prepare("SELECT id, ticket_id, sequence, occurred_at, actor, action, command_id, facts_json, event_json FROM operational_events").all(),
+      ticketRevisions: beforeDatabase.prepare("SELECT ticket_id, revision, operational_event_id, created_at, payload_json FROM ticket_revisions").all(),
+      recommendationRevisions: beforeDatabase.prepare("SELECT recommendation_id, ticket_id, operational_event_id, created_at, payload_json FROM recommendation_revisions").all(),
+      receipts: beforeDatabase.prepare("SELECT command_id, operation, request_hash, result_json, created_at FROM command_idempotency").all(),
+      outbox: beforeDatabase.prepare("SELECT id, operational_event_id, delivery_key, status, attempts, created_at, claimed_by, claimed_at, delivered_at, error_code, envelope_json FROM learning_capture_outbox").all(),
+    };
+    beforeDatabase.close();
+
+    downgradeToV3(path);
+    const migrated = OperationalSqliteStore.open(path);
+    migrated.initialize();
+    migrated.close();
+
+    const afterDatabase = new Database(path, { readonly: true });
+    try {
+      expect(afterDatabase.prepare("SELECT value FROM operational_metadata WHERE key = 'schema_version'").get())
+        .toEqual({ value: "4" });
+      expect(afterDatabase.prepare("SELECT request_hash_version FROM command_idempotency WHERE command_id = ?").get(receiptId))
+        .toEqual({ request_hash_version: 1 });
+      expect({
+        events: afterDatabase.prepare("SELECT id, ticket_id, sequence, occurred_at, actor, action, command_id, facts_json, event_json FROM operational_events").all(),
+        ticketRevisions: afterDatabase.prepare("SELECT ticket_id, revision, operational_event_id, created_at, payload_json FROM ticket_revisions").all(),
+        recommendationRevisions: afterDatabase.prepare("SELECT recommendation_id, ticket_id, operational_event_id, created_at, payload_json FROM recommendation_revisions").all(),
+        receipts: afterDatabase.prepare("SELECT command_id, operation, request_hash, result_json, created_at FROM command_idempotency").all(),
+        outbox: afterDatabase.prepare("SELECT id, operational_event_id, delivery_key, status, attempts, created_at, claimed_by, claimed_at, delivered_at, error_code, envelope_json FROM learning_capture_outbox").all(),
+      }).toEqual(before);
+    } finally {
+      afterDatabase.close();
     }
   });
 
@@ -585,6 +750,31 @@ function insertLegacyEvaluationReceipt(root: string, commandId: string): void {
       }),
       "2026-09-05T10:00:00.000Z",
     );
+  } finally {
+    database.close();
+  }
+}
+
+function downgradeToV3(databasePath: string): void {
+  const database = new Database(databasePath);
+  try {
+    database.exec(`
+      ALTER TABLE command_idempotency RENAME TO command_idempotency_v4;
+      CREATE TABLE command_idempotency (
+        command_id TEXT PRIMARY KEY NOT NULL,
+        operation TEXT NOT NULL,
+        request_hash TEXT NOT NULL,
+        result_json TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+      INSERT INTO command_idempotency(command_id, operation, request_hash, result_json, created_at)
+      SELECT command_id, operation, request_hash, result_json, created_at
+      FROM command_idempotency_v4;
+      DROP TABLE command_idempotency_v4;
+      CREATE INDEX command_idempotency_operation_idx ON command_idempotency(operation, command_id);
+    `);
+    database.prepare("DELETE FROM schema_migrations WHERE version > 3").run();
+    database.prepare("UPDATE operational_metadata SET value = '3' WHERE key = 'schema_version'").run();
   } finally {
     database.close();
   }

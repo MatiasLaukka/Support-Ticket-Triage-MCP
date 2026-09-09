@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+import Database from "better-sqlite3";
 import { readFileSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -9,6 +11,7 @@ import { OperationalSqliteStore } from "../src/operational/sqlite-store.js";
 import { resetOperationalDemoState } from "../src/demo-reset.js";
 import { createRuntimeDependencies } from "../src/runtime.js";
 import type { DeliveryScheduler } from "../src/operational/learning-delivery-runner.js";
+import { canonicalLearningJson } from "../src/knowledge-evolution/learning-ledger.js";
 
 const roots: string[] = [];
 const runtimes: Array<Awaited<ReturnType<typeof createRuntimeDependencies>>> = [];
@@ -122,12 +125,24 @@ describe("production runtime learning delivery", () => {
     const restartedStore = OperationalSqliteStore.open(database);
     restartedStore.initialize();
     appendLearningRow(restartedStore, ticket);
-    expect(restartedStore.transaction((unit) => unit.claimPendingOutbox(
+    const pendingBeforeUpgrade = restartedStore.readOutbox("98000000-0000-4000-8000-000000000001")!;
+    const originalEnvelopeHash = createHash("sha256")
+      .update(canonicalLearningJson(pendingBeforeUpgrade.envelope))
+      .digest("hex");
+    restartedStore.close();
+    downgradeToV3(database);
+    const migratedStore = OperationalSqliteStore.open(database);
+    migratedStore.initialize();
+    const pendingAfterUpgrade = migratedStore.readOutbox("98000000-0000-4000-8000-000000000001")!;
+    expect(pendingAfterUpgrade).toEqual(pendingBeforeUpgrade);
+    expect(createHash("sha256").update(canonicalLearningJson(pendingAfterUpgrade.envelope)).digest("hex"))
+      .toBe(originalEnvelopeHash);
+    expect(migratedStore.transaction((unit) => unit.claimPendingOutbox(
       "98000000-0000-4000-8000-000000000001",
       "expired-runtime-claim",
       "2026-09-09T00:00:00.000Z",
     ))).toBe(true);
-    restartedStore.close();
+    migratedStore.close();
 
     const scheduler = new FakeScheduler();
     scheduler.time = Date.parse("2026-09-09T00:10:00.000Z");
@@ -143,7 +158,23 @@ describe("production runtime learning delivery", () => {
       diagnosisId: "diagnosis-runtime-delivery",
     }]);
     expect((runtime.operationalStore as OperationalSqliteStore).readOutbox("98000000-0000-4000-8000-000000000001"))
-      .toMatchObject({ status: "delivered", attempts: 2 });
+      .toMatchObject({
+        status: "delivered",
+        attempts: 2,
+        deliveryKey: "99000000-0000-4000-8000-000000000002",
+        envelope: {
+          deliveryKey: "99000000-0000-4000-8000-000000000002",
+          operationalEventId: "99000000-0000-4000-8000-000000000001",
+          diagnosisId: "diagnosis-runtime-delivery",
+        },
+      });
+    expect(runtime.knowledgeEvolution.ledger.getDatabase().prepare(
+      "SELECT delivery_key, envelope_hash, event_id FROM learning_deliveries WHERE delivery_key = ?",
+    ).get("99000000-0000-4000-8000-000000000002")).toEqual({
+      delivery_key: "99000000-0000-4000-8000-000000000002",
+      envelope_hash: originalEnvelopeHash,
+      event_id: "99000000-0000-4000-8000-000000000002",
+    });
   });
 
   it("waits for active delivery before closing its stores and joins repeated close calls", async () => {
@@ -304,4 +335,29 @@ function appendLearningRow(store: OperationalSqliteStore, ticket: Ticket): void 
     });
     unit.appendLearningCaptureOutbox(row);
   });
+}
+
+function downgradeToV3(databasePath: string): void {
+  const database = new Database(databasePath);
+  try {
+    database.exec(`
+      ALTER TABLE command_idempotency RENAME TO command_idempotency_v4;
+      CREATE TABLE command_idempotency (
+        command_id TEXT PRIMARY KEY NOT NULL,
+        operation TEXT NOT NULL,
+        request_hash TEXT NOT NULL,
+        result_json TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+      INSERT INTO command_idempotency(command_id, operation, request_hash, result_json, created_at)
+      SELECT command_id, operation, request_hash, result_json, created_at
+      FROM command_idempotency_v4;
+      DROP TABLE command_idempotency_v4;
+      CREATE INDEX command_idempotency_operation_idx ON command_idempotency(operation, command_id);
+    `);
+    database.prepare("DELETE FROM schema_migrations WHERE version > 3").run();
+    database.prepare("UPDATE operational_metadata SET value = '3' WHERE key = 'schema_version'").run();
+  } finally {
+    database.close();
+  }
 }

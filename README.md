@@ -437,6 +437,15 @@ operations return an actionable unavailable error until the path or permissions
 are repaired and the process is restarted. Operational database corruption or
 an incomplete cutover still fails closed as described above.
 
+The R1 reliability proof exercises these boundaries together: v3-to-v4
+operational migration preserves immutable history and receipt bytes, new v2
+commands replay after restart while legacy v1 keys fail explicitly without
+provider calls, and a restarted runtime delivers the original pending learning
+envelope once. The production knowledge-reuse path discovers, reviews, and
+promotes only evidence-backed diagnoses before a later recommendation can pin
+an approved version. Queue, UI/outbox presentation, taxonomy, semantic-search,
+and cryptographic-receipt work remain separately governed or deferred.
+
 Run the disposable import/restart/timeline demonstration with:
 
 ```powershell

@@ -20,6 +20,7 @@ import type { CustomerResponseDraftProvider } from "../src/approval-desk/draft-r
 import { importOperationalData, type OperationalImportAggregate } from "../src/operational/import.js";
 import { OperationalSqliteStore } from "../src/operational/sqlite-store.js";
 import { OperationalAuditRepository } from "../src/operational/runtime-repositories.js";
+import { projectDiagnosisAudits } from "../src/operational/diagnosis-audit.js";
 import {
   OperationalEventSchema,
   OperationalWorkflowSnapshotSchema,
@@ -327,6 +328,224 @@ describe("production operational runtime parity", () => {
       await expect(new OperationalAuditRepository(store).list())
         .rejects.toMatchObject({ code: "PERSISTENCE_ERROR" });
     }
+  });
+
+  it("rejects an origin receipt whose source revision disagrees with its event", () => {
+    const event = OperationalEventSchema.parse({
+      id: "87000000-0000-4000-8000-000000000061",
+      ticketId: "TKT-0001",
+      sequence: 1,
+      occurredAt: fixedNow,
+      actor: "operator",
+      action: "diagnosis-completed",
+      commandId: "87000000-0000-4000-8000-000000000062",
+      facts: { diagnosisOutcome: "completed", sourceRevision: 1 },
+    });
+    const audit = AuditEventSchema.parse({
+      id: event.id,
+      timestamp: fixedNow,
+      actor: "operator",
+      action: "diagnosis-completed",
+      ticketId: "TKT-0001",
+      before: {},
+      after: { diagnosis: validDiagnosisContext(), sourceTicketRevision: 0 },
+      rationale: "Completed diagnosis.",
+      knowledgeArticleIds: [],
+      result: "success",
+    });
+    const result: OperationalResultReference = {
+      operation: "record-diagnosis",
+      tickets: [{ ticketId: "TKT-0001", operationalEventIds: [event.id], resultingRevision: null }],
+      diagnosisId: `diagnosis-${event.id}`,
+      lifecycleAuditEvents: [audit],
+    };
+
+    expect(() => projectDiagnosisAudits({
+      events: [event],
+      receiptResults: new Map([[event.commandId, result]]),
+      fallbackAudits: [],
+      originalAudits: [],
+      policy: "strict",
+    })).toThrow(/invalid diagnosis|revision/i);
+  });
+
+  it("rejects a schema-valid diagnosis review with an unexpected nested key", () => {
+    const originEvent = OperationalEventSchema.parse({
+      id: "87000000-0000-4000-8000-000000000071",
+      ticketId: "TKT-0001",
+      sequence: 1,
+      occurredAt: fixedNow,
+      actor: "operator",
+      action: "diagnosis-completed",
+      commandId: "87000000-0000-4000-8000-000000000072",
+      facts: { diagnosisOutcome: "completed", sourceRevision: 0 },
+    });
+    const originAudit = AuditEventSchema.parse({
+      id: originEvent.id,
+      timestamp: fixedNow,
+      actor: "operator",
+      action: "diagnosis-completed",
+      ticketId: "TKT-0001",
+      before: {},
+      after: { diagnosis: validDiagnosisContext(), sourceTicketRevision: 0 },
+      rationale: "Completed diagnosis.",
+      knowledgeArticleIds: [],
+      result: "success",
+    });
+    const reviewEvent = OperationalEventSchema.parse({
+      id: "87000000-0000-4000-8000-000000000073",
+      ticketId: "TKT-0001",
+      sequence: 2,
+      occurredAt: fixedNow,
+      actor: "reviewer",
+      action: "diagnosis-reviewed",
+      commandId: "87000000-0000-4000-8000-000000000074",
+      facts: { diagnosisOutcome: "reject", sourceRevision: 0 },
+    });
+    const review = AuditEventSchema.parse({
+      id: reviewEvent.id,
+      timestamp: fixedNow,
+      actor: "reviewer",
+      action: "diagnosis-reviewed",
+      ticketId: "TKT-0001",
+      before: { diagnosisId: originEvent.id },
+      after: {
+        diagnosisReview: {
+          decision: "reject",
+          diagnosisId: originEvent.id,
+          ticketId: "TKT-0001",
+          sourceTicketRevision: 0,
+          sourceConversationWatermark: { state: "none" },
+          editedDiagnosis: validDiagnosisContext(),
+          actor: "reviewer",
+          rationale: "Rejecting this diagnosis.",
+          reviewedAt: fixedNow,
+          unexpected: true,
+        },
+      },
+      rationale: "Review.",
+      knowledgeArticleIds: [],
+      result: "success",
+    });
+
+    expect(() => projectDiagnosisAudits({
+      events: [originEvent, reviewEvent],
+      receiptResults: new Map([
+        [originEvent.commandId, {
+          operation: "record-diagnosis",
+          tickets: [{ ticketId: "TKT-0001", operationalEventIds: [originEvent.id], resultingRevision: null }],
+          diagnosisId: `diagnosis-${originEvent.id}`,
+          lifecycleAuditEvents: [originAudit],
+        }],
+        [reviewEvent.commandId, {
+          operation: "review-diagnosis",
+          tickets: [{ ticketId: "TKT-0001", operationalEventIds: [reviewEvent.id], resultingRevision: null }],
+          lifecycleAuditEvents: [review],
+        }],
+      ]),
+      fallbackAudits: [],
+      originalAudits: [originAudit],
+      policy: "strict",
+    })).toThrow(/review|schema|causal/i);
+  });
+
+  it("rejects an ineffective-fix receipt tied to another diagnosis", () => {
+    const originEvent = OperationalEventSchema.parse({
+      id: "87000000-0000-4000-8000-000000000081",
+      ticketId: "TKT-0001",
+      sequence: 1,
+      occurredAt: fixedNow,
+      actor: "operator",
+      action: "diagnosis-completed",
+      commandId: "87000000-0000-4000-8000-000000000082",
+      facts: { diagnosisOutcome: "completed", sourceRevision: 0 },
+    });
+    const originAudit = AuditEventSchema.parse({
+      id: originEvent.id,
+      timestamp: fixedNow,
+      actor: "operator",
+      action: "diagnosis-completed",
+      ticketId: "TKT-0001",
+      before: {},
+      after: { diagnosis: validDiagnosisContext(), sourceTicketRevision: 0 },
+      rationale: "Completed diagnosis.",
+      knowledgeArticleIds: [],
+      result: "success",
+    });
+    const fixEvent = OperationalEventSchema.parse({
+      id: "87000000-0000-4000-8000-000000000083",
+      ticketId: "TKT-0001",
+      sequence: 2,
+      occurredAt: fixedNow,
+      actor: "operator",
+      action: "fix-available",
+      commandId: "87000000-0000-4000-8000-000000000084",
+      facts: { outcome: "available" },
+    });
+    const fixAudit = AuditEventSchema.parse({
+      id: fixEvent.id,
+      timestamp: fixedNow,
+      actor: "operator",
+      action: "fix-available",
+      ticketId: "TKT-0001",
+      before: { diagnosisId: "87000000-0000-4000-8000-000000000099" },
+      after: { outcome: "available" },
+      rationale: "Fix available.",
+      knowledgeArticleIds: [],
+      result: "success",
+    });
+    const ineffectiveEvent = OperationalEventSchema.parse({
+      id: "87000000-0000-4000-8000-000000000085",
+      ticketId: "TKT-0001",
+      sequence: 3,
+      occurredAt: fixedNow,
+      actor: "operator",
+      action: "fix-ineffective",
+      commandId: "87000000-0000-4000-8000-000000000086",
+      facts: {
+        diagnosisId: originEvent.id,
+        fixEventId: fixEvent.id,
+        outcome: "ineffective",
+        sourceRevision: 0,
+      },
+    });
+    const ineffectiveAudit = AuditEventSchema.parse({
+      id: ineffectiveEvent.id,
+      timestamp: fixedNow,
+      actor: "operator",
+      action: "fix-ineffective",
+      ticketId: "TKT-0001",
+      before: { diagnosisId: originEvent.id, fixEventId: fixEvent.id },
+      after: { outcome: "ineffective" },
+      rationale: "The fix was ineffective.",
+      knowledgeArticleIds: [],
+      result: "success",
+    });
+
+    expect(() => projectDiagnosisAudits({
+      events: [originEvent, fixEvent, ineffectiveEvent],
+      receiptResults: new Map([
+        [originEvent.commandId, {
+          operation: "record-diagnosis",
+          tickets: [{ ticketId: "TKT-0001", operationalEventIds: [originEvent.id], resultingRevision: null }],
+          diagnosisId: `diagnosis-${originEvent.id}`,
+          lifecycleAuditEvents: [originAudit],
+        }],
+        [fixEvent.commandId, {
+          operation: "record-fix-available",
+          tickets: [{ ticketId: "TKT-0001", operationalEventIds: [fixEvent.id], resultingRevision: null }],
+          lifecycleAuditEvents: [fixAudit],
+        }],
+        [ineffectiveEvent.commandId, {
+          operation: "record-fix-ineffective",
+          tickets: [{ ticketId: "TKT-0001", operationalEventIds: [ineffectiveEvent.id], resultingRevision: null }],
+          lifecycleAuditEvents: [ineffectiveAudit],
+        }],
+      ]),
+      fallbackAudits: [],
+      originalAudits: [originAudit],
+      policy: "strict",
+    })).toThrow(/fix|diagnosis|causal/i);
   });
 
   it("blocks evaluation before provider work while a readable import is incomplete", async () => {
@@ -885,6 +1104,19 @@ async function jsonRequest(url: string, init?: RequestInit): Promise<any> {
 
 function closeHttp(server: ReturnType<typeof createApprovalDeskHttpServer>): Promise<void> {
   return new Promise((resolveClose) => server.close(() => resolveClose()));
+}
+
+function validDiagnosisContext(): Record<string, unknown> {
+  return {
+    status: "completed",
+    causeType: "configuration",
+    customerSafeSummary: "A governed configuration change caused the API failure.",
+    evidenceUsed: ["request-trace"],
+    confidence: "confirmed",
+    owner: "engineering",
+    recommendedNextAction: "Apply the governed configuration update.",
+    doNotSay: [],
+  };
 }
 
 function operationalStore(runtime: RuntimeDependencies): OperationalSqliteStore {

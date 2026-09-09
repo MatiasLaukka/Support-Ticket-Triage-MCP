@@ -79,6 +79,8 @@ async function main(): Promise<void> {
     try {
       if (shutdown !== undefined) {
         await shutdown();
+        await server.close();
+        await transport.close();
       } else {
         await closeRuntime();
       }

@@ -250,7 +250,7 @@ export const DiagnosticTaxonomyRevisionSchema = z.object({
   }
 }).readonly();
 
-const OperationalDiagnosisContextSchema = z.object({
+export const OperationalDiagnosisContextSchema = z.object({
   status: z.literal("completed"),
   causeType: z.enum([
     "configuration",

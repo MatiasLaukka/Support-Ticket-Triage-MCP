@@ -8,7 +8,7 @@ import type { CandidateDraftPayload } from "./candidate-draft-contract.js";
 import { evidenceReferenceIds, type CompletedDiagnosis, type KnowledgeCandidate, type KnowledgeObject } from "./domain.js";
 import { KnowledgeCandidateWriteSchema } from "./domain.js";
 import { discoverCandidates, type KnowledgeDiscoveryResult } from "./discovery.js";
-import type { DiagnosisRepository } from "./diagnosis-repository.js";
+import type { CompletedDiagnosisSource } from "./completed-diagnosis-source.js";
 import type { KnowledgeAuditEvent, KnowledgeAuditRepository } from "./knowledge-audit-repository.js";
 import type { KnowledgeObjectRepository } from "./knowledge-object-repository.js";
 import { findEvidenceRequirement } from "../evidence-catalog.js";
@@ -29,7 +29,7 @@ export type CandidateEdits = Partial<Pick<KnowledgeCandidate, (typeof editableFi
 export interface KnowledgeEvolutionServiceDependencies {
   tickets: Pick<TicketRepository, "snapshot" | "get">;
   knowledge: Pick<KnowledgeRepository, "list">;
-  diagnoses: Pick<DiagnosisRepository, "list">;
+  diagnoses: CompletedDiagnosisSource;
   objects: Pick<KnowledgeObjectRepository, "listCandidates" | "getCandidate" | "saveCandidate" | "removeCandidate" | "listApproved" | "promote" | "removeApproved"> & {
     promoteWithAudit?: (candidateId: string, approved: KnowledgeObject, expectedCandidateVersion: number | undefined, audit: KnowledgeAuditEvent) => Promise<KnowledgeObject>;
   } & Partial<Pick<KnowledgeVersionStore, "listVersions" | "listHeadMappings" | "promoteReplacement" | "snapshotForReuse">>;
@@ -233,6 +233,7 @@ export class KnowledgeEvolutionService implements KnowledgeRevisionOperations {
       }
       const reviewed = applyEdits(candidate, input.edits);
       assertPromotable(reviewed, reviewEvents);
+      assertSupportingDiagnosesAreEligible(reviewed, diagnoses);
       assertReferences(reviewed, diagnoses, tickets);
       const reviewedPolicy = reviewed.evidencePolicy;
       if (reviewedPolicy.mode === "undecided") {
@@ -366,6 +367,7 @@ export class KnowledgeEvolutionService implements KnowledgeRevisionOperations {
       const expectedHeadVersion = heads.get(candidate.objectId);
       if (expectedHeadVersion !== candidate.sourceVersion) throw new DomainError("Knowledge source version is not the active head.", "STALE_APPROVAL");
       assertPromotable(candidate, reviewEvents);
+      assertSupportingDiagnosesAreEligible(candidate, diagnoses);
       assertReferences(candidate, diagnoses, tickets);
       const policy = candidate.evidencePolicy;
       if (policy.mode === "undecided") throw new DomainError("Knowledge candidate requires an explicit evidence policy before approval.", "INVALID_APPROVAL_FIELDS");
@@ -698,6 +700,19 @@ function assertReferences(candidate: KnowledgeCandidate, diagnoses: readonly Com
     return requirement === undefined || requirement.status === "deprecated";
   })) {
     throw new DomainError("Knowledge candidate references are invalid.", "INVALID_APPROVAL_FIELDS");
+  }
+}
+
+function assertSupportingDiagnosesAreEligible(
+  candidate: KnowledgeCandidate,
+  diagnoses: readonly CompletedDiagnosis[],
+): void {
+  const eligible = new Set(diagnoses.map((diagnosis) => diagnosis.id));
+  if (candidate.supportingDiagnosisIds.some((id) => !eligible.has(id))) {
+    throw new DomainError(
+      "Supporting diagnosis evidence changed. Refresh and review the candidate again.",
+      "KNOWLEDGE_SUPPORT_STALE",
+    );
   }
 }
 

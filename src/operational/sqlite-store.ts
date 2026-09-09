@@ -17,6 +17,7 @@ import type {
 import type {
   OperationalResultReader,
 } from "../operational-command-dispatch.js";
+import type { CompletedDiagnosisReadSnapshot } from "../knowledge-evolution/completed-diagnosis-source.js";
 import {
   OperationalStoreError,
   OperationalUnitOfWork,
@@ -247,6 +248,22 @@ export class OperationalSqliteStore {
     const read = this.database.transaction(() => this.withReader((reader) =>
       reader.readTicketIds().map((ticketId) => reader.readWorkflowSnapshot(ticketId))));
     return read();
+  }
+
+  readCompletedDiagnosisSnapshots(): CompletedDiagnosisReadSnapshot[] {
+    this.assertInitialized();
+    const read = this.database.transaction(() => {
+      const unit = new OperationalUnitOfWork(this.database);
+      try {
+        return unit.readCompletedDiagnosisSnapshots();
+      } finally {
+        unit.closeScope();
+      }
+    });
+    return this.normalizeDeferredRead(
+      () => read().map((snapshot) => structuredClone(snapshot)),
+      "Operational diagnosis discovery read could not complete",
+    );
   }
 
   readOutbox(id: string): OperationalOutboxRow | undefined {

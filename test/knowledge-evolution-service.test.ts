@@ -155,6 +155,46 @@ describe("knowledge evolution service", () => {
     await expect(fixture.audits.list({ action: "approved" })).resolves.toEqual([]);
   });
 
+  it("rejects initial promotion when supporting diagnosis evidence becomes ineligible", async () => {
+    const fixture = createFixture();
+    const service = fixture.service();
+    await service.discover({ includeGpt: false, actorId: "support-lead" });
+    fixture.diagnoses.splice(0, 1);
+
+    await expect(service.approve({
+      candidateId: "known-cause-diagnosis-001",
+      actorId: "support-lead",
+      expectedVersion: 1,
+    })).rejects.toMatchObject({ code: "KNOWLEDGE_SUPPORT_STALE" });
+    await expect(fixture.objects.listApproved()).resolves.toEqual([]);
+  });
+
+  it("rejects replacement promotion when supporting diagnosis evidence becomes ineligible", async () => {
+    const fixture = createFixture();
+    const service = fixture.service();
+    await service.discover({ includeGpt: false, actorId: "support-lead" });
+    await service.approve({
+      candidateId: "known-cause-diagnosis-001",
+      actorId: "support-lead",
+      expectedVersion: 1,
+    });
+    const revision = await service.proposeRevision({
+      objectId: "known-cause-diagnosis-001",
+      sourceVersion: 1,
+      actorId: "support-lead",
+      edits: { summary: "Updated reviewed guidance." },
+    });
+    fixture.diagnoses.splice(0, 1);
+
+    await expect(service.approveRevision({
+      candidateId: revision.id,
+      actorId: "support-lead",
+    })).rejects.toMatchObject({ code: "KNOWLEDGE_SUPPORT_STALE" });
+    await expect(fixture.objects.listApproved()).resolves.toMatchObject([
+      { id: "known-cause-diagnosis-001", version: 1 },
+    ]);
+  });
+
   it.each([
     ["unknown", { mode: "required", evidenceIds: ["not-registered"] }],
     ["duplicate", { mode: "required", evidenceIds: ["request-id", "request-id"] }],

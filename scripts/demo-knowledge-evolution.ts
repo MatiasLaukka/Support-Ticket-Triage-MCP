@@ -222,7 +222,7 @@ export async function runKnowledgeEvolutionShowcase(
       ...auditEvents.map((event) => `- ${event.action}: actor=${event.actor}; result=${event.result}.`),
     ] : []),
   ].join("\n");
-  deps.knowledgeEvolution.ledger.close();
+  await deps.close();
   return {
     mode: "controlled",
     gptStatus: discovery.gptAdvisory.status,

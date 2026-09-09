@@ -18,10 +18,10 @@ import { acquireDemoStateResetLease } from "../src/demo-state-lease.js";
 import { OperationalSqliteStore } from "../src/operational/sqlite-store.js";
 
 const temporaryRoots: string[] = [];
-const openLedgers: Array<{ close: () => void }> = [];
+const openRuntimes: Array<{ close: () => Promise<void> }> = [];
 
 afterEach(async () => {
-  for (const ledger of openLedgers.splice(0)) ledger.close();
+  await Promise.all(openRuntimes.splice(0).map((runtime) => runtime.close()));
   await Promise.all(
     temporaryRoots
       .splice(0)
@@ -75,7 +75,7 @@ describe("runtime configuration", () => {
       },
       now: () => fixedNow,
     });
-    openLedgers.push(deps.knowledgeEvolution.ledger);
+    openRuntimes.push(deps);
 
     await expect(deps.tickets.get("TKT-1005")).resolves.toMatchObject({
       id: "TKT-1005",
@@ -199,7 +199,7 @@ describe("runtime configuration", () => {
         TRIAGE_LEARNING_LEDGER_PATH: customLedger,
       },
     });
-    openLedgers.push(deps.knowledgeEvolution.ledger);
+    openRuntimes.push(deps);
     expect(deps.paths.knowledgeEvolution.learningLedgerFile).toBe(resolve(customLedger));
     await expect(deps.knowledgeEvolution.ledger.list()).resolves.toEqual([]);
   });
@@ -211,7 +211,7 @@ describe("runtime configuration", () => {
       legacyFixtureRepositories: true,
       env: { TRIAGE_DATA_ROOT: dataRoot, TRIAGE_SEED_FILE: resolve("data", "seed", "tickets.json"), TRIAGE_KNOWLEDGE_ROOT: resolve("data", "knowledge") },
     });
-    openLedgers.push(deps.knowledgeEvolution.ledger);
+    openRuntimes.push(deps);
 
     const ticket = await deps.tickets.get("TKT-1005");
     const diagnosis = diagnosisContextForTicket(ticket, TriageRecommendationSchema.parse({
@@ -301,7 +301,7 @@ describe("runtime configuration", () => {
       },
       knowledgeCandidateDraftProvider: createControlledKnowledgeCandidateDraftProvider(),
     });
-    openLedgers.push(deps.knowledgeEvolution.ledger);
+    openRuntimes.push(deps);
     await deps.knowledgeEvolution.diagnoses.save({
       id: "diagnosis-runtime-provider",
       ticketId: "TKT-1001",

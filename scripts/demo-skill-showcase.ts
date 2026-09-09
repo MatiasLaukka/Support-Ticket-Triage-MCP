@@ -189,7 +189,7 @@ export async function runSkillShowcase(
     return await replayTkt1010({ client, deps, mode: options.mode });
   } finally {
     await client.close();
-    deps.knowledgeEvolution.ledger.close();
+    await deps.close();
   }
 }
 

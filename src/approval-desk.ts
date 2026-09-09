@@ -123,6 +123,12 @@ async function main(): Promise<void> {
       server.once("error", rejectListen);
       server.listen(port, host, () => {
         server.off("error", rejectListen);
+        if (shutdownRequested) {
+          server.close((error) => error === undefined
+            ? resolveListen()
+            : rejectListen(error));
+          return;
+        }
         const address = server.address();
         const boundPort = typeof address === "object" && address !== null
           ? (address as AddressInfo).port

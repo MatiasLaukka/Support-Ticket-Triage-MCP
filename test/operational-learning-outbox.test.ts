@@ -335,6 +335,57 @@ describe("durable operational learning outbox", () => {
     }
   });
 
+  it("propagates a non-transient acknowledgement persistence failure", async () => {
+    const harness = openHarness();
+    try {
+      const [envelope] = manyCaptureEnvelopes(1);
+      appendRows(harness.store, [envelope!]);
+      let transactionCount = 0;
+      const store: OperationalLearningOutboxStore = {
+        transaction<T>(work: (unit: OperationalUnitOfWork) => T): T {
+          transactionCount += 1;
+          if (transactionCount === 2) {
+            throw new OperationalStoreError(
+              "acknowledgement invariant failed",
+              "PERSISTENCE_ERROR",
+            );
+          }
+          return harness.store.transaction(work);
+        },
+        readOutbox: harness.store.readOutbox.bind(harness.store),
+        listPendingOutbox: harness.store.listPendingOutbox.bind(harness.store),
+        listDueOutbox: harness.store.listDueOutbox.bind(harness.store),
+      };
+      const worker = new LearningOutboxWorker({
+        store,
+        delivery: {
+          async deliverEnvelope() {
+            return "delivered" as const;
+          },
+        },
+        now: () => new Date("2026-08-11T13:00:00.000Z"),
+        claimToken: () => "invariant-worker",
+      });
+
+      await expect(worker.drainDue({
+        now: "2026-08-11T13:00:00.000Z",
+        staleBefore: "2026-08-11T12:59:00.000Z",
+        limit: 25,
+        deferredUntil: {},
+      })).rejects.toMatchObject({
+        code: "PERSISTENCE_ERROR",
+        message: "acknowledgement invariant failed",
+      });
+      expect(harness.store.readOutbox(outboxId(envelope!.operationalEventId))).toMatchObject({
+        status: "pending",
+        claimedBy: "invariant-worker",
+      });
+    } finally {
+      harness.ledger.close();
+      harness.store.close();
+    }
+  });
+
   it("continues to later due rows after a normalized transient claim failure", async () => {
     const harness = openHarness();
     try {

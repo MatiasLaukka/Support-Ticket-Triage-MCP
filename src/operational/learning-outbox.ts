@@ -141,9 +141,7 @@ export class LearningOutboxWorker {
         unit.markOutboxDelivered(row.id, token, this.now().toISOString()));
     } catch (error) {
       if (isLostClaim(error)) return { id: row.id, outcome: "not-claimed" };
-      if (!(error instanceof OperationalStoreError) || error.code !== "PERSISTENCE_ERROR") {
-        throw error;
-      }
+      if (!isRetryablePersistence(error)) throw error;
       // Keep the claim recoverable after ledger commit and an acknowledgement failure.
       return { id: row.id, outcome: "retryable" };
     }
@@ -201,7 +199,7 @@ function isLostClaim(error: unknown): boolean {
 function isRetryablePersistence(error: unknown): boolean {
   if (!(error instanceof OperationalStoreError) || error.code !== "PERSISTENCE_ERROR") return false;
   const cause = error.cause;
-  if (cause === undefined) return true;
+  if (cause === undefined) return false;
   if (typeof cause !== "object" || cause === null || !("code" in cause)) return false;
   const code = (cause as { code?: unknown }).code;
   return code === "SQLITE_BUSY" || code === "SQLITE_LOCKED";

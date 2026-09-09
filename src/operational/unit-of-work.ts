@@ -185,6 +185,13 @@ export interface OperationalDiagnosisWrite {
 
 export interface DiagnosticTaxonomyRevisionWrite extends DiagnosticTaxonomyRevision {}
 
+export interface DueOutboxQuery {
+  readonly now: string;
+  readonly staleBefore: string;
+  readonly limit: number;
+  readonly deferredUntil: Readonly<Record<string, string>>;
+}
+
 /**
  * Transaction-scoped persistence primitives. Workflow decisions stay in the
  * domain service; this object validates and atomically stores their write set.
@@ -1026,6 +1033,28 @@ export class OperationalUnitOfWork {
         AND (claimed_by IS NULL OR (? IS NOT NULL AND claimed_at <= ?))
       ORDER BY created_at ASC, id ASC
     `).all(parsedStaleBefore ?? null, parsedStaleBefore ?? null) as OutboxRow[]).map(parseOutboxRow);
+  }
+
+  listDueOutbox(input: DueOutboxQuery): OperationalOutboxRow[] {
+    this.assertActive();
+    const query = normalizeDueOutboxQuery(input);
+    const deferredUntilJson = JSON.stringify(query.deferredUntil);
+    return (this.database.prepare(`
+      SELECT o.id, o.operational_event_id, o.delivery_key, o.status, o.attempts, o.created_at,
+             o.claimed_by, o.claimed_at, o.delivered_at, o.error_code, o.envelope_json
+      FROM learning_capture_outbox AS o
+      LEFT JOIN json_each(?) AS delay ON delay.key = o.id
+      WHERE o.status = 'pending'
+        AND (o.claimed_by IS NULL OR o.claimed_at <= ?)
+        AND (delay.value IS NULL OR delay.value <= ?)
+      ORDER BY o.created_at ASC, o.id ASC
+      LIMIT ?
+    `).all(
+      deferredUntilJson,
+      query.staleBefore,
+      query.now,
+      query.limit,
+    ) as OutboxRow[]).map(parseOutboxRow);
   }
 
   claimPendingOutbox(
@@ -2225,6 +2254,40 @@ function parseWith<T>(
     throw new OperationalStoreError(message, "VALIDATION_ERROR", { cause: parsed.error });
   }
   return parsed.data;
+}
+
+export function normalizeDueOutboxQuery(input: DueOutboxQuery): DueOutboxQuery {
+  if (!Number.isInteger(input.limit) || input.limit < 1 || input.limit > 25) {
+    throw new OperationalStoreError(
+      "Learning outbox due-row limit must be an integer from 1 through 25.",
+      "VALIDATION_ERROR",
+    );
+  }
+  const deferredUntil = Object.fromEntries(
+    Object.entries(input.deferredUntil).map(([id, timestamp]) => [
+      id,
+      normalizeTimestamp(timestamp, "Learning outbox deferred-until timestamp is invalid."),
+    ]),
+  );
+  const now = normalizeTimestamp(input.now, "Learning outbox current timestamp is invalid.");
+  const staleBefore = normalizeTimestamp(input.staleBefore, "Learning outbox stale-claim timestamp is invalid.");
+  if (staleBefore > now) {
+    throw new OperationalStoreError(
+      "Learning outbox stale-claim timestamp cannot be later than the current timestamp.",
+      "VALIDATION_ERROR",
+    );
+  }
+  return {
+    now,
+    staleBefore,
+    limit: input.limit,
+    deferredUntil,
+  };
+}
+
+function normalizeTimestamp(value: string, message: string): string {
+  const parsed = parseWith(IsoTimestampSchema, value, message);
+  return new Date(parsed).toISOString();
 }
 
 function parseStoredValue<T>(

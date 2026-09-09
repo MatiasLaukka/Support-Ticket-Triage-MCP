@@ -68,6 +68,7 @@ export async function runKnowledgeEvolutionShowcase(
     now: () => new Date("2026-08-01T12:00:00.000Z"),
   });
 
+  try {
   await deps.knowledgeEvolution.diagnoses.save(diagnosis("diagnosis-001", "TKT-1001"));
   await deps.knowledgeEvolution.diagnoses.save(diagnosis("diagnosis-002", "TKT-1002"));
   await deps.knowledgeEvolution.diagnoses.save(unrelatedDiagnosis("diagnosis-003", "TKT-1004"));
@@ -222,7 +223,6 @@ export async function runKnowledgeEvolutionShowcase(
       ...auditEvents.map((event) => `- ${event.action}: actor=${event.actor}; result=${event.result}.`),
     ] : []),
   ].join("\n");
-  await deps.close();
   return {
     mode: "controlled",
     gptStatus: discovery.gptAdvisory.status,
@@ -241,6 +241,9 @@ export async function runKnowledgeEvolutionShowcase(
     },
     output,
   };
+  } finally {
+    await deps.close();
+  }
 }
 
 function reuseObservation(input: {

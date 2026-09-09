@@ -176,19 +176,19 @@ export async function runSkillShowcase(
       TRIAGE_KNOWLEDGE_ROOT: resolve(options.root, "data/knowledge"),
     },
   });
-  const providers = providersForMode(options.mode, env);
-  const client = await connectInMemory(
-    createTriageServer({
-      ...deps,
-      ...providers,
-      env: options.mode === "live" ? env : {},
-    }),
-  );
-
+  let client: Client | undefined;
   try {
+    const providers = providersForMode(options.mode, env);
+    client = await connectInMemory(
+      createTriageServer({
+        ...deps,
+        ...providers,
+        env: options.mode === "live" ? env : {},
+      }),
+    );
     return await replayTkt1010({ client, deps, mode: options.mode });
   } finally {
-    await client.close();
+    await client?.close();
     await deps.close();
   }
 }

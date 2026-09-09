@@ -4140,7 +4140,7 @@ describe("approvalDeskHtml", () => {
     );
   });
 
-  it("re-enables recommendation creation when generation fails", async () => {
+  it("retains an uncertain evaluation outcome until the command is deliberately retried", async () => {
     const app = await startApprovalDeskApp({
       failRecommendation: true,
     });
@@ -4148,10 +4148,12 @@ describe("approvalDeskHtml", () => {
 
     await app.createRecommendation();
 
-    expect(app.el("createRecommendation").disabled).toBe(false);
-    expect(app.el("createRecommendation").textContent).toBe("Evaluate");
+    expect(app.el("createRecommendation").disabled).toBe(true);
+    expect(app.el("createRecommendation").textContent).toBe("Evaluating…");
+    expect(app.el("refreshQueue").textContent).toBe("Retry action");
     expect(app.parsedResult()).toMatchObject({
-      error: "Draft provider unavailable.",
+      code: "AUTHORITATIVE_REFRESH_REQUIRED",
+      actionError: "Draft provider unavailable.",
     });
   });
 
@@ -5156,8 +5158,9 @@ describe("approvalDeskHtml", () => {
     expect(app.parsedResult()).toMatchObject({
       error: "Ticket refresh is unavailable.",
     });
-    expect(app.el("createRecommendation").disabled).toBe(false);
+    expect(app.el("createRecommendation").disabled).toBe(true);
     expect(app.el("createRecommendation").textContent).toBe("Evaluate");
+    expect(app.el("refreshQueue").textContent).toBe("Retry refresh");
   });
 
   it("reconciles send-customer-response from authoritative refresh data", async () => {

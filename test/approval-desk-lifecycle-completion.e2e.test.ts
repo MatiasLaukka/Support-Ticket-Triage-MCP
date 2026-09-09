@@ -1033,11 +1033,15 @@ async function waitForAuthoritativeRefresh(
   await app.refreshSelectedTicket(currentTicketId);
 }
 
-async function startLiveApprovalDeskApp(baseUrl: string) {
+export async function startLiveApprovalDeskApp(
+  baseUrl: string,
+  options: { throwAfterResponseOnce?: RegExp } = {},
+) {
   const elements = createElements();
   const requests: Array<{ path: string; init?: RequestInit }> = [];
   const responses: Array<{ path: string; status: number; body: any }> = [];
   let pendingRequests = 0;
+  let threwAfterResponse = false;
   const document = {
     createElement: () => new FakeElement(),
     getElementById: (id: string) => elements[id],
@@ -1049,6 +1053,10 @@ async function startLiveApprovalDeskApp(baseUrl: string) {
       const response = await fetch(`${baseUrl}${path}`, init);
       const body = await response.json();
       responses.push({ path, status: response.status, body });
+      if (!threwAfterResponse && options.throwAfterResponseOnce?.test(path) === true) {
+        threwAfterResponse = true;
+        throw new Error("The response was lost after the backend committed the command.");
+      }
       return jsonResponse(body, response.status);
     } finally {
       pendingRequests -= 1;
@@ -1087,6 +1095,10 @@ async function startLiveApprovalDeskApp(baseUrl: string) {
     },
     refreshSelectedTicket: async (id: string) => {
       elements.ticketList.children.find((item) => item.innerHTML.includes(id))!.dispatch("click");
+      await waitForIdle();
+    },
+    refreshQueue: async () => {
+      elements.refreshQueue.dispatch("click");
       await waitForIdle();
     },
     createRecommendation: async () => {

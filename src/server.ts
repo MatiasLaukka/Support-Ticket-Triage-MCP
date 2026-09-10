@@ -1197,7 +1197,7 @@ async function evaluateTicketLegacy(
   if (input.taxonomyPreference !== undefined) {
     throw new DomainError(
       "taxonomyPreference requires operational evaluation support.",
-      "REPOSITORY_ERROR",
+      "UNSUPPORTED_VERSION_TRANSITION",
     );
   }
   const { commandId } = input;

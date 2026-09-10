@@ -447,6 +447,13 @@ export const AiTaxonomyTraceSchema = z.object({
       message: "A used taxonomy trace must select GPT as canonical.",
     });
   }
+  if (trace.status !== "used" && trace.gptCandidate !== undefined) {
+    context.addIssue({
+      code: "custom",
+      path: ["gptCandidate"],
+      message: "A skipped or fallback taxonomy trace cannot retain a GPT candidate.",
+    });
+  }
   if (trace.status === "fallback") {
     if (trace.canonicalSource !== "deterministic" || trace.fallback === undefined) {
       context.addIssue({

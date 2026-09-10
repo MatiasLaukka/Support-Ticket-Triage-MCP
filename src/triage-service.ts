@@ -1223,6 +1223,16 @@ export class TriageService {
   ): { revision: number; context: DiagnosticTaxonomyContext } | undefined {
     if (incoming === undefined) return undefined;
     const context = DiagnosticTaxonomyContextSchema.parse(incoming);
+    if (
+      context.basis.source !== "initial-classification"
+      || context.support.productSurface === "established"
+      || context.support.problemClass === "established"
+    ) {
+      throw new OperationalStoreError(
+        "Initial diagnostic taxonomy must use initial-classification basis and non-established support.",
+        "VALIDATION_ERROR",
+      );
+    }
     const latest = snapshot.diagnosticTaxonomyRevisions.at(-1);
     if (
       latest !== undefined &&
@@ -1395,7 +1405,11 @@ export class TriageService {
     if (commandEvents.length !== eventIds.size) {
       throw replayIntegrity("Operational evaluation replay references a missing causal event.");
     }
-    if (commandId !== undefined && commandEvents.some((event) => event.commandId !== commandId)) {
+    const commandEventIds = new Set(commandEvents.map(({ commandId: eventCommandId }) => eventCommandId));
+    if (
+      commandEventIds.size !== 1
+      || (commandId !== undefined && !commandEventIds.has(commandId))
+    ) {
       throw replayIntegrity("Operational evaluation replay references an event from another command.");
     }
     if (commandEvents.some((event) => !replay.result.tickets.some((ticket) =>
@@ -1466,6 +1480,8 @@ export class TriageService {
       || event.sequence > endSequence
       || (commandId !== undefined && event.commandId !== commandId)
       || recommendationEvent === undefined
+      || event.facts.revision !== revision.revision
+      || event.commandId !== recommendationEvent.commandId
       || event.actor !== recommendationEvent.actor
       || revision.createdAt !== event.occurredAt
     ) {

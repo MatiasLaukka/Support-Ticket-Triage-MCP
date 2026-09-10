@@ -50,6 +50,9 @@ export function buildDecisionTimeline(
   const traces = tracesByOperationalEventId(snapshot.traces);
 
   return [...snapshot.events]
+    // B2 taxonomy is advisory persistence; it is deliberately not projected
+    // into the existing Approval Desk decision timeline/UI.
+    .filter((event) => event.action !== "diagnostic-taxonomy-revised")
     .sort((left, right) => left.sequence - right.sequence)
     .map((event) => {
       const eventTraces = traces.get(event.id) ?? [];

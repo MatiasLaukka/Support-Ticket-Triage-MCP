@@ -117,4 +117,26 @@ describe("runTaxonomyStage", () => {
     });
     expect(result.trace.gptCandidate).toBeUndefined();
   });
+
+  it("treats secondary-only surface evidence as supported and sanitizes unsafe provenance", async () => {
+    const result = await runTaxonomyStage(await stageInput({
+      provider: {
+        async reason() {
+          return {
+            candidate: {
+              primaryProductSurface: null,
+              secondaryProductSurfaces: [{ domain: "integrations", area: "webhooks" }],
+              problemClasses: [],
+            },
+            rationale: "C:\\private\\provider-output",
+            telemetry: { model: "C:\\private\\model", latencyMs: 2 },
+          };
+        },
+      },
+    }));
+    expect(result.context.support.productSurface).toBe("supported");
+    expect(result.context.support.problemClass).toBe("tentative");
+    expect(result.trace.model).toBeUndefined();
+    expect(result.trace.gptRationale).toBeUndefined();
+  });
 });

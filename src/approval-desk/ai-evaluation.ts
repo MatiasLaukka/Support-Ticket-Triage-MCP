@@ -83,6 +83,9 @@ type SharedEvaluation = {
 export async function evaluateTicketWithAi(input: AiEvaluationInput): Promise<
   Omit<SubmitEvaluationInput, "submittedAt" | "evaluatedCustomerReplyWatermark">
 > {
+  if (input.taxonomyPreference !== undefined) {
+    throw new Error("taxonomyPreference requires operational evaluation support.");
+  }
   return (await prepareEvaluationCore(input)).recommendationInput;
 }
 

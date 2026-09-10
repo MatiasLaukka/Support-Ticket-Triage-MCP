@@ -200,20 +200,24 @@ export class OpenAiTaxonomyReasoningProvider
 export class InvalidTaxonomySchemaError extends Error {
   readonly stage:
     | "reasoning-json"
-    | "reasoning-fields";
+    | "reasoning-fields"
+    | "response-envelope";
 
   readonly fields: readonly string[];
 
   constructor(
     stage:
       | "reasoning-json"
-      | "reasoning-fields",
+      | "reasoning-fields"
+      | "response-envelope",
     fields: readonly string[],
   ) {
     super(
       stage === "reasoning-json"
         ? "Taxonomy reasoning output could not be parsed."
-        : "Taxonomy reasoning output did not satisfy the taxonomy schema.",
+        : stage === "response-envelope"
+          ? "Taxonomy reasoning provider response did not satisfy the response schema."
+          : "Taxonomy reasoning output did not satisfy the taxonomy schema.",
     );
 
     this.name = "InvalidTaxonomySchemaError";
@@ -226,7 +230,6 @@ export type TaxonomyReasoningProviderUnavailableReason =
   | "transport"
   | "http"
   | "response-body"
-  | "invalid-response"
   | "timeout";
 
 export class TaxonomyReasoningProviderUnavailableError extends Error {
@@ -338,7 +341,7 @@ async function requestTaxonomyResponse(input: {
     try {
       rawPayload = JSON.parse(raw);
     } catch {
-      throw new TaxonomyReasoningProviderUnavailableError("invalid-response", null);
+      throw new InvalidTaxonomySchemaError("response-envelope", []);
     }
 
     const envelopeSchema = z.object({
@@ -361,7 +364,7 @@ async function requestTaxonomyResponse(input: {
 
     const envelopeResult = envelopeSchema.safeParse(rawPayload);
     if (!envelopeResult.success) {
-      throw new TaxonomyReasoningProviderUnavailableError("invalid-response", null);
+      throw new InvalidTaxonomySchemaError("response-envelope", []);
     }
 
     const envelope = envelopeResult.data;
@@ -369,7 +372,7 @@ async function requestTaxonomyResponse(input: {
       .flatMap((item) => item.content)
       .find(({ type }) => type === "output_text")?.text;
     if (outputText === undefined) {
-      throw new TaxonomyReasoningProviderUnavailableError("invalid-response", null);
+      throw new InvalidTaxonomySchemaError("response-envelope", ["output_text"]);
     }
 
     let usage: AiUsage | undefined;
@@ -380,7 +383,7 @@ async function requestTaxonomyResponse(input: {
         totalTokens: envelope.usage.total_tokens,
       });
       if (!parsedUsage.success) {
-        throw new TaxonomyReasoningProviderUnavailableError("invalid-response", null);
+        throw new InvalidTaxonomySchemaError("response-envelope", ["usage"]);
       }
       usage = parsedUsage.data;
     }

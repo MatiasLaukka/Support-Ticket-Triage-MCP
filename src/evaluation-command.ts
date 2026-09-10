@@ -129,7 +129,7 @@ export async function evaluateTicketCommand(
           taxonomyReasoningProvider:
             deps.taxonomyReasoningProvider ??
             createTaxonomyReasoningProviderFromEnv(deps.env ?? process.env, {
-              preferOpenAi: taxonomyPreference === "gpt-preferred",
+              preferOpenAi: taxonomyPreference !== "deterministic",
             }),
           responseStyle: input.responseStyle,
           classificationProvider:

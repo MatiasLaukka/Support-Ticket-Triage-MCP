@@ -22,7 +22,6 @@ export type TaxonomyLaneEvaluationOutcome =
         | "transport"
         | "http"
         | "response-body"
-        | "invalid-response"
         | "timeout";
       statusCode: number | null;
     }
@@ -30,7 +29,8 @@ export type TaxonomyLaneEvaluationOutcome =
       status: "rejected-taxonomy";
       stage:
         | "reasoning-json"
-        | "reasoning-fields";
+        | "reasoning-fields"
+        | "response-envelope";
       fields: readonly string[];
     };
 
@@ -82,7 +82,6 @@ export interface UnavailableTaxonomyLaneEvaluationResult {
     | "transport"
     | "http"
     | "response-body"
-    | "invalid-response"
     | "timeout";
   statusCode: number | null;
 }
@@ -92,7 +91,8 @@ export interface RejectedTaxonomyLaneEvaluationResult {
   status: "rejected-taxonomy";
   stage:
     | "reasoning-json"
-    | "reasoning-fields";
+    | "reasoning-fields"
+    | "response-envelope";
   fields: readonly string[];
 }
 

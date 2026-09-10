@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   createTaxonomyReasoningProviderFromEnv,
+  InvalidTaxonomySchemaError,
   TaxonomyReasoningProviderUnavailableError,
   OpenAiTaxonomyReasoningProvider,
 } from "../src/taxonomy-reasoning-provider.js";
@@ -195,16 +196,19 @@ describe("OpenAiTaxonomyReasoningProvider", () => {
     });
   });
 
-  it("maps malformed envelopes and missing output text to invalid response", async () => {
-    for (const body of ["{", JSON.stringify({ output: [] })]) {
+  it("maps malformed envelopes, missing output text, and invalid usage to invalid schema", async () => {
+    const malformedUsage = {
+      ...validResponse(),
+      usage: { input_tokens: -1, output_tokens: 1, total_tokens: 0 },
+    };
+    for (const body of ["{", JSON.stringify({ output: [] }), JSON.stringify(malformedUsage)]) {
       const error = await new OpenAiTaxonomyReasoningProvider({
         apiKey: "sk-test",
         fetch: async () => ({ ok: true, status: 200, text: async () => body }),
       }).reason(await providerInput()).catch((caught) => caught);
-      expect(error).toMatchObject({
-        name: "TaxonomyReasoningProviderUnavailableError",
-        reason: "invalid-response",
-      });
+      expect(error).toBeInstanceOf(InvalidTaxonomySchemaError);
+      expect(error).toMatchObject({ name: "InvalidTaxonomySchemaError", stage: "response-envelope" });
+      expect((error as Error).message).not.toContain("sk-test");
     }
   });
 

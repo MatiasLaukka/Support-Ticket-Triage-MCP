@@ -31,6 +31,46 @@ afterEach(async () => {
 });
 
 describe("reliability command replay", () => {
+  it("invokes a configured taxonomy provider for auto preference through the production path", async () => {
+    const originalFetch = globalThis.fetch;
+    let providerCalls = 0;
+    globalThis.fetch = async (input, init) => {
+      if (String(input) === "https://api.openai.com/v1/responses") {
+        providerCalls += 1;
+        return new Response(JSON.stringify({
+          output: [{ content: [{
+            type: "output_text",
+            text: JSON.stringify({
+              primaryProductSurface: { domain: "messaging", area: "sms" },
+              secondaryProductSurfaces: [],
+              problemClasses: ["expected-behavior"],
+              rationale: "The ticket identifies a messaging surface.",
+            }),
+          }] }],
+          usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+        }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      return originalFetch(input, init);
+    };
+    try {
+      const harness = await openReliabilityRuntime({
+        environment: { OPENAI_API_KEY: "test-key" },
+      });
+      activeRuntimes.push(harness);
+      const response = await harness.post(
+        "/api/tickets/TKT-1010/recommendations",
+        { actor: "approval-desk", aiPreference: "auto" },
+        randomUUID(),
+      );
+      expect(response.status).toBe(201);
+      expect(providerCalls).toBe(1);
+      expect((response.body.recommendation as { aiExecutionTrace?: { taxonomy?: { status?: string } } })
+        .aiExecutionTrace?.taxonomy?.status).toBe("used");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it("persists advisory taxonomy atomically and does not call its provider on replay", async () => {
     let taxonomyCalls = 0;
     const taxonomyReasoningProvider: TaxonomyReasoningProvider = {

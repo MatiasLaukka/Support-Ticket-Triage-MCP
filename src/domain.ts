@@ -398,7 +398,7 @@ const TaxonomyFallbackSchema = z.object({
 
 const TaxonomySuppressionSchema = z.object({
   reason: z.enum(["prompt-injection", "deterministic-preference"]),
-  message: SanitizedAiMessageSchema,
+  message: SanitizedAiMessageSchema.optional(),
 }).strict();
 
 export const AiTaxonomyTraceSchema = z.object({

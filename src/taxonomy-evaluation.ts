@@ -18,7 +18,12 @@ export type TaxonomyLaneEvaluationOutcome =
     }
   | {
       status: "provider-unavailable";
-      reason: "http" | "timeout";
+      reason:
+        | "transport"
+        | "http"
+        | "response-body"
+        | "invalid-response"
+        | "timeout";
       statusCode: number | null;
     }
   | {
@@ -73,7 +78,12 @@ export interface ScoredTaxonomyLaneEvaluationResult {
 export interface UnavailableTaxonomyLaneEvaluationResult {
   ticketId: string;
   status: "provider-unavailable";
-  reason: "http" | "timeout";
+  reason:
+    | "transport"
+    | "http"
+    | "response-body"
+    | "invalid-response"
+    | "timeout";
   statusCode: number | null;
 }
 

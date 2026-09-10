@@ -11,7 +11,9 @@ import {
   createControlledDraftProvider,
 } from "../src/approval-desk/controlled-evaluation-providers.js";
 import type { ClassificationReasoningProvider } from "../src/approval-desk/classification-reasoning-provider.js";
+import type { TaxonomyReasoningProvider } from "../src/taxonomy-reasoning-provider.js";
 import { OperationalUnitOfWork } from "../src/operational/unit-of-work.js";
+import { canonicalRequestHashV2 } from "../src/operational/idempotency.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { createTriageServer } from "../src/server.js";
@@ -29,6 +31,139 @@ afterEach(async () => {
 });
 
 describe("reliability command replay", () => {
+  it("invokes a configured taxonomy provider for auto preference through the production path", async () => {
+    const originalFetch = globalThis.fetch;
+    let providerCalls = 0;
+    globalThis.fetch = async (input, init) => {
+      if (String(input) === "https://api.openai.com/v1/responses") {
+        providerCalls += 1;
+        return new Response(JSON.stringify({
+          output: [{ content: [{
+            type: "output_text",
+            text: JSON.stringify({
+              primaryProductSurface: { domain: "messaging", area: "sms" },
+              secondaryProductSurfaces: [],
+              problemClasses: ["expected-behavior"],
+              rationale: "The ticket identifies a messaging surface.",
+            }),
+          }] }],
+          usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+        }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      return originalFetch(input, init);
+    };
+    try {
+      const harness = await openReliabilityRuntime({
+        environment: { OPENAI_API_KEY: "test-key" },
+      });
+      activeRuntimes.push(harness);
+      const response = await harness.post(
+        "/api/tickets/TKT-1010/recommendations",
+        { actor: "approval-desk", aiPreference: "auto" },
+        randomUUID(),
+      );
+      expect(response.status).toBe(201);
+      expect(providerCalls).toBe(1);
+      expect((response.body.recommendation as { aiExecutionTrace?: { taxonomy?: { status?: string } } })
+        .aiExecutionTrace?.taxonomy?.status).toBe("used");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("persists advisory taxonomy atomically and does not call its provider on replay", async () => {
+    let taxonomyCalls = 0;
+    const taxonomyReasoningProvider: TaxonomyReasoningProvider = {
+      async reason() {
+        taxonomyCalls += 1;
+        return {
+          candidate: {
+            primaryProductSurface: { domain: "messaging", area: "sms" },
+            secondaryProductSurfaces: [],
+            problemClasses: ["expected-behavior"],
+          },
+          rationale: "The ticket identifies a messaging surface.",
+          telemetry: { model: "taxonomy-test-model", latencyMs: 1 },
+        };
+      },
+    };
+    const harness = await openReliabilityRuntime({ taxonomyReasoningProvider });
+    activeRuntimes.push(harness);
+    const key = randomUUID();
+    const input = {
+      actor: "approval-desk",
+      aiPreference: "auto",
+      taxonomyPreference: "gpt-preferred",
+    };
+
+    const first = await harness.post("/api/tickets/TKT-1010/recommendations", input, key);
+    const snapshot = (harness.runtime.operationalStore as OperationalSqliteStore)
+      .readWorkflowSnapshot("TKT-1010");
+    const retry = await harness.post("/api/tickets/TKT-1010/recommendations", input, key);
+
+    expect(first.status).toBe(201);
+    expect(retry.status).toBe(201);
+    expect(taxonomyCalls).toBe(1);
+    expect(snapshot.diagnosticTaxonomyRevisions).toHaveLength(1);
+    expect(snapshot.diagnosticTaxonomyRevisions[0]?.context.basis.source).toBe("initial-classification");
+    expect(snapshot.recommendationRevisions.at(-1)?.recommendation.aiExecutionTrace?.taxonomy)
+      .toMatchObject({ status: "used", canonicalSource: "gpt", model: "taxonomy-test-model" });
+    const taxonomyEvent = snapshot.events
+      .filter(({ commandId }) => commandId === key && commandId !== undefined)
+      .some(({ action }) => action === "diagnostic-taxonomy-revised");
+    expect(taxonomyEvent).toBe(true);
+    expect((harness.runtime.operationalStore as OperationalSqliteStore)
+      .readWorkflowSnapshot("TKT-1010").events)
+      .toEqual(snapshot.events);
+  });
+
+  it("does not create a taxonomy revision for order-only candidate changes", async () => {
+    let call = 0;
+    const taxonomyReasoningProvider: TaxonomyReasoningProvider = {
+      async reason() {
+        call += 1;
+        const secondaryProductSurfaces = call === 1
+          ? [
+              { domain: "customer-data" as const, area: "profiles" as const },
+              { domain: "automation" as const, area: "flows" as const },
+            ]
+          : [
+              { domain: "automation" as const, area: "flows" as const },
+              { domain: "customer-data" as const, area: "profiles" as const },
+            ];
+        return {
+          candidate: {
+            primaryProductSurface: { domain: "messaging" as const, area: "sms" as const },
+            secondaryProductSurfaces,
+            problemClasses: call === 1
+              ? ["expected-behavior" as const, "degraded-performance" as const]
+              : ["degraded-performance" as const, "expected-behavior" as const],
+          },
+          rationale: "The ticket identifies a messaging surface.",
+          telemetry: { model: "taxonomy-test-model", latencyMs: 1 },
+        };
+      },
+    };
+    const harness = await openReliabilityRuntime({ taxonomyReasoningProvider });
+    activeRuntimes.push(harness);
+    const first = await harness.post(
+      "/api/tickets/TKT-1010/recommendations",
+      { actor: "approval-desk", aiPreference: "auto", taxonomyPreference: "gpt-preferred" },
+      randomUUID(),
+    );
+    const second = await harness.post(
+      "/api/tickets/TKT-1010/recommendations",
+      { actor: "approval-desk", aiPreference: "auto", taxonomyPreference: "gpt-preferred" },
+      randomUUID(),
+    );
+    const snapshot = (harness.runtime.operationalStore as OperationalSqliteStore)
+      .readWorkflowSnapshot("TKT-1010");
+    expect(first.status).toBe(201);
+    expect(second.status).toBe(201);
+    expect(call).toBe(2);
+    expect(snapshot.diagnosticTaxonomyRevisions).toHaveLength(1);
+  });
+
   it("replays evaluation after time and runtime advance", async () => {
     const harness = await openReliabilityRuntime();
     activeRuntimes.push(harness);
@@ -46,6 +181,34 @@ describe("reliability command replay", () => {
     expect(restarted.body.recommendation).toEqual(first.body.recommendation);
     expect((await harness.runtime.recommendations.list())
       .filter((recommendation) => recommendation.ticketId === "TKT-1010")).toHaveLength(1);
+  });
+
+  it("preserves pre-B2 v2 identity for omitted and equivalent taxonomy preference", async () => {
+    const harness = await openReliabilityRuntime();
+    activeRuntimes.push(harness);
+    const key = randomUUID();
+    const first = await harness.post(
+      "/api/tickets/TKT-1010/recommendations",
+      { actor: "approval-desk", aiPreference: "deterministic" },
+      key,
+    );
+    const receipt = (harness.runtime.operationalStore as OperationalSqliteStore)
+      .readCommandReceipt(key);
+    expect(first.status).toBe(201);
+    expect(receipt?.requestHash).toBe(canonicalRequestHashV2("evaluate-ticket", {
+      ticketId: "TKT-1010",
+      actor: "approval-desk",
+      responseStyle: "auto",
+      aiPreference: "deterministic",
+      customerReplies: [],
+    }));
+    const equivalent = await harness.post(
+      "/api/tickets/TKT-1010/recommendations",
+      { actor: "approval-desk", aiPreference: "deterministic", taxonomyPreference: "deterministic" },
+      key,
+    );
+    expect(equivalent.status).toBe(201);
+    expect(equivalent.body.recommendation).toEqual(first.body.recommendation);
   });
 
   it("does not call providers again for a committed replay", async () => {

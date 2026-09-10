@@ -23,7 +23,7 @@ export interface PreparedCommandDefinition<I, P, R> {
     prepared: P,
     commandId: string,
   ): OperationalResultReference;
-  replay(reader: OperationalResultReader, result: OperationalResultReference): R;
+  replay(reader: OperationalResultReader, result: OperationalResultReference, commandId?: string): R;
 }
 
 export interface DispatchableOperationalStore {
@@ -84,7 +84,7 @@ export class OperationalCommandDispatcher {
   ): R | undefined {
     return this.store.readCommandOutcome(commandId, (receipt, reader) => {
       assertReplayableReceipt(receipt, definition.operation, requestHash);
-      return definition.replay(reader, receipt.result);
+      return definition.replay(reader, receipt.result, receipt.commandId);
     });
   }
 
@@ -98,10 +98,10 @@ export class OperationalCommandDispatcher {
     const prepared = await definition.prepare(intent);
     return this.store.transaction((unit) => {
       const replay = unit.beginCommandV2(commandId, definition.operation, intent);
-      if (replay !== "new") return definition.replay(unit, replay.result);
+      if (replay !== "new") return definition.replay(unit, replay.result, commandId);
       const result = definition.commit(unit, prepared, commandId);
       unit.persistCommandResult(commandId, requestHash, result);
-      return definition.replay(unit, result);
+      return definition.replay(unit, result, commandId);
     });
   }
 }

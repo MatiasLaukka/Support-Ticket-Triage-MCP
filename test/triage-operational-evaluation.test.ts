@@ -8,6 +8,7 @@ import {
   type Ticket,
   type TriageRecommendation,
 } from "../src/domain.js";
+import type { DiagnosticTaxonomyContext } from "../src/diagnostic-taxonomy.js";
 import {
   canonicalRequestHash,
   type OperationalCommandContext,
@@ -102,6 +103,44 @@ describe("transactional operational evaluation", () => {
       const snapshot = harness.store.readWorkflowSnapshot(ticketId);
       expect(snapshot.recommendations.some(({ id }) => id === recommendation.id)).toBe(true);
       expect(snapshot.events.filter((event) => event.commandId === commandId)).toHaveLength(1);
+    } finally {
+      harness.store.close();
+    }
+  });
+
+  it("rejects a prepared taxonomy that violates the initial B2 support and basis boundary", async () => {
+    const harness = openHarness();
+    try {
+      const {
+        submittedAt: _submittedAt,
+        evaluatedCustomerReplyWatermark,
+        ...recommendationInput
+      } = evaluationInput();
+      const invalidTaxonomy: DiagnosticTaxonomyContext = {
+        primaryProductSurface: { domain: "integrations", area: "shopify" },
+        secondaryProductSurfaces: [],
+        problemClasses: ["data-integrity"],
+        support: { productSurface: "established", problemClass: "supported" },
+        basis: {
+          source: "diagnosis",
+          evidenceIds: ["diagnosis-evidence"],
+          knowledgeArticleIds: [],
+          playbookIds: [],
+          knownCauseIds: [],
+          explanation: "This direct prepared context is outside the initial B2 boundary.",
+        },
+      };
+      expect(() => harness.store.transaction((unit) => harness.service.commitOperationalEvaluation(
+        unit,
+        {
+          recommendationInput,
+          evaluatedCustomerReplyWatermark,
+          diagnosticTaxonomy: invalidTaxonomy,
+        },
+        commandId,
+      ))).toThrow("Initial diagnostic taxonomy");
+      expect(harness.store.readWorkflowSnapshot(ticketId).events
+        .some(({ commandId: eventCommandId }) => eventCommandId === commandId)).toBe(false);
     } finally {
       harness.store.close();
     }

@@ -195,6 +195,25 @@ describe("operational persistence domain", () => {
 
   it("strictly validates result references, outbox states, import states, and causal timeline entries", () => {
     expect(OperationalResultReferenceSchema.safeParse({
+      operation: "evaluate-ticket",
+      tickets: [{ ticketId: "TKT-0001", operationalEventIds: [eventId], resultingRevision: null }],
+      recommendationId,
+      diagnosticTaxonomyRevisionId: "taxonomy-revision-1",
+    }).success).toBe(true);
+    expect(OperationalResultReferenceSchema.safeParse({
+      operation: "record-diagnosis",
+      tickets: [{ ticketId: "TKT-0001", operationalEventIds: [eventId], resultingRevision: null }],
+      diagnosticTaxonomyRevisionId: "taxonomy-revision-1",
+    }).success).toBe(false);
+    expect(OperationalResultReferenceSchema.safeParse({
+      operation: "evaluate-ticket",
+      tickets: [
+        { ticketId: "TKT-0001", operationalEventIds: [eventId], resultingRevision: null },
+        { ticketId: "TKT-0002", operationalEventIds: [secondEventId], resultingRevision: null },
+      ],
+      diagnosticTaxonomyRevisionId: "taxonomy-revision-1",
+    }).success).toBe(false);
+    expect(OperationalResultReferenceSchema.safeParse({
       operation: "record-diagnosis",
       tickets: [{ ticketId: "TKT-0001", operationalEventIds: [eventId], resultingRevision: 2 }],
       diagnosisId: "diagnosis-001",

@@ -18,14 +18,19 @@ export type TaxonomyLaneEvaluationOutcome =
     }
   | {
       status: "provider-unavailable";
-      reason: "http" | "timeout";
+      reason:
+        | "transport"
+        | "http"
+        | "response-body"
+        | "timeout";
       statusCode: number | null;
     }
   | {
       status: "rejected-taxonomy";
       stage:
         | "reasoning-json"
-        | "reasoning-fields";
+        | "reasoning-fields"
+        | "response-envelope";
       fields: readonly string[];
     };
 
@@ -73,7 +78,11 @@ export interface ScoredTaxonomyLaneEvaluationResult {
 export interface UnavailableTaxonomyLaneEvaluationResult {
   ticketId: string;
   status: "provider-unavailable";
-  reason: "http" | "timeout";
+  reason:
+    | "transport"
+    | "http"
+    | "response-body"
+    | "timeout";
   statusCode: number | null;
 }
 
@@ -82,7 +91,8 @@ export interface RejectedTaxonomyLaneEvaluationResult {
   status: "rejected-taxonomy";
   stage:
     | "reasoning-json"
-    | "reasoning-fields";
+    | "reasoning-fields"
+    | "response-envelope";
   fields: readonly string[];
 }
 

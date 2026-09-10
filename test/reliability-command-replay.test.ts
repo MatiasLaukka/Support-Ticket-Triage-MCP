@@ -11,6 +11,7 @@ import {
   createControlledDraftProvider,
 } from "../src/approval-desk/controlled-evaluation-providers.js";
 import type { ClassificationReasoningProvider } from "../src/approval-desk/classification-reasoning-provider.js";
+import type { TaxonomyReasoningProvider } from "../src/taxonomy-reasoning-provider.js";
 import { OperationalUnitOfWork } from "../src/operational/unit-of-work.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
@@ -29,6 +30,50 @@ afterEach(async () => {
 });
 
 describe("reliability command replay", () => {
+  it("persists advisory taxonomy atomically and does not call its provider on replay", async () => {
+    let taxonomyCalls = 0;
+    const taxonomyReasoningProvider: TaxonomyReasoningProvider = {
+      async reason() {
+        taxonomyCalls += 1;
+        return {
+          candidate: {
+            primaryProductSurface: { domain: "messaging", area: "sms" },
+            secondaryProductSurfaces: [],
+            problemClasses: ["expected-behavior"],
+          },
+          rationale: "The ticket identifies a messaging surface.",
+          telemetry: { model: "taxonomy-test-model", latencyMs: 1 },
+        };
+      },
+    };
+    const harness = await openReliabilityRuntime({ taxonomyReasoningProvider });
+    activeRuntimes.push(harness);
+    const key = randomUUID();
+    const input = {
+      actor: "approval-desk",
+      aiPreference: "auto",
+      taxonomyPreference: "gpt-preferred",
+    };
+
+    const first = await harness.post("/api/tickets/TKT-1010/recommendations", input, key);
+    const snapshot = (harness.runtime.operationalStore as OperationalSqliteStore)
+      .readWorkflowSnapshot("TKT-1010");
+    const retry = await harness.post("/api/tickets/TKT-1010/recommendations", input, key);
+
+    expect(first.status).toBe(201);
+    expect(retry.status).toBe(201);
+    expect(taxonomyCalls).toBe(1);
+    expect(snapshot.diagnosticTaxonomyRevisions).toHaveLength(1);
+    expect(snapshot.diagnosticTaxonomyRevisions[0]?.context.basis.source).toBe("initial-classification");
+    const taxonomyEvent = snapshot.events
+      .filter(({ commandId }) => commandId === key && commandId !== undefined)
+      .some(({ action }) => action === "diagnostic-taxonomy-revised");
+    expect(taxonomyEvent).toBe(true);
+    expect((harness.runtime.operationalStore as OperationalSqliteStore)
+      .readWorkflowSnapshot("TKT-1010").events)
+      .toEqual(snapshot.events);
+  });
+
   it("replays evaluation after time and runtime advance", async () => {
     const harness = await openReliabilityRuntime();
     activeRuntimes.push(harness);

@@ -1861,6 +1861,54 @@ export class OperationalUnitOfWork {
     );
     this.assertRecommendationReference(result, ticketIds, localRecommendations);
 
+    const localTaxonomyRows = this.diagnosticTaxonomyRevisionWrites.map((row) => {
+      this.assertLocalChildEvent("diagnostic taxonomy revision", row, commandEvents);
+      return {
+        id: row.id,
+        ticket_id: row.ticket_id,
+        operational_event_id: row.operational_event_id,
+      };
+    }).sort((left, right) => left.id.localeCompare(right.id));
+    const durableTaxonomyRows = this.database.prepare(`
+      SELECT revisions.id, revisions.ticket_id, revisions.operational_event_id
+      FROM diagnostic_taxonomy_revisions AS revisions
+      JOIN operational_events AS events ON events.id = revisions.operational_event_id
+      WHERE events.command_id = ?
+      ORDER BY revisions.id ASC
+    `).all(commandId) as LocalEventChildRow[];
+    if (
+      durableTaxonomyRows.length !== localTaxonomyRows.length
+      || durableTaxonomyRows.some((row, index) => (
+        row.id !== localTaxonomyRows[index]?.id
+        || row.ticket_id !== localTaxonomyRows[index]?.ticket_id
+        || row.operational_event_id !== localTaxonomyRows[index]?.operational_event_id
+      ))
+    ) {
+      throw this.semanticReferenceError(
+        "Operational diagnostic taxonomy revisions must be written by its transaction-local command claim.",
+      );
+    }
+    const resultTaxonomyId = result.diagnosticTaxonomyRevisionId;
+    if (resultTaxonomyId === undefined) {
+      if (localTaxonomyRows.length > 0) {
+        throw this.semanticReferenceError(
+          "Every diagnostic taxonomy revision must be referenced by the command result.",
+        );
+      }
+    } else {
+      if (localTaxonomyRows.length !== 1 || localTaxonomyRows[0]?.id !== resultTaxonomyId) {
+        throw this.semanticReferenceError(
+          "The command result must reference its transaction-local diagnostic taxonomy revision.",
+        );
+      }
+      const ticketResult = result.tickets.find(({ ticketId }) => ticketId === localTaxonomyRows[0]?.ticket_id);
+      if (ticketResult === undefined || !ticketResult.operationalEventIds.includes(localTaxonomyRows[0]!.operational_event_id)) {
+        throw this.semanticReferenceError(
+          "The diagnostic taxonomy result reference must include its causal event.",
+        );
+      }
+    }
+
     const localDiagnoses = this.localSemanticRows("diagnosis", this.diagnosisWrites, commandEvents);
     this.assertDurableSemanticRows(
       "diagnosis",

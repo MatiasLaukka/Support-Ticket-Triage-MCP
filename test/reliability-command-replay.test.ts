@@ -13,6 +13,7 @@ import {
 import type { ClassificationReasoningProvider } from "../src/approval-desk/classification-reasoning-provider.js";
 import type { TaxonomyReasoningProvider } from "../src/taxonomy-reasoning-provider.js";
 import { OperationalUnitOfWork } from "../src/operational/unit-of-work.js";
+import { canonicalRequestHashV2 } from "../src/operational/idempotency.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { createTriageServer } from "../src/server.js";
@@ -140,6 +141,34 @@ describe("reliability command replay", () => {
     expect(restarted.body.recommendation).toEqual(first.body.recommendation);
     expect((await harness.runtime.recommendations.list())
       .filter((recommendation) => recommendation.ticketId === "TKT-1010")).toHaveLength(1);
+  });
+
+  it("preserves pre-B2 v2 identity for omitted and equivalent taxonomy preference", async () => {
+    const harness = await openReliabilityRuntime();
+    activeRuntimes.push(harness);
+    const key = randomUUID();
+    const first = await harness.post(
+      "/api/tickets/TKT-1010/recommendations",
+      { actor: "approval-desk", aiPreference: "deterministic" },
+      key,
+    );
+    const receipt = (harness.runtime.operationalStore as OperationalSqliteStore)
+      .readCommandReceipt(key);
+    expect(first.status).toBe(201);
+    expect(receipt?.requestHash).toBe(canonicalRequestHashV2("evaluate-ticket", {
+      ticketId: "TKT-1010",
+      actor: "approval-desk",
+      responseStyle: "auto",
+      aiPreference: "deterministic",
+      customerReplies: [],
+    }));
+    const equivalent = await harness.post(
+      "/api/tickets/TKT-1010/recommendations",
+      { actor: "approval-desk", aiPreference: "deterministic", taxonomyPreference: "deterministic" },
+      key,
+    );
+    expect(equivalent.status).toBe(201);
+    expect(equivalent.body.recommendation).toEqual(first.body.recommendation);
   });
 
   it("does not call providers again for a committed replay", async () => {

@@ -55,6 +55,7 @@ import {
   type TicketStatus,
   type TriageRecommendation,
 } from "./domain.js";
+import type { DiagnosticTaxonomyContext } from "./diagnostic-taxonomy.js";
 import { DomainError } from "./errors.js";
 import { compareIsoInstants } from "./iso-instant.js";
 import { evaluateEscalation, validateApprovedFields } from "./policy.js";
@@ -419,6 +420,7 @@ export interface PreparedOperationalEvaluation {
   readonly recommendationInput: Omit<SubmitRecommendationInput, "submittedAt">;
   readonly evaluatedCustomerReplyWatermark: CustomerReplyWatermark;
   readonly classificationConfidence?: ClassificationConfidence;
+  readonly diagnosticTaxonomy?: DiagnosticTaxonomyContext;
 }
 
 export interface RejectRecommendationInput {
@@ -1108,8 +1110,9 @@ export class TriageService {
   replayOperationalEvaluation(
     reader: OperationalResultReader,
     result: OperationalResultReference,
+    commandId?: string,
   ): { recommendation: TriageRecommendation; recommendations: TriageRecommendation[] } {
-    return this.replayEvaluation(reader, { result });
+    return this.replayEvaluation(reader, { result }, undefined, commandId);
   }
 
   private commitOperationalEvaluationWriteSet(
@@ -1319,6 +1322,7 @@ export class TriageService {
     unit: OperationalResultReader,
     replay: CommandReplay,
     preferredRecommendationId?: string,
+    commandId?: string,
   ): { recommendation: TriageRecommendation; recommendations: TriageRecommendation[] } {
     const recommendationIds = replay.result.recommendationIds ??
       (replay.result.recommendationId === undefined ? [] : [replay.result.recommendationId]);

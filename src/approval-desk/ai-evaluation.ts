@@ -35,6 +35,11 @@ import type {
   CustomerResponseDraftProvider,
   GptClassificationReasoning,
 } from "./draft-response-provider.js";
+import {
+  runTaxonomyStage,
+  type TaxonomyStageResult,
+} from "../taxonomy-stage.js";
+import type { TaxonomyReasoningProvider } from "../taxonomy-reasoning-provider.js";
 
 export type CustomerReply = {
   id: string;
@@ -48,7 +53,7 @@ export type PreviousSupportResponse = {
   body: string;
 };
 
-export async function evaluateTicketWithAi(input: {
+export interface AiEvaluationInput {
   ticket: Ticket;
   outcome?: ExpectedOutcome;
   actor: string;
@@ -66,9 +71,52 @@ export async function evaluateTicketWithAi(input: {
   responseStyle: DraftCustomerResponseStyleInput;
   classificationProvider?: ClassificationReasoningProvider;
   draftProvider?: CustomerResponseDraftProvider;
-}): Promise<
+  taxonomyPreference?: AiPreference;
+  taxonomyReasoningProvider?: TaxonomyReasoningProvider;
+}
+
+type SharedEvaluation = {
+  recommendationInput: Omit<SubmitEvaluationInput, "submittedAt" | "evaluatedCustomerReplyWatermark">;
+  taxonomyInput: Parameters<typeof runTaxonomyStage>[0];
+};
+
+export async function evaluateTicketWithAi(input: AiEvaluationInput): Promise<
   Omit<SubmitEvaluationInput, "submittedAt" | "evaluatedCustomerReplyWatermark">
 > {
+  return (await prepareEvaluationCore(input)).recommendationInput;
+}
+
+export async function evaluateTicketWithOperationalTaxonomy(
+  input: AiEvaluationInput,
+): Promise<{
+  recommendationInput: Omit<SubmitEvaluationInput, "submittedAt" | "evaluatedCustomerReplyWatermark">;
+  diagnosticTaxonomy: TaxonomyStageResult["context"];
+}> {
+  const shared = await prepareEvaluationCore(input);
+  const taxonomy = await runTaxonomyStage({
+    ...shared.taxonomyInput,
+    preference:
+      input.taxonomyPreference ??
+      input.classificationPreference ??
+      input.aiPreference,
+    provider: input.taxonomyReasoningProvider,
+  });
+  const recommendationInput = shared.recommendationInput;
+  return {
+    recommendationInput: recommendationInput.aiExecutionTrace === undefined
+      ? recommendationInput
+      : {
+          ...recommendationInput,
+          aiExecutionTrace: {
+            ...recommendationInput.aiExecutionTrace,
+            taxonomy: taxonomy.trace,
+          },
+        },
+    diagnosticTaxonomy: taxonomy.context,
+  };
+}
+
+async function prepareEvaluationCore(input: AiEvaluationInput): Promise<SharedEvaluation> {
   const classificationPreference =
     input.classificationPreference ?? input.aiPreference;
   const draftingPreference = input.draftingPreference ?? input.aiPreference;
@@ -104,7 +152,7 @@ export async function evaluateTicketWithAi(input: {
   const selectedKnowledge = input.allKnowledgeArticles.filter((article) =>
     base.knowledgeArticleIds.includes(article.id),
   );
-  return buildApprovalDeskRecommendationInputWithDrafting({
+  const recommendationInput = await buildApprovalDeskRecommendationInputWithDrafting({
     ticket: input.ticket,
     outcome: input.outcome,
     actor: input.actor,
@@ -128,6 +176,20 @@ export async function evaluateTicketWithAi(input: {
       finalOutcome: finalOutcomeFromRecommendation(base),
     },
   });
+  return {
+    recommendationInput,
+    taxonomyInput: {
+      ticket: input.ticket,
+      conversationText: conversationContext.classificationText,
+      deterministicClassification: {
+        category: baseline.category,
+        team: baseline.team,
+        priority: baseline.priority,
+      },
+      preference: input.taxonomyPreference ?? input.classificationPreference ?? input.aiPreference,
+      promptInjectionDetected: safety.detected,
+    },
+  };
 }
 
 async function runClassificationStage(input: {

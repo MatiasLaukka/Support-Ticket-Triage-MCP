@@ -243,6 +243,7 @@ const EvaluateTicketInputSchema = z
     actor: NonBlankStringSchema.default("approval-desk"),
     responseStyle: DraftCustomerResponseStyleInputSchema.default("auto"),
     aiPreference: AiPreferenceSchema.default("auto"),
+    taxonomyPreference: AiPreferenceSchema.optional(),
   })
   .strict();
 const MarkResponseDoneInputSchema = ApprovalInputSchema.refine(
@@ -1168,6 +1169,7 @@ async function evaluateTicket(
       actor: input.actor,
       responseStyle: input.responseStyle,
       aiPreference: input.aiPreference,
+      ...(input.taxonomyPreference === undefined ? {} : { taxonomyPreference: input.taxonomyPreference }),
     }, input.commandId);
     const [persistedTicket, persistedAudits] = await Promise.all([
       deps.tickets.get(input.ticketId),
@@ -1189,6 +1191,12 @@ async function evaluateTicketLegacy(
   deps: TriageServerDependencies,
   input: z.infer<typeof EvaluateTicketInputSchema>,
 ): Promise<z.infer<typeof EvaluateTicketOutputSchema>> {
+  if (input.taxonomyPreference !== undefined) {
+    throw new DomainError(
+      "taxonomyPreference requires operational evaluation support.",
+      "REPOSITORY_ERROR",
+    );
+  }
   const { commandId } = input;
   const reusableKnowledge = deps.learningAvailability?.status === "unavailable"
     ? unavailableReusableKnowledge()

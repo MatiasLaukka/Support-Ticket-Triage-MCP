@@ -12,7 +12,7 @@ import type {
   ClassificationReasoningProvider,
 } from "./approval-desk/classification-reasoning-provider.js";
 import {
-  evaluateTicketWithAi,
+  evaluateTicketWithOperationalTaxonomy,
   type CustomerReply,
 } from "./approval-desk/ai-evaluation.js";
 import type { CustomerResponseDraftProvider } from "./approval-desk/draft-response-provider.js";
@@ -24,6 +24,10 @@ import {
 import { selectPersistedDiagnosticWorkflowContext } from "./approval-desk/diagnostic-workflow.js";
 import { createClassificationReasoningProviderFromEnv } from "./approval-desk/classification-reasoning-provider.js";
 import { createCustomerResponseDraftProviderFromEnv } from "./approval-desk/draft-response-provider.js";
+import {
+  createTaxonomyReasoningProviderFromEnv,
+  type TaxonomyReasoningProvider,
+} from "./taxonomy-reasoning-provider.js";
 import {
   unavailableReusableKnowledge,
   type ReusableKnowledgeResult,
@@ -46,10 +50,22 @@ export const EvaluationCommandInputSchema = z.object({
   actor: z.string().trim().min(1).default("approval-desk"),
   responseStyle: DraftCustomerResponseStyleInputSchema.default("auto"),
   aiPreference: AiPreferenceSchema.default("auto"),
+  taxonomyPreference: AiPreferenceSchema.optional(),
   customerReplies: z.array(CustomerReplyInputSchema).max(8).default([]),
-}).strict();
+}).strict().transform((parsed) => {
+  if (
+    parsed.taxonomyPreference === undefined ||
+    parsed.taxonomyPreference === parsed.aiPreference
+  ) {
+    const { taxonomyPreference: _taxonomyPreference, ...identity } = parsed;
+    return identity;
+  }
+  return parsed;
+});
 
-export type EvaluationCommandInput = z.infer<typeof EvaluationCommandInputSchema>;
+export type EvaluationCommandInput = z.infer<typeof EvaluationCommandInputSchema> & {
+  readonly taxonomyPreference?: z.infer<typeof AiPreferenceSchema>;
+};
 
 export interface EvaluationCommandDependencies {
   readonly dispatcher: OperationalCommandDispatcher;
@@ -64,6 +80,7 @@ export interface EvaluationCommandDependencies {
   readonly evaluationGuard?: Pick<TicketEvaluationGuard, "run">;
   readonly draftProvider?: CustomerResponseDraftProvider;
   readonly classificationReasoningProvider?: ClassificationReasoningProvider;
+  readonly taxonomyReasoningProvider?: TaxonomyReasoningProvider;
   readonly loadExpectedOutcome?: (ticketId: string) => Promise<ExpectedOutcome | undefined>;
 }
 
@@ -95,7 +112,8 @@ export async function evaluateTicketCommand(
         ];
         const previousSupportResponse = latestSupportResponseFromAudits(ticket.id, audits);
         const persistedDiagnosticContext = selectPersistedDiagnosticWorkflowContext(audits);
-        const recommendationInput = await evaluateTicketWithAi({
+        const taxonomyPreference = input.taxonomyPreference ?? input.aiPreference;
+        const evaluation = await evaluateTicketWithOperationalTaxonomy({
           ticket,
           outcome,
           actor: input.actor,
@@ -107,6 +125,12 @@ export async function evaluateTicketCommand(
           rejectedDiagnosis: persistedDiagnosticContext.rejectedDiagnosis?.context,
           fixContext: persistedDiagnosticContext.fix?.context,
           aiPreference: input.aiPreference,
+          taxonomyPreference,
+          taxonomyReasoningProvider:
+            deps.taxonomyReasoningProvider ??
+            createTaxonomyReasoningProviderFromEnv(deps.env ?? process.env, {
+              preferOpenAi: taxonomyPreference === "gpt-preferred",
+            }),
           responseStyle: input.responseStyle,
           classificationProvider:
             deps.classificationReasoningProvider ??
@@ -121,12 +145,14 @@ export async function evaluateTicketCommand(
               preferOpenAi: input.aiPreference === "gpt-preferred",
             }),
         });
+        const recommendationInput = evaluation.recommendationInput;
         const {
           classificationConfidence,
           ...serializableRecommendationInput
         } = recommendationInput;
         return {
           recommendationInput: serializableRecommendationInput,
+          diagnosticTaxonomy: evaluation.diagnosticTaxonomy,
           evaluatedCustomerReplyWatermark: customerReplyWatermarkFromAudits(audits),
           ...(classificationConfidence === undefined ? {} : { classificationConfidence }),
         };
@@ -137,8 +163,8 @@ export async function evaluateTicketCommand(
     },
     commit: (unit: Parameters<TriageService["commitOperationalEvaluation"]>[0], prepared: PreparedOperationalEvaluation, id: string) =>
       deps.service.commitOperationalEvaluation(unit, prepared, id),
-    replay: (reader: Parameters<TriageService["replayOperationalEvaluation"]>[0], result: Parameters<TriageService["replayOperationalEvaluation"]>[1]) =>
-      deps.service.replayOperationalEvaluation(reader, result),
+    replay: (reader: Parameters<TriageService["replayOperationalEvaluation"]>[0], result: Parameters<TriageService["replayOperationalEvaluation"]>[1], replayCommandId?: string) =>
+      deps.service.replayOperationalEvaluation(reader, result, replayCommandId),
   };
   return deps.dispatcher.run(definition, rawInput, commandId);
 }

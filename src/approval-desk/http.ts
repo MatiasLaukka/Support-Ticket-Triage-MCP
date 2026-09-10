@@ -136,6 +136,7 @@ const SubmitBodySchema = z
     actor: z.string().trim().min(1).default("approval-desk"),
     responseStyle: DraftCustomerResponseStyleInputSchema.default("auto"),
     aiPreference: AiPreferenceSchema.default("auto"),
+    taxonomyPreference: AiPreferenceSchema.optional(),
     customerReplies: z.array(CustomerReplyBodySchema).max(8).default([]),
   })
   .strict();
@@ -953,12 +954,16 @@ async function createRecommendation(
       actor: body.actor,
       responseStyle: body.responseStyle,
       aiPreference: body.aiPreference,
+      ...(body.taxonomyPreference === undefined ? {} : { taxonomyPreference: body.taxonomyPreference }),
       customerReplies: body.customerReplies,
     }, commandContext.commandId);
     return {
       recommendation: evaluation.recommendation,
       ...(await lifecycleEnvelope({ deps }, ticketId)),
     };
+  }
+  if (body.taxonomyPreference !== undefined) {
+    throw invalidRequest("taxonomyPreference requires operational evaluation support.");
   }
   return evaluationGuard.run(ticketId, async () => {
     const reusableKnowledge = deps.learningAvailability.status === "unavailable"

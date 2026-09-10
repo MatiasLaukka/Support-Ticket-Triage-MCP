@@ -41,6 +41,7 @@ import {
   createClassificationReasoningProviderFromEnv,
   type ClassificationReasoningProvider,
 } from "./classification-reasoning-provider.js";
+import type { TaxonomyReasoningProvider } from "../taxonomy-reasoning-provider.js";
 import { evaluateTicketWithAi } from "./ai-evaluation.js";
 import { evaluateTicketCommand } from "../evaluation-command.js";
 import { TicketEvaluationGuard } from "./evaluation-guard.js";
@@ -329,6 +330,7 @@ export interface ApprovalDeskHttpOptions {
   expectedOutcomesPath?: string;
   draftProvider?: CustomerResponseDraftProvider;
   classificationReasoningProvider?: ClassificationReasoningProvider;
+  taxonomyReasoningProvider?: TaxonomyReasoningProvider;
   lifecycleReplayReportPath?: string;
   lifecycleReplayControlledReportPath?: string;
   lifecycleReplayScenarios?: readonly DiagnosticEvaluationScenario[];
@@ -943,6 +945,7 @@ async function createRecommendation(
       evaluationGuard,
       draftProvider: options.draftProvider,
       classificationReasoningProvider: options.classificationReasoningProvider,
+      taxonomyReasoningProvider: options.taxonomyReasoningProvider,
       loadExpectedOutcome: options.expectedOutcomesPath === undefined
         ? undefined
         : async (requestedTicketId) => {

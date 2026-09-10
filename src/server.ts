@@ -49,6 +49,7 @@ import {
 } from "./approval-desk/classification-reasoning-provider.js";
 import { evaluateTicketWithAi } from "./approval-desk/ai-evaluation.js";
 import { evaluateTicketCommand } from "./evaluation-command.js";
+import type { TaxonomyReasoningProvider } from "./taxonomy-reasoning-provider.js";
 import {
   buildTicketWorkflowReadModel,
   customerRepliesFromAudits,
@@ -499,6 +500,7 @@ export interface TriageServerDependencies {
   now: () => Date;
   minutesPerAcceptedRecommendation?: number;
   classificationReasoningProvider?: ClassificationReasoningProvider;
+  taxonomyReasoningProvider?: TaxonomyReasoningProvider;
   draftProvider?: CustomerResponseDraftProvider;
   env?: NodeJS.ProcessEnv;
   knowledgeEvolution: {
@@ -1164,6 +1166,7 @@ async function evaluateTicket(
       evaluationGuard: deps.evaluationGuard,
       draftProvider: deps.draftProvider,
       classificationReasoningProvider: deps.classificationReasoningProvider,
+      taxonomyReasoningProvider: deps.taxonomyReasoningProvider,
     }, {
       ticketId: input.ticketId,
       actor: input.actor,

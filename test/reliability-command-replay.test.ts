@@ -65,6 +65,8 @@ describe("reliability command replay", () => {
     expect(taxonomyCalls).toBe(1);
     expect(snapshot.diagnosticTaxonomyRevisions).toHaveLength(1);
     expect(snapshot.diagnosticTaxonomyRevisions[0]?.context.basis.source).toBe("initial-classification");
+    expect(snapshot.recommendationRevisions.at(-1)?.recommendation.aiExecutionTrace?.taxonomy)
+      .toMatchObject({ status: "used", canonicalSource: "gpt", model: "taxonomy-test-model" });
     const taxonomyEvent = snapshot.events
       .filter(({ commandId }) => commandId === key && commandId !== undefined)
       .some(({ action }) => action === "diagnostic-taxonomy-revised");
@@ -72,6 +74,53 @@ describe("reliability command replay", () => {
     expect((harness.runtime.operationalStore as OperationalSqliteStore)
       .readWorkflowSnapshot("TKT-1010").events)
       .toEqual(snapshot.events);
+  });
+
+  it("does not create a taxonomy revision for order-only candidate changes", async () => {
+    let call = 0;
+    const taxonomyReasoningProvider: TaxonomyReasoningProvider = {
+      async reason() {
+        call += 1;
+        const secondaryProductSurfaces = call === 1
+          ? [
+              { domain: "customer-data" as const, area: "profiles" as const },
+              { domain: "automation" as const, area: "flows" as const },
+            ]
+          : [
+              { domain: "automation" as const, area: "flows" as const },
+              { domain: "customer-data" as const, area: "profiles" as const },
+            ];
+        return {
+          candidate: {
+            primaryProductSurface: { domain: "messaging" as const, area: "sms" as const },
+            secondaryProductSurfaces,
+            problemClasses: call === 1
+              ? ["expected-behavior" as const, "degraded-performance" as const]
+              : ["degraded-performance" as const, "expected-behavior" as const],
+          },
+          rationale: "The ticket identifies a messaging surface.",
+          telemetry: { model: "taxonomy-test-model", latencyMs: 1 },
+        };
+      },
+    };
+    const harness = await openReliabilityRuntime({ taxonomyReasoningProvider });
+    activeRuntimes.push(harness);
+    const first = await harness.post(
+      "/api/tickets/TKT-1010/recommendations",
+      { actor: "approval-desk", aiPreference: "auto", taxonomyPreference: "gpt-preferred" },
+      randomUUID(),
+    );
+    const second = await harness.post(
+      "/api/tickets/TKT-1010/recommendations",
+      { actor: "approval-desk", aiPreference: "auto", taxonomyPreference: "gpt-preferred" },
+      randomUUID(),
+    );
+    const snapshot = (harness.runtime.operationalStore as OperationalSqliteStore)
+      .readWorkflowSnapshot("TKT-1010");
+    expect(first.status).toBe(201);
+    expect(second.status).toBe(201);
+    expect(call).toBe(2);
+    expect(snapshot.diagnosticTaxonomyRevisions).toHaveLength(1);
   });
 
   it("replays evaluation after time and runtime advance", async () => {

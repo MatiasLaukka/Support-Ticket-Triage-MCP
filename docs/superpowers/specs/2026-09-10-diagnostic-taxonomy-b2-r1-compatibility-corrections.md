@@ -36,3 +36,14 @@ are not removed from, or added to, the direct-service caller intent.
 it to `evaluate-ticket` results with one affected ticket; replay validation
 proves the referenced revision and causal event belong to the same committed
 command.
+
+## Initial-boundary and replay validation correction
+
+The operational persistence layer supports the broader immutable taxonomy
+history needed by later phases. B2's initial prepared context is narrower, so
+`TriageService` rejects a prepared revision whose basis is not
+`initial-classification` or whose support is `established`, including direct
+prepared-service callers. Replay also requires one command identity across the
+evaluation's events and verifies that the taxonomy event's revision fact,
+command, actor, ticket, and timestamp match the referenced immutable revision
+and recommendation event.

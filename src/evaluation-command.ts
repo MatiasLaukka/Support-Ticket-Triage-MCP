@@ -39,6 +39,9 @@ import {
 } from "./triage-service.js";
 import { OperationalCommandDispatcher } from "./operational-command-dispatch.js";
 import { buildRetrievalQuery, type RetrievalObserver } from "./retrieval/stage.js";
+import { buildConversationContextForTicket } from "./approval-desk/conversation-context.js";
+import { classifyTicketFromContext } from "./approval-desk/classifier.js";
+import type { Reference } from "./retrieval/types.js";
 
 const CustomerReplyInputSchema = z.object({
   id: z.string().trim().min(1).max(80),
@@ -182,10 +185,33 @@ export async function evaluateTicketCommand(
   const result = await deps.dispatcher.run(definition, rawInput, commandId);
   if (didCommit && capturedBasis !== undefined && deps.retrievalObserver !== undefined) {
     try {
-      await deps.retrievalObserver.observe(buildRetrievalQuery(capturedBasis), commandId);
+      const references = deterministicRetrievalReferences(capturedBasis);
+      await deps.retrievalObserver.observe(buildRetrievalQuery({ ...capturedBasis, references }), commandId);
     } catch {
       // Retrieval remains observational and cannot affect authoritative results.
     }
   }
   return result;
+}
+
+function deterministicRetrievalReferences(input: Parameters<typeof buildRetrievalQuery>[0]): readonly Reference[] {
+  const classification = classifyTicketFromContext(buildConversationContextForTicket({
+    ticket: input.ticket,
+    customerReplies: input.customerReplies,
+  }));
+  const references: Reference[] = classification.knowledgeArticleIds.map((sourceId) => ({
+    resourceKey: `knowledge-article:${sourceId}`,
+    channel: "deterministic-reference",
+    sourceId,
+    reason: "classifier-association",
+  }));
+  if (classification.knownCause) {
+    references.push({
+      resourceKey: `known-cause:${classification.knownCause}`,
+      channel: "deterministic-reference",
+      sourceId: classification.knownCause,
+      reason: "safety-inclusion",
+    });
+  }
+  return references;
 }

@@ -27,6 +27,13 @@
       "requiredArticleIds": ["sms-compliance"],
       "relevantArticleIds": []
     },
+    "retrieval": {
+      "requiredResourceKeys": ["knowledge-article:sms-compliance"],
+      "relevantResourceKeys": ["knowledge-article:sms-compliance", "known-cause:sms-quiet-hours"],
+      "hardNegativeResourceKeys": ["known-cause:sms-stop-sync-delay"],
+      "labelsComplete": true,
+      "resourceCoverage": { "knowledge-article": "adequate", "known-cause": "adequate", "diagnostic-playbook": "missing", "resolved-ticket": "not-expected" }
+    },
     "taxonomy": {
       "acceptablePrimaryProductSurfaces": [
      {
@@ -56,6 +63,13 @@
     "knowledge": {
       "requiredArticleIds": ["webhook-signature-validation"],
       "relevantArticleIds": ["webhook-signature-validation"]
+    },
+    "retrieval": {
+      "requiredResourceKeys": ["knowledge-article:webhook-signature-validation"],
+      "relevantResourceKeys": ["knowledge-article:webhook-signature-validation", "known-cause:webhook-delivery-latency"],
+      "hardNegativeResourceKeys": ["known-cause:webhook-secret-rotation"],
+      "labelsComplete": true,
+      "resourceCoverage": { "knowledge-article": "adequate", "known-cause": "adequate", "diagnostic-playbook": "missing", "resolved-ticket": "not-expected" }
     },
     "taxonomy": {
       "acceptablePrimaryProductSurfaces": [
@@ -145,6 +159,13 @@
       "requiredArticleIds": [],
       "relevantArticleIds": ["performance-troubleshooting"]
     },
+    "retrieval": {
+      "requiredResourceKeys": [],
+      "relevantResourceKeys": ["knowledge-article:performance-troubleshooting", "diagnostic-playbook:campaign-editor"],
+      "hardNegativeResourceKeys": [],
+      "labelsComplete": false,
+      "resourceCoverage": { "knowledge-article": "adequate", "known-cause": "uncertain", "diagnostic-playbook": "adequate", "resolved-ticket": "not-expected" }
+    },
     "knownCause": {
       "expectation": "insufficient-evidence"
     },
@@ -202,6 +223,13 @@
     "knowledge": {
       "requiredArticleIds": ["shopify-integration-sync"],
       "relevantArticleIds": ["coupon-catalog-sync"]
+    },
+    "retrieval": {
+      "requiredResourceKeys": ["knowledge-article:shopify-integration-sync"],
+      "relevantResourceKeys": ["knowledge-article:shopify-integration-sync", "known-cause:shopify-custom-field-mapping"],
+      "hardNegativeResourceKeys": ["knowledge-article:coupon-catalog-sync"],
+      "labelsComplete": true,
+      "resourceCoverage": { "knowledge-article": "adequate", "known-cause": "adequate", "diagnostic-playbook": "missing", "resolved-ticket": "not-expected" }
     },
     "taxonomy": {
       "acceptablePrimaryProductSurfaces": [

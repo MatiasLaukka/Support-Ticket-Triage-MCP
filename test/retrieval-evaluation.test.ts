@@ -12,4 +12,15 @@ describe("retrieval evaluation", () => {
   it("rejects required keys outside relevant and overlapping hard negatives", () => {
     expect(() => RetrievalExpectationSchema.parse({ requiredResourceKeys: ["knowledge-article:a"], relevantResourceKeys: [], hardNegativeResourceKeys: [], labelsComplete: true, resourceCoverage: { "knowledge-article": "adequate", "known-cause": "missing", "diagnostic-playbook": "missing", "resolved-ticket": "missing" } })).toThrow();
   });
+
+  it("accepts the namespaced learned-cause resource identity", () => {
+    const parsed = RetrievalExpectationSchema.parse({
+      requiredResourceKeys: ["known-cause:learned/sms-quiet-hours"],
+      relevantResourceKeys: ["known-cause:learned/sms-quiet-hours"],
+      hardNegativeResourceKeys: [],
+      labelsComplete: true,
+      resourceCoverage: { "knowledge-article": "missing", "known-cause": "adequate", "diagnostic-playbook": "missing", "resolved-ticket": "not-expected" },
+    });
+    expect(parsed.requiredResourceKeys[0]).toContain("learned/");
+  });
 });

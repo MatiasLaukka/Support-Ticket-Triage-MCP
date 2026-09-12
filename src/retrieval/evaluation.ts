@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { ResourceKey, ResourceType } from "./types.js";
 
-const resourceKeyPattern = /^(?:knowledge-article|known-cause|diagnostic-playbook|resolved-ticket):[A-Za-z0-9._-]+$/;
+const resourceKeyPattern = /^(?:knowledge-article|known-cause|diagnostic-playbook|resolved-ticket):[A-Za-z0-9._/-]+$/;
 const ResourceKeySchema = z.string().regex(resourceKeyPattern);
 const ResourceKeysSchema = z.array(ResourceKeySchema).refine((values) => new Set(values).size === values.length, "Resource keys must be unique.");
 const ResourceCoverageSchema = z.enum(["adequate", "missing", "uncertain", "not-expected"]);

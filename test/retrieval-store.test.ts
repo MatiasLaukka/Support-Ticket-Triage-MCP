@@ -57,4 +57,18 @@ describe("retrieval store", () => {
     expect(() => db.validate()).toThrow();
     db.close();
   });
+
+  it("excludes stale ready vectors and surfaces their corruption to validation", () => {
+    const db = RetrievalStore.open(":memory:");
+    db.initialize();
+    const article = projectArticle({ id: "stale", title: "Stale", tags: [], body: "Stale vector" });
+    db.reconcile({ resources: [article], unavailableFamilies: [] });
+    db.configureModel({ id: "model", revision: "1", dimensions: 2 });
+    db.installVectors([{ representationId: article.representations[0]!.id, resourceKey: article.resource.key, contentHash: article.representations[0]!.contentHash, model: { id: "model", revision: "1", dimensions: 2 }, values: [1, 0] }]);
+    const raw = (db as unknown as { database: { prepare(sql: string): { run(...values: unknown[]): void } } }).database;
+    raw.prepare("UPDATE retrieval_embeddings SET content_hash=? WHERE representation_id=?").run("stale-hash", article.representations[0]!.id);
+    expect(db.readSnapshot('"stale"').vectors).toHaveLength(0);
+    expect(() => db.validate()).toThrow();
+    db.close();
+  });
 });

@@ -29,4 +29,23 @@ describe("retrieval index manager", () => {
     await expect(manager.refresh(new AbortController().signal)).resolves.toBeDefined();
     await manager.close();
   });
+
+  it("rebuilds the complete projection atomically instead of treating it as a no-op refresh", async () => {
+    const store = RetrievalStore.open(":memory:");
+    const article = projectArticle({ id: "a", title: "A", tags: [], body: "Webhook signing" });
+    let includeArticle = true;
+    let calls = 0;
+    const manager = new IndexManager({
+      store,
+      load: async () => ({ resources: includeArticle ? [article] : [], unavailableFamilies: [] }),
+      provider: { model: { id: "test", revision: "1", dimensions: 2 }, embed: async (texts) => { calls += 1; return texts.map(() => [1, 0]); } },
+    });
+    await manager.refresh(new AbortController().signal);
+    await manager.rebuild(new AbortController().signal);
+    expect(calls).toBe(2);
+    includeArticle = false;
+    await manager.rebuild(new AbortController().signal);
+    expect(store.readSnapshot('"webhook"').resources).toHaveLength(0);
+    await manager.close();
+  });
 });

@@ -21,4 +21,34 @@ describe("retrieval search", () => {
     expect(result.candidates[0]!.deterministicReferences).toHaveLength(1);
     store.close();
   });
+
+  it("excludes the ticket's own resolved-case memory from its query", async () => {
+    const store = RetrievalStore.open(":memory:");
+    store.initialize();
+    const resolved = projectArticle({ id: "self", title: "Webhook resolved", tags: [], body: "Webhook secret rotation resolved." });
+    const projected = {
+      ...resolved,
+      resource: {
+        ...resolved.resource,
+        key: "resolved-ticket:TKT-0001" as const,
+        type: "resolved-ticket" as const,
+        sourceId: "TKT-0001",
+        family: "resolved-ticket" as const,
+      },
+      representations: resolved.representations.map((representation) => ({
+        ...representation,
+        id: "resolved-ticket:TKT-0001:canonical:0",
+        resourceKey: "resolved-ticket:TKT-0001" as const,
+      })),
+    };
+    store.reconcile({ resources: [projected], unavailableFamilies: [] });
+    const result = await retrieve({
+      query: { queryText: "webhook secret", queryHash: "q", ticketId: "TKT-0001", sourceRevision: 1, customerReplyWatermark: "none", queryTruncated: false, references: [] },
+      store,
+      limits: { "knowledge-article": { lexical: 5, semantic: 5 }, "known-cause": { lexical: 5, semantic: 5 }, "diagnostic-playbook": { lexical: 5, semantic: 5 }, "resolved-ticket": { lexical: 5, semantic: 5 } },
+      signal: new AbortController().signal,
+    });
+    expect(result.candidates).toHaveLength(0);
+    store.close();
+  });
 });

@@ -1460,3 +1460,6 @@ webhook payloads, provider comments, and imported macros remain untrusted.
 - `data/knowledge/`: local policy and troubleshooting articles
 - `.codex/config.toml`: project MCP launch configuration
 - `.agents/skills/triaging-support-tickets/`: Codex Skill, workflow, and policy reference
+# B3 retrieval operations
+
+Use `npm run retrieval:index -- status|refresh|rebuild|validate` to inspect or refresh the derived `data/runtime/retrieval.sqlite` projection. Retrieval runs in shadow mode only; it cannot change operational recommendations, lifecycle, or customer responses. `npm run evaluate:retrieval` produces an offline, lexical-only report and explicitly marks semantic empirical evidence as outstanding when no configured provider or cached vectors are available. The trace ring is bounded to 100 entries and is process-lived. Source projections exclude unsafe text and only resolved, eligible case memories are indexed. Provider failures use bounded retrieval diagnostics; local HTTP endpoints are allowed, while remote endpoints require HTTPS. Embedding dimensions alone do not establish compatibility: changing the model revision changes the embedding space identity. B3 discovers candidates; B4 ranking and B5 applicability remain out of scope.

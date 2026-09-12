@@ -15,6 +15,30 @@ describe("retrieval store", () => {
     db.close();
   });
 
+  it("does not advance generation for an unchanged reconciliation", () => {
+    const db = RetrievalStore.open(":memory:");
+    db.initialize();
+    const article = projectArticle({ id: "same", title: "Same", tags: [], body: "Stable content" });
+    db.reconcile({ resources: [article], unavailableFamilies: [] });
+    const before = db.metadata();
+    db.reconcile({ resources: [article], unavailableFamilies: [] });
+    expect(db.metadata().generation).toBe(before.generation);
+    expect(db.metadata().lexicalGeneration).toBe(before.lexicalGeneration);
+    db.close();
+  });
+
+  it("excludes vectors after the configured embedding model changes", () => {
+    const db = RetrievalStore.open(":memory:");
+    db.initialize();
+    const article = projectArticle({ id: "model", title: "Model", tags: [], body: "Compatible vector" });
+    db.reconcile({ resources: [article], unavailableFamilies: [] });
+    db.configureModel({ id: "model-a", revision: "r1", dimensions: 2 });
+    db.installVectors([{ representationId: article.representations[0]!.id, resourceKey: article.resource.key, contentHash: article.representations[0]!.contentHash, model: { id: "model-a", revision: "r1", dimensions: 2 }, values: [1, 0] }]);
+    db.configureModel({ id: "model-b", revision: "r2", dimensions: 2 });
+    expect(db.readSnapshot('"compatible"').vectors).toHaveLength(0);
+    db.close();
+  });
+
   it("rejects invalid vectors and preserves model identity when unconfigured", () => {
     const db = RetrievalStore.open(":memory:");
     db.initialize();
@@ -22,6 +46,15 @@ describe("retrieval store", () => {
     db.configureModel({ id: "m", revision: "1", dimensions: 2 });
     db.configureModel(undefined);
     expect(db.metadata().model).toEqual({ id: "m", revision: "1", dimensions: 2 });
+    db.close();
+  });
+
+  it("rejects malformed persisted metadata during validation", () => {
+    const db = RetrievalStore.open(":memory:");
+    db.initialize();
+    const raw = (db as unknown as { database: { prepare(sql: string): { run(...values: unknown[]): void } } }).database;
+    raw.prepare("UPDATE retrieval_index_metadata SET value=? WHERE key='corpusHash'").run("{");
+    expect(() => db.validate()).toThrow();
     db.close();
   });
 });

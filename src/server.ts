@@ -49,6 +49,7 @@ import {
 } from "./approval-desk/classification-reasoning-provider.js";
 import { evaluateTicketWithAi } from "./approval-desk/ai-evaluation.js";
 import { evaluateTicketCommand } from "./evaluation-command.js";
+import type { TaxonomyReasoningProvider } from "./taxonomy-reasoning-provider.js";
 import {
   buildTicketWorkflowReadModel,
   customerRepliesFromAudits,
@@ -243,6 +244,7 @@ const EvaluateTicketInputSchema = z
     actor: NonBlankStringSchema.default("approval-desk"),
     responseStyle: DraftCustomerResponseStyleInputSchema.default("auto"),
     aiPreference: AiPreferenceSchema.default("auto"),
+    taxonomyPreference: AiPreferenceSchema.optional(),
   })
   .strict();
 const MarkResponseDoneInputSchema = ApprovalInputSchema.refine(
@@ -498,6 +500,7 @@ export interface TriageServerDependencies {
   now: () => Date;
   minutesPerAcceptedRecommendation?: number;
   classificationReasoningProvider?: ClassificationReasoningProvider;
+  taxonomyReasoningProvider?: TaxonomyReasoningProvider;
   draftProvider?: CustomerResponseDraftProvider;
   env?: NodeJS.ProcessEnv;
   knowledgeEvolution: {
@@ -1163,11 +1166,13 @@ async function evaluateTicket(
       evaluationGuard: deps.evaluationGuard,
       draftProvider: deps.draftProvider,
       classificationReasoningProvider: deps.classificationReasoningProvider,
+      taxonomyReasoningProvider: deps.taxonomyReasoningProvider,
     }, {
       ticketId: input.ticketId,
       actor: input.actor,
       responseStyle: input.responseStyle,
       aiPreference: input.aiPreference,
+      ...(input.taxonomyPreference === undefined ? {} : { taxonomyPreference: input.taxonomyPreference }),
     }, input.commandId);
     const [persistedTicket, persistedAudits] = await Promise.all([
       deps.tickets.get(input.ticketId),
@@ -1189,6 +1194,12 @@ async function evaluateTicketLegacy(
   deps: TriageServerDependencies,
   input: z.infer<typeof EvaluateTicketInputSchema>,
 ): Promise<z.infer<typeof EvaluateTicketOutputSchema>> {
+  if (input.taxonomyPreference !== undefined) {
+    throw new DomainError(
+      "taxonomyPreference requires operational evaluation support.",
+      "UNSUPPORTED_VERSION_TRANSITION",
+    );
+  }
   const { commandId } = input;
   const reusableKnowledge = deps.learningAvailability?.status === "unavailable"
     ? unavailableReusableKnowledge()

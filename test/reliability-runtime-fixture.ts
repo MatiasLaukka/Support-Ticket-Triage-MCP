@@ -12,6 +12,7 @@ import {
 
 export interface ReliabilityRuntimeOptions extends ApprovalDeskHttpOptions {
   omitEvaluationGuard?: boolean;
+  environment?: NodeJS.ProcessEnv;
 }
 
 export async function closeReliabilityResources(
@@ -46,6 +47,7 @@ export async function openReliabilityRuntime(
     TRIAGE_SEED_FILE: resolve("data/seed/tickets.json"),
     TRIAGE_KNOWLEDGE_ROOT: resolve("data/knowledge"),
     OPERATIONAL_DB_PATH: join(root, "operational.sqlite"),
+    ...(options.environment ?? {}),
   };
   resetOperationalDemoState({
     dataRoot: root,

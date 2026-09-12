@@ -62,6 +62,10 @@ import {
   DiagnosticStateSnapshotSchema,
   type DiagnosticStateSnapshot,
 } from "./approval-desk/diagnostic-state.js";
+import {
+  DiagnosticTaxonomyContextSchema,
+  type DiagnosticTaxonomyContext,
+} from "./diagnostic-taxonomy.js";
 import type { CompletedDiagnosis } from "./knowledge-evolution/domain.js";
 import type { DiagnosisReviewInput } from "./approval-desk/diagnosis-review.js";
 import {
@@ -419,6 +423,7 @@ export interface PreparedOperationalEvaluation {
   readonly recommendationInput: Omit<SubmitRecommendationInput, "submittedAt">;
   readonly evaluatedCustomerReplyWatermark: CustomerReplyWatermark;
   readonly classificationConfidence?: ClassificationConfidence;
+  readonly diagnosticTaxonomy?: DiagnosticTaxonomyContext;
 }
 
 export interface RejectRecommendationInput {
@@ -1102,14 +1107,16 @@ export class TriageService {
       parsed,
       recommendation,
       commandId,
+      prepared.diagnosticTaxonomy,
     );
   }
 
   replayOperationalEvaluation(
     reader: OperationalResultReader,
     result: OperationalResultReference,
+    commandId?: string,
   ): { recommendation: TriageRecommendation; recommendations: TriageRecommendation[] } {
-    return this.replayEvaluation(reader, { result });
+    return this.replayEvaluation(reader, { result }, undefined, commandId);
   }
 
   private commitOperationalEvaluationWriteSet(
@@ -1118,13 +1125,19 @@ export class TriageService {
     parsed: z.infer<typeof SubmitRecommendationInputSchema>,
     recommendation: TriageRecommendation,
     commandId: string,
+    diagnosticTaxonomy?: DiagnosticTaxonomyContext,
   ): OperationalResultReference {
     const superseded = snapshot.recommendations.filter((candidate) =>
       candidate.resolution === "pending" &&
       candidate.ticketId === parsed.ticketId &&
       this.hasOperationalCustomerReplyAfterRecommendation(snapshot, candidate),
     );
-    const eventIds = [this.uuid(), ...superseded.map(() => this.uuid())];
+    const taxonomyRevision = this.taxonomyRevisionToPersist(snapshot, diagnosticTaxonomy);
+    const eventIds = [
+      this.uuid(),
+      ...superseded.map(() => this.uuid()),
+      ...(taxonomyRevision === undefined ? [] : [this.uuid()]),
+    ];
     const sequences = unit.allocateEventSequences(parsed.ticketId, eventIds.length);
     unit.appendEvent(this.operationalRecommendationEvent(
       eventIds[0]!,
@@ -1165,13 +1178,76 @@ export class TriageService {
       });
     });
 
+    let diagnosticTaxonomyRevisionId: string | undefined;
+    if (taxonomyRevision !== undefined) {
+      const taxonomyEventId = eventIds.at(-1)!;
+      const taxonomySequence = sequences.at(-1)!;
+      unit.appendEvent(OperationalEventSchema.parse({
+        id: taxonomyEventId,
+        ticketId: parsed.ticketId,
+        sequence: taxonomySequence,
+        commandId,
+        actor: parsed.actor,
+        occurredAt: parsed.submittedAt,
+        action: "diagnostic-taxonomy-revised",
+        facts: {
+          revision: taxonomyRevision.revision,
+          status: "advisory",
+        },
+      }));
+      diagnosticTaxonomyRevisionId = `taxonomy-${this.uuid()}`;
+      unit.appendDiagnosticTaxonomyRevision({
+        id: diagnosticTaxonomyRevisionId,
+        ticketId: parsed.ticketId,
+        revision: taxonomyRevision.revision,
+        context: taxonomyRevision.context,
+        operationalEventId: taxonomyEventId,
+        createdAt: parsed.submittedAt,
+      });
+    }
+
     const recommendationIds = [recommendation.id, ...superseded.map(({ id }) => id)];
     return {
       operation: "evaluate-ticket",
       tickets: [{ ticketId: parsed.ticketId, operationalEventIds: eventIds, resultingRevision: null }],
+      ...(diagnosticTaxonomyRevisionId === undefined ? {} : { diagnosticTaxonomyRevisionId }),
       ...(recommendationIds.length === 1
         ? { recommendationId: recommendationIds[0]! }
         : { recommendationIds }),
+    };
+  }
+
+  private taxonomyRevisionToPersist(
+    snapshot: OperationalWorkflowSnapshot,
+    incoming: DiagnosticTaxonomyContext | undefined,
+  ): { revision: number; context: DiagnosticTaxonomyContext } | undefined {
+    if (incoming === undefined) return undefined;
+    const context = DiagnosticTaxonomyContextSchema.parse(incoming);
+    if (
+      context.basis.source !== "initial-classification"
+      || context.support.productSurface === "established"
+      || context.support.problemClass === "established"
+    ) {
+      throw new OperationalStoreError(
+        "Initial diagnostic taxonomy must use initial-classification basis and non-established support.",
+        "VALIDATION_ERROR",
+      );
+    }
+    const latest = snapshot.diagnosticTaxonomyRevisions.at(-1);
+    if (
+      latest !== undefined &&
+      (latest.context.basis.source !== "initial-classification"
+        || latest.context.support.productSurface === "established"
+        || latest.context.support.problemClass === "established")
+    ) {
+      return undefined;
+    }
+    if (latest !== undefined && taxonomySemanticallyEqual(latest.context, context)) {
+      return undefined;
+    }
+    return {
+      revision: (latest?.revision ?? 0) + 1,
+      context,
     };
   }
 
@@ -1319,13 +1395,31 @@ export class TriageService {
     unit: OperationalResultReader,
     replay: CommandReplay,
     preferredRecommendationId?: string,
+    commandId?: string,
   ): { recommendation: TriageRecommendation; recommendations: TriageRecommendation[] } {
     const recommendationIds = replay.result.recommendationIds ??
       (replay.result.recommendationId === undefined ? [] : [replay.result.recommendationId]);
     const eventIds = new Set(replay.result.tickets.flatMap(({ operationalEventIds }) => operationalEventIds));
     const snapshot = unit.readWorkflowSnapshot(replay.result.tickets[0]!.ticketId);
-    const commandSequences = new Set(snapshot.events.filter(({ id }) => eventIds.has(id)).map(({ sequence }) => sequence));
+    const commandEvents = snapshot.events.filter(({ id }) => eventIds.has(id));
+    if (commandEvents.length !== eventIds.size) {
+      throw replayIntegrity("Operational evaluation replay references a missing causal event.");
+    }
+    const commandEventIds = new Set(commandEvents.map(({ commandId: eventCommandId }) => eventCommandId));
+    if (
+      commandEventIds.size !== 1
+      || (commandId !== undefined && !commandEventIds.has(commandId))
+    ) {
+      throw replayIntegrity("Operational evaluation replay references an event from another command.");
+    }
+    if (commandEvents.some((event) => !replay.result.tickets.some((ticket) =>
+      ticket.ticketId === event.ticketId && ticket.operationalEventIds.includes(event.id),
+    ))) {
+      throw replayIntegrity("Operational evaluation replay references an event from another ticket.");
+    }
+    const commandSequences = new Set(commandEvents.map(({ sequence }) => sequence));
     const endSequence = Math.max(...commandSequences);
+    this.assertEvaluationTaxonomyReplay(snapshot, replay.result, commandEvents, endSequence, commandId);
     const latest = new Map<string, TriageRecommendation>();
     const firstRevisionSequence = new Map<string, number>();
     for (const revision of snapshot.recommendationRevisions) {
@@ -1349,6 +1443,50 @@ export class TriageService {
         .sort((left, right) => (firstRevisionSequence.get(left[0]) ?? 0) - (firstRevisionSequence.get(right[0]) ?? 0))
         .map(([, value]) => value),
     };
+  }
+
+  private assertEvaluationTaxonomyReplay(
+    snapshot: OperationalWorkflowSnapshot,
+    result: OperationalResultReference,
+    commandEvents: readonly OperationalWorkflowSnapshot["events"][number][],
+    endSequence: number,
+    commandId?: string,
+  ): void {
+    const taxonomyEvents = commandEvents.filter(({ action }) => action === "diagnostic-taxonomy-revised");
+    const taxonomyId = result.diagnosticTaxonomyRevisionId;
+    if (taxonomyId === undefined) {
+      if (taxonomyEvents.length > 0) {
+        throw replayIntegrity("Operational evaluation replay contains an unreferenced taxonomy event.");
+      }
+      return;
+    }
+    if (taxonomyEvents.length !== 1) {
+      throw replayIntegrity("Operational evaluation replay is missing its diagnostic taxonomy event.");
+    }
+    const revision = snapshot.diagnosticTaxonomyRevisions.find(({ id }) => id === taxonomyId);
+    const event = revision === undefined
+      ? undefined
+      : snapshot.events.find(({ id }) => id === revision.operationalEventId);
+    const ticketResult = result.tickets[0];
+    const recommendationEvent = commandEvents.find(({ action }) => action === "recommendation-submitted");
+    if (
+      revision === undefined
+      || event === undefined
+      || ticketResult === undefined
+      || revision.ticketId !== ticketResult.ticketId
+      || event.ticketId !== ticketResult.ticketId
+      || event.action !== "diagnostic-taxonomy-revised"
+      || !ticketResult.operationalEventIds.includes(event.id)
+      || event.sequence > endSequence
+      || (commandId !== undefined && event.commandId !== commandId)
+      || recommendationEvent === undefined
+      || event.facts.revision !== revision.revision
+      || event.commandId !== recommendationEvent.commandId
+      || event.actor !== recommendationEvent.actor
+      || revision.createdAt !== event.occurredAt
+    ) {
+      throw replayIntegrity("Operational evaluation replay contains an invalid diagnostic taxonomy reference.");
+    }
   }
 
   private hasOperationalCustomerReplyAfterRecommendation(
@@ -5697,6 +5835,26 @@ function invalidDiagnosisReview(message: string): DomainError {
 
 function sameStructuredValue(left: unknown, right: unknown): boolean {
   return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function taxonomySemanticallyEqual(
+  left: DiagnosticTaxonomyContext,
+  right: DiagnosticTaxonomyContext,
+): boolean {
+  const surfaceKey = (surface: { domain: string; area: string }) => `${surface.domain}/${surface.area}`;
+  const sortedSurfaceKeys = (surfaces: readonly { domain: string; area: string }[]) =>
+    surfaces.map(surfaceKey).sort();
+  return (
+    surfaceKeyOrNull(left.primaryProductSurface) === surfaceKeyOrNull(right.primaryProductSurface)
+    && JSON.stringify(sortedSurfaceKeys(left.secondaryProductSurfaces)) === JSON.stringify(sortedSurfaceKeys(right.secondaryProductSurfaces))
+    && JSON.stringify([...left.problemClasses].sort()) === JSON.stringify([...right.problemClasses].sort())
+    && left.support.productSurface === right.support.productSurface
+    && left.support.problemClass === right.support.problemClass
+  );
+}
+
+function surfaceKeyOrNull(surface: { domain: string; area: string } | null): string | null {
+  return surface === null ? null : `${surface.domain}/${surface.area}`;
 }
 
 function compositeAutomaticReplySourceTicketMatchesHistory(

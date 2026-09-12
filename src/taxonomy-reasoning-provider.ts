@@ -18,14 +18,16 @@ import {
   type TaxonomyInferenceInput,
 } from "./taxonomy-inference.js";
 
+import { makeOpenAiResponsesUrl } from "./utils/normalize-url.js";
+import { parseOpenAiTimeoutMs } from "./utils/parse-openai-timeout.js";
+import { StartupConfigError } from "./runtime.js";
+
 import type {
   FetchLike,
 } from "./approval-desk/draft-response-provider.js";
 
 const DEFAULT_MODEL = "gpt-5.6-luna";
 const DEFAULT_TIMEOUT_MS = 20_000;
-const OPENAI_RESPONSES_URL =
-  "https://api.openai.com/v1/responses";
 
 const TAXONOMY_REASONING_INSTRUCTIONS = [
   "Infer semantic diagnostic taxonomy using only the provided ticket and conversation context.",
@@ -99,6 +101,7 @@ export class OpenAiTaxonomyReasoningProvider
       apiKey: string;
       model?: string;
       timeoutMs?: number;
+      baseUrl?: string;
       fetch?: FetchLike;
       now?: () => number;
     },
@@ -110,128 +113,20 @@ export class OpenAiTaxonomyReasoningProvider
     const model =
       this.options.model ?? DEFAULT_MODEL;
 
-    const now =
-      this.options.now ?? Date.now;
+    const now = this.options.now ?? Date.now;
 
     const startedAt = now();
 
-    const fetchImpl =
-      this.options.fetch ?? fetch;
-
-    const abortController =
-      new AbortController();
-
-    let timeout:
-      | ReturnType<typeof setTimeout>
-      | undefined;
-
-    const response = await Promise.race([
-      fetchImpl(
-        OPENAI_RESPONSES_URL,
-        {
-          method: "POST",
-
-          headers: {
-            "content-type": "application/json",
-            authorization:
-              `Bearer ${this.options.apiKey}`,
-          },
-
-          signal:
-            abortController.signal,
-
-          body: JSON.stringify({
-            model,
-
-            instructions:
-              TAXONOMY_REASONING_INSTRUCTIONS,
-
-            input:
-              buildReasoningInput(input),
-
-            store: false,
-
-            text: {
-              format: {
-                type: "json_schema",
-                name: "taxonomy_reasoning",
-                strict: true,
-                schema:
-                  taxonomyReasoningJsonSchema,
-              },
-            },
-          }),
-        },
-      ),
-
-      new Promise<never>((_resolve, reject) => {
-        timeout = setTimeout(() => {
-          reject(
-            new TaxonomyReasoningProviderUnavailableError(
-              "timeout",
-              null,
-            ),
-          );
-
-          abortController.abort();
-        }, this.options.timeoutMs ?? DEFAULT_TIMEOUT_MS);
-      }),
-    ]).finally(() => {
-      if (timeout !== undefined) {
-        clearTimeout(timeout);
-      }
+    const envelope = await requestTaxonomyResponse({
+      apiKey: this.options.apiKey,
+      model,
+      timeoutMs: this.options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+      url: makeOpenAiResponsesUrl(this.options.baseUrl),
+      fetch: this.options.fetch ?? fetch,
+      input,
     });
 
-    const raw = await response.text();
-
-    if (!response.ok) {
-      throw new TaxonomyReasoningProviderUnavailableError(
-        "http",
-        response.status,
-      );
-    }
-
-    const envelope = z
-      .object({
-        output: z.array(
-          z.object({
-            content: z.array(
-              z.object({
-                type: z.string(),
-                text: z.string().optional(),
-              }),
-            ),
-          }),
-        ),
-
-        usage: z
-          .object({
-            input_tokens:
-              z.number().int().nonnegative(),
-
-            output_tokens:
-              z.number().int().nonnegative(),
-
-            total_tokens:
-              z.number().int().nonnegative(),
-          })
-          .optional(),
-      })
-      .passthrough()
-      .parse(JSON.parse(raw));
-
-    const outputText = envelope.output
-      .flatMap((item) => item.content)
-      .find(
-        ({ type }) =>
-          type === "output_text",
-      )?.text;
-
-    if (outputText === undefined) {
-      throw new Error(
-        "OpenAI taxonomy response did not include output text.",
-      );
-    }
+    const outputText = envelope.outputText;
 
     let reasoningFields: unknown;
 
@@ -279,21 +174,6 @@ export class OpenAiTaxonomyReasoningProvider
       throw error;
     }
 
-    let usage: AiUsage | undefined;
-
-    if (envelope.usage !== undefined) {
-      usage = AiUsageSchema.parse({
-        inputTokens:
-          envelope.usage.input_tokens,
-
-        outputTokens:
-          envelope.usage.output_tokens,
-
-        totalTokens:
-          envelope.usage.total_tokens,
-      });
-    }
-
     return {
       candidate,
 
@@ -309,9 +189,9 @@ export class OpenAiTaxonomyReasoningProvider
             now() - startedAt,
           ),
 
-        ...(usage === undefined
+        ...(envelope.usage === undefined
           ? {}
-          : { usage }),
+          : { usage: envelope.usage }),
       },
     };
   }
@@ -320,20 +200,24 @@ export class OpenAiTaxonomyReasoningProvider
 export class InvalidTaxonomySchemaError extends Error {
   readonly stage:
     | "reasoning-json"
-    | "reasoning-fields";
+    | "reasoning-fields"
+    | "response-envelope";
 
   readonly fields: readonly string[];
 
   constructor(
     stage:
       | "reasoning-json"
-      | "reasoning-fields",
+      | "reasoning-fields"
+      | "response-envelope",
     fields: readonly string[],
   ) {
     super(
       stage === "reasoning-json"
         ? "Taxonomy reasoning output could not be parsed."
-        : "Taxonomy reasoning output did not satisfy the taxonomy schema.",
+        : stage === "response-envelope"
+          ? "Taxonomy reasoning provider response did not satisfy the response schema."
+          : "Taxonomy reasoning output did not satisfy the taxonomy schema.",
     );
 
     this.name = "InvalidTaxonomySchemaError";
@@ -343,7 +227,9 @@ export class InvalidTaxonomySchemaError extends Error {
 }
 
 export type TaxonomyReasoningProviderUnavailableReason =
+  | "transport"
   | "http"
+  | "response-body"
   | "timeout";
 
 export class TaxonomyReasoningProviderUnavailableError extends Error {
@@ -360,6 +246,163 @@ export class TaxonomyReasoningProviderUnavailableError extends Error {
     this.name =
       "TaxonomyReasoningProviderUnavailableError";
   }
+}
+
+export function createTaxonomyReasoningProviderFromEnv(
+  env: NodeJS.ProcessEnv,
+  options: { preferOpenAi: boolean },
+): TaxonomyReasoningProvider | undefined {
+  if (!options.preferOpenAi) {
+    return undefined;
+  }
+
+  const apiKey = env.OPENAI_API_KEY?.trim();
+  if (!apiKey) {
+    return undefined;
+  }
+
+  const baseUrl = env.TRIAGE_OPENAI_BASE_URL?.trim();
+  if (baseUrl !== undefined && baseUrl !== "") {
+    try {
+      new URL(baseUrl);
+    } catch {
+      throw new StartupConfigError(
+        "TRIAGE_OPENAI_BASE_URL must be a valid absolute URL.",
+      );
+    }
+  }
+
+  return new OpenAiTaxonomyReasoningProvider({
+    apiKey,
+    model:
+      env.TRIAGE_TAXONOMY_MODEL?.trim() ||
+      env.OPENAI_MODEL?.trim() ||
+      DEFAULT_MODEL,
+    timeoutMs: parseOpenAiTimeoutMs(
+      env.TRIAGE_TAXONOMY_TIMEOUT_MS ??
+      env.TRIAGE_OPENAI_TIMEOUT_MS,
+    ),
+    baseUrl,
+  });
+}
+
+async function requestTaxonomyResponse(input: {
+  apiKey: string;
+  model: string;
+  timeoutMs: number;
+  url: string;
+  fetch: FetchLike;
+  input: TaxonomyInferenceInput;
+}): Promise<{ outputText: string; usage?: AiUsage }> {
+  const abortController = new AbortController();
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+
+  const operation = (async () => {
+    let response: Awaited<ReturnType<FetchLike>>;
+    try {
+      response = await input.fetch(input.url, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${input.apiKey}`,
+        },
+        signal: abortController.signal,
+        body: JSON.stringify({
+          model: input.model,
+          instructions: TAXONOMY_REASONING_INSTRUCTIONS,
+          input: buildReasoningInput(input.input),
+          store: false,
+          text: {
+            format: {
+              type: "json_schema",
+              name: "taxonomy_reasoning",
+              strict: true,
+              schema: taxonomyReasoningJsonSchema,
+            },
+          },
+        }),
+      });
+    } catch {
+      throw new TaxonomyReasoningProviderUnavailableError("transport", null);
+    }
+
+    if (!response.ok) {
+      throw new TaxonomyReasoningProviderUnavailableError("http", response.status);
+    }
+
+    let raw: string;
+    try {
+      raw = await response.text();
+    } catch {
+      throw new TaxonomyReasoningProviderUnavailableError("response-body", null);
+    }
+
+    let rawPayload: unknown;
+    try {
+      rawPayload = JSON.parse(raw);
+    } catch {
+      throw new InvalidTaxonomySchemaError("response-envelope", []);
+    }
+
+    const envelopeSchema = z.object({
+      output: z.array(
+        z.object({
+          content: z.array(
+            z.object({
+              type: z.string(),
+              text: z.string().optional(),
+            }),
+          ),
+        }),
+      ),
+      usage: z.object({
+        input_tokens: z.number().int().nonnegative(),
+        output_tokens: z.number().int().nonnegative(),
+        total_tokens: z.number().int().nonnegative(),
+      }).optional(),
+    }).passthrough();
+
+    const envelopeResult = envelopeSchema.safeParse(rawPayload);
+    if (!envelopeResult.success) {
+      throw new InvalidTaxonomySchemaError("response-envelope", []);
+    }
+
+    const envelope = envelopeResult.data;
+    const outputText = envelope.output
+      .flatMap((item) => item.content)
+      .find(({ type }) => type === "output_text")?.text;
+    if (outputText === undefined) {
+      throw new InvalidTaxonomySchemaError("response-envelope", ["output_text"]);
+    }
+
+    let usage: AiUsage | undefined;
+    if (envelope.usage !== undefined) {
+      const parsedUsage = AiUsageSchema.safeParse({
+        inputTokens: envelope.usage.input_tokens,
+        outputTokens: envelope.usage.output_tokens,
+        totalTokens: envelope.usage.total_tokens,
+      });
+      if (!parsedUsage.success) {
+        throw new InvalidTaxonomySchemaError("response-envelope", ["usage"]);
+      }
+      usage = parsedUsage.data;
+    }
+
+    return {
+      outputText,
+      ...(usage === undefined ? {} : { usage }),
+    };
+  })();
+
+  return await new Promise<{ outputText: string; usage?: AiUsage }>((resolve, reject) => {
+    timeout = setTimeout(() => {
+      abortController.abort();
+      reject(new TaxonomyReasoningProviderUnavailableError("timeout", null));
+    }, input.timeoutMs);
+    operation.then(resolve, reject).finally(() => {
+      if (timeout !== undefined) clearTimeout(timeout);
+    });
+  });
 }
 
 function buildReasoningInput(

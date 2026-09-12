@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
 import { createApprovalDeskHttpServer } from "../src/approval-desk/http.js";
 import { resetOperationalDemoState } from "../src/demo-reset.js";
 import { createRuntimeDependencies } from "../src/runtime.js";
-import { startLiveApprovalDeskApp } from "./approval-desk-lifecycle-completion.e2e.test.js";
+import { startLiveApprovalDeskApp } from "./approval-desk-live-app.js";
 
 describe("Approval Desk command retry integration", () => {
   it("retries a lost evaluation response with the same command attempt and reconciles once", async () => {

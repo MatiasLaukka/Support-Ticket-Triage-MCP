@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { TicketSchema } from "../src/domain.js";
+import { AiExecutionTraceSchema, TicketSchema } from "../src/domain.js";
 import { evaluateTicketWithAi } from "../src/approval-desk/ai-evaluation.js";
 import type { ClassificationReasoningProvider } from "../src/approval-desk/classification-reasoning-provider.js";
 import {
@@ -85,6 +85,76 @@ const throwingClassificationProvider: ClassificationReasoningProvider = {
 };
 
 describe("evaluateTicketWithAi", () => {
+  it("accepts a consistent taxonomy trace and preserves old trace compatibility", () => {
+    const candidate = {
+      primaryProductSurface: { domain: "messaging", area: "sms" },
+      secondaryProductSurfaces: [],
+      problemClasses: ["degraded-performance"],
+    } as const;
+    const trace = AiExecutionTraceSchema.parse({
+      preference: "gpt-preferred",
+      classification: {
+        status: "skipped",
+        acceptedSignals: [],
+        rejectedAdvice: [],
+        deterministicOverrides: [],
+        finalOutcome: {
+          category: "performance", team: "product", priority: "P2",
+          knowledgeArticleIds: [], confidence: 0.9, escalationReasons: [],
+        },
+      },
+      drafting: {
+        status: "skipped", source: "deterministic", requestedStyle: "auto",
+        recommendedStyle: "balanced", selectedStyle: "balanced", checks: [],
+      },
+      taxonomy: {
+        preference: "gpt-preferred", status: "used",
+        deterministicCandidate: candidate, gptCandidate: candidate,
+        canonicalSource: "gpt", canonicalCandidate: candidate,
+        model: "local-taxonomy-model", latencyMs: 4,
+        gptRationale: "The conversation supports the selected taxonomy.",
+      },
+    });
+    expect(trace.taxonomy?.canonicalSource).toBe("gpt");
+    expect(AiExecutionTraceSchema.parse({ ...trace, taxonomy: undefined }).taxonomy)
+      .toBeUndefined();
+  });
+
+  it.each([
+    ["missing GPT candidate", { canonicalSource: "gpt", gptCandidate: undefined }],
+    ["mismatched canonical candidate", {
+      canonicalSource: "gpt",
+      gptCandidate: {
+        primaryProductSurface: { domain: "messaging", area: "sms" },
+        secondaryProductSurfaces: [], problemClasses: [],
+      },
+    }],
+    ["unsafe model provenance", { canonicalSource: "deterministic", model: "C:\\secret\\model" }],
+  ])("rejects an invalid taxonomy trace: %s", (_name, overrides) => {
+    const deterministicCandidate = {
+      primaryProductSurface: null, secondaryProductSurfaces: [], problemClasses: [],
+    } as const;
+    expect(() => AiExecutionTraceSchema.parse({
+      preference: "auto",
+      classification: {
+        status: "skipped", acceptedSignals: [], rejectedAdvice: [],
+        deterministicOverrides: [],
+        finalOutcome: {
+          category: "other", team: "support", priority: "P3",
+          knowledgeArticleIds: [], confidence: 0.8, escalationReasons: [],
+        },
+      },
+      drafting: {
+        status: "skipped", source: "deterministic", requestedStyle: "auto",
+        recommendedStyle: "balanced", selectedStyle: "balanced", checks: [],
+      },
+      taxonomy: {
+        preference: "auto", status: "used", deterministicCandidate,
+        canonicalCandidate: deterministicCandidate,
+        ...overrides,
+      },
+    })).toThrow();
+  });
   it("passes an explicitly rejected diagnosis to advisory stages as exclusion context", async () => {
     let classificationInput: unknown;
     let draftInput: unknown;

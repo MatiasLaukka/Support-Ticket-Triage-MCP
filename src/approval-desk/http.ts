@@ -41,6 +41,7 @@ import {
   createClassificationReasoningProviderFromEnv,
   type ClassificationReasoningProvider,
 } from "./classification-reasoning-provider.js";
+import type { TaxonomyReasoningProvider } from "../taxonomy-reasoning-provider.js";
 import { evaluateTicketWithAi } from "./ai-evaluation.js";
 import { evaluateTicketCommand } from "../evaluation-command.js";
 import { TicketEvaluationGuard } from "./evaluation-guard.js";
@@ -136,6 +137,7 @@ const SubmitBodySchema = z
     actor: z.string().trim().min(1).default("approval-desk"),
     responseStyle: DraftCustomerResponseStyleInputSchema.default("auto"),
     aiPreference: AiPreferenceSchema.default("auto"),
+    taxonomyPreference: AiPreferenceSchema.optional(),
     customerReplies: z.array(CustomerReplyBodySchema).max(8).default([]),
   })
   .strict();
@@ -328,6 +330,7 @@ export interface ApprovalDeskHttpOptions {
   expectedOutcomesPath?: string;
   draftProvider?: CustomerResponseDraftProvider;
   classificationReasoningProvider?: ClassificationReasoningProvider;
+  taxonomyReasoningProvider?: TaxonomyReasoningProvider;
   lifecycleReplayReportPath?: string;
   lifecycleReplayControlledReportPath?: string;
   lifecycleReplayScenarios?: readonly DiagnosticEvaluationScenario[];
@@ -942,6 +945,7 @@ async function createRecommendation(
       evaluationGuard,
       draftProvider: options.draftProvider,
       classificationReasoningProvider: options.classificationReasoningProvider,
+      taxonomyReasoningProvider: options.taxonomyReasoningProvider,
       loadExpectedOutcome: options.expectedOutcomesPath === undefined
         ? undefined
         : async (requestedTicketId) => {
@@ -953,12 +957,16 @@ async function createRecommendation(
       actor: body.actor,
       responseStyle: body.responseStyle,
       aiPreference: body.aiPreference,
+      ...(body.taxonomyPreference === undefined ? {} : { taxonomyPreference: body.taxonomyPreference }),
       customerReplies: body.customerReplies,
     }, commandContext.commandId);
     return {
       recommendation: evaluation.recommendation,
       ...(await lifecycleEnvelope({ deps }, ticketId)),
     };
+  }
+  if (body.taxonomyPreference !== undefined) {
+    throw invalidRequest("taxonomyPreference requires operational evaluation support.");
   }
   return evaluationGuard.run(ticketId, async () => {
     const reusableKnowledge = deps.learningAvailability.status === "unavailable"

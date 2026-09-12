@@ -3,6 +3,9 @@ import { resolve } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  createTaxonomyReasoningProviderFromEnv,
+  InvalidTaxonomySchemaError,
+  TaxonomyReasoningProviderUnavailableError,
   OpenAiTaxonomyReasoningProvider,
 } from "../src/taxonomy-reasoning-provider.js";
 
@@ -69,6 +72,161 @@ async function providerInput() {
 }
 
 describe("OpenAiTaxonomyReasoningProvider", () => {
+  const validResponse = () => ({
+    output: [
+      {
+        content: [
+          {
+            type: "output_text",
+            text: JSON.stringify({
+              primaryProductSurface: null,
+              secondaryProductSurfaces: [],
+              problemClasses: [],
+              rationale: "No taxonomy label is supported by the evidence.",
+            }),
+          },
+        ],
+      },
+    ],
+  });
+
+  it("uses the hosted Responses endpoint by default", async () => {
+    const fetch = vi.fn(async (url: string) => ({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify(validResponse()),
+    }));
+
+    await new OpenAiTaxonomyReasoningProvider({ apiKey: "sk-test", fetch })
+      .reason(await providerInput());
+
+    expect(fetch.mock.calls[0]?.[0]).toBe("https://api.openai.com/v1/responses");
+  });
+
+  it("normalizes an OpenAI-compatible base URL to its Responses endpoint", async () => {
+    const fetch = vi.fn(async (url: string) => ({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify(validResponse()),
+    }));
+
+    await new OpenAiTaxonomyReasoningProvider({
+      apiKey: "local-key",
+      baseUrl: "http://localhost:11434/v1/",
+      fetch,
+    }).reason(await providerInput());
+
+    expect(fetch.mock.calls[0]?.[0]).toBe("http://localhost:11434/v1/responses");
+  });
+
+  it("constructs no provider when taxonomy GPT is not configured", () => {
+    expect(createTaxonomyReasoningProviderFromEnv({}, { preferOpenAi: true }))
+      .toBeUndefined();
+    expect(createTaxonomyReasoningProviderFromEnv({ OPENAI_API_KEY: "sk-test" }, { preferOpenAi: false }))
+      .toBeUndefined();
+  });
+
+  it("uses a taxonomy model override before OPENAI_MODEL", async () => {
+    const provider = createTaxonomyReasoningProviderFromEnv({
+      OPENAI_API_KEY: "sk-test",
+      OPENAI_MODEL: "general-model",
+      TRIAGE_TAXONOMY_MODEL: "taxonomy-model",
+    }, { preferOpenAi: true });
+    const fetch = vi.fn(async (_url: string, init: { body: string }) => ({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify(validResponse()),
+    }));
+
+    const configured = new OpenAiTaxonomyReasoningProvider({
+      apiKey: "sk-test",
+      model: "taxonomy-model",
+      fetch,
+    });
+    await configured.reason(await providerInput());
+    expect(JSON.parse(fetch.mock.calls[0]![1].body).model).toBe("taxonomy-model");
+    expect(provider).toBeDefined();
+  });
+
+  it("maps fetch rejection to transport unavailability", async () => {
+    const error = await new OpenAiTaxonomyReasoningProvider({
+      apiKey: "sk-test",
+      fetch: async () => { throw new Error("provider body secret"); },
+    }).reason(await providerInput()).catch((caught) => caught);
+
+    expect(error).toMatchObject({
+      name: "TaxonomyReasoningProviderUnavailableError",
+      reason: "transport",
+      statusCode: null,
+    });
+    expect((error as Error).message).not.toContain("provider body secret");
+  });
+
+  it("maps response.text rejection to response-body unavailability", async () => {
+    const error = await new OpenAiTaxonomyReasoningProvider({
+      apiKey: "sk-test",
+      fetch: async () => ({
+        ok: true,
+        status: 200,
+        text: async () => { throw new Error("sensitive body"); },
+      }),
+    }).reason(await providerInput()).catch((caught) => caught);
+
+    expect(error).toMatchObject({
+      name: "TaxonomyReasoningProviderUnavailableError",
+      reason: "response-body",
+      statusCode: null,
+    });
+  });
+
+  it("keeps the timeout active through body consumption", async () => {
+    const error = await new OpenAiTaxonomyReasoningProvider({
+      apiKey: "sk-test",
+      timeoutMs: 5,
+      fetch: async () => ({
+        ok: true,
+        status: 200,
+        text: async () => await new Promise<string>((resolve) => setTimeout(() => resolve(JSON.stringify(validResponse())), 40)),
+      }),
+    }).reason(await providerInput()).catch((caught) => caught);
+
+    expect(error).toMatchObject({
+      name: "TaxonomyReasoningProviderUnavailableError",
+      reason: "timeout",
+    });
+  });
+
+  it("maps malformed envelopes, missing output text, and invalid usage to invalid schema", async () => {
+    const malformedUsage = {
+      ...validResponse(),
+      usage: { input_tokens: -1, output_tokens: 1, total_tokens: 0 },
+    };
+    for (const body of ["{", JSON.stringify({ output: [] }), JSON.stringify(malformedUsage)]) {
+      const error = await new OpenAiTaxonomyReasoningProvider({
+        apiKey: "sk-test",
+        fetch: async () => ({ ok: true, status: 200, text: async () => body }),
+      }).reason(await providerInput()).catch((caught) => caught);
+      expect(error).toBeInstanceOf(InvalidTaxonomySchemaError);
+      expect(error).toMatchObject({ name: "InvalidTaxonomySchemaError", stage: "response-envelope" });
+      expect((error as Error).message).not.toContain("sk-test");
+    }
+  });
+
+  it("keeps expected unavailable errors typed and sanitized", async () => {
+    const error = await new OpenAiTaxonomyReasoningProvider({
+      apiKey: "sk-test",
+      fetch: async () => ({
+        ok: false,
+        status: 502,
+        text: async () => "raw-provider-payload",
+      }),
+    }).reason(await providerInput()).catch((caught) => caught);
+
+    expect(error).toBeInstanceOf(TaxonomyReasoningProviderUnavailableError);
+    expect((error as Error).message).not.toContain("raw-provider-payload");
+    expect((error as Error).message).not.toContain("sk-test");
+  });
+
   it("sends the exact canonical taxonomy in the strict structured-output schema", async () => {
     const fetch = vi.fn(
       async (_url: string, _init: unknown) => ({

@@ -3,6 +3,7 @@ import {
   isEvidenceRequirementId,
   type EvidenceRequirementId,
 } from "./evidence-catalog.js";
+import { TaxonomyInferenceCandidateSchema } from "./taxonomy-inference.js";
 
 const NonBlankStringSchema = z.string().trim().min(1);
 const SlugSchema = z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/);
@@ -383,6 +384,110 @@ const AiFinalClassificationSchema = z.object({
   escalationReasons: z.array(RequiredEscalationSchema),
 }).strict();
 
+const TaxonomyFallbackCategorySchema = z.enum([
+  "not-configured",
+  "timeout",
+  "provider-error",
+  "invalid-schema",
+]);
+
+const TaxonomyFallbackSchema = z.object({
+  category: TaxonomyFallbackCategorySchema,
+  message: SanitizedAiMessageSchema,
+}).strict();
+
+const TaxonomySuppressionSchema = z.object({
+  reason: z.enum(["prompt-injection", "deterministic-preference"]),
+  message: SanitizedAiMessageSchema.optional(),
+}).strict();
+
+export const AiTaxonomyTraceSchema = z.object({
+  preference: AiPreferenceSchema,
+  status: z.enum(["used", "fallback", "skipped"]),
+  deterministicCandidate: TaxonomyInferenceCandidateSchema,
+  gptCandidate: TaxonomyInferenceCandidateSchema.optional(),
+  canonicalSource: z.enum(["gpt", "deterministic"]),
+  canonicalCandidate: TaxonomyInferenceCandidateSchema,
+  model: AiModelSchema.optional(),
+  latencyMs: z.number().int().nonnegative().optional(),
+  usage: AiUsageSchema.optional(),
+  fallback: TaxonomyFallbackSchema.optional(),
+  suppression: TaxonomySuppressionSchema.optional(),
+  gptRationale: SanitizedAiMessageSchema.optional(),
+}).strict().superRefine((trace, context) => {
+  const candidatesEqual = (left: unknown, right: unknown) =>
+    JSON.stringify(left) === JSON.stringify(right);
+
+  if (trace.canonicalSource === "gpt") {
+    if (trace.gptCandidate === undefined) {
+      context.addIssue({
+        code: "custom",
+        path: ["gptCandidate"],
+        message: "GPT canonical taxonomy requires a GPT candidate.",
+      });
+    } else if (!candidatesEqual(trace.canonicalCandidate, trace.gptCandidate)) {
+      context.addIssue({
+        code: "custom",
+        path: ["canonicalCandidate"],
+        message: "The canonical taxonomy must match the declared GPT candidate.",
+      });
+    }
+  } else if (!candidatesEqual(trace.canonicalCandidate, trace.deterministicCandidate)) {
+    context.addIssue({
+      code: "custom",
+      path: ["canonicalCandidate"],
+      message: "The deterministic canonical taxonomy must match its candidate.",
+    });
+  }
+
+  if (trace.status === "used" && trace.canonicalSource !== "gpt") {
+    context.addIssue({
+      code: "custom",
+      path: ["canonicalSource"],
+      message: "A used taxonomy trace must select GPT as canonical.",
+    });
+  }
+  if (trace.status !== "used" && trace.gptCandidate !== undefined) {
+    context.addIssue({
+      code: "custom",
+      path: ["gptCandidate"],
+      message: "A skipped or fallback taxonomy trace cannot retain a GPT candidate.",
+    });
+  }
+  if (trace.status === "fallback") {
+    if (trace.canonicalSource !== "deterministic" || trace.fallback === undefined) {
+      context.addIssue({
+        code: "custom",
+        path: ["fallback"],
+        message: "Fallback taxonomy must use a deterministic candidate and reason.",
+      });
+    }
+  }
+  if (trace.status === "skipped") {
+    if (trace.canonicalSource !== "deterministic" || trace.suppression === undefined) {
+      context.addIssue({
+        code: "custom",
+        path: ["suppression"],
+        message: "Skipped taxonomy must record deterministic suppression.",
+      });
+    }
+  }
+  if (trace.suppression !== undefined && trace.status !== "skipped") {
+    context.addIssue({
+      code: "custom",
+      path: ["suppression"],
+      message: "Taxonomy suppression is valid only for skipped GPT taxonomy.",
+    });
+  }
+  if (trace.fallback !== undefined && trace.status !== "fallback") {
+    context.addIssue({
+      code: "custom",
+      path: ["fallback"],
+      message: "Taxonomy fallback metadata requires fallback status.",
+    });
+  }
+});
+
 export const AiSafetyTraceSchema = z.object({
   promptInjectionDetected: z.boolean(),
   matchedRules: z.array(SlugSchema),
@@ -393,6 +498,7 @@ export const AiSafetyTraceSchema = z.object({
 export const AiExecutionTraceSchema = z.object({
   preference: AiPreferenceSchema,
   safety: AiSafetyTraceSchema.optional(),
+  taxonomy: AiTaxonomyTraceSchema.optional(),
   classification: z.object({
     status: z.enum(["skipped", "used", "fallback"]),
     model: AiModelSchema.optional(),
@@ -817,6 +923,7 @@ export type AiFallbackCategory = z.infer<typeof AiFallbackCategorySchema>;
 export type AiUsage = z.infer<typeof AiUsageSchema>;
 export type AiGuardrailCheck = z.infer<typeof AiGuardrailCheckSchema>;
 export type AiSafetyTrace = z.infer<typeof AiSafetyTraceSchema>;
+export type AiTaxonomyTrace = z.infer<typeof AiTaxonomyTraceSchema>;
 export type AiExecutionTrace = z.infer<typeof AiExecutionTraceSchema>;
 export type Customer = z.infer<typeof CustomerSchema>;
 export type RequesterTechnicalLevel = z.infer<

@@ -465,7 +465,18 @@ export const OperationalResultReferenceSchema = z.object({
   auditsBeforeSentEventIds: UniqueOperationalEventIdsSchema.optional(),
   lifecycleAuditEvents: z.array(OperationalLifecycleAuditEventSchema).min(1).optional(),
   automaticCustomerReplyIntent: AutomaticCustomerReplyIntentSchema.optional(),
+  diagnosticTaxonomyRevisionId: IdentifierSchema.optional(),
 }).strict().superRefine((result, context) => {
+  if (result.diagnosticTaxonomyRevisionId !== undefined && (
+    result.operation !== "evaluate-ticket"
+    || result.tickets.length !== 1
+  )) {
+    context.addIssue({
+      code: "custom",
+      path: ["diagnosticTaxonomyRevisionId"],
+      message: "Diagnostic taxonomy result references require one evaluate-ticket result.",
+    });
+  }
   if (result.recommendationId !== undefined && result.recommendationIds !== undefined) {
     context.addIssue({
       code: "custom",

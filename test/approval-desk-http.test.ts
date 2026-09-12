@@ -424,9 +424,9 @@ describe("createApprovalDeskHttpServer", () => {
     ];
 
     for (const action of actions) {
-      await expect(runHttpKnowledgeAction(action)).resolves.toEqual(
-        await runMcpKnowledgeAction(action),
-      );
+      const httpOutcome = await runHttpKnowledgeAction(action);
+      const mcpOutcome = await runMcpKnowledgeAction(action);
+      expect(httpOutcome).toEqual(mcpOutcome);
     }
   });
 

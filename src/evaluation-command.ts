@@ -38,6 +38,7 @@ import {
   type TriageService,
 } from "./triage-service.js";
 import { OperationalCommandDispatcher } from "./operational-command-dispatch.js";
+import { buildRetrievalQuery, type RetrievalObserver } from "./retrieval/stage.js";
 
 const CustomerReplyInputSchema = z.object({
   id: z.string().trim().min(1).max(80),
@@ -82,6 +83,7 @@ export interface EvaluationCommandDependencies {
   readonly classificationReasoningProvider?: ClassificationReasoningProvider;
   readonly taxonomyReasoningProvider?: TaxonomyReasoningProvider;
   readonly loadExpectedOutcome?: (ticketId: string) => Promise<ExpectedOutcome | undefined>;
+  readonly retrievalObserver?: RetrievalObserver;
 }
 
 export async function evaluateTicketCommand(
@@ -89,6 +91,8 @@ export async function evaluateTicketCommand(
   rawInput: unknown,
   commandId: string,
 ): Promise<ReturnType<TriageService["replayOperationalEvaluation"]>> {
+  let capturedBasis: Parameters<typeof buildRetrievalQuery>[0] | undefined;
+  let didCommit = false;
   const definition = {
     operation: "evaluate-ticket",
     parse: (input: unknown) => EvaluationCommandInputSchema.parse(input),
@@ -150,6 +154,12 @@ export async function evaluateTicketCommand(
           classificationConfidence,
           ...serializableRecommendationInput
         } = recommendationInput;
+        capturedBasis = {
+          ticket,
+          customerReplies,
+          customerReplyWatermark: JSON.stringify(customerReplyWatermarkFromAudits(audits)),
+          references: [],
+        };
         return {
           recommendationInput: serializableRecommendationInput,
           diagnosticTaxonomy: evaluation.diagnosticTaxonomy,
@@ -161,10 +171,21 @@ export async function evaluateTicketCommand(
         ? prepare()
         : deps.evaluationGuard.run(input.ticketId, prepare);
     },
-    commit: (unit: Parameters<TriageService["commitOperationalEvaluation"]>[0], prepared: PreparedOperationalEvaluation, id: string) =>
-      deps.service.commitOperationalEvaluation(unit, prepared, id),
+    commit: (unit: Parameters<TriageService["commitOperationalEvaluation"]>[0], prepared: PreparedOperationalEvaluation, id: string) => {
+      const result = deps.service.commitOperationalEvaluation(unit, prepared, id);
+      didCommit = true;
+      return result;
+    },
     replay: (reader: Parameters<TriageService["replayOperationalEvaluation"]>[0], result: Parameters<TriageService["replayOperationalEvaluation"]>[1], replayCommandId?: string) =>
       deps.service.replayOperationalEvaluation(reader, result, replayCommandId),
   };
-  return deps.dispatcher.run(definition, rawInput, commandId);
+  const result = await deps.dispatcher.run(definition, rawInput, commandId);
+  if (didCommit && capturedBasis !== undefined && deps.retrievalObserver !== undefined) {
+    try {
+      await deps.retrievalObserver.observe(buildRetrievalQuery(capturedBasis), commandId);
+    } catch {
+      // Retrieval remains observational and cannot affect authoritative results.
+    }
+  }
+  return result;
 }

@@ -1,11 +1,11 @@
 {
   "mode": "offline-lexical-only",
   "semanticEvidence": "outstanding",
-  "sourceCommit": "7b2c61395986bc0580c92ad68f0cab8f7c559a23",
-  "oracleHash": "dcb56214562d4d3a68c6ea5ccb0b421f789f185c10aaa7c114c7e3a34aa183d9",
+  "sourceCommit": "d136a375c55a5cb1ffb9ca292de3cbc83ccd5200",
+  "oracleHash": "83435586f4b4fcbc66069ad5c80ff7d79e6c7c271c0b1b9d254d6f2697aaab0e",
   "scenarioCutoff": "2026-09-12T23:59:59.999Z",
-  "corpusHash": "c2ecd79155568570f0870246fac4cf8c307940d8327220991a188cb33de79e58",
-  "representationVersion": 1,
+  "corpusHash": "1dd1ccb213252a34bb777e46c7d628c447a45bd192c6cf03ac3d1f1d95850476",
+  "representationVersion": 2,
   "ftsTokenization": "unicode-letter-number-v1; quoted OR terms; max 128 tokens",
   "model": null,
   "kBudget": {
@@ -26,29 +26,39 @@
       "semantic": 5
     }
   },
-  "scenarioCount": 4,
+  "scenarioCount": 8,
   "candidatePools": [
     {
       "ticketId": "TKT-1017",
       "family": "sms-compliance",
-      "contrastGroup": "sms-quiet-hours",
+      "contrastGroup": "SMS quiet-hours/consent delay",
       "lexicalKeys": [
-        "diagnostic-playbook:article-backed",
-        "diagnostic-playbook:campaign-editor",
-        "diagnostic-playbook:event-processing-delay",
-        "diagnostic-playbook:flow-trigger",
-        "knowledge-article:campaign-send-failures",
-        "knowledge-article:email-deliverability",
-        "knowledge-article:profile-sync-issues",
+        "known-cause:sms-quiet-hours",
         "knowledge-article:sms-compliance",
         "knowledge-article:support-operations-playbook",
-        "known-cause:sms-quiet-hours",
+        "knowledge-article:campaign-send-failures",
+        "diagnostic-playbook:flow-trigger",
         "known-cause:sms-stop-sync-delay",
-        "known-cause:track-api-local-time-timestamp",
+        "knowledge-article:email-deliverability",
+        "knowledge-article:profile-sync-issues",
         "known-cause:webhook-delivery-latency",
-        "known-cause:webhook-secret-rotation"
+        "diagnostic-playbook:campaign-editor",
+        "known-cause:webhook-secret-rotation",
+        "known-cause:track-api-local-time-timestamp",
+        "diagnostic-playbook:event-processing-delay",
+        "diagnostic-playbook:article-backed"
       ],
       "semanticKeys": [],
+      "deterministicReferenceKeys": [
+        "knowledge-article:sms-compliance",
+        "known-cause:sms-quiet-hours"
+      ],
+      "knownCauseReferenceKeys": [
+        "knowledge-article:event-tracking-debugging",
+        "knowledge-article:profile-sync-issues",
+        "knowledge-article:sms-compliance",
+        "knowledge-article:webhook-signature-validation"
+      ],
       "unionKeys": [
         "diagnostic-playbook:article-backed",
         "diagnostic-playbook:campaign-editor",
@@ -245,10 +255,49 @@
           "known-cause:sms-stop-sync-delay"
         ]
       },
+      "referencePools": {
+        "deterministic": {
+          "candidateRecall": 1,
+          "requiredCoverage": 1,
+          "unjudgedKeys": [],
+          "hardNegativeHits": []
+        },
+        "knownCause": {
+          "candidateRecall": 0.5,
+          "requiredCoverage": 1,
+          "unjudgedKeys": [
+            "knowledge-article:event-tracking-debugging",
+            "knowledge-article:profile-sync-issues",
+            "knowledge-article:webhook-signature-validation"
+          ],
+          "hardNegativeHits": []
+        }
+      },
+      "gaps": {
+        "retrievalMisses": [],
+        "corpusGaps": [
+          "diagnostic-playbook"
+        ],
+        "oracleReviewCandidates": [
+          "diagnostic-playbook:article-backed",
+          "diagnostic-playbook:campaign-editor",
+          "diagnostic-playbook:event-processing-delay",
+          "diagnostic-playbook:flow-trigger",
+          "knowledge-article:campaign-send-failures",
+          "knowledge-article:email-deliverability",
+          "knowledge-article:event-tracking-debugging",
+          "knowledge-article:profile-sync-issues",
+          "knowledge-article:support-operations-playbook",
+          "knowledge-article:webhook-signature-validation",
+          "known-cause:track-api-local-time-timestamp",
+          "known-cause:webhook-delivery-latency",
+          "known-cause:webhook-secret-rotation"
+        ]
+      },
       "ranked": {
         "lexical": {
-          "recallAtK": 0,
-          "precisionAtK": 0
+          "recallAtK": 1,
+          "precisionAtK": 0.4
         },
         "semantic": {
           "recallAtK": null,
@@ -263,24 +312,35 @@
     {
       "ticketId": "TKT-1028",
       "family": "known-cause",
-      "contrastGroup": "webhook-delivery-delay",
+      "contrastGroup": "webhook rotation/latency",
       "lexicalKeys": [
-        "diagnostic-playbook:article-backed",
-        "diagnostic-playbook:campaign-editor",
-        "diagnostic-playbook:event-processing-delay",
-        "diagnostic-playbook:flow-trigger",
-        "knowledge-article:coupon-catalog-sync",
-        "knowledge-article:flow-trigger-troubleshooting",
-        "knowledge-article:shopify-integration-sync",
         "knowledge-article:support-operations-playbook",
         "knowledge-article:webhook-signature-validation",
-        "known-cause:shopify-custom-field-mapping",
-        "known-cause:sms-stop-sync-delay",
-        "known-cause:track-api-local-time-timestamp",
         "known-cause:webhook-delivery-latency",
-        "known-cause:webhook-secret-rotation"
+        "diagnostic-playbook:event-processing-delay",
+        "knowledge-article:shopify-integration-sync",
+        "known-cause:webhook-secret-rotation",
+        "knowledge-article:coupon-catalog-sync",
+        "knowledge-article:flow-trigger-troubleshooting",
+        "known-cause:shopify-custom-field-mapping",
+        "known-cause:track-api-local-time-timestamp",
+        "diagnostic-playbook:flow-trigger",
+        "known-cause:sms-stop-sync-delay",
+        "diagnostic-playbook:campaign-editor",
+        "diagnostic-playbook:article-backed"
       ],
       "semanticKeys": [],
+      "deterministicReferenceKeys": [
+        "knowledge-article:webhook-signature-validation",
+        "known-cause:webhook-delivery-latency"
+      ],
+      "knownCauseReferenceKeys": [
+        "knowledge-article:event-tracking-debugging",
+        "knowledge-article:profile-sync-issues",
+        "knowledge-article:shopify-integration-sync",
+        "knowledge-article:sms-compliance",
+        "knowledge-article:webhook-signature-validation"
+      ],
       "unionKeys": [
         "diagnostic-playbook:article-backed",
         "diagnostic-playbook:campaign-editor",
@@ -480,10 +540,51 @@
           "known-cause:webhook-secret-rotation"
         ]
       },
+      "referencePools": {
+        "deterministic": {
+          "candidateRecall": 1,
+          "requiredCoverage": 1,
+          "unjudgedKeys": [],
+          "hardNegativeHits": []
+        },
+        "knownCause": {
+          "candidateRecall": 0.5,
+          "requiredCoverage": 1,
+          "unjudgedKeys": [
+            "knowledge-article:event-tracking-debugging",
+            "knowledge-article:profile-sync-issues",
+            "knowledge-article:shopify-integration-sync",
+            "knowledge-article:sms-compliance"
+          ],
+          "hardNegativeHits": []
+        }
+      },
+      "gaps": {
+        "retrievalMisses": [],
+        "corpusGaps": [
+          "diagnostic-playbook"
+        ],
+        "oracleReviewCandidates": [
+          "diagnostic-playbook:article-backed",
+          "diagnostic-playbook:campaign-editor",
+          "diagnostic-playbook:event-processing-delay",
+          "diagnostic-playbook:flow-trigger",
+          "knowledge-article:coupon-catalog-sync",
+          "knowledge-article:event-tracking-debugging",
+          "knowledge-article:flow-trigger-troubleshooting",
+          "knowledge-article:profile-sync-issues",
+          "knowledge-article:shopify-integration-sync",
+          "knowledge-article:sms-compliance",
+          "knowledge-article:support-operations-playbook",
+          "known-cause:shopify-custom-field-mapping",
+          "known-cause:sms-stop-sync-delay",
+          "known-cause:track-api-local-time-timestamp"
+        ]
+      },
       "ranked": {
         "lexical": {
-          "recallAtK": 0,
-          "precisionAtK": 0
+          "recallAtK": 1,
+          "precisionAtK": 0.4
         },
         "semantic": {
           "recallAtK": null,
@@ -498,20 +599,27 @@
     {
       "ticketId": "TKT-1010",
       "family": "ambiguity",
-      "contrastGroup": "campaign-editor-loading",
+      "contrastGroup": "editor session/platform loading",
       "lexicalKeys": [
-        "diagnostic-playbook:campaign-editor",
-        "diagnostic-playbook:flow-trigger",
-        "knowledge-article:email-deliverability",
-        "knowledge-article:event-tracking-debugging",
-        "knowledge-article:flow-trigger-troubleshooting",
-        "knowledge-article:security-incident-response",
         "knowledge-article:support-operations-playbook",
-        "known-cause:shopify-custom-field-mapping",
+        "diagnostic-playbook:campaign-editor",
+        "knowledge-article:event-tracking-debugging",
+        "knowledge-article:security-incident-response",
+        "knowledge-article:email-deliverability",
+        "knowledge-article:flow-trigger-troubleshooting",
+        "diagnostic-playbook:flow-trigger",
+        "known-cause:webhook-secret-rotation",
         "known-cause:sms-stop-sync-delay",
-        "known-cause:webhook-secret-rotation"
+        "known-cause:shopify-custom-field-mapping"
       ],
       "semanticKeys": [],
+      "deterministicReferenceKeys": [],
+      "knownCauseReferenceKeys": [
+        "knowledge-article:profile-sync-issues",
+        "knowledge-article:shopify-integration-sync",
+        "knowledge-article:sms-compliance",
+        "knowledge-article:webhook-signature-validation"
+      ],
       "unionKeys": [
         "diagnostic-playbook:campaign-editor",
         "diagnostic-playbook:flow-trigger",
@@ -670,6 +778,44 @@
         ],
         "hardNegativeHits": []
       },
+      "referencePools": {
+        "deterministic": {
+          "candidateRecall": 0,
+          "requiredCoverage": null,
+          "unjudgedKeys": [],
+          "hardNegativeHits": []
+        },
+        "knownCause": {
+          "candidateRecall": 0,
+          "requiredCoverage": null,
+          "unjudgedKeys": [
+            "knowledge-article:profile-sync-issues",
+            "knowledge-article:shopify-integration-sync",
+            "knowledge-article:sms-compliance",
+            "knowledge-article:webhook-signature-validation"
+          ],
+          "hardNegativeHits": []
+        }
+      },
+      "gaps": {
+        "retrievalMisses": [],
+        "corpusGaps": [],
+        "oracleReviewCandidates": [
+          "diagnostic-playbook:flow-trigger",
+          "knowledge-article:email-deliverability",
+          "knowledge-article:event-tracking-debugging",
+          "knowledge-article:flow-trigger-troubleshooting",
+          "knowledge-article:profile-sync-issues",
+          "knowledge-article:security-incident-response",
+          "knowledge-article:shopify-integration-sync",
+          "knowledge-article:sms-compliance",
+          "knowledge-article:support-operations-playbook",
+          "knowledge-article:webhook-signature-validation",
+          "known-cause:shopify-custom-field-mapping",
+          "known-cause:sms-stop-sync-delay",
+          "known-cause:webhook-secret-rotation"
+        ]
+      },
       "ranked": {
         "lexical": {
           "recallAtK": 0.5,
@@ -688,22 +834,34 @@
     {
       "ticketId": "TKT-1020",
       "family": "shopify-catalog",
+      "contrastGroup": "Shopify mapping/general sync",
       "lexicalKeys": [
-        "diagnostic-playbook:article-backed",
-        "diagnostic-playbook:campaign-editor",
-        "diagnostic-playbook:event-processing-delay",
         "knowledge-article:coupon-catalog-sync",
-        "knowledge-article:product-feedback",
-        "knowledge-article:profile-sync-issues",
         "knowledge-article:shopify-integration-sync",
-        "knowledge-article:support-operations-playbook",
         "known-cause:shopify-custom-field-mapping",
+        "knowledge-article:profile-sync-issues",
+        "knowledge-article:support-operations-playbook",
+        "knowledge-article:product-feedback",
         "known-cause:sms-quiet-hours",
-        "known-cause:sms-stop-sync-delay",
+        "diagnostic-playbook:event-processing-delay",
         "known-cause:track-api-local-time-timestamp",
-        "known-cause:webhook-secret-rotation"
+        "known-cause:sms-stop-sync-delay",
+        "diagnostic-playbook:campaign-editor",
+        "known-cause:webhook-secret-rotation",
+        "diagnostic-playbook:article-backed"
       ],
       "semanticKeys": [],
+      "deterministicReferenceKeys": [
+        "knowledge-article:coupon-catalog-sync",
+        "knowledge-article:shopify-integration-sync"
+      ],
+      "knownCauseReferenceKeys": [
+        "knowledge-article:event-tracking-debugging",
+        "knowledge-article:profile-sync-issues",
+        "knowledge-article:shopify-integration-sync",
+        "knowledge-article:sms-compliance",
+        "knowledge-article:webhook-signature-validation"
+      ],
       "unionKeys": [
         "diagnostic-playbook:article-backed",
         "diagnostic-playbook:campaign-editor",
@@ -892,10 +1050,1138 @@
           "knowledge-article:coupon-catalog-sync"
         ]
       },
+      "referencePools": {
+        "deterministic": {
+          "candidateRecall": 0.5,
+          "requiredCoverage": 1,
+          "unjudgedKeys": [],
+          "hardNegativeHits": [
+            "knowledge-article:coupon-catalog-sync"
+          ]
+        },
+        "knownCause": {
+          "candidateRecall": 0.5,
+          "requiredCoverage": 1,
+          "unjudgedKeys": [
+            "knowledge-article:event-tracking-debugging",
+            "knowledge-article:profile-sync-issues",
+            "knowledge-article:sms-compliance",
+            "knowledge-article:webhook-signature-validation"
+          ],
+          "hardNegativeHits": []
+        }
+      },
+      "gaps": {
+        "retrievalMisses": [],
+        "corpusGaps": [
+          "diagnostic-playbook"
+        ],
+        "oracleReviewCandidates": [
+          "diagnostic-playbook:article-backed",
+          "diagnostic-playbook:campaign-editor",
+          "diagnostic-playbook:event-processing-delay",
+          "knowledge-article:event-tracking-debugging",
+          "knowledge-article:product-feedback",
+          "knowledge-article:profile-sync-issues",
+          "knowledge-article:sms-compliance",
+          "knowledge-article:support-operations-playbook",
+          "knowledge-article:webhook-signature-validation",
+          "known-cause:sms-quiet-hours",
+          "known-cause:sms-stop-sync-delay",
+          "known-cause:track-api-local-time-timestamp",
+          "known-cause:webhook-secret-rotation"
+        ]
+      },
       "ranked": {
         "lexical": {
-          "recallAtK": 0,
-          "precisionAtK": 0
+          "recallAtK": 1,
+          "precisionAtK": 0.4
+        },
+        "semantic": {
+          "recallAtK": null,
+          "precisionAtK": null
+        }
+      },
+      "channelStatuses": {
+        "lexical": "used",
+        "semantic": "unavailable"
+      }
+    },
+    {
+      "ticketId": "TKT-1023",
+      "family": "consent-sync",
+      "contrastGroup": "SMS quiet-hours/consent delay",
+      "lexicalKeys": [
+        "knowledge-article:profile-sync-issues",
+        "knowledge-article:segmentation-audience-rules",
+        "knowledge-article:flow-trigger-troubleshooting",
+        "knowledge-article:support-operations-playbook",
+        "known-cause:sms-stop-sync-delay",
+        "knowledge-article:event-tracking-debugging",
+        "known-cause:track-api-local-time-timestamp",
+        "known-cause:shopify-custom-field-mapping",
+        "known-cause:webhook-secret-rotation",
+        "diagnostic-playbook:flow-trigger",
+        "diagnostic-playbook:campaign-editor",
+        "known-cause:sms-quiet-hours",
+        "diagnostic-playbook:event-processing-delay",
+        "diagnostic-playbook:article-backed"
+      ],
+      "semanticKeys": [],
+      "deterministicReferenceKeys": [
+        "knowledge-article:profile-sync-issues",
+        "knowledge-article:sms-compliance"
+      ],
+      "knownCauseReferenceKeys": [
+        "knowledge-article:event-tracking-debugging",
+        "knowledge-article:profile-sync-issues",
+        "knowledge-article:shopify-integration-sync",
+        "knowledge-article:sms-compliance",
+        "knowledge-article:webhook-signature-validation"
+      ],
+      "unionKeys": [
+        "diagnostic-playbook:article-backed",
+        "diagnostic-playbook:campaign-editor",
+        "diagnostic-playbook:event-processing-delay",
+        "diagnostic-playbook:flow-trigger",
+        "knowledge-article:event-tracking-debugging",
+        "knowledge-article:flow-trigger-troubleshooting",
+        "knowledge-article:profile-sync-issues",
+        "knowledge-article:segmentation-audience-rules",
+        "knowledge-article:shopify-integration-sync",
+        "knowledge-article:sms-compliance",
+        "knowledge-article:support-operations-playbook",
+        "knowledge-article:webhook-signature-validation",
+        "known-cause:shopify-custom-field-mapping",
+        "known-cause:sms-quiet-hours",
+        "known-cause:sms-stop-sync-delay",
+        "known-cause:track-api-local-time-timestamp",
+        "known-cause:webhook-secret-rotation"
+      ],
+      "candidateCount": 17,
+      "returnedRepresentations": {
+        "diagnostic-playbook:article-backed": {
+          "lexical": [
+            {
+              "representationId": "diagnostic-playbook:article-backed:canonical:0",
+              "score": -0.0000014592290086613114,
+              "rank": 32
+            }
+          ]
+        },
+        "diagnostic-playbook:campaign-editor": {
+          "lexical": [
+            {
+              "representationId": "diagnostic-playbook:campaign-editor:canonical:0",
+              "score": -0.0000018852040816326534,
+              "rank": 27
+            }
+          ]
+        },
+        "diagnostic-playbook:event-processing-delay": {
+          "lexical": [
+            {
+              "representationId": "diagnostic-playbook:event-processing-delay:canonical:0",
+              "score": -0.0000014723115236585919,
+              "rank": 31
+            }
+          ]
+        },
+        "diagnostic-playbook:flow-trigger": {
+          "lexical": [
+            {
+              "representationId": "diagnostic-playbook:flow-trigger:canonical:0",
+              "score": -0.0000033010897762134208,
+              "rank": 25
+            }
+          ]
+        },
+        "knowledge-article:event-tracking-debugging": {
+          "lexical": [
+            {
+              "representationId": "knowledge-article:event-tracking-debugging:section:0",
+              "score": -4.106538136828883,
+              "rank": 7
+            }
+          ]
+        },
+        "knowledge-article:flow-trigger-troubleshooting": {
+          "lexical": [
+            {
+              "representationId": "knowledge-article:flow-trigger-troubleshooting:section:0",
+              "score": -6.350019786421981,
+              "rank": 3
+            }
+          ]
+        },
+        "knowledge-article:profile-sync-issues": {
+          "lexical": [
+            {
+              "representationId": "knowledge-article:profile-sync-issues:section:0",
+              "score": -11.486829204792464,
+              "rank": 1
+            }
+          ]
+        },
+        "knowledge-article:segmentation-audience-rules": {
+          "lexical": [
+            {
+              "representationId": "knowledge-article:segmentation-audience-rules:section:0",
+              "score": -8.27845621857007,
+              "rank": 2
+            }
+          ]
+        },
+        "knowledge-article:shopify-integration-sync": {},
+        "knowledge-article:sms-compliance": {},
+        "knowledge-article:support-operations-playbook": {
+          "lexical": [
+            {
+              "representationId": "knowledge-article:support-operations-playbook:section:5",
+              "score": -6.002147642857738,
+              "rank": 4
+            },
+            {
+              "representationId": "knowledge-article:support-operations-playbook:section:2",
+              "score": -4.394807356025191,
+              "rank": 6
+            },
+            {
+              "representationId": "knowledge-article:support-operations-playbook:section:3",
+              "score": -4.042118945966667,
+              "rank": 8
+            },
+            {
+              "representationId": "knowledge-article:support-operations-playbook:section:1",
+              "score": -3.9816942974574157,
+              "rank": 9
+            },
+            {
+              "representationId": "knowledge-article:support-operations-playbook:section:4",
+              "score": -0.000005329024676271007,
+              "rank": 21
+            },
+            {
+              "representationId": "knowledge-article:support-operations-playbook:section:0",
+              "score": -0.0000018197386462210033,
+              "rank": 29
+            }
+          ]
+        },
+        "knowledge-article:webhook-signature-validation": {},
+        "known-cause:shopify-custom-field-mapping": {
+          "lexical": [
+            {
+              "representationId": "known-cause:shopify-custom-field-mapping:canonical:0",
+              "score": -0.000004222306315189868,
+              "rank": 23
+            }
+          ]
+        },
+        "known-cause:sms-quiet-hours": {
+          "lexical": [
+            {
+              "representationId": "known-cause:sms-quiet-hours:canonical:0",
+              "score": -0.0000018324293100776287,
+              "rank": 28
+            }
+          ]
+        },
+        "known-cause:sms-stop-sync-delay": {
+          "lexical": [
+            {
+              "representationId": "known-cause:sms-stop-sync-delay:canonical:0",
+              "score": -5.5241422137865515,
+              "rank": 5
+            }
+          ]
+        },
+        "known-cause:track-api-local-time-timestamp": {
+          "lexical": [
+            {
+              "representationId": "known-cause:track-api-local-time-timestamp:canonical:0",
+              "score": -1.8492264260018096,
+              "rank": 17
+            }
+          ]
+        },
+        "known-cause:webhook-secret-rotation": {
+          "lexical": [
+            {
+              "representationId": "known-cause:webhook-secret-rotation:canonical:0",
+              "score": -0.0000034104728131244776,
+              "rank": 24
+            }
+          ]
+        }
+      },
+      "pool": {
+        "candidateRecall": 1,
+        "requiredCoverage": 1,
+        "unjudgedKeys": [
+          "diagnostic-playbook:article-backed",
+          "diagnostic-playbook:campaign-editor",
+          "diagnostic-playbook:event-processing-delay",
+          "diagnostic-playbook:flow-trigger",
+          "knowledge-article:event-tracking-debugging",
+          "knowledge-article:flow-trigger-troubleshooting",
+          "knowledge-article:segmentation-audience-rules",
+          "knowledge-article:shopify-integration-sync",
+          "knowledge-article:sms-compliance",
+          "knowledge-article:support-operations-playbook",
+          "knowledge-article:webhook-signature-validation",
+          "known-cause:shopify-custom-field-mapping",
+          "known-cause:track-api-local-time-timestamp",
+          "known-cause:webhook-secret-rotation"
+        ],
+        "hardNegativeHits": [
+          "known-cause:sms-quiet-hours"
+        ]
+      },
+      "referencePools": {
+        "deterministic": {
+          "candidateRecall": 0.5,
+          "requiredCoverage": 1,
+          "unjudgedKeys": [
+            "knowledge-article:sms-compliance"
+          ],
+          "hardNegativeHits": []
+        },
+        "knownCause": {
+          "candidateRecall": 0.5,
+          "requiredCoverage": 1,
+          "unjudgedKeys": [
+            "knowledge-article:event-tracking-debugging",
+            "knowledge-article:shopify-integration-sync",
+            "knowledge-article:sms-compliance",
+            "knowledge-article:webhook-signature-validation"
+          ],
+          "hardNegativeHits": []
+        }
+      },
+      "gaps": {
+        "retrievalMisses": [],
+        "corpusGaps": [
+          "diagnostic-playbook"
+        ],
+        "oracleReviewCandidates": [
+          "diagnostic-playbook:article-backed",
+          "diagnostic-playbook:campaign-editor",
+          "diagnostic-playbook:event-processing-delay",
+          "diagnostic-playbook:flow-trigger",
+          "knowledge-article:event-tracking-debugging",
+          "knowledge-article:flow-trigger-troubleshooting",
+          "knowledge-article:segmentation-audience-rules",
+          "knowledge-article:shopify-integration-sync",
+          "knowledge-article:sms-compliance",
+          "knowledge-article:support-operations-playbook",
+          "knowledge-article:webhook-signature-validation",
+          "known-cause:shopify-custom-field-mapping",
+          "known-cause:track-api-local-time-timestamp",
+          "known-cause:webhook-secret-rotation"
+        ]
+      },
+      "ranked": {
+        "lexical": {
+          "recallAtK": 1,
+          "precisionAtK": 0.4
+        },
+        "semantic": {
+          "recallAtK": null,
+          "precisionAtK": null
+        }
+      },
+      "channelStatuses": {
+        "lexical": "used",
+        "semantic": "unavailable"
+      }
+    },
+    {
+      "ticketId": "TKT-1024",
+      "family": "campaign-coupons",
+      "lexicalKeys": [
+        "knowledge-article:coupon-catalog-sync",
+        "knowledge-article:support-operations-playbook",
+        "knowledge-article:segmentation-audience-rules",
+        "knowledge-article:campaign-send-failures",
+        "known-cause:sms-quiet-hours",
+        "knowledge-article:webhook-signature-validation",
+        "known-cause:track-api-local-time-timestamp",
+        "known-cause:webhook-secret-rotation",
+        "diagnostic-playbook:campaign-editor",
+        "known-cause:sms-stop-sync-delay",
+        "known-cause:webhook-delivery-latency",
+        "diagnostic-playbook:article-backed"
+      ],
+      "semanticKeys": [],
+      "deterministicReferenceKeys": [
+        "knowledge-article:campaign-send-failures",
+        "knowledge-article:coupon-catalog-sync"
+      ],
+      "knownCauseReferenceKeys": [
+        "knowledge-article:event-tracking-debugging",
+        "knowledge-article:profile-sync-issues",
+        "knowledge-article:sms-compliance",
+        "knowledge-article:webhook-signature-validation"
+      ],
+      "unionKeys": [
+        "diagnostic-playbook:article-backed",
+        "diagnostic-playbook:campaign-editor",
+        "knowledge-article:campaign-send-failures",
+        "knowledge-article:coupon-catalog-sync",
+        "knowledge-article:event-tracking-debugging",
+        "knowledge-article:profile-sync-issues",
+        "knowledge-article:segmentation-audience-rules",
+        "knowledge-article:sms-compliance",
+        "knowledge-article:support-operations-playbook",
+        "knowledge-article:webhook-signature-validation",
+        "known-cause:sms-quiet-hours",
+        "known-cause:sms-stop-sync-delay",
+        "known-cause:track-api-local-time-timestamp",
+        "known-cause:webhook-delivery-latency",
+        "known-cause:webhook-secret-rotation"
+      ],
+      "candidateCount": 15,
+      "returnedRepresentations": {
+        "diagnostic-playbook:article-backed": {
+          "lexical": [
+            {
+              "representationId": "diagnostic-playbook:article-backed:canonical:0",
+              "score": -0.0000029184580173226227,
+              "rank": 25
+            }
+          ]
+        },
+        "diagnostic-playbook:campaign-editor": {
+          "lexical": [
+            {
+              "representationId": "diagnostic-playbook:campaign-editor:canonical:0",
+              "score": -1.2652891693077162,
+              "rank": 17
+            }
+          ]
+        },
+        "knowledge-article:campaign-send-failures": {
+          "lexical": [
+            {
+              "representationId": "knowledge-article:campaign-send-failures:section:0",
+              "score": -5.018819148595635,
+              "rank": 5
+            }
+          ]
+        },
+        "knowledge-article:coupon-catalog-sync": {
+          "lexical": [
+            {
+              "representationId": "knowledge-article:coupon-catalog-sync:section:0",
+              "score": -8.133234673062907,
+              "rank": 1
+            }
+          ]
+        },
+        "knowledge-article:event-tracking-debugging": {},
+        "knowledge-article:profile-sync-issues": {},
+        "knowledge-article:segmentation-audience-rules": {
+          "lexical": [
+            {
+              "representationId": "knowledge-article:segmentation-audience-rules:section:0",
+              "score": -5.8590028913097365,
+              "rank": 3
+            }
+          ]
+        },
+        "knowledge-article:sms-compliance": {},
+        "knowledge-article:support-operations-playbook": {
+          "lexical": [
+            {
+              "representationId": "knowledge-article:support-operations-playbook:section:1",
+              "score": -6.372111225681847,
+              "rank": 2
+            },
+            {
+              "representationId": "knowledge-article:support-operations-playbook:section:2",
+              "score": -5.454075783644428,
+              "rank": 4
+            },
+            {
+              "representationId": "knowledge-article:support-operations-playbook:section:4",
+              "score": -2.6713219985917087,
+              "rank": 10
+            },
+            {
+              "representationId": "knowledge-article:support-operations-playbook:section:3",
+              "score": -1.098174075257997,
+              "rank": 18
+            },
+            {
+              "representationId": "knowledge-article:support-operations-playbook:section:0",
+              "score": -0.0000018197386462210033,
+              "rank": 30
+            },
+            {
+              "representationId": "knowledge-article:support-operations-playbook:section:5",
+              "score": -0.0000014650476469395573,
+              "rank": 31
+            }
+          ]
+        },
+        "knowledge-article:webhook-signature-validation": {
+          "lexical": [
+            {
+              "representationId": "knowledge-article:webhook-signature-validation:section:0",
+              "score": -4.28819928468561,
+              "rank": 7
+            }
+          ]
+        },
+        "known-cause:sms-quiet-hours": {
+          "lexical": [
+            {
+              "representationId": "known-cause:sms-quiet-hours:canonical:0",
+              "score": -4.9639697381750345,
+              "rank": 6
+            }
+          ]
+        },
+        "known-cause:sms-stop-sync-delay": {
+          "lexical": [
+            {
+              "representationId": "known-cause:sms-stop-sync-delay:canonical:0",
+              "score": -1.0953327145169682,
+              "rank": 19
+            }
+          ]
+        },
+        "known-cause:track-api-local-time-timestamp": {
+          "lexical": [
+            {
+              "representationId": "known-cause:track-api-local-time-timestamp:canonical:0",
+              "score": -3.3952114733595757,
+              "rank": 9
+            }
+          ]
+        },
+        "known-cause:webhook-delivery-latency": {
+          "lexical": [
+            {
+              "representationId": "known-cause:webhook-delivery-latency:canonical:0",
+              "score": -0.0000032695372515445087,
+              "rank": 22
+            }
+          ]
+        },
+        "known-cause:webhook-secret-rotation": {
+          "lexical": [
+            {
+              "representationId": "known-cause:webhook-secret-rotation:canonical:0",
+              "score": -2.361727726439652,
+              "rank": 11
+            }
+          ]
+        }
+      },
+      "pool": {
+        "candidateRecall": 1,
+        "requiredCoverage": null,
+        "unjudgedKeys": [
+          "diagnostic-playbook:article-backed",
+          "diagnostic-playbook:campaign-editor",
+          "knowledge-article:campaign-send-failures",
+          "knowledge-article:event-tracking-debugging",
+          "knowledge-article:profile-sync-issues",
+          "knowledge-article:segmentation-audience-rules",
+          "knowledge-article:sms-compliance",
+          "knowledge-article:support-operations-playbook",
+          "knowledge-article:webhook-signature-validation",
+          "known-cause:sms-quiet-hours",
+          "known-cause:sms-stop-sync-delay",
+          "known-cause:track-api-local-time-timestamp",
+          "known-cause:webhook-delivery-latency",
+          "known-cause:webhook-secret-rotation"
+        ],
+        "hardNegativeHits": []
+      },
+      "referencePools": {
+        "deterministic": {
+          "candidateRecall": 1,
+          "requiredCoverage": null,
+          "unjudgedKeys": [
+            "knowledge-article:campaign-send-failures"
+          ],
+          "hardNegativeHits": []
+        },
+        "knownCause": {
+          "candidateRecall": 0,
+          "requiredCoverage": null,
+          "unjudgedKeys": [
+            "knowledge-article:event-tracking-debugging",
+            "knowledge-article:profile-sync-issues",
+            "knowledge-article:sms-compliance",
+            "knowledge-article:webhook-signature-validation"
+          ],
+          "hardNegativeHits": []
+        }
+      },
+      "gaps": {
+        "retrievalMisses": [],
+        "corpusGaps": [
+          "resolved-ticket"
+        ],
+        "oracleReviewCandidates": [
+          "diagnostic-playbook:article-backed",
+          "diagnostic-playbook:campaign-editor",
+          "knowledge-article:campaign-send-failures",
+          "knowledge-article:event-tracking-debugging",
+          "knowledge-article:profile-sync-issues",
+          "knowledge-article:segmentation-audience-rules",
+          "knowledge-article:sms-compliance",
+          "knowledge-article:support-operations-playbook",
+          "knowledge-article:webhook-signature-validation",
+          "known-cause:sms-quiet-hours",
+          "known-cause:sms-stop-sync-delay",
+          "known-cause:track-api-local-time-timestamp",
+          "known-cause:webhook-delivery-latency",
+          "known-cause:webhook-secret-rotation"
+        ]
+      },
+      "ranked": {
+        "lexical": {
+          "recallAtK": 1,
+          "precisionAtK": null
+        },
+        "semantic": {
+          "recallAtK": null,
+          "precisionAtK": null
+        }
+      },
+      "channelStatuses": {
+        "lexical": "used",
+        "semantic": "unavailable"
+      }
+    },
+    {
+      "ticketId": "TKT-1007",
+      "family": "webhooks",
+      "contrastGroup": "webhook rotation/latency",
+      "lexicalKeys": [
+        "knowledge-article:webhook-signature-validation",
+        "known-cause:webhook-secret-rotation",
+        "knowledge-article:support-operations-playbook",
+        "known-cause:webhook-delivery-latency",
+        "knowledge-article:campaign-send-failures",
+        "knowledge-article:event-tracking-debugging",
+        "knowledge-article:security-incident-response",
+        "diagnostic-playbook:event-processing-delay",
+        "known-cause:shopify-custom-field-mapping",
+        "known-cause:track-api-local-time-timestamp",
+        "known-cause:sms-stop-sync-delay",
+        "diagnostic-playbook:article-backed"
+      ],
+      "semanticKeys": [],
+      "deterministicReferenceKeys": [
+        "knowledge-article:webhook-signature-validation"
+      ],
+      "knownCauseReferenceKeys": [
+        "knowledge-article:event-tracking-debugging",
+        "knowledge-article:profile-sync-issues",
+        "knowledge-article:shopify-integration-sync",
+        "knowledge-article:sms-compliance",
+        "knowledge-article:webhook-signature-validation"
+      ],
+      "unionKeys": [
+        "diagnostic-playbook:article-backed",
+        "diagnostic-playbook:event-processing-delay",
+        "knowledge-article:campaign-send-failures",
+        "knowledge-article:event-tracking-debugging",
+        "knowledge-article:profile-sync-issues",
+        "knowledge-article:security-incident-response",
+        "knowledge-article:shopify-integration-sync",
+        "knowledge-article:sms-compliance",
+        "knowledge-article:support-operations-playbook",
+        "knowledge-article:webhook-signature-validation",
+        "known-cause:shopify-custom-field-mapping",
+        "known-cause:sms-stop-sync-delay",
+        "known-cause:track-api-local-time-timestamp",
+        "known-cause:webhook-delivery-latency",
+        "known-cause:webhook-secret-rotation"
+      ],
+      "candidateCount": 15,
+      "returnedRepresentations": {
+        "diagnostic-playbook:article-backed": {
+          "lexical": [
+            {
+              "representationId": "diagnostic-playbook:article-backed:canonical:0",
+              "score": -0.0000014592290086613114,
+              "rank": 31
+            }
+          ]
+        },
+        "diagnostic-playbook:event-processing-delay": {
+          "lexical": [
+            {
+              "representationId": "diagnostic-playbook:event-processing-delay:canonical:0",
+              "score": -1.8584130188825598,
+              "rank": 11
+            }
+          ]
+        },
+        "knowledge-article:campaign-send-failures": {
+          "lexical": [
+            {
+              "representationId": "knowledge-article:campaign-send-failures:section:0",
+              "score": -3.7388349008051205,
+              "rank": 6
+            }
+          ]
+        },
+        "knowledge-article:event-tracking-debugging": {
+          "lexical": [
+            {
+              "representationId": "knowledge-article:event-tracking-debugging:section:0",
+              "score": -2.805542132807998,
+              "rank": 7
+            }
+          ]
+        },
+        "knowledge-article:profile-sync-issues": {},
+        "knowledge-article:security-incident-response": {
+          "lexical": [
+            {
+              "representationId": "knowledge-article:security-incident-response:section:0",
+              "score": -2.6013871390078447,
+              "rank": 8
+            }
+          ]
+        },
+        "knowledge-article:shopify-integration-sync": {},
+        "knowledge-article:sms-compliance": {},
+        "knowledge-article:support-operations-playbook": {
+          "lexical": [
+            {
+              "representationId": "knowledge-article:support-operations-playbook:section:3",
+              "score": -11.771014493743762,
+              "rank": 3
+            },
+            {
+              "representationId": "knowledge-article:support-operations-playbook:section:2",
+              "score": -9.078641962096127,
+              "rank": 4
+            },
+            {
+              "representationId": "knowledge-article:support-operations-playbook:section:1",
+              "score": -2.330798939626926,
+              "rank": 9
+            },
+            {
+              "representationId": "knowledge-article:support-operations-playbook:section:4",
+              "score": -2.0849343241148595,
+              "rank": 10
+            },
+            {
+              "representationId": "knowledge-article:support-operations-playbook:section:5",
+              "score": -1.806678230037901,
+              "rank": 12
+            },
+            {
+              "representationId": "knowledge-article:support-operations-playbook:section:0",
+              "score": -1.7284809434874375,
+              "rank": 13
+            }
+          ]
+        },
+        "knowledge-article:webhook-signature-validation": {
+          "lexical": [
+            {
+              "representationId": "knowledge-article:webhook-signature-validation:section:0",
+              "score": -14.029205359152932,
+              "rank": 1
+            }
+          ]
+        },
+        "known-cause:shopify-custom-field-mapping": {
+          "lexical": [
+            {
+              "representationId": "known-cause:shopify-custom-field-mapping:canonical:0",
+              "score": -1.6444813440384227,
+              "rank": 14
+            }
+          ]
+        },
+        "known-cause:sms-stop-sync-delay": {
+          "lexical": [
+            {
+              "representationId": "known-cause:sms-stop-sync-delay:canonical:0",
+              "score": -0.000001912255939778876,
+              "rank": 26
+            }
+          ]
+        },
+        "known-cause:track-api-local-time-timestamp": {
+          "lexical": [
+            {
+              "representationId": "known-cause:track-api-local-time-timestamp:canonical:0",
+              "score": -0.0000019209871125102333,
+              "rank": 25
+            }
+          ]
+        },
+        "known-cause:webhook-delivery-latency": {
+          "lexical": [
+            {
+              "representationId": "known-cause:webhook-delivery-latency:canonical:0",
+              "score": -8.475102377255123,
+              "rank": 5
+            }
+          ]
+        },
+        "known-cause:webhook-secret-rotation": {
+          "lexical": [
+            {
+              "representationId": "known-cause:webhook-secret-rotation:canonical:0",
+              "score": -11.847805586828414,
+              "rank": 2
+            }
+          ]
+        }
+      },
+      "pool": {
+        "candidateRecall": 1,
+        "requiredCoverage": 1,
+        "unjudgedKeys": [
+          "diagnostic-playbook:article-backed",
+          "diagnostic-playbook:event-processing-delay",
+          "knowledge-article:campaign-send-failures",
+          "knowledge-article:event-tracking-debugging",
+          "knowledge-article:profile-sync-issues",
+          "knowledge-article:security-incident-response",
+          "knowledge-article:shopify-integration-sync",
+          "knowledge-article:sms-compliance",
+          "knowledge-article:support-operations-playbook",
+          "known-cause:shopify-custom-field-mapping",
+          "known-cause:sms-stop-sync-delay",
+          "known-cause:track-api-local-time-timestamp"
+        ],
+        "hardNegativeHits": [
+          "known-cause:webhook-delivery-latency"
+        ]
+      },
+      "referencePools": {
+        "deterministic": {
+          "candidateRecall": 0.5,
+          "requiredCoverage": 1,
+          "unjudgedKeys": [],
+          "hardNegativeHits": []
+        },
+        "knownCause": {
+          "candidateRecall": 0.5,
+          "requiredCoverage": 1,
+          "unjudgedKeys": [
+            "knowledge-article:event-tracking-debugging",
+            "knowledge-article:profile-sync-issues",
+            "knowledge-article:shopify-integration-sync",
+            "knowledge-article:sms-compliance"
+          ],
+          "hardNegativeHits": []
+        }
+      },
+      "gaps": {
+        "retrievalMisses": [],
+        "corpusGaps": [
+          "diagnostic-playbook"
+        ],
+        "oracleReviewCandidates": [
+          "diagnostic-playbook:article-backed",
+          "diagnostic-playbook:event-processing-delay",
+          "knowledge-article:campaign-send-failures",
+          "knowledge-article:event-tracking-debugging",
+          "knowledge-article:profile-sync-issues",
+          "knowledge-article:security-incident-response",
+          "knowledge-article:shopify-integration-sync",
+          "knowledge-article:sms-compliance",
+          "knowledge-article:support-operations-playbook",
+          "known-cause:shopify-custom-field-mapping",
+          "known-cause:sms-stop-sync-delay",
+          "known-cause:track-api-local-time-timestamp"
+        ]
+      },
+      "ranked": {
+        "lexical": {
+          "recallAtK": 1,
+          "precisionAtK": 0.4
+        },
+        "semantic": {
+          "recallAtK": null,
+          "precisionAtK": null
+        }
+      },
+      "channelStatuses": {
+        "lexical": "used",
+        "semantic": "unavailable"
+      }
+    },
+    {
+      "ticketId": "TKT-1018",
+      "family": "shopify-catalog",
+      "contrastGroup": "Shopify mapping/general sync",
+      "lexicalKeys": [
+        "known-cause:shopify-custom-field-mapping",
+        "knowledge-article:support-operations-playbook",
+        "knowledge-article:shopify-integration-sync",
+        "knowledge-article:profile-sync-issues",
+        "knowledge-article:coupon-catalog-sync",
+        "knowledge-article:product-feedback",
+        "diagnostic-playbook:campaign-editor",
+        "known-cause:sms-stop-sync-delay",
+        "known-cause:webhook-delivery-latency",
+        "known-cause:webhook-secret-rotation",
+        "known-cause:track-api-local-time-timestamp",
+        "diagnostic-playbook:flow-trigger",
+        "diagnostic-playbook:article-backed"
+      ],
+      "semanticKeys": [],
+      "deterministicReferenceKeys": [
+        "knowledge-article:shopify-integration-sync",
+        "known-cause:shopify-custom-field-mapping"
+      ],
+      "knownCauseReferenceKeys": [
+        "knowledge-article:event-tracking-debugging",
+        "knowledge-article:profile-sync-issues",
+        "knowledge-article:shopify-integration-sync",
+        "knowledge-article:sms-compliance",
+        "knowledge-article:webhook-signature-validation"
+      ],
+      "unionKeys": [
+        "diagnostic-playbook:article-backed",
+        "diagnostic-playbook:campaign-editor",
+        "diagnostic-playbook:flow-trigger",
+        "knowledge-article:coupon-catalog-sync",
+        "knowledge-article:event-tracking-debugging",
+        "knowledge-article:product-feedback",
+        "knowledge-article:profile-sync-issues",
+        "knowledge-article:shopify-integration-sync",
+        "knowledge-article:sms-compliance",
+        "knowledge-article:support-operations-playbook",
+        "knowledge-article:webhook-signature-validation",
+        "known-cause:shopify-custom-field-mapping",
+        "known-cause:sms-stop-sync-delay",
+        "known-cause:track-api-local-time-timestamp",
+        "known-cause:webhook-delivery-latency",
+        "known-cause:webhook-secret-rotation"
+      ],
+      "candidateCount": 16,
+      "returnedRepresentations": {
+        "diagnostic-playbook:article-backed": {
+          "lexical": [
+            {
+              "representationId": "diagnostic-playbook:article-backed:canonical:0",
+              "score": -0.0000014592290086613114,
+              "rank": 31
+            }
+          ]
+        },
+        "diagnostic-playbook:campaign-editor": {
+          "lexical": [
+            {
+              "representationId": "diagnostic-playbook:campaign-editor:canonical:0",
+              "score": -3.544775376007298,
+              "rank": 9
+            }
+          ]
+        },
+        "diagnostic-playbook:flow-trigger": {
+          "lexical": [
+            {
+              "representationId": "diagnostic-playbook:flow-trigger:canonical:0",
+              "score": -0.000001867340492735313,
+              "rank": 26
+            }
+          ]
+        },
+        "knowledge-article:coupon-catalog-sync": {
+          "lexical": [
+            {
+              "representationId": "knowledge-article:coupon-catalog-sync:section:0",
+              "score": -4.489956766714242,
+              "rank": 6
+            }
+          ]
+        },
+        "knowledge-article:event-tracking-debugging": {},
+        "knowledge-article:product-feedback": {
+          "lexical": [
+            {
+              "representationId": "knowledge-article:product-feedback:section:0",
+              "score": -4.295460806208722,
+              "rank": 7
+            }
+          ]
+        },
+        "knowledge-article:profile-sync-issues": {
+          "lexical": [
+            {
+              "representationId": "knowledge-article:profile-sync-issues:section:0",
+              "score": -7.201440711586065,
+              "rank": 5
+            }
+          ]
+        },
+        "knowledge-article:shopify-integration-sync": {
+          "lexical": [
+            {
+              "representationId": "knowledge-article:shopify-integration-sync:section:0",
+              "score": -11.266226676364719,
+              "rank": 3
+            }
+          ]
+        },
+        "knowledge-article:sms-compliance": {},
+        "knowledge-article:support-operations-playbook": {
+          "lexical": [
+            {
+              "representationId": "knowledge-article:support-operations-playbook:section:3",
+              "score": -13.074353836450998,
+              "rank": 2
+            },
+            {
+              "representationId": "knowledge-article:support-operations-playbook:section:1",
+              "score": -8.519564300347573,
+              "rank": 4
+            },
+            {
+              "representationId": "knowledge-article:support-operations-playbook:section:2",
+              "score": -4.007022052349632,
+              "rank": 8
+            },
+            {
+              "representationId": "knowledge-article:support-operations-playbook:section:4",
+              "score": -2.0849355580015874,
+              "rank": 12
+            },
+            {
+              "representationId": "knowledge-article:support-operations-playbook:section:0",
+              "score": -1.7284809434874375,
+              "rank": 16
+            },
+            {
+              "representationId": "knowledge-article:support-operations-playbook:section:5",
+              "score": -0.0000029300952938791146,
+              "rank": 21
+            }
+          ]
+        },
+        "knowledge-article:webhook-signature-validation": {},
+        "known-cause:shopify-custom-field-mapping": {
+          "lexical": [
+            {
+              "representationId": "known-cause:shopify-custom-field-mapping:canonical:0",
+              "score": -16.987690930871604,
+              "rank": 1
+            }
+          ]
+        },
+        "known-cause:sms-stop-sync-delay": {
+          "lexical": [
+            {
+              "representationId": "known-cause:sms-stop-sync-delay:canonical:0",
+              "score": -1.8578394101279758,
+              "rank": 14
+            }
+          ]
+        },
+        "known-cause:track-api-local-time-timestamp": {
+          "lexical": [
+            {
+              "representationId": "known-cause:track-api-local-time-timestamp:canonical:0",
+              "score": -0.0000019209871125102333,
+              "rank": 24
+            }
+          ]
+        },
+        "known-cause:webhook-delivery-latency": {
+          "lexical": [
+            {
+              "representationId": "known-cause:webhook-delivery-latency:canonical:0",
+              "score": -1.6275324904335302,
+              "rank": 18
+            }
+          ]
+        },
+        "known-cause:webhook-secret-rotation": {
+          "lexical": [
+            {
+              "representationId": "known-cause:webhook-secret-rotation:canonical:0",
+              "score": -0.0000034104728131244776,
+              "rank": 19
+            }
+          ]
+        }
+      },
+      "pool": {
+        "candidateRecall": 1,
+        "requiredCoverage": 1,
+        "unjudgedKeys": [
+          "diagnostic-playbook:article-backed",
+          "diagnostic-playbook:campaign-editor",
+          "diagnostic-playbook:flow-trigger",
+          "knowledge-article:event-tracking-debugging",
+          "knowledge-article:product-feedback",
+          "knowledge-article:profile-sync-issues",
+          "knowledge-article:sms-compliance",
+          "knowledge-article:support-operations-playbook",
+          "knowledge-article:webhook-signature-validation",
+          "known-cause:sms-stop-sync-delay",
+          "known-cause:track-api-local-time-timestamp",
+          "known-cause:webhook-delivery-latency",
+          "known-cause:webhook-secret-rotation"
+        ],
+        "hardNegativeHits": [
+          "knowledge-article:coupon-catalog-sync"
+        ]
+      },
+      "referencePools": {
+        "deterministic": {
+          "candidateRecall": 1,
+          "requiredCoverage": 1,
+          "unjudgedKeys": [],
+          "hardNegativeHits": []
+        },
+        "knownCause": {
+          "candidateRecall": 0.5,
+          "requiredCoverage": 1,
+          "unjudgedKeys": [
+            "knowledge-article:event-tracking-debugging",
+            "knowledge-article:profile-sync-issues",
+            "knowledge-article:sms-compliance",
+            "knowledge-article:webhook-signature-validation"
+          ],
+          "hardNegativeHits": []
+        }
+      },
+      "gaps": {
+        "retrievalMisses": [],
+        "corpusGaps": [
+          "diagnostic-playbook"
+        ],
+        "oracleReviewCandidates": [
+          "diagnostic-playbook:article-backed",
+          "diagnostic-playbook:campaign-editor",
+          "diagnostic-playbook:flow-trigger",
+          "knowledge-article:event-tracking-debugging",
+          "knowledge-article:product-feedback",
+          "knowledge-article:profile-sync-issues",
+          "knowledge-article:sms-compliance",
+          "knowledge-article:support-operations-playbook",
+          "knowledge-article:webhook-signature-validation",
+          "known-cause:sms-stop-sync-delay",
+          "known-cause:track-api-local-time-timestamp",
+          "known-cause:webhook-delivery-latency",
+          "known-cause:webhook-secret-rotation"
+        ]
+      },
+      "ranked": {
+        "lexical": {
+          "recallAtK": 1,
+          "precisionAtK": 0.4
         },
         "semantic": {
           "recallAtK": null,
@@ -914,14 +2200,14 @@
   },
   "perTypeMetrics": {
     "knowledge-article": {
-      "scenarios": 4,
+      "scenarios": 8,
       "lexical": {
-        "recallAt1": 0,
-        "precisionAt1": 0,
-        "recallAt3": 0,
-        "precisionAt3": 0,
-        "recallAt5": 0.75,
-        "precisionAt5": 0.2
+        "recallAt1": 0.5,
+        "precisionAt1": 0.5,
+        "recallAt3": 0.875,
+        "precisionAt3": 0.3333333333333333,
+        "recallAt5": 0.875,
+        "precisionAt5": 0.19999999999999998
       },
       "semantic": {
         "recallAt1": null,
@@ -930,17 +2216,35 @@
         "precisionAt3": null,
         "recallAt5": null,
         "precisionAt5": null
+      },
+      "exclusions": {
+        "lexical": {
+          "recallAt1": 0,
+          "precisionAt1": 2,
+          "recallAt3": 0,
+          "precisionAt3": 2,
+          "recallAt5": 0,
+          "precisionAt5": 2
+        },
+        "semantic": {
+          "recallAt1": 8,
+          "precisionAt1": 8,
+          "recallAt3": 8,
+          "precisionAt3": 8,
+          "recallAt5": 8,
+          "precisionAt5": 8
+        }
       }
     },
     "known-cause": {
-      "scenarios": 3,
+      "scenarios": 6,
       "lexical": {
-        "recallAt1": 0.6666666666666666,
-        "precisionAt1": 0.6666666666666666,
-        "recallAt3": 0.6666666666666666,
-        "precisionAt3": 0.2222222222222222,
+        "recallAt1": 1,
+        "precisionAt1": 1,
+        "recallAt3": 1,
+        "precisionAt3": 0.3333333333333333,
         "recallAt5": 1,
-        "precisionAt5": 0.2
+        "precisionAt5": 0.19999999999999998
       },
       "semantic": {
         "recallAt1": null,
@@ -949,6 +2253,24 @@
         "precisionAt3": null,
         "recallAt5": null,
         "precisionAt5": null
+      },
+      "exclusions": {
+        "lexical": {
+          "recallAt1": 0,
+          "precisionAt1": 0,
+          "recallAt3": 0,
+          "precisionAt3": 0,
+          "recallAt5": 0,
+          "precisionAt5": 0
+        },
+        "semantic": {
+          "recallAt1": 6,
+          "precisionAt1": 6,
+          "recallAt3": 6,
+          "precisionAt3": 6,
+          "recallAt5": 6,
+          "precisionAt5": 6
+        }
       }
     },
     "diagnostic-playbook": {
@@ -968,6 +2290,24 @@
         "precisionAt3": null,
         "recallAt5": null,
         "precisionAt5": null
+      },
+      "exclusions": {
+        "lexical": {
+          "recallAt1": 0,
+          "precisionAt1": 1,
+          "recallAt3": 0,
+          "precisionAt3": 1,
+          "recallAt5": 0,
+          "precisionAt5": 1
+        },
+        "semantic": {
+          "recallAt1": 1,
+          "precisionAt1": 1,
+          "recallAt3": 1,
+          "precisionAt3": 1,
+          "recallAt5": 1,
+          "precisionAt5": 1
+        }
       }
     },
     "resolved-ticket": {
@@ -987,6 +2327,24 @@
         "precisionAt3": null,
         "recallAt5": null,
         "precisionAt5": null
+      },
+      "exclusions": {
+        "lexical": {
+          "recallAt1": 0,
+          "precisionAt1": 0,
+          "recallAt3": 0,
+          "precisionAt3": 0,
+          "recallAt5": 0,
+          "precisionAt5": 0
+        },
+        "semantic": {
+          "recallAt1": 0,
+          "precisionAt1": 0,
+          "recallAt3": 0,
+          "precisionAt3": 0,
+          "recallAt5": 0,
+          "precisionAt5": 0
+        }
       }
     }
   },
@@ -994,48 +2352,605 @@
     "sms-compliance": {
       "scenarios": 1,
       "candidateRecall": 1,
-      "requiredCoverage": 1
+      "requiredCoverage": 1,
+      "excludedCandidateRecall": 0,
+      "excludedRequiredCoverage": 0
     },
     "known-cause": {
       "scenarios": 1,
       "candidateRecall": 1,
-      "requiredCoverage": 1
+      "requiredCoverage": 1,
+      "excludedCandidateRecall": 0,
+      "excludedRequiredCoverage": 0
     },
     "ambiguity": {
       "scenarios": 1,
       "candidateRecall": 0.5,
-      "requiredCoverage": null
+      "requiredCoverage": null,
+      "excludedCandidateRecall": 0,
+      "excludedRequiredCoverage": 1
     },
     "shopify-catalog": {
+      "scenarios": 2,
+      "candidateRecall": 1,
+      "requiredCoverage": 1,
+      "excludedCandidateRecall": 0,
+      "excludedRequiredCoverage": 0
+    },
+    "consent-sync": {
       "scenarios": 1,
       "candidateRecall": 1,
-      "requiredCoverage": 1
+      "requiredCoverage": 1,
+      "excludedCandidateRecall": 0,
+      "excludedRequiredCoverage": 0
+    },
+    "campaign-coupons": {
+      "scenarios": 1,
+      "candidateRecall": 1,
+      "requiredCoverage": null,
+      "excludedCandidateRecall": 0,
+      "excludedRequiredCoverage": 1
+    },
+    "webhooks": {
+      "scenarios": 1,
+      "candidateRecall": 1,
+      "requiredCoverage": 1,
+      "excludedCandidateRecall": 0,
+      "excludedRequiredCoverage": 0
     }
   },
   "excludedCounts": {
-    "incompletePrecision": 1,
-    "semanticUnavailable": 4
+    "incompletePrecision": 2,
+    "semanticUnavailable": 8
   },
   "baselineComparison": {
-    "articleOnlyRequiredCoverage": 1,
+    "deterministicArticleRequiredCoverage": 1,
     "unionRequiredCoverage": 1,
-    "scenariosCompared": 3
+    "scenariosCompared": 6,
+    "unsupportedResourceFamilies": [
+      "known-cause",
+      "diagnostic-playbook",
+      "resolved-ticket"
+    ]
   },
   "corpusCoverage": {
     "knowledge-article": {
-      "adequate": 4
+      "adequate": 8
     },
     "known-cause": {
-      "adequate": 3,
-      "uncertain": 1
+      "adequate": 6,
+      "uncertain": 2
     },
     "diagnostic-playbook": {
-      "missing": 3,
-      "adequate": 1
+      "missing": 6,
+      "adequate": 1,
+      "uncertain": 1
     },
     "resolved-ticket": {
-      "not-expected": 4
+      "not-expected": 7,
+      "missing": 1
     }
+  },
+  "referenceChannelMetrics": {
+    "deterministic": {
+      "kind": "unordered-pool",
+      "scenarios": 8,
+      "candidateRecall": 0.6875,
+      "requiredCoverage": 1,
+      "excludedCandidateRecall": 0,
+      "excludedRequiredCoverage": 2,
+      "provenance": "deterministic classifier associations"
+    },
+    "knownCause": {
+      "kind": "unordered-pool",
+      "scenarios": 8,
+      "candidateRecall": 0.375,
+      "requiredCoverage": 1,
+      "excludedCandidateRecall": 0,
+      "excludedRequiredCoverage": 2,
+      "provenance": "direct approved links from retrieved known causes"
+    }
+  },
+  "gapBreakdown": {
+    "retrievalMisses": [],
+    "corpusGaps": [
+      {
+        "ticketId": "TKT-1017",
+        "resourceType": "diagnostic-playbook"
+      },
+      {
+        "ticketId": "TKT-1028",
+        "resourceType": "diagnostic-playbook"
+      },
+      {
+        "ticketId": "TKT-1020",
+        "resourceType": "diagnostic-playbook"
+      },
+      {
+        "ticketId": "TKT-1023",
+        "resourceType": "diagnostic-playbook"
+      },
+      {
+        "ticketId": "TKT-1024",
+        "resourceType": "resolved-ticket"
+      },
+      {
+        "ticketId": "TKT-1007",
+        "resourceType": "diagnostic-playbook"
+      },
+      {
+        "ticketId": "TKT-1018",
+        "resourceType": "diagnostic-playbook"
+      }
+    ],
+    "oracleReviewCandidates": [
+      {
+        "ticketId": "TKT-1017",
+        "resourceKey": "diagnostic-playbook:article-backed"
+      },
+      {
+        "ticketId": "TKT-1017",
+        "resourceKey": "diagnostic-playbook:campaign-editor"
+      },
+      {
+        "ticketId": "TKT-1017",
+        "resourceKey": "diagnostic-playbook:event-processing-delay"
+      },
+      {
+        "ticketId": "TKT-1017",
+        "resourceKey": "diagnostic-playbook:flow-trigger"
+      },
+      {
+        "ticketId": "TKT-1017",
+        "resourceKey": "knowledge-article:campaign-send-failures"
+      },
+      {
+        "ticketId": "TKT-1017",
+        "resourceKey": "knowledge-article:email-deliverability"
+      },
+      {
+        "ticketId": "TKT-1017",
+        "resourceKey": "knowledge-article:event-tracking-debugging"
+      },
+      {
+        "ticketId": "TKT-1017",
+        "resourceKey": "knowledge-article:profile-sync-issues"
+      },
+      {
+        "ticketId": "TKT-1017",
+        "resourceKey": "knowledge-article:support-operations-playbook"
+      },
+      {
+        "ticketId": "TKT-1017",
+        "resourceKey": "knowledge-article:webhook-signature-validation"
+      },
+      {
+        "ticketId": "TKT-1017",
+        "resourceKey": "known-cause:track-api-local-time-timestamp"
+      },
+      {
+        "ticketId": "TKT-1017",
+        "resourceKey": "known-cause:webhook-delivery-latency"
+      },
+      {
+        "ticketId": "TKT-1017",
+        "resourceKey": "known-cause:webhook-secret-rotation"
+      },
+      {
+        "ticketId": "TKT-1028",
+        "resourceKey": "diagnostic-playbook:article-backed"
+      },
+      {
+        "ticketId": "TKT-1028",
+        "resourceKey": "diagnostic-playbook:campaign-editor"
+      },
+      {
+        "ticketId": "TKT-1028",
+        "resourceKey": "diagnostic-playbook:event-processing-delay"
+      },
+      {
+        "ticketId": "TKT-1028",
+        "resourceKey": "diagnostic-playbook:flow-trigger"
+      },
+      {
+        "ticketId": "TKT-1028",
+        "resourceKey": "knowledge-article:coupon-catalog-sync"
+      },
+      {
+        "ticketId": "TKT-1028",
+        "resourceKey": "knowledge-article:event-tracking-debugging"
+      },
+      {
+        "ticketId": "TKT-1028",
+        "resourceKey": "knowledge-article:flow-trigger-troubleshooting"
+      },
+      {
+        "ticketId": "TKT-1028",
+        "resourceKey": "knowledge-article:profile-sync-issues"
+      },
+      {
+        "ticketId": "TKT-1028",
+        "resourceKey": "knowledge-article:shopify-integration-sync"
+      },
+      {
+        "ticketId": "TKT-1028",
+        "resourceKey": "knowledge-article:sms-compliance"
+      },
+      {
+        "ticketId": "TKT-1028",
+        "resourceKey": "knowledge-article:support-operations-playbook"
+      },
+      {
+        "ticketId": "TKT-1028",
+        "resourceKey": "known-cause:shopify-custom-field-mapping"
+      },
+      {
+        "ticketId": "TKT-1028",
+        "resourceKey": "known-cause:sms-stop-sync-delay"
+      },
+      {
+        "ticketId": "TKT-1028",
+        "resourceKey": "known-cause:track-api-local-time-timestamp"
+      },
+      {
+        "ticketId": "TKT-1010",
+        "resourceKey": "diagnostic-playbook:flow-trigger"
+      },
+      {
+        "ticketId": "TKT-1010",
+        "resourceKey": "knowledge-article:email-deliverability"
+      },
+      {
+        "ticketId": "TKT-1010",
+        "resourceKey": "knowledge-article:event-tracking-debugging"
+      },
+      {
+        "ticketId": "TKT-1010",
+        "resourceKey": "knowledge-article:flow-trigger-troubleshooting"
+      },
+      {
+        "ticketId": "TKT-1010",
+        "resourceKey": "knowledge-article:profile-sync-issues"
+      },
+      {
+        "ticketId": "TKT-1010",
+        "resourceKey": "knowledge-article:security-incident-response"
+      },
+      {
+        "ticketId": "TKT-1010",
+        "resourceKey": "knowledge-article:shopify-integration-sync"
+      },
+      {
+        "ticketId": "TKT-1010",
+        "resourceKey": "knowledge-article:sms-compliance"
+      },
+      {
+        "ticketId": "TKT-1010",
+        "resourceKey": "knowledge-article:support-operations-playbook"
+      },
+      {
+        "ticketId": "TKT-1010",
+        "resourceKey": "knowledge-article:webhook-signature-validation"
+      },
+      {
+        "ticketId": "TKT-1010",
+        "resourceKey": "known-cause:shopify-custom-field-mapping"
+      },
+      {
+        "ticketId": "TKT-1010",
+        "resourceKey": "known-cause:sms-stop-sync-delay"
+      },
+      {
+        "ticketId": "TKT-1010",
+        "resourceKey": "known-cause:webhook-secret-rotation"
+      },
+      {
+        "ticketId": "TKT-1020",
+        "resourceKey": "diagnostic-playbook:article-backed"
+      },
+      {
+        "ticketId": "TKT-1020",
+        "resourceKey": "diagnostic-playbook:campaign-editor"
+      },
+      {
+        "ticketId": "TKT-1020",
+        "resourceKey": "diagnostic-playbook:event-processing-delay"
+      },
+      {
+        "ticketId": "TKT-1020",
+        "resourceKey": "knowledge-article:event-tracking-debugging"
+      },
+      {
+        "ticketId": "TKT-1020",
+        "resourceKey": "knowledge-article:product-feedback"
+      },
+      {
+        "ticketId": "TKT-1020",
+        "resourceKey": "knowledge-article:profile-sync-issues"
+      },
+      {
+        "ticketId": "TKT-1020",
+        "resourceKey": "knowledge-article:sms-compliance"
+      },
+      {
+        "ticketId": "TKT-1020",
+        "resourceKey": "knowledge-article:support-operations-playbook"
+      },
+      {
+        "ticketId": "TKT-1020",
+        "resourceKey": "knowledge-article:webhook-signature-validation"
+      },
+      {
+        "ticketId": "TKT-1020",
+        "resourceKey": "known-cause:sms-quiet-hours"
+      },
+      {
+        "ticketId": "TKT-1020",
+        "resourceKey": "known-cause:sms-stop-sync-delay"
+      },
+      {
+        "ticketId": "TKT-1020",
+        "resourceKey": "known-cause:track-api-local-time-timestamp"
+      },
+      {
+        "ticketId": "TKT-1020",
+        "resourceKey": "known-cause:webhook-secret-rotation"
+      },
+      {
+        "ticketId": "TKT-1023",
+        "resourceKey": "diagnostic-playbook:article-backed"
+      },
+      {
+        "ticketId": "TKT-1023",
+        "resourceKey": "diagnostic-playbook:campaign-editor"
+      },
+      {
+        "ticketId": "TKT-1023",
+        "resourceKey": "diagnostic-playbook:event-processing-delay"
+      },
+      {
+        "ticketId": "TKT-1023",
+        "resourceKey": "diagnostic-playbook:flow-trigger"
+      },
+      {
+        "ticketId": "TKT-1023",
+        "resourceKey": "knowledge-article:event-tracking-debugging"
+      },
+      {
+        "ticketId": "TKT-1023",
+        "resourceKey": "knowledge-article:flow-trigger-troubleshooting"
+      },
+      {
+        "ticketId": "TKT-1023",
+        "resourceKey": "knowledge-article:segmentation-audience-rules"
+      },
+      {
+        "ticketId": "TKT-1023",
+        "resourceKey": "knowledge-article:shopify-integration-sync"
+      },
+      {
+        "ticketId": "TKT-1023",
+        "resourceKey": "knowledge-article:sms-compliance"
+      },
+      {
+        "ticketId": "TKT-1023",
+        "resourceKey": "knowledge-article:support-operations-playbook"
+      },
+      {
+        "ticketId": "TKT-1023",
+        "resourceKey": "knowledge-article:webhook-signature-validation"
+      },
+      {
+        "ticketId": "TKT-1023",
+        "resourceKey": "known-cause:shopify-custom-field-mapping"
+      },
+      {
+        "ticketId": "TKT-1023",
+        "resourceKey": "known-cause:track-api-local-time-timestamp"
+      },
+      {
+        "ticketId": "TKT-1023",
+        "resourceKey": "known-cause:webhook-secret-rotation"
+      },
+      {
+        "ticketId": "TKT-1024",
+        "resourceKey": "diagnostic-playbook:article-backed"
+      },
+      {
+        "ticketId": "TKT-1024",
+        "resourceKey": "diagnostic-playbook:campaign-editor"
+      },
+      {
+        "ticketId": "TKT-1024",
+        "resourceKey": "knowledge-article:campaign-send-failures"
+      },
+      {
+        "ticketId": "TKT-1024",
+        "resourceKey": "knowledge-article:event-tracking-debugging"
+      },
+      {
+        "ticketId": "TKT-1024",
+        "resourceKey": "knowledge-article:profile-sync-issues"
+      },
+      {
+        "ticketId": "TKT-1024",
+        "resourceKey": "knowledge-article:segmentation-audience-rules"
+      },
+      {
+        "ticketId": "TKT-1024",
+        "resourceKey": "knowledge-article:sms-compliance"
+      },
+      {
+        "ticketId": "TKT-1024",
+        "resourceKey": "knowledge-article:support-operations-playbook"
+      },
+      {
+        "ticketId": "TKT-1024",
+        "resourceKey": "knowledge-article:webhook-signature-validation"
+      },
+      {
+        "ticketId": "TKT-1024",
+        "resourceKey": "known-cause:sms-quiet-hours"
+      },
+      {
+        "ticketId": "TKT-1024",
+        "resourceKey": "known-cause:sms-stop-sync-delay"
+      },
+      {
+        "ticketId": "TKT-1024",
+        "resourceKey": "known-cause:track-api-local-time-timestamp"
+      },
+      {
+        "ticketId": "TKT-1024",
+        "resourceKey": "known-cause:webhook-delivery-latency"
+      },
+      {
+        "ticketId": "TKT-1024",
+        "resourceKey": "known-cause:webhook-secret-rotation"
+      },
+      {
+        "ticketId": "TKT-1007",
+        "resourceKey": "diagnostic-playbook:article-backed"
+      },
+      {
+        "ticketId": "TKT-1007",
+        "resourceKey": "diagnostic-playbook:event-processing-delay"
+      },
+      {
+        "ticketId": "TKT-1007",
+        "resourceKey": "knowledge-article:campaign-send-failures"
+      },
+      {
+        "ticketId": "TKT-1007",
+        "resourceKey": "knowledge-article:event-tracking-debugging"
+      },
+      {
+        "ticketId": "TKT-1007",
+        "resourceKey": "knowledge-article:profile-sync-issues"
+      },
+      {
+        "ticketId": "TKT-1007",
+        "resourceKey": "knowledge-article:security-incident-response"
+      },
+      {
+        "ticketId": "TKT-1007",
+        "resourceKey": "knowledge-article:shopify-integration-sync"
+      },
+      {
+        "ticketId": "TKT-1007",
+        "resourceKey": "knowledge-article:sms-compliance"
+      },
+      {
+        "ticketId": "TKT-1007",
+        "resourceKey": "knowledge-article:support-operations-playbook"
+      },
+      {
+        "ticketId": "TKT-1007",
+        "resourceKey": "known-cause:shopify-custom-field-mapping"
+      },
+      {
+        "ticketId": "TKT-1007",
+        "resourceKey": "known-cause:sms-stop-sync-delay"
+      },
+      {
+        "ticketId": "TKT-1007",
+        "resourceKey": "known-cause:track-api-local-time-timestamp"
+      },
+      {
+        "ticketId": "TKT-1018",
+        "resourceKey": "diagnostic-playbook:article-backed"
+      },
+      {
+        "ticketId": "TKT-1018",
+        "resourceKey": "diagnostic-playbook:campaign-editor"
+      },
+      {
+        "ticketId": "TKT-1018",
+        "resourceKey": "diagnostic-playbook:flow-trigger"
+      },
+      {
+        "ticketId": "TKT-1018",
+        "resourceKey": "knowledge-article:event-tracking-debugging"
+      },
+      {
+        "ticketId": "TKT-1018",
+        "resourceKey": "knowledge-article:product-feedback"
+      },
+      {
+        "ticketId": "TKT-1018",
+        "resourceKey": "knowledge-article:profile-sync-issues"
+      },
+      {
+        "ticketId": "TKT-1018",
+        "resourceKey": "knowledge-article:sms-compliance"
+      },
+      {
+        "ticketId": "TKT-1018",
+        "resourceKey": "knowledge-article:support-operations-playbook"
+      },
+      {
+        "ticketId": "TKT-1018",
+        "resourceKey": "knowledge-article:webhook-signature-validation"
+      },
+      {
+        "ticketId": "TKT-1018",
+        "resourceKey": "known-cause:sms-stop-sync-delay"
+      },
+      {
+        "ticketId": "TKT-1018",
+        "resourceKey": "known-cause:track-api-local-time-timestamp"
+      },
+      {
+        "ticketId": "TKT-1018",
+        "resourceKey": "known-cause:webhook-delivery-latency"
+      },
+      {
+        "ticketId": "TKT-1018",
+        "resourceKey": "known-cause:webhook-secret-rotation"
+      }
+    ]
+  },
+  "approvedContrastCoverage": {
+    "webhook rotation/latency": {
+      "status": "covered",
+      "scenarioCount": 2,
+      "ticketIds": [
+        "TKT-1007",
+        "TKT-1028"
+      ]
+    },
+    "SMS quiet-hours/consent delay": {
+      "status": "covered",
+      "scenarioCount": 2,
+      "ticketIds": [
+        "TKT-1017",
+        "TKT-1023"
+      ]
+    },
+    "Shopify mapping/general sync": {
+      "status": "covered",
+      "scenarioCount": 2,
+      "ticketIds": [
+        "TKT-1018",
+        "TKT-1020"
+      ]
+    },
+    "editor session/platform loading": {
+      "status": "missing-counterpart",
+      "scenarioCount": 1,
+      "ticketIds": [
+        "TKT-1010"
+      ]
+    }
+  },
+  "resolvedCaseEvaluation": {
+    "status": "corpus-gap",
+    "reviewedScenarioTickets": [
+      "TKT-1024"
+    ],
+    "eligibleCaseCount": 0,
+    "futureCasesExcluded": 0,
+    "selfTicketExclusion": "enforced at retrieval query time"
   },
   "unjudgedHits": [
     {
@@ -1248,6 +3163,218 @@
     },
     {
       "ticketId": "TKT-1020",
+      "resourceKey": "known-cause:webhook-secret-rotation"
+    },
+    {
+      "ticketId": "TKT-1023",
+      "resourceKey": "diagnostic-playbook:article-backed"
+    },
+    {
+      "ticketId": "TKT-1023",
+      "resourceKey": "diagnostic-playbook:campaign-editor"
+    },
+    {
+      "ticketId": "TKT-1023",
+      "resourceKey": "diagnostic-playbook:event-processing-delay"
+    },
+    {
+      "ticketId": "TKT-1023",
+      "resourceKey": "diagnostic-playbook:flow-trigger"
+    },
+    {
+      "ticketId": "TKT-1023",
+      "resourceKey": "knowledge-article:event-tracking-debugging"
+    },
+    {
+      "ticketId": "TKT-1023",
+      "resourceKey": "knowledge-article:flow-trigger-troubleshooting"
+    },
+    {
+      "ticketId": "TKT-1023",
+      "resourceKey": "knowledge-article:segmentation-audience-rules"
+    },
+    {
+      "ticketId": "TKT-1023",
+      "resourceKey": "knowledge-article:shopify-integration-sync"
+    },
+    {
+      "ticketId": "TKT-1023",
+      "resourceKey": "knowledge-article:sms-compliance"
+    },
+    {
+      "ticketId": "TKT-1023",
+      "resourceKey": "knowledge-article:support-operations-playbook"
+    },
+    {
+      "ticketId": "TKT-1023",
+      "resourceKey": "knowledge-article:webhook-signature-validation"
+    },
+    {
+      "ticketId": "TKT-1023",
+      "resourceKey": "known-cause:shopify-custom-field-mapping"
+    },
+    {
+      "ticketId": "TKT-1023",
+      "resourceKey": "known-cause:track-api-local-time-timestamp"
+    },
+    {
+      "ticketId": "TKT-1023",
+      "resourceKey": "known-cause:webhook-secret-rotation"
+    },
+    {
+      "ticketId": "TKT-1024",
+      "resourceKey": "diagnostic-playbook:article-backed"
+    },
+    {
+      "ticketId": "TKT-1024",
+      "resourceKey": "diagnostic-playbook:campaign-editor"
+    },
+    {
+      "ticketId": "TKT-1024",
+      "resourceKey": "knowledge-article:campaign-send-failures"
+    },
+    {
+      "ticketId": "TKT-1024",
+      "resourceKey": "knowledge-article:event-tracking-debugging"
+    },
+    {
+      "ticketId": "TKT-1024",
+      "resourceKey": "knowledge-article:profile-sync-issues"
+    },
+    {
+      "ticketId": "TKT-1024",
+      "resourceKey": "knowledge-article:segmentation-audience-rules"
+    },
+    {
+      "ticketId": "TKT-1024",
+      "resourceKey": "knowledge-article:sms-compliance"
+    },
+    {
+      "ticketId": "TKT-1024",
+      "resourceKey": "knowledge-article:support-operations-playbook"
+    },
+    {
+      "ticketId": "TKT-1024",
+      "resourceKey": "knowledge-article:webhook-signature-validation"
+    },
+    {
+      "ticketId": "TKT-1024",
+      "resourceKey": "known-cause:sms-quiet-hours"
+    },
+    {
+      "ticketId": "TKT-1024",
+      "resourceKey": "known-cause:sms-stop-sync-delay"
+    },
+    {
+      "ticketId": "TKT-1024",
+      "resourceKey": "known-cause:track-api-local-time-timestamp"
+    },
+    {
+      "ticketId": "TKT-1024",
+      "resourceKey": "known-cause:webhook-delivery-latency"
+    },
+    {
+      "ticketId": "TKT-1024",
+      "resourceKey": "known-cause:webhook-secret-rotation"
+    },
+    {
+      "ticketId": "TKT-1007",
+      "resourceKey": "diagnostic-playbook:article-backed"
+    },
+    {
+      "ticketId": "TKT-1007",
+      "resourceKey": "diagnostic-playbook:event-processing-delay"
+    },
+    {
+      "ticketId": "TKT-1007",
+      "resourceKey": "knowledge-article:campaign-send-failures"
+    },
+    {
+      "ticketId": "TKT-1007",
+      "resourceKey": "knowledge-article:event-tracking-debugging"
+    },
+    {
+      "ticketId": "TKT-1007",
+      "resourceKey": "knowledge-article:profile-sync-issues"
+    },
+    {
+      "ticketId": "TKT-1007",
+      "resourceKey": "knowledge-article:security-incident-response"
+    },
+    {
+      "ticketId": "TKT-1007",
+      "resourceKey": "knowledge-article:shopify-integration-sync"
+    },
+    {
+      "ticketId": "TKT-1007",
+      "resourceKey": "knowledge-article:sms-compliance"
+    },
+    {
+      "ticketId": "TKT-1007",
+      "resourceKey": "knowledge-article:support-operations-playbook"
+    },
+    {
+      "ticketId": "TKT-1007",
+      "resourceKey": "known-cause:shopify-custom-field-mapping"
+    },
+    {
+      "ticketId": "TKT-1007",
+      "resourceKey": "known-cause:sms-stop-sync-delay"
+    },
+    {
+      "ticketId": "TKT-1007",
+      "resourceKey": "known-cause:track-api-local-time-timestamp"
+    },
+    {
+      "ticketId": "TKT-1018",
+      "resourceKey": "diagnostic-playbook:article-backed"
+    },
+    {
+      "ticketId": "TKT-1018",
+      "resourceKey": "diagnostic-playbook:campaign-editor"
+    },
+    {
+      "ticketId": "TKT-1018",
+      "resourceKey": "diagnostic-playbook:flow-trigger"
+    },
+    {
+      "ticketId": "TKT-1018",
+      "resourceKey": "knowledge-article:event-tracking-debugging"
+    },
+    {
+      "ticketId": "TKT-1018",
+      "resourceKey": "knowledge-article:product-feedback"
+    },
+    {
+      "ticketId": "TKT-1018",
+      "resourceKey": "knowledge-article:profile-sync-issues"
+    },
+    {
+      "ticketId": "TKT-1018",
+      "resourceKey": "knowledge-article:sms-compliance"
+    },
+    {
+      "ticketId": "TKT-1018",
+      "resourceKey": "knowledge-article:support-operations-playbook"
+    },
+    {
+      "ticketId": "TKT-1018",
+      "resourceKey": "knowledge-article:webhook-signature-validation"
+    },
+    {
+      "ticketId": "TKT-1018",
+      "resourceKey": "known-cause:sms-stop-sync-delay"
+    },
+    {
+      "ticketId": "TKT-1018",
+      "resourceKey": "known-cause:track-api-local-time-timestamp"
+    },
+    {
+      "ticketId": "TKT-1018",
+      "resourceKey": "known-cause:webhook-delivery-latency"
+    },
+    {
+      "ticketId": "TKT-1018",
       "resourceKey": "known-cause:webhook-secret-rotation"
     }
   ],

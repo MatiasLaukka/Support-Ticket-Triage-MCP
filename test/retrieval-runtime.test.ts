@@ -139,9 +139,38 @@ describe("retrieval runtime configuration", () => {
     let observed = 0;
     let reported = 0;
     const shadowResult = await evaluateTicketCommand({ ...base, retrievalObserver: { observe: async () => { observed += 1; throw new Error("shadow failure"); }, reportFailure: () => { reported += 1; }, recent: () => [], close: async () => undefined } }, { ticketId: ticket.id, aiPreference: "deterministic", responseStyle: "auto" }, "40000000-0000-4000-8000-000000000002");
-    expect(observed).toBe(1);
-    expect(reported).toBe(1);
+    await vi.waitFor(() => {
+      expect(observed).toBe(1);
+      expect(reported).toBe(1);
+    });
     expect(shadowResult).toEqual(offResult);
+  });
+
+  it("does not hold a committed evaluation open for shadow observation", async () => {
+    const ticket = TicketSchema.parse({
+      id: "TKT-0002", createdAt: "2026-09-12T00:00:00.000Z", updatedAt: "2026-09-12T00:00:00.000Z",
+      customer: { name: "Northstar Labs", plan: "enterprise", region: "eu-west", vip: false },
+      subject: "Accepted API requests are delayed", description: "Accepted requests remain absent from the profile timeline.",
+      status: "triage", category: "api", priority: "P2", team: "api-platform", tags: ["api", "delay"],
+      sla: { responseDueAt: "2026-09-12T04:00:00.000Z", breached: false }, relatedTicketIds: [], revision: 0,
+    });
+    let observationStarted!: () => void;
+    let releaseObservation!: () => void;
+    const started = new Promise<void>((resolve) => { observationStarted = resolve; });
+    const released = new Promise<void>((resolve) => { releaseObservation = resolve; });
+    const base = {
+      dispatcher: { async run(definition: any, raw: unknown, commandId: string) { const parsed = definition.parse(raw); const prepared = await definition.prepare(parsed); return definition.replay({}, definition.commit({}, prepared, commandId), commandId); } },
+      service: { commitOperationalEvaluation: () => ({ committed: true }), replayOperationalEvaluation: (_reader: unknown, result: unknown) => result },
+      tickets: { get: async () => ticket }, audits: { list: async () => [] }, knowledge: { list: async () => [] },
+      knowledgeEvolution: { listReusableApproved: async () => ({ status: "available", contexts: [], issues: [] }) }, now: () => new Date("2026-09-12T00:00:00.000Z"), env: {},
+      retrievalObserver: { observe: async () => { observationStarted(); await released; }, recent: () => [], close: async () => undefined },
+    } as any;
+
+    const command = evaluateTicketCommand(base, { ticketId: ticket.id, aiPreference: "deterministic", responseStyle: "auto" }, "40000000-0000-4000-8000-000000000003");
+    await started;
+    const completion = await Promise.race([command.then(() => "committed"), new Promise<string>((resolve) => setTimeout(() => resolve("blocked"), 0))]);
+    expect(completion).toBe("committed");
+    releaseObservation();
   });
 
   it("keeps HTTP and MCP evaluation authority identical while shadow observation is advisory", async () => {
@@ -167,7 +196,7 @@ describe("retrieval runtime configuration", () => {
       expect((replay.structuredContent as { recommendation: unknown }).recommendation).toEqual(shadowResult.body.recommendation);
       const withoutIdentity = ({ id: _id, commandId: _commandId, ...value }: any) => value;
       expect(withoutIdentity(offResult.body.recommendation as any)).toEqual(withoutIdentity(shadowResult.body.recommendation as any));
-      expect(shadow.runtime.retrievalObserver?.recent()).toHaveLength(1);
+      await vi.waitFor(() => expect(shadow.runtime.retrievalObserver?.recent()).toHaveLength(1));
       expect(off.runtime.retrievalObserver).toBeUndefined();
       expect((off.runtime.operationalStore as any).readWorkflowSnapshot("TKT-1010").events.map(withoutIdentity))
         .toEqual((shadow.runtime.operationalStore as any).readWorkflowSnapshot("TKT-1010").events.map(withoutIdentity));

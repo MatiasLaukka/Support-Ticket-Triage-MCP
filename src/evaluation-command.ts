@@ -184,13 +184,12 @@ export async function evaluateTicketCommand(
   };
   const result = await deps.dispatcher.run(definition, rawInput, commandId);
   if (didCommit && capturedBasis !== undefined && deps.retrievalObserver !== undefined) {
-    try {
-      const references = deterministicRetrievalReferences(capturedBasis);
-      await deps.retrievalObserver.observe(buildRetrievalQuery({ ...capturedBasis, references }), commandId);
-    } catch {
-      // Retrieval remains observational and cannot affect authoritative results.
-      deps.retrievalObserver.reportFailure?.(commandId);
-    }
+    const references = deterministicRetrievalReferences(capturedBasis);
+    // The receipt-backed operational result is already complete. Shadow work must not
+    // delay it, including when an embedding provider or SQLite reconciliation stalls.
+    void Promise.resolve()
+      .then(() => deps.retrievalObserver!.observe(buildRetrievalQuery({ ...capturedBasis!, references }), commandId))
+      .catch(() => deps.retrievalObserver?.reportFailure?.(commandId));
   }
   return result;
 }

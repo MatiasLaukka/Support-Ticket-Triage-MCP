@@ -19,12 +19,14 @@ export function buildRetrievalQuery(input: {
 }): Query {
   const subject = input.ticket.subject.trim();
   const description = input.ticket.description.trim();
-  const prefix = `${subject}\n\n${description}`;
+  const fullPrefix = `${subject}\n\n${description}`;
+  const prefix = fullPrefix.slice(0, RETRIEVAL_QUERY_MAX_CHARS);
   const ordered = [...input.customerReplies].sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
   const room = Math.max(0, RETRIEVAL_QUERY_MAX_CHARS - prefix.length - 2);
   const replyText = ordered.map((reply) => reply.body.trim()).filter(Boolean).join("\n\n");
-  const queryText = replyText.length <= room ? `${prefix}${replyText ? `\n\n${replyText}` : ""}` : `${prefix}${replyText ? `\n\n${replyText.slice(-room)}` : ""}`;
-  const queryTruncated = queryText.length < prefix.length + (replyText ? replyText.length + 2 : 0);
+  const clippedReplyText = room === 0 ? "" : replyText.length <= room ? replyText : replyText.slice(-room);
+  const queryText = `${prefix}${clippedReplyText ? `\n\n${clippedReplyText}` : ""}`;
+  const queryTruncated = queryText.length < fullPrefix.length + (replyText ? replyText.length + 2 : 0);
   const queryHash = createHash("sha256").update(JSON.stringify({ subject, description, replies: ordered.map(({ id, body }) => ({ id, body })) })).digest("hex");
   return { queryText, queryHash, ticketId: input.ticket.id, sourceRevision: Date.parse(input.ticket.updatedAt), customerReplyWatermark: input.customerReplyWatermark, queryTruncated, references: [...input.references], ...(input.taxonomy ? { taxonomy: input.taxonomy } : {}) };
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildRetrievalQuery, createRetrievalObserver } from "../src/retrieval/stage.js";
+import { buildRetrievalQuery, createRetrievalObserver, RETRIEVAL_QUERY_MAX_CHARS } from "../src/retrieval/stage.js";
 
 describe("retrieval stage", () => {
   it("builds customer-only deterministic queries and hashes reply identities", () => {
@@ -9,6 +9,17 @@ describe("retrieval stage", () => {
     expect(base.queryText).toContain("Still delayed");
     expect(base.queryText).not.toContain("support response");
     expect(base.queryHash).not.toBe(changed.queryHash);
+  });
+
+  it("caps oversized ticket context before allocating reply evidence", () => {
+    const query = buildRetrievalQuery({
+      ticket: { id: "TKT-0001", updatedAt: "2026-01-01T00:00:00.000Z", subject: "Subject", description: "d".repeat(RETRIEVAL_QUERY_MAX_CHARS) } as any,
+      customerReplies: [{ id: "reply", ticketId: "TKT-0001", createdAt: "2026-01-01T01:00:00.000Z", body: "Recent customer evidence" }],
+      customerReplyWatermark: "reply:reply",
+      references: [],
+    });
+    expect(query.queryText.length).toBeLessThanOrEqual(RETRIEVAL_QUERY_MAX_CHARS);
+    expect(query.queryTruncated).toBe(true);
   });
 
   it("reconciles before every observation and waits for cancellation on close", async () => {

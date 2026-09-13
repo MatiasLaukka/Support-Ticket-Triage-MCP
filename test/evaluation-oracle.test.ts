@@ -260,13 +260,16 @@ describe("evaluation oracle foundation", () => {
     });
     expect(first.contrastGroupCoverage).toMatchObject({
       "campaign-processing-scope": 2,
-      "sms-quiet-hours": 1,
-      "webhook-delivery-delay": 2,
+      "SMS quiet-hours/consent delay": 2,
+      "Shopify mapping/general sync": 2,
+      "webhook rotation/latency": 2,
     });
     expect(first.duplicateHeavyGroups).toEqual([
       { contrastGroup: "campaign-processing-scope", count: 2, ticketIds: ["TKT-1009", "TKT-1021"] },
       { contrastGroup: "event-ingestion-delay", count: 2, ticketIds: ["TKT-1001", "TKT-1002"] },
-      { contrastGroup: "webhook-delivery-delay", count: 2, ticketIds: ["TKT-1028", "TKT-1029"] },
+      { contrastGroup: "Shopify mapping/general sync", count: 2, ticketIds: ["TKT-1018", "TKT-1020"] },
+      { contrastGroup: "SMS quiet-hours/consent delay", count: 2, ticketIds: ["TKT-1017", "TKT-1023"] },
+      { contrastGroup: "webhook rotation/latency", count: 2, ticketIds: ["TKT-1007", "TKT-1028"] },
     ]);
   });
 

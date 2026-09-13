@@ -49,7 +49,7 @@
       "expectation": "plausible"
     },
     "family": "sms-compliance",
-    "contrastGroup": "sms-quiet-hours",
+    "contrastGroup": "SMS quiet-hours/consent delay",
     "labelRationale": "The dashboard reports quiet-hour protection. Correct compliance behavior is the best initial interpretation, but the cause remains plausible rather than confirmed until recipient region, local time, and applicable rules are verified."
   },
   {
@@ -85,7 +85,7 @@
       "acceptableKnownCauseIds": ["webhook-delivery-latency"]
     },
     "family": "known-cause",
-    "contrastGroup": "webhook-delivery-delay",
+    "contrastGroup": "webhook rotation/latency",
     "labelRationale": "The delivery-delay event is a plausible known cause while the customer evidence remains incomplete."
   },
   {
@@ -170,7 +170,7 @@
       "expectation": "insufficient-evidence"
     },
     "family": "ambiguity",
-    "contrastGroup": "campaign-editor-loading",
+    "contrastGroup": "editor session/platform loading",
     "labelRationale": "The initial campaign-editor evidence supports more than one route and is insufficient to confirm a known cause."
   },
   {
@@ -241,6 +241,7 @@
       "acceptableProblemClasses": ["degraded-performance"]
     },
     "family": "shopify-catalog",
+    "contrastGroup": "Shopify mapping/general sync",
     "labelRationale": "A six-hour Shopify-to-catalog delay is both an integration-boundary and degraded-performance symptom until import history identifies the responsible subsystem."
   },
   {
@@ -286,6 +287,13 @@
       "requiredArticleIds": ["profile-sync-issues"],
       "relevantArticleIds": []
     },
+    "retrieval": {
+      "requiredResourceKeys": ["knowledge-article:profile-sync-issues"],
+      "relevantResourceKeys": ["knowledge-article:profile-sync-issues", "known-cause:sms-stop-sync-delay"],
+      "hardNegativeResourceKeys": ["known-cause:sms-quiet-hours"],
+      "labelsComplete": true,
+      "resourceCoverage": { "knowledge-article": "adequate", "known-cause": "adequate", "diagnostic-playbook": "missing", "resolved-ticket": "not-expected" }
+    },
     "taxonomy": {
       "acceptablePrimaryProductSurfaces": [
         {
@@ -296,6 +304,7 @@
       "acceptableProblemClasses": ["data-integrity"]
     },
     "family": "consent-sync",
+    "contrastGroup": "SMS quiet-hours/consent delay",
     "labelRationale": "Email consent values not reflecting API updates concern the API/profile update path, not authentication. SMS compliance is not supported by this ticket."
   },
   {
@@ -309,6 +318,13 @@
     "knowledge": {
       "requiredArticleIds": [],
       "relevantArticleIds": ["coupon-catalog-sync"]
+    },
+    "retrieval": {
+      "requiredResourceKeys": [],
+      "relevantResourceKeys": ["knowledge-article:coupon-catalog-sync"],
+      "hardNegativeResourceKeys": [],
+      "labelsComplete": false,
+      "resourceCoverage": { "knowledge-article": "adequate", "known-cause": "uncertain", "diagnostic-playbook": "uncertain", "resolved-ticket": "missing" }
     },
     "family": "campaign-coupons",
     "labelRationale": "Removing expired coupon codes from a welcome campaign is low-urgency campaign/catalog maintenance, not a billing problem. Coupon knowledge is relevant but should not be mandatory for correct routing."
@@ -416,6 +432,13 @@
       "requiredArticleIds": ["webhook-signature-validation"],
       "relevantArticleIds": ["webhook-signature-validation"]
     },
+    "retrieval": {
+      "requiredResourceKeys": ["knowledge-article:webhook-signature-validation"],
+      "relevantResourceKeys": ["knowledge-article:webhook-signature-validation", "known-cause:webhook-secret-rotation"],
+      "hardNegativeResourceKeys": ["known-cause:webhook-delivery-latency"],
+      "labelsComplete": true,
+      "resourceCoverage": { "knowledge-article": "adequate", "known-cause": "adequate", "diagnostic-playbook": "missing", "resolved-ticket": "not-expected" }
+    },
     "taxonomy": {
       "acceptablePrimaryProductSurfaces": [
         {
@@ -426,7 +449,7 @@
       "acceptableProblemClasses": ["configuration"]
     },
     "family": "webhooks",
-    "contrastGroup": "webhook-signature-failure",
+    "contrastGroup": "webhook rotation/latency",
     "labelRationale": "HMAC verification failing after signing-secret rotation supports webhooks as the primary surface and configuration as the reviewed problem class."
   },
   {
@@ -441,6 +464,13 @@
       "requiredArticleIds": ["shopify-integration-sync"],
       "relevantArticleIds": ["shopify-integration-sync"]
     },
+    "retrieval": {
+      "requiredResourceKeys": ["knowledge-article:shopify-integration-sync"],
+      "relevantResourceKeys": ["knowledge-article:shopify-integration-sync", "known-cause:shopify-custom-field-mapping"],
+      "hardNegativeResourceKeys": ["knowledge-article:coupon-catalog-sync"],
+      "labelsComplete": true,
+      "resourceCoverage": { "knowledge-article": "adequate", "known-cause": "adequate", "diagnostic-playbook": "missing", "resolved-ticket": "not-expected" }
+    },
     "taxonomy": {
       "acceptablePrimaryProductSurfaces": [
         {
@@ -451,6 +481,7 @@
       "acceptableProblemClasses": ["data-integrity"]
     },
     "family": "shopify-catalog",
+    "contrastGroup": "Shopify mapping/general sync",
     "labelRationale": "A completed Shopify sync omitting a custom product field supports Shopify as the primary surface and data integrity as the reviewed problem class."
   },
   {

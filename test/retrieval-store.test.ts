@@ -36,6 +36,7 @@ describe("retrieval store", () => {
     db.installVectors([{ representationId: article.representations[0]!.id, resourceKey: article.resource.key, contentHash: article.representations[0]!.contentHash, model: { id: "model-a", revision: "r1", dimensions: 2 }, values: [1, 0] }]);
     db.configureModel({ id: "model-b", revision: "r2", dimensions: 2 });
     expect(db.readSnapshot('"compatible"').vectors).toHaveLength(0);
+    expect(() => db.validate()).not.toThrow();
     db.close();
   });
 

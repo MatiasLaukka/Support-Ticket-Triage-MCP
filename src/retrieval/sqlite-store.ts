@@ -116,6 +116,7 @@ export class RetrievalStore {
       this.database.exec("DELETE FROM retrieval_fts; DELETE FROM retrieval_embeddings; DELETE FROM retrieval_representations; DELETE FROM retrieval_resources;");
       this.applySnapshot(snapshot, nextHash);
       this.applyVectors(vectors);
+      if (vectors.length === 0) this.setMeta("semanticGeneration", "0");
     })();
   }
 
@@ -173,7 +174,7 @@ export class RetrievalStore {
         const resource = JSON.parse(row.metadata_json) as { family?: unknown };
         if (typeof resource.family !== "string" || typeof row.content_hash !== "string" || row.content_hash.length === 0) throw new Error();
       }
-      for (const row of this.database.prepare("SELECT e.model_id,e.model_revision,e.dimensions,e.vector_blob,e.content_hash,r.content_hash AS representation_hash FROM retrieval_embeddings e JOIN retrieval_representations r ON r.representation_id=e.representation_id").all() as any[]) {
+      for (const row of this.database.prepare("SELECT e.model_id,e.model_revision,e.dimensions,e.vector_blob,e.content_hash,r.content_hash AS representation_hash FROM retrieval_embeddings e JOIN retrieval_representations r ON r.representation_id=e.representation_id WHERE e.status='ready'").all() as any[]) {
         const model = configuredModel;
         if (!Number.isInteger(row.dimensions) || row.dimensions <= 0 || row.vector_blob.byteLength !== row.dimensions * 4 || row.content_hash !== row.representation_hash || model === undefined || row.model_id !== model.id || row.model_revision !== model.revision || row.dimensions !== model.dimensions) throw new Error();
         const vector = Array.from(new Float32Array(row.vector_blob.buffer, row.vector_blob.byteOffset, row.vector_blob.byteLength / 4));
@@ -213,6 +214,7 @@ export class RetrievalStore {
     this.setMeta("unavailableFamilies", JSON.stringify(snapshot.unavailableFamilies));
     this.setMeta("generation", String(this.metadata().generation + 1));
     this.setMeta("lexicalGeneration", String(this.metadata().lexicalGeneration + 1));
+    this.setMeta("semanticGeneration", "0");
     this.setMeta("state", "degraded");
     return pending;
   }

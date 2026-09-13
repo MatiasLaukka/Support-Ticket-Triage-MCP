@@ -53,9 +53,21 @@ describe("retrieval store", () => {
   it("rejects malformed persisted metadata during validation", () => {
     const db = RetrievalStore.open(":memory:");
     db.initialize();
+    db.reconcile({ resources: [], unavailableFamilies: [] });
     const raw = (db as unknown as { database: { prepare(sql: string): { run(...values: unknown[]): void } } }).database;
     raw.prepare("UPDATE retrieval_index_metadata SET value=? WHERE key='corpusHash'").run("{");
     expect(() => db.validate()).toThrow();
+    db.close();
+  });
+
+  it("rejects unknown unavailable source families during validation", () => {
+    const db = RetrievalStore.open(":memory:");
+    db.initialize();
+    db.reconcile({ resources: [], unavailableFamilies: [] });
+    const raw = (db as unknown as { database: { prepare(sql: string): { run(...values: unknown[]): void } } }).database;
+    raw.prepare("UPDATE retrieval_index_metadata SET value=? WHERE key='unavailableFamilies'").run('["unsupported-family"]');
+    expect(() => db.validate()).toThrow();
+    expect(() => db.readSnapshot("")).toThrow();
     db.close();
   });
 

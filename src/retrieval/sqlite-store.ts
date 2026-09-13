@@ -6,6 +6,7 @@ import type { IndexMetadata, ModelIdentity, Representation, Resource, SearchSnap
 
 const SCHEMA_VERSION = 1;
 const REPRESENTATION_VERSION = 1;
+const UNAVAILABLE_FAMILIES = new Set(["learned-known-cause", "resolved-ticket"]);
 
 export class RetrievalIntegrityError extends Error {
   readonly code = "INDEX_INTEGRITY_ERROR";
@@ -125,8 +126,7 @@ export class RetrievalStore {
     return this.database.transaction(() => {
       const metadata = this.metadata();
       const unavailableRow = this.database.prepare("SELECT value FROM retrieval_index_metadata WHERE key='unavailableFamilies'").get() as { value?: string } | undefined;
-      let unavailable: Set<string>;
-      try { unavailable = new Set(JSON.parse(unavailableRow?.value ?? "[]")); } catch { throw new RetrievalIntegrityError("Unavailable-family metadata is invalid."); }
+      const unavailable = parseUnavailableFamilies(unavailableRow?.value ?? "[]");
       const resources = (this.database.prepare("SELECT resource_key,resource_type,source_id,source_version,content_hash,metadata_json FROM retrieval_resources ORDER BY resource_type,resource_key").all() as ResourceRow[])
         .map((row) => {
           let meta: Record<string, unknown>;
@@ -169,7 +169,7 @@ export class RetrievalStore {
         if (typeof parsedModel.id !== "string" || typeof parsedModel.revision !== "string" || typeof parsedModel.dimensions !== "number" || !Number.isInteger(parsedModel.dimensions) || parsedModel.dimensions <= 0) throw new Error();
         configuredModel = parsedModel as ModelIdentity;
       }
-      JSON.parse(values.get("unavailableFamilies") ?? "[]");
+      parseUnavailableFamilies(values.get("unavailableFamilies") ?? "[]");
       for (const row of this.database.prepare("SELECT metadata_json,content_hash FROM retrieval_resources").all() as { metadata_json: string; content_hash: string }[]) {
         const resource = JSON.parse(row.metadata_json) as { family?: unknown };
         if (typeof resource.family !== "string" || typeof row.content_hash !== "string" || row.content_hash.length === 0) throw new Error();
@@ -236,4 +236,14 @@ export class RetrievalStore {
 
 function corpusHash(snapshot: SourceSnapshot): string {
   return hashText(JSON.stringify(snapshot.resources.map(({ resource }) => [resource.key, resource.contentHash]).sort()));
+}
+
+function parseUnavailableFamilies(serialized: string): Set<string> {
+  try {
+    const parsed: unknown = JSON.parse(serialized);
+    if (!Array.isArray(parsed) || parsed.some((family) => typeof family !== "string" || !UNAVAILABLE_FAMILIES.has(family))) throw new Error();
+    return new Set(parsed);
+  } catch {
+    throw new RetrievalIntegrityError("Unavailable-family metadata is invalid.");
+  }
 }

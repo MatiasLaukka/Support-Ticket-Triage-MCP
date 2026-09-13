@@ -3,7 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runRetrievalIndex } from "../scripts/retrieval-index.js";
-import { evaluateRetrieval } from "../scripts/evaluate-retrieval.js";
+import { evaluateRetrieval, providerForEvaluation } from "../scripts/evaluate-retrieval.js";
 
 describe("retrieval maintenance CLI", () => {
   it("reports absent status without creating a database and rejects unknown commands", async () => {
@@ -29,5 +29,11 @@ describe("retrieval maintenance CLI", () => {
       reviewedContrastFamilies: expect.arrayContaining(["webhook rotation/latency", "editor session/platform loading"]),
     });
     expect(JSON.stringify(report)).not.toContain("Webhook deliveries delayed by ten minutes");
+  });
+
+  it("requires an explicit complete provider tuple for live evaluation", () => {
+    expect(providerForEvaluation([], {})).toBeUndefined();
+    expect(() => providerForEvaluation(["--live-embeddings"], { TRIAGE_EMBEDDING_MODEL: "model-only" })).toThrow(/complete .* tuple/i);
+    expect(() => providerForEvaluation(["--unexpected"], {})).toThrow(/Unknown retrieval evaluation option/);
   });
 });

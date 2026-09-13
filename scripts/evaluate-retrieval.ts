@@ -14,6 +14,8 @@ import { IndexManager } from "../src/retrieval/index-manager.js";
 import { retrieve } from "../src/retrieval/search.js";
 import { scorePool, scoreRanked, type RetrievalExpectation } from "../src/retrieval/evaluation.js";
 import { unavailableReusableKnowledge } from "../src/knowledge-evolution/reusable-context.js";
+import { embeddingProviderFromEnv } from "../src/retrieval/embedding-provider.js";
+import type { EmbeddingProvider } from "../src/retrieval/types.js";
 
 const K_BUDGET = {
   "knowledge-article": { lexical: 5, semantic: 5 },
@@ -43,7 +45,7 @@ type ScenarioReport = {
   channelStatuses: { lexical: string; semantic: string };
 };
 
-export async function evaluateRetrieval(): Promise<Record<string, unknown>> {
+export async function evaluateRetrieval(input: { provider?: EmbeddingProvider } = {}): Promise<Record<string, unknown>> {
   const sourceRoot = mkdtempSync(join(tmpdir(), "triage-retrieval-eval-"));
   const tickets = new TicketRepository(sourceRoot, resolve("data/seed/tickets.json"));
   const store = RetrievalStore.open(":memory:");
@@ -54,14 +56,14 @@ export async function evaluateRetrieval(): Promise<Record<string, unknown>> {
       loadEvaluationOracles(),
     ]);
     const snapshot = loadRetrievalSources({ articles, reusable: unavailableReusableKnowledge(), completedSnapshots: [] });
-    const manager = new IndexManager({ store, load: async () => snapshot });
+    const manager = new IndexManager({ store, load: async () => snapshot, ...(input.provider === undefined ? {} : { provider: input.provider }) });
     await manager.refresh(new AbortController().signal);
     const scenarios: ScenarioReport[] = [];
     for (const oracle of oracles) {
       if (oracle.retrieval === undefined) continue;
       const ticket = await tickets.get(oracle.ticketId);
       const query = buildRetrievalQuery({ ticket, customerReplies: [], customerReplyWatermark: "seed", references: [] });
-      const result = await retrieve({ query, store, limits: K_BUDGET, signal: new AbortController().signal });
+      const result = await retrieve({ query, store, limits: K_BUDGET, ...(input.provider === undefined ? {} : { provider: input.provider }), signal: new AbortController().signal });
       const lexicalKeys = result.candidates.filter((candidate) => candidate.lexical !== undefined).map((candidate) => candidate.resourceKey);
       const semanticKeys = result.candidates.filter((candidate) => candidate.semantic !== undefined).map((candidate) => candidate.resourceKey);
       const unionKeys = result.candidates.map((candidate) => candidate.resourceKey);
@@ -98,19 +100,19 @@ export async function evaluateRetrieval(): Promise<Record<string, unknown>> {
       return oracle.requiredResourceKeys.filter((key) => articles.has(key)).length / oracle.requiredResourceKeys.length;
     }).filter((value): value is number => value !== null);
     return {
-      mode: "offline-lexical-only",
-      semanticEvidence: "outstanding",
+      mode: input.provider === undefined ? "offline-lexical-only" : "live-embeddings",
+      semanticEvidence: input.provider === undefined ? "outstanding" : "measured",
       sourceCommit: sourceCommit(),
       oracleHash,
       scenarioCutoff: SCENARIO_CUTOFF,
       corpusHash,
       representationVersion: store.metadata().representationVersion,
       ftsTokenization: "unicode-letter-number-v1; quoted OR terms; max 128 tokens",
-      model: null,
+      model: input.provider?.model ?? null,
       kBudget: K_BUDGET,
       scenarioCount: scenarios.length,
       candidatePools: scenarios,
-      channelStatuses: { lexical: "available", semantic: "unavailable:provider-not-configured" },
+      channelStatuses: { lexical: "available", semantic: input.provider === undefined ? "unavailable:provider-not-configured" : "measured" },
       perTypeMetrics,
       perFamilyMetrics,
       baselineComparison: {
@@ -216,13 +218,24 @@ function markdownReport(report: Record<string, unknown>): string {
 }
 
 async function main(): Promise<void> {
-  const report = await evaluateRetrieval();
+  const provider = providerForEvaluation(process.argv.slice(2), process.env);
+  const report = await evaluateRetrieval(provider === undefined ? {} : { provider });
   const outputDir = resolve("reports/retrieval");
   mkdirSync(outputDir, { recursive: true });
   writeFileSync(resolve(outputDir, "evaluation.json"), `${JSON.stringify(report, null, 2)}\n`, "utf8");
   writeFileSync(resolve(outputDir, "evaluation.md"), markdownReport(report), "utf8");
   console.log(JSON.stringify(report, null, 2));
   console.log(markdownReport(report));
+}
+
+export function providerForEvaluation(args: readonly string[], env: NodeJS.ProcessEnv): EmbeddingProvider | undefined {
+  const unknown = args.filter((arg) => arg !== "--live-embeddings");
+  if (unknown.length > 0) throw new Error(`Unknown retrieval evaluation option: ${unknown[0]}.`);
+  if (!args.includes("--live-embeddings")) return undefined;
+  let provider: EmbeddingProvider | undefined;
+  try { provider = embeddingProviderFromEnv(env); } catch { throw new Error("--live-embeddings requires the complete TRIAGE_EMBEDDING_ENDPOINT, TRIAGE_EMBEDDING_MODEL, TRIAGE_EMBEDDING_REVISION, and TRIAGE_EMBEDDING_DIMENSIONS tuple."); }
+  if (provider === undefined) throw new Error("--live-embeddings requires the complete TRIAGE_EMBEDDING_ENDPOINT, TRIAGE_EMBEDDING_MODEL, TRIAGE_EMBEDDING_REVISION, and TRIAGE_EMBEDDING_DIMENSIONS tuple.");
+  return provider;
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) main().catch((error: unknown) => { console.error(error instanceof Error ? error.message : error); process.exitCode = 1; });

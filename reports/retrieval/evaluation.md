@@ -2,7 +2,7 @@
 
 - Mode: offline-lexical-only
 - Semantic evidence: outstanding
-- Source commit: 9501efbc0759a0102df40aa358f6d92cb33581b4
+- Source commit: 7b2c61395986bc0580c92ad68f0cab8f7c559a23
 - Oracle hash: dcb56214562d4d3a68c6ea5ccb0b421f789f185c10aaa7c114c7e3a34aa183d9
 - Scenario cutoff: 2026-09-12T23:59:59.999Z
 - Corpus hash: c2ecd79155568570f0870246fac4cf8c307940d8327220991a188cb33de79e58

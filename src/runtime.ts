@@ -367,6 +367,7 @@ export async function createRuntimeDependencies(
     try {
       retrievalStore = RetrievalStore.open(resolve(dataRoot, "retrieval.sqlite"));
       retrievalStore.initialize();
+      retrievalStore.validate();
       const provider = embeddingProviderFromEnv(env);
       const load = async () => {
         const [articles, reusable] = await Promise.all([

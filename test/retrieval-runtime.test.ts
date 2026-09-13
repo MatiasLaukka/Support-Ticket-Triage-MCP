@@ -1,9 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
 import { createRuntimeDependencies, parseRetrievalMode } from "../src/runtime.js";
+import { RetrievalStore } from "../src/retrieval/sqlite-store.js";
 
 describe("retrieval runtime configuration", () => {
   it("defaults to shadow and accepts the explicit off comparison mode", () => {
@@ -33,6 +34,25 @@ describe("retrieval runtime configuration", () => {
     expect(shadow.retrievalObserver).toBeDefined();
     await shadow.close();
     rmSync(root, { recursive: true, force: true });
+  });
+
+  it("validates an existing retrieval index before publishing startup reconciliation", async () => {
+    const root = mkdtempSync(join(tmpdir(), "triage-b3-runtime-validate-"));
+    const validate = vi.spyOn(RetrievalStore.prototype, "validate");
+    const env = {
+      TRIAGE_DATA_ROOT: root,
+      TRIAGE_SEED_FILE: resolve("data/seed/tickets.json"),
+      TRIAGE_KNOWLEDGE_ROOT: resolve("data/knowledge"),
+      TRIAGE_RETRIEVAL_MODE: "shadow",
+    };
+    try {
+      const runtime = await createRuntimeDependencies({ env });
+      expect(validate).toHaveBeenCalled();
+      await runtime.close();
+    } finally {
+      validate.mockRestore();
+      try { rmSync(root, { recursive: true, force: true }); } catch { /* Windows may release SQLite handles after the test turn. */ }
+    }
   });
 
   it("keeps normal runtime available when retrieval provider configuration is invalid", async () => {

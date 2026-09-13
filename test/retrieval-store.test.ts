@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { RetrievalStore } from "../src/retrieval/sqlite-store.js";
 import { projectArticle } from "../src/retrieval/representations.js";
+import { projectLearnedCause } from "../src/retrieval/sources.js";
 
 describe("retrieval store", () => {
   it("uses FTS5 and removes changed representations", () => {
@@ -24,6 +25,38 @@ describe("retrieval store", () => {
     db.reconcile({ resources: [article], unavailableFamilies: [] });
     expect(db.metadata().generation).toBe(before.generation);
     expect(db.metadata().lexicalGeneration).toBe(before.lexicalGeneration);
+    db.close();
+  });
+
+  it("retains unavailable-family projections while excluding them from active retrieval", () => {
+    const db = RetrievalStore.open(":memory:");
+    db.initialize();
+    const learned = projectLearnedCause({
+      object: {
+        id: "example",
+        kind: "known-cause",
+        name: "Cached approved learning",
+        summary: "Cached approved learning",
+        triggerPatterns: ["cached"],
+        evidencePolicy: { mode: "none-required", rationale: "reviewed" },
+        timeConstraints: [], diagnosticSteps: ["inspect"], fixSteps: [], verificationSteps: [],
+        customerSafeExplanation: "Cached approved learning", operatorRationale: "reviewed", owner: "support", version: 1,
+        supportingDiagnosisIds: [], supportingTicketIds: [], provenance: { source: "review", recordedAt: "2026-09-12T00:00:00.000Z" },
+        status: "approved", approval: { approvedBy: "reviewer", approvedAt: "2026-09-12T00:00:00.000Z" }, learningGovernance: "legacy",
+      },
+      version: 1,
+      learning: { maturity: "outcome-verified", health: "active", eligibleForReuse: true },
+      eligibilitySource: "legacy-compatible",
+    });
+    db.reconcile({ resources: [learned], unavailableFamilies: [] });
+    db.reconcile({ resources: [], unavailableFamilies: ["learned-known-cause"] });
+
+    expect(db.readSnapshot('"cached"').resources).toEqual([]);
+    const raw = (db as unknown as { database: { prepare(sql: string): { get(): { count: number } } } }).database;
+    expect(raw.prepare("SELECT count(*) AS count FROM retrieval_resources").get().count).toBe(1);
+
+    db.reconcile({ resources: [], unavailableFamilies: [] });
+    expect(raw.prepare("SELECT count(*) AS count FROM retrieval_resources").get().count).toBe(0);
     db.close();
   });
 
@@ -60,6 +93,28 @@ describe("retrieval store", () => {
     db.close();
   });
 
+  it("detects tampered canonical representation and FTS rows during validation", () => {
+    const db = RetrievalStore.open(":memory:");
+    db.initialize();
+    const article = projectArticle({ id: "integrity", title: "Integrity", tags: [], body: "Canonical content" });
+    db.reconcile({ resources: [article], unavailableFamilies: [] });
+    const raw = (db as unknown as { database: { prepare(sql: string): { run(...values: unknown[]): void } } }).database;
+    raw.prepare("UPDATE retrieval_representations SET lexical_text='tampered' WHERE representation_id=?").run(article.representations[0]!.id);
+    expect(() => db.validate()).toThrow();
+    db.close();
+  });
+
+  it("detects FTS rows that no longer match their representation", () => {
+    const db = RetrievalStore.open(":memory:");
+    db.initialize();
+    const article = projectArticle({ id: "fts-integrity", title: "FTS integrity", tags: [], body: "Canonical content" });
+    db.reconcile({ resources: [article], unavailableFamilies: [] });
+    const raw = (db as unknown as { database: { prepare(sql: string): { run(...values: unknown[]): void } } }).database;
+    raw.prepare("UPDATE retrieval_fts SET body='tampered' WHERE representation_id=?").run(article.representations[0]!.id);
+    expect(() => db.validate()).toThrow();
+    db.close();
+  });
+
   it("rejects unknown unavailable source families during validation", () => {
     const db = RetrievalStore.open(":memory:");
     db.initialize();
@@ -80,7 +135,7 @@ describe("retrieval store", () => {
     db.installVectors([{ representationId: article.representations[0]!.id, resourceKey: article.resource.key, contentHash: article.representations[0]!.contentHash, model: { id: "model", revision: "1", dimensions: 2 }, values: [1, 0] }]);
     const raw = (db as unknown as { database: { prepare(sql: string): { run(...values: unknown[]): void } } }).database;
     raw.prepare("UPDATE retrieval_embeddings SET content_hash=? WHERE representation_id=?").run("stale-hash", article.representations[0]!.id);
-    expect(db.readSnapshot('"stale"').vectors).toHaveLength(0);
+    expect(() => db.readSnapshot('"stale"')).toThrow();
     expect(() => db.validate()).toThrow();
     db.close();
   });

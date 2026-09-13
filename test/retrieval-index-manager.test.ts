@@ -20,13 +20,16 @@ describe("retrieval index manager", () => {
     await manager.close();
   });
 
-  it("recovers its queue after a provider failure", async () => {
+  it("keeps lexical retrieval available and retries pending vectors after a provider failure", async () => {
     const store = RetrievalStore.open(":memory:");
     const article = projectArticle({ id: "a", title: "A", tags: [], body: "Webhook signing" });
     let fail = true;
     const manager = new IndexManager({ store, load: async () => ({ resources: [article], unavailableFamilies: [] }), provider: { model: { id: "test", revision: "1", dimensions: 2 }, embed: async () => { if (fail) { fail = false; throw new Error("provider"); } return [[1, 0]]; } } });
-    await expect(manager.refresh(new AbortController().signal)).rejects.toThrow("provider");
+    await expect(manager.refresh(new AbortController().signal)).resolves.toMatchObject({ state: "degraded", semanticGeneration: 0 });
+    expect(store.readSnapshot('"webhook"').lexicalMatches).toHaveLength(1);
+    expect(store.readSnapshot('"webhook"').vectors).toHaveLength(0);
     await expect(manager.refresh(new AbortController().signal)).resolves.toBeDefined();
+    expect(store.readSnapshot('"webhook"').vectors).toHaveLength(1);
     await manager.close();
   });
 
@@ -64,6 +67,29 @@ describe("retrieval index manager", () => {
     await manager.refresh(new AbortController().signal);
     expect(calls).toBe(2);
     expect(store.readSnapshot('"webhook"').vectors[0]?.model).toEqual(model);
+    await manager.close();
+  });
+
+  it("preserves the active model and vectors when a rebuild embedding attempt fails", async () => {
+    const store = RetrievalStore.open(":memory:");
+    const article = projectArticle({ id: "atomic-model", title: "Atomic model", tags: [], body: "Webhook signing" });
+    let model: { id: string; revision: string; dimensions: number } = { id: "model-a", revision: "1", dimensions: 2 };
+    let failRebuild = false;
+    const provider = {
+      get model() { return model; },
+      embed: async (texts: readonly string[]) => {
+        if (failRebuild) throw new Error("provider unavailable");
+        return texts.map(() => [1, 0]);
+      },
+    };
+    const manager = new IndexManager({ store, load: async () => ({ resources: [article], unavailableFamilies: [] }), provider });
+    await manager.refresh(new AbortController().signal);
+    model = { id: "model-b", revision: "2", dimensions: 2 };
+    failRebuild = true;
+
+    await expect(manager.rebuild(new AbortController().signal)).rejects.toThrow("provider unavailable");
+    expect(store.metadata().model).toEqual({ id: "model-a", revision: "1", dimensions: 2 });
+    expect(store.readSnapshot('"webhook"').vectors[0]?.model).toEqual({ id: "model-a", revision: "1", dimensions: 2 });
     await manager.close();
   });
 });

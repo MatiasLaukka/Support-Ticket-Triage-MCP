@@ -4,27 +4,28 @@ import type { KnowledgeArticle } from "../domain.js";
 import { eligibleCompletedDiagnoses, type CompletedDiagnosisReadSnapshot } from "../knowledge-evolution/completed-diagnosis-source.js";
 import type { ReusableKnowledgeContext, ReusableKnowledgeResult } from "../knowledge-evolution/reusable-context.js";
 import { latestAuditPosition } from "../approval-desk/workflow-causal-context.js";
-import { hashText, normalizeText, projectArticle, safeCaseText } from "./representations.js";
+import { hashRepresentation, hashResource, normalizeText, projectArticle, safeCaseText } from "./representations.js";
 import type { ProjectedResource, ResourceKey, SourceSnapshot } from "./types.js";
 
 const key = (type: "known-cause" | "diagnostic-playbook" | "resolved-ticket", id: string) => `${type}:${id}` as ResourceKey;
 
 function one(resource: ProjectedResource["resource"], title: string, text: string, keywords: readonly string[]): ProjectedResource {
   const semanticText = normalizeText(`${title}\n\n${text}`);
-  const contentHash = hashText(JSON.stringify({ resource: { key: resource.key, type: resource.type, sourceId: resource.sourceId, sourceVersion: resource.sourceVersion, family: resource.family, linkedResourceKeys: resource.linkedResourceKeys, taxonomy: resource.taxonomy }, title, text, keywords }));
+  const representation = {
+    id: `${resource.key}:canonical:0`,
+    resourceKey: resource.key,
+    kind: "canonical",
+    ordinal: 0,
+    title,
+    keywords,
+    lexicalText: normalizeText(`${title}\n${keywords.join(" ")}\n${text}`),
+    semanticText,
+  };
+  const contentHash = hashRepresentation(representation);
+  const canonicalResource = { key: resource.key, type: resource.type, sourceId: resource.sourceId, ...(resource.sourceVersion ? { sourceVersion: resource.sourceVersion } : {}), family: resource.family, linkedResourceKeys: resource.linkedResourceKeys, ...(resource.taxonomy ? { taxonomy: resource.taxonomy } : {}) };
   return {
-    resource: { ...resource, contentHash },
-    representations: [{
-      id: `${resource.key}:canonical:0`,
-      resourceKey: resource.key,
-      kind: "canonical",
-      ordinal: 0,
-      title,
-      keywords,
-      lexicalText: normalizeText(`${title}\n${keywords.join(" ")}\n${text}`),
-      semanticText,
-      contentHash,
-    }],
+    resource: { ...resource, contentHash: hashResource(canonicalResource, [{ id: representation.id, contentHash }]) },
+    representations: [{ ...representation, contentHash }],
   };
 }
 

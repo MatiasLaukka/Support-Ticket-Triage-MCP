@@ -21,18 +21,22 @@ export class IndexManager {
 
   private async runRefresh(signal: AbortSignal, rebuild: boolean): Promise<IndexMetadata> {
     const snapshot = await this.input.load();
-    const modelChanged = this.input.provider?.model === undefined ? false : this.input.store.configureModel(this.input.provider.model);
     if (rebuild) {
       const vectors = this.input.provider === undefined
         ? []
         : await this.embed(snapshot.resources.flatMap(({ representations }) => representations), signal);
-      this.input.store.replaceAll(snapshot, vectors);
+      this.input.store.replaceAll(snapshot, vectors, this.input.provider?.model);
       return this.input.store.metadata();
     }
+    if (this.input.provider) this.input.store.configureModel(this.input.provider.model);
     const pending = this.input.store.reconcile(snapshot);
-    const toEmbed = modelChanged ? snapshot.resources.flatMap(({ representations }) => representations) : pending;
-    if (this.input.provider && toEmbed.length > 0) {
-      this.input.store.installVectors(await this.embed(toEmbed, signal));
+    if (this.input.provider && pending.length > 0) {
+      try {
+        this.input.store.installVectors(await this.embed(pending, signal));
+      } catch (error) {
+        if (signal.aborted || this.controller.signal.aborted) throw error;
+        return this.input.store.metadata();
+      }
     }
     return this.input.store.metadata();
   }

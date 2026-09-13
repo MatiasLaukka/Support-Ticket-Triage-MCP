@@ -189,6 +189,7 @@ export async function evaluateTicketCommand(
       await deps.retrievalObserver.observe(buildRetrievalQuery({ ...capturedBasis, references }), commandId);
     } catch {
       // Retrieval remains observational and cannot affect authoritative results.
+      deps.retrievalObserver.reportFailure?.(commandId);
     }
   }
   return result;

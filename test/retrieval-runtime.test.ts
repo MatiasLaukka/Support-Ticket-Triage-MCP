@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -7,6 +8,10 @@ import { createRuntimeDependencies, parseRetrievalMode } from "../src/runtime.js
 import { RetrievalStore } from "../src/retrieval/sqlite-store.js";
 import { TicketSchema } from "../src/domain.js";
 import { evaluateTicketCommand } from "../src/evaluation-command.js";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { createTriageServer } from "../src/server.js";
+import { openReliabilityRuntime } from "./reliability-runtime-fixture.js";
 
 describe("retrieval runtime configuration", () => {
   it("defaults to shadow and accepts the explicit off comparison mode", () => {
@@ -54,6 +59,24 @@ describe("retrieval runtime configuration", () => {
     } finally {
       validate.mockRestore();
       try { rmSync(root, { recursive: true, force: true }); } catch { /* Windows may release SQLite handles after the test turn. */ }
+    }
+  });
+
+  it("keeps runtime commands available and preserves an integrity trace when startup finds a corrupt retrieval index", async () => {
+    const root = mkdtempSync(join(tmpdir(), "triage-b3-runtime-corrupt-"));
+    const path = join(root, "retrieval.sqlite");
+    const corrupted = RetrievalStore.open(path);
+    corrupted.initialize();
+    const raw = (corrupted as unknown as { database: { prepare(sql: string): { run(...values: unknown[]): void } } }).database;
+    raw.prepare("UPDATE retrieval_index_metadata SET value=? WHERE key='corpusHash'").run("not-a-hash");
+    corrupted.close();
+    const runtime = await createRuntimeDependencies({ env: { TRIAGE_DATA_ROOT: root, TRIAGE_SEED_FILE: resolve("data/seed/tickets.json"), TRIAGE_KNOWLEDGE_ROOT: resolve("data/knowledge"), TRIAGE_RETRIEVAL_MODE: "shadow" } });
+    try {
+      await runtime.retrievalObserver!.observe({ queryText: "test", queryHash: "q", ticketId: "TKT-0001", sourceRevision: 1, customerReplyWatermark: "none", queryTruncated: false, references: [] }, "cmd-corrupt-startup");
+      expect(runtime.retrievalObserver!.recent()[0]).toMatchObject({ failureCode: "INDEX_INTEGRITY_ERROR" });
+    } finally {
+      await runtime.close();
+      rmSync(root, { recursive: true, force: true });
     }
   });
 
@@ -114,8 +137,44 @@ describe("retrieval runtime configuration", () => {
     } as any;
     const offResult = await evaluateTicketCommand(base, { ticketId: ticket.id, aiPreference: "deterministic", responseStyle: "auto" }, "40000000-0000-4000-8000-000000000001");
     let observed = 0;
-    const shadowResult = await evaluateTicketCommand({ ...base, retrievalObserver: { observe: async () => { observed += 1; throw new Error("shadow failure"); }, recent: () => [], close: async () => undefined } }, { ticketId: ticket.id, aiPreference: "deterministic", responseStyle: "auto" }, "40000000-0000-4000-8000-000000000002");
+    let reported = 0;
+    const shadowResult = await evaluateTicketCommand({ ...base, retrievalObserver: { observe: async () => { observed += 1; throw new Error("shadow failure"); }, reportFailure: () => { reported += 1; }, recent: () => [], close: async () => undefined } }, { ticketId: ticket.id, aiPreference: "deterministic", responseStyle: "auto" }, "40000000-0000-4000-8000-000000000002");
     expect(observed).toBe(1);
+    expect(reported).toBe(1);
     expect(shadowResult).toEqual(offResult);
+  });
+
+  it("keeps HTTP and MCP evaluation authority identical while shadow observation is advisory", async () => {
+    const off = await openReliabilityRuntime({ environment: { TRIAGE_RETRIEVAL_MODE: "off" } });
+    const shadow = await openReliabilityRuntime({ environment: { TRIAGE_RETRIEVAL_MODE: "shadow" } });
+    const input = { actor: "approval-desk", aiPreference: "deterministic" };
+    const offCommandId = randomUUID();
+    const shadowCommandId = randomUUID();
+    const server = createTriageServer(shadow.runtime);
+    const client = new Client({ name: "retrieval-shadow-parity", version: "1.0.0" });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    await server.connect(serverTransport);
+    await client.connect(clientTransport);
+    try {
+      const [offResult, shadowResult] = await Promise.all([
+        off.post("/api/tickets/TKT-1010/recommendations", input, offCommandId),
+        shadow.post("/api/tickets/TKT-1010/recommendations", input, shadowCommandId),
+      ]);
+      const replay = await client.callTool({ name: "evaluate_ticket", arguments: { commandId: shadowCommandId, ticketId: "TKT-1010", ...input } });
+
+      expect(offResult.status).toBe(201);
+      expect(shadowResult.status).toBe(201);
+      expect((replay.structuredContent as { recommendation: unknown }).recommendation).toEqual(shadowResult.body.recommendation);
+      const withoutIdentity = ({ id: _id, commandId: _commandId, ...value }: any) => value;
+      expect(withoutIdentity(offResult.body.recommendation as any)).toEqual(withoutIdentity(shadowResult.body.recommendation as any));
+      expect(shadow.runtime.retrievalObserver?.recent()).toHaveLength(1);
+      expect(off.runtime.retrievalObserver).toBeUndefined();
+      expect((off.runtime.operationalStore as any).readWorkflowSnapshot("TKT-1010").events.map(withoutIdentity))
+        .toEqual((shadow.runtime.operationalStore as any).readWorkflowSnapshot("TKT-1010").events.map(withoutIdentity));
+      expect((off.runtime.operationalStore as any).readCommandReceipt(offCommandId).requestHash)
+        .toEqual((shadow.runtime.operationalStore as any).readCommandReceipt(shadowCommandId).requestHash);
+    } finally {
+      await Promise.allSettled([client.close(), server.close(), off.close(), shadow.close()]);
+    }
   });
 });

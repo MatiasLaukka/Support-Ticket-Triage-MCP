@@ -67,4 +67,18 @@ describe("retrieval search", () => {
     expect(calls).toBe(0);
     store.close();
   });
+
+  it("records a bounded diagnostic for an explicit reference missing from the snapshot", async () => {
+    const store = RetrievalStore.open(":memory:");
+    store.initialize();
+    const result = await retrieve({
+      query: { queryText: "webhook", queryHash: "q", ticketId: "TKT-0001", sourceRevision: 1, customerReplyWatermark: "none", queryTruncated: false, references: [{ resourceKey: "knowledge-article:missing", channel: "deterministic-reference", sourceId: "missing", reason: "classifier-association" }] },
+      store,
+      limits: { "knowledge-article": { lexical: 5, semantic: 5 }, "known-cause": { lexical: 5, semantic: 5 }, "diagnostic-playbook": { lexical: 5, semantic: 5 }, "resolved-ticket": { lexical: 5, semantic: 5 } },
+      signal: new AbortController().signal,
+    });
+
+    expect((result as any).referenceDiagnostics).toEqual([{ resourceKey: "knowledge-article:missing", channel: "deterministic-reference", reason: "missing-resource" }]);
+    store.close();
+  });
 });

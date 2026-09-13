@@ -145,4 +145,23 @@ describe("retrieval sources", () => {
     expect(confirmed?.representations[0]?.semanticText).toContain("Customer confirmed resolution");
     expect(unconfirmed?.representations[0]?.semanticText).not.toContain("Customer confirmed resolution");
   });
+
+  it("sanitizes every resolved-case projection field while retaining causal confidence and outcome", () => {
+    const ticketId = "TKT-0002";
+    const diagnosisAudit = AuditEventSchema.parse({
+      id: "20000000-0000-4000-8000-000000000003",
+      timestamp: "2026-09-12T10:00:00.000Z", actor: "support", action: "diagnosis-completed", ticketId,
+      before: {}, after: { sourceTicketRevision: 1, sourceConversationWatermark: { state: "none" }, diagnosis: { status: "completed", causeType: "performance", customerSafeSummary: "The editor was restored.", evidenceUsed: ["maple studio saw a blank editor", "contact person@example.com", "Maple Studio account id=acct-123", "editor blank"], evidenceReferences: [], confidence: "confirmed", owner: "support", recommendedNextAction: "Apply mitigation.", doNotSay: [] } },
+      rationale: "Recorded diagnosis.", knowledgeArticleIds: [], result: "success",
+    });
+    const diagnosis = { id: `diagnosis-${diagnosisAudit.id}`, ticketId, problem: "The editor was restored.", symptoms: ["performance", "maple studio saw a blank editor", "contact person@example.com", "Maple Studio account id=acct-123", "editor blank"], evidenceUsed: ["maple studio saw a blank editor", "contact person@example.com", "Maple Studio account id=acct-123", "editor blank"], evidenceReferences: [], ownerTeam: "support", fixSteps: ["Apply the completed diagnosis next action through the governed support workflow."], verificationSteps: ["Confirm the customer-safe outcome after the governed next action."], completedAt: diagnosisAudit.timestamp };
+    const event = (sequence: number, facts: Record<string, unknown>) => ({ id: sequence === 1 ? diagnosisAudit.id : "20000000-0000-4000-8000-000000000004", ticketId, sequence, occurredAt: sequence === 1 ? diagnosisAudit.timestamp : "2026-09-12T10:02:00.000Z", actor: "support", action: sequence === 1 ? "diagnosis-completed" : "ticket-updated", commandId: "30000000-0000-4000-8000-000000000002", facts });
+    const projected = projectResolvedCase({ ticket: { id: ticketId, status: "resolved", revision: 1, updatedAt: "2026-09-12T10:02:00.000Z", customer: { name: "Maple Studio" } }, audits: [diagnosisAudit], diagnoses: [{ diagnosis, originalAudit: diagnosisAudit, operationalEventId: diagnosisAudit.id }], events: [event(1, { status: "completed", sourceRevision: 1 }), event(2, { status: "resolved", verificationType: "customer-confirmed" })] } as any);
+
+    const representation = projected?.representations[0];
+    expect(representation?.semanticText).toContain("Diagnosis confidence: confirmed.");
+    expect(representation?.semanticText).toContain("Verified outcome: Customer confirmed resolution after diagnosis.");
+    expect(representation?.semanticText).not.toMatch(/maple studio|person@example\.com|acct-123/i);
+    expect(representation?.keywords.join(" ")).not.toMatch(/maple studio|person@example\.com|acct-123/i);
+  });
 });

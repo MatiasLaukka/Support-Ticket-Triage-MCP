@@ -56,6 +56,18 @@ export function projectResolvedCase(snapshot: CompletedDiagnosisReadSnapshot): P
   const identifiers = [snapshot.ticket.customer.name, snapshot.ticket.requester?.name].filter((value): value is string => value !== undefined);
   const problem = safeCaseText(diagnosis.problem, identifiers);
   if (!problem) return undefined;
+  const symptoms = diagnosis.symptoms.flatMap((symptom) => {
+    const safe = safeCaseText(symptom, identifiers);
+    return safe === undefined ? [] : [safe];
+  });
+  const evidence = (diagnosis.evidenceUsed ?? []).flatMap((item) => {
+    const safe = safeCaseText(item, identifiers);
+    return safe === undefined ? [] : [safe];
+  });
+  const auditDiagnosis = latest.event.after.diagnosis as { confidence?: unknown } | undefined;
+  const confidence = auditDiagnosis?.confidence === "likely" || auditDiagnosis?.confidence === "confirmed"
+    ? `Diagnosis confidence: ${auditDiagnosis.confidence}.`
+    : undefined;
   const diagnosisSequence = snapshot.events?.find(({ id }) => id === latest.event.id)?.sequence;
   const customerConfirmedClosure = diagnosisSequence !== undefined && snapshot.events?.some((event) =>
     event.ticketId === snapshot.ticket.id
@@ -65,8 +77,9 @@ export function projectResolvedCase(snapshot: CompletedDiagnosisReadSnapshot): P
     && event.facts.verificationType === "customer-confirmed",
   ) === true;
   // Proposed fix steps are intentionally omitted. A resolved ticket is useful
-  // memory only for the eligible diagnosis and evidence that caused it.
-  return one({ key: key("resolved-ticket", snapshot.ticket.id), type: "resolved-ticket", sourceId: snapshot.ticket.id, sourceVersion: snapshot.ticket.updatedAt, contentHash: "", family: "resolved-ticket", linkedResourceKeys: [] }, `Resolved case ${snapshot.ticket.id}`, [problem, ...diagnosis.symptoms, ...(diagnosis.evidenceUsed ?? []), ...(customerConfirmedClosure ? ["Customer confirmed resolution was recorded after the diagnosis."] : [])].join("\n"), diagnosis.symptoms);
+  // memory only for the eligible diagnosis, sanitized evidence, and an outcome
+  // explicitly supported by the causal history.
+  return one({ key: key("resolved-ticket", snapshot.ticket.id), type: "resolved-ticket", sourceId: snapshot.ticket.id, sourceVersion: snapshot.ticket.updatedAt, contentHash: "", family: "resolved-ticket", linkedResourceKeys: [] }, `Resolved case ${snapshot.ticket.id}`, [problem, ...symptoms, ...evidence, ...(confidence ? [confidence] : []), ...(customerConfirmedClosure ? ["Verified outcome: Customer confirmed resolution after diagnosis."] : [])].join("\n"), [...symptoms, ...evidence]);
 }
 
 export function loadRetrievalSources(input: { articles: readonly KnowledgeArticle[]; reusable: ReusableKnowledgeResult; completedSnapshots: readonly CompletedDiagnosisReadSnapshot[] }): SourceSnapshot {

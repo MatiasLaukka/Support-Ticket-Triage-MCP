@@ -2,10 +2,10 @@
 
 - Mode: offline-lexical-only
 - Semantic evidence: outstanding
-- Source commit: f94b9f184cd00e4c00677c023f1d60936a6e5425
+- Source commit: 9501efbc0759a0102df40aa358f6d92cb33581b4
 - Oracle hash: dcb56214562d4d3a68c6ea5ccb0b421f789f185c10aaa7c114c7e3a34aa183d9
 - Scenario cutoff: 2026-09-12T23:59:59.999Z
-- Corpus hash: 7bdf5d216fde8db344b2f83602a7e4a26465e361a90b253ba89c2ca863cfc521
+- Corpus hash: c2ecd79155568570f0870246fac4cf8c307940d8327220991a188cb33de79e58
 - Representation version: 1
 - FTS tokenization: unicode-letter-number-v1; quoted OR terms; max 128 tokens
 - Model: null

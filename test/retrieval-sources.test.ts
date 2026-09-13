@@ -76,4 +76,13 @@ describe("retrieval sources", () => {
       for (const articleId of descriptor.linkedKnowledgeArticleIds) expect(articleIds.has(articleId)).toBe(true);
     }
   });
+
+  it("marks resolved-ticket sources unavailable when verification yields no eligible cases", () => {
+    const snapshot = loadRetrievalSources({
+      articles: [retrievalArticle()],
+      reusable: { status: "available", contexts: [], issues: [] },
+      completedSnapshots: [{ ticket: { ...({ id: "TKT-0001", status: "open" } as any) }, audits: [], diagnoses: [] }],
+    });
+    expect(snapshot.unavailableFamilies).toContain("resolved-ticket");
+  });
 });

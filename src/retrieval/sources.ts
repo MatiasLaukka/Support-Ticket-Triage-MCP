@@ -61,12 +61,13 @@ export function projectResolvedCase(snapshot: CompletedDiagnosisReadSnapshot): P
 }
 
 export function loadRetrievalSources(input: { articles: readonly KnowledgeArticle[]; reusable: ReusableKnowledgeResult; completedSnapshots: readonly CompletedDiagnosisReadSnapshot[] }): SourceSnapshot {
+  const resolvedResources = input.completedSnapshots.map(projectResolvedCase).filter((item): item is ProjectedResource => item !== undefined);
   const resources = [
     ...input.articles.map(projectArticle),
     ...KNOWN_CAUSES.map(projectStaticCause),
     ...PLAYBOOK_DESCRIPTORS.map(projectPlaybook),
     ...(input.reusable.status === "available" ? input.reusable.contexts.filter((context) => context.learning.eligibleForReuse).map(projectLearnedCause) : []),
-    ...input.completedSnapshots.map(projectResolvedCase).filter((item): item is ProjectedResource => item !== undefined),
+    ...resolvedResources,
   ];
   const identities = new Set<string>();
   for (const item of resources) {
@@ -77,7 +78,7 @@ export function loadRetrievalSources(input: { articles: readonly KnowledgeArticl
     resources,
     unavailableFamilies: [
       ...(input.reusable.status === "available" ? [] : ["learned-known-cause" as const]),
-      ...(input.completedSnapshots.length === 0 ? ["resolved-ticket" as const] : []),
+      ...(resolvedResources.length === 0 ? ["resolved-ticket" as const] : []),
     ],
   };
 }

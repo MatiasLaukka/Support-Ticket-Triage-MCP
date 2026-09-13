@@ -48,4 +48,22 @@ describe("retrieval index manager", () => {
     expect(store.readSnapshot('"webhook"').resources).toHaveLength(0);
     await manager.close();
   });
+
+  it("re-embeds the complete corpus after the embedding model revision changes", async () => {
+    const store = RetrievalStore.open(":memory:");
+    const article = projectArticle({ id: "model-change", title: "Model change", tags: [], body: "Webhook signing" });
+    let model: { id: string; revision: string; dimensions: number } = { id: "test-a", revision: "1", dimensions: 2 };
+    let calls = 0;
+    const provider = {
+      get model() { return model; },
+      embed: async (texts: readonly string[]) => { calls += 1; return texts.map(() => [1, 0]); },
+    };
+    const manager = new IndexManager({ store, load: async () => ({ resources: [article], unavailableFamilies: [] }), provider });
+    await manager.refresh(new AbortController().signal);
+    model = { id: "test-b", revision: "2", dimensions: 2 };
+    await manager.refresh(new AbortController().signal);
+    expect(calls).toBe(2);
+    expect(store.readSnapshot('"webhook"').vectors[0]?.model).toEqual(model);
+    await manager.close();
+  });
 });

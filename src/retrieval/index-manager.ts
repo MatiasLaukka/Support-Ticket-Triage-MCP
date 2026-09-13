@@ -21,7 +21,7 @@ export class IndexManager {
 
   private async runRefresh(signal: AbortSignal, rebuild: boolean): Promise<IndexMetadata> {
     const snapshot = await this.input.load();
-    if (this.input.provider) this.input.store.configureModel(this.input.provider.model);
+    const modelChanged = this.input.provider?.model === undefined ? false : this.input.store.configureModel(this.input.provider.model);
     if (rebuild) {
       const vectors = this.input.provider === undefined
         ? []
@@ -30,8 +30,9 @@ export class IndexManager {
       return this.input.store.metadata();
     }
     const pending = this.input.store.reconcile(snapshot);
-    if (this.input.provider && pending.length > 0) {
-      this.input.store.installVectors(await this.embed(pending, signal));
+    const toEmbed = modelChanged ? snapshot.resources.flatMap(({ representations }) => representations) : pending;
+    if (this.input.provider && toEmbed.length > 0) {
+      this.input.store.installVectors(await this.embed(toEmbed, signal));
     }
     return this.input.store.metadata();
   }

@@ -11,7 +11,7 @@ const key = (type: "known-cause" | "diagnostic-playbook" | "resolved-ticket", id
 
 function one(resource: ProjectedResource["resource"], title: string, text: string, keywords: readonly string[]): ProjectedResource {
   const semanticText = normalizeText(`${title}\n\n${text}`);
-  const contentHash = hashText(JSON.stringify({ resource: resource.key, title, text, keywords }));
+  const contentHash = hashText(JSON.stringify({ resource: { key: resource.key, type: resource.type, sourceId: resource.sourceId, sourceVersion: resource.sourceVersion, family: resource.family, linkedResourceKeys: resource.linkedResourceKeys, taxonomy: resource.taxonomy }, title, text, keywords }));
   return {
     resource: { ...resource, contentHash },
     representations: [{

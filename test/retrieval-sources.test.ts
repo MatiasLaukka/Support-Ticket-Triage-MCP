@@ -61,6 +61,13 @@ describe("retrieval sources", () => {
     expect(learnedResource.resource.key).toBe(`known-cause:learned/${KNOWN_CAUSES[0]!.id}`);
   });
 
+  it("changes the projection hash when linked source metadata changes", () => {
+    const cause = KNOWN_CAUSES[0]!;
+    const linked = projectStaticCause(cause);
+    const changed = projectStaticCause({ ...cause, knowledgeArticleIds: [...cause.knowledgeArticleIds, "event-tracking-debugging"] });
+    expect(changed.resource.contentHash).not.toBe(linked.resource.contentHash);
+  });
+
   it("grounds every descriptor in an existing executable diagnostic path", () => {
     const playbookFile = "src/approval-desk/diagnostic-playbooks.ts";
     expect(existsSync(new URL(`../${playbookFile}`, import.meta.url))).toBe(true);

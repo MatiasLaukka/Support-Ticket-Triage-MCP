@@ -81,15 +81,15 @@ export class RetrievalStore {
     this.initialized = true;
   }
 
-  configureModel(model: ModelIdentity | undefined): void {
+  configureModel(model: ModelIdentity | undefined): boolean {
     this.assertReady();
-    if (model === undefined) return;
+    if (model === undefined) return false;
     const current = this.metadata().model;
-    if (!current || current.id !== model.id || current.revision !== model.revision || current.dimensions !== model.dimensions) {
-      this.database.prepare("UPDATE retrieval_embeddings SET status='stale' WHERE model_id != ? OR model_revision != ? OR dimensions != ?").run(model.id, model.revision, model.dimensions);
-      this.setMeta("model", JSON.stringify(model));
-      this.setMeta("semanticGeneration", "0");
-    }
+    if (current && current.id === model.id && current.revision === model.revision && current.dimensions === model.dimensions) return false;
+    this.database.prepare("UPDATE retrieval_embeddings SET status='stale' WHERE model_id != ? OR model_revision != ? OR dimensions != ?").run(model.id, model.revision, model.dimensions);
+    this.setMeta("model", JSON.stringify(model));
+    this.setMeta("semanticGeneration", "0");
+    return true;
   }
 
   metadata(): IndexMetadata {

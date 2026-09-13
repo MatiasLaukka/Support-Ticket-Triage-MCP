@@ -173,6 +173,28 @@ describe("retrieval runtime configuration", () => {
     releaseObservation();
   });
 
+  it("observes the evaluation basis captured before the commit can advance ticket state", async () => {
+    const ticket = TicketSchema.parse({
+      id: "TKT-0003", createdAt: "2026-09-12T00:00:00.000Z", updatedAt: "2026-09-12T00:00:00.000Z",
+      customer: { name: "Northstar Labs", plan: "enterprise", region: "eu-west", vip: false },
+      subject: "Original customer subject", description: "Original customer description.", status: "triage", category: "api", priority: "P2", team: "api-platform", tags: ["api"],
+      sla: { responseDueAt: "2026-09-12T04:00:00.000Z", breached: false }, relatedTicketIds: [], revision: 0,
+    });
+    let observedQuery = "";
+    const base = {
+      dispatcher: { async run(definition: any, raw: unknown, commandId: string) { const parsed = definition.parse(raw); const prepared = await definition.prepare(parsed); const committed = definition.commit({}, prepared, commandId); ticket.subject = "Later operational subject"; return definition.replay({}, committed, commandId); } },
+      service: { commitOperationalEvaluation: () => ({ committed: true }), replayOperationalEvaluation: (_reader: unknown, result: unknown) => result },
+      tickets: { get: async () => ticket }, audits: { list: async () => [] }, knowledge: { list: async () => [] },
+      knowledgeEvolution: { listReusableApproved: async () => ({ status: "available", contexts: [], issues: [] }) }, now: () => new Date("2026-09-12T00:00:00.000Z"), env: {},
+      retrievalObserver: { observe: async (query: { queryText: string }) => { observedQuery = query.queryText; }, recent: () => [], close: async () => undefined },
+    } as any;
+
+    await evaluateTicketCommand(base, { ticketId: ticket.id, aiPreference: "deterministic", responseStyle: "auto" }, "40000000-0000-4000-8000-000000000004");
+    await vi.waitFor(() => expect(observedQuery).not.toBe(""));
+    expect(observedQuery).toContain("Original customer subject");
+    expect(observedQuery).not.toContain("Later operational subject");
+  });
+
   it("keeps HTTP and MCP evaluation authority identical while shadow observation is advisory", async () => {
     const off = await openReliabilityRuntime({ environment: { TRIAGE_RETRIEVAL_MODE: "off" } });
     const shadow = await openReliabilityRuntime({ environment: { TRIAGE_RETRIEVAL_MODE: "shadow" } });

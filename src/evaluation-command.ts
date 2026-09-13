@@ -157,12 +157,12 @@ export async function evaluateTicketCommand(
           classificationConfidence,
           ...serializableRecommendationInput
         } = recommendationInput;
-        capturedBasis = {
+        capturedBasis = structuredClone({
           ticket,
           customerReplies,
           customerReplyWatermark: JSON.stringify(customerReplyWatermarkFromAudits(audits)),
           references: [],
-        };
+        });
         return {
           recommendationInput: serializableRecommendationInput,
           diagnosticTaxonomy: evaluation.diagnosticTaxonomy,
@@ -184,11 +184,14 @@ export async function evaluateTicketCommand(
   };
   const result = await deps.dispatcher.run(definition, rawInput, commandId);
   if (didCommit && capturedBasis !== undefined && deps.retrievalObserver !== undefined) {
-    const references = deterministicRetrievalReferences(capturedBasis);
     // The receipt-backed operational result is already complete. Shadow work must not
     // delay it, including when an embedding provider or SQLite reconciliation stalls.
     void Promise.resolve()
-      .then(() => deps.retrievalObserver!.observe(buildRetrievalQuery({ ...capturedBasis!, references }), commandId))
+      .then(() => {
+        const references = deterministicRetrievalReferences(capturedBasis!);
+        return buildRetrievalQuery({ ...capturedBasis!, references });
+      })
+      .then((query) => deps.retrievalObserver!.observe(query, commandId))
       .catch(() => deps.retrievalObserver?.reportFailure?.(commandId));
   }
   return result;

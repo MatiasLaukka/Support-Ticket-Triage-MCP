@@ -64,7 +64,7 @@ describe("retrieval maintenance CLI", () => {
     expect(report).toMatchObject({
       referenceChannelMetrics: expect.objectContaining({ deterministic: expect.any(Object), knownCause: expect.any(Object) }),
       gapBreakdown: expect.objectContaining({ retrievalMisses: expect.any(Array), corpusGaps: expect.any(Array), oracleReviewCandidates: expect.any(Array) }),
-      approvedContrastCoverage: expect.objectContaining({ "webhook rotation/latency": expect.objectContaining({ status: "covered" }), "editor session/platform loading": expect.objectContaining({ status: "missing-counterpart" }) }),
+      approvedContrastCoverage: expect.objectContaining({ "webhook rotation/latency": expect.objectContaining({ status: "covered" }), "editor session/platform loading": expect.objectContaining({ status: "covered", syntheticFixtureIds: ["synthetic-editor-browser-session"] }) }),
       resolvedCaseEvaluation: expect.objectContaining({ status: "corpus-gap" }),
       candidatePools: expect.arrayContaining([expect.objectContaining({ referencePools: expect.objectContaining({ deterministic: expect.any(Object), knownCause: expect.any(Object) }) })]),
     });

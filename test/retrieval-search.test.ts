@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import { cosine, makeFtsQuery, retrieve } from "../src/retrieval/search.js";
 import { RetrievalStore } from "../src/retrieval/sqlite-store.js";
 import { hashRepresentation, hashResource, projectArticle } from "../src/retrieval/representations.js";
+import { projectResolvedCase } from "../src/retrieval/sources.js";
+import { AuditEventSchema } from "../src/domain.js";
 
 describe("retrieval search", () => {
   it("quotes literal FTS tokens and computes exact cosine", () => {
@@ -40,6 +42,31 @@ describe("retrieval search", () => {
       signal: new AbortController().signal,
     });
     expect(result.candidates).toHaveLength(0);
+    store.close();
+  });
+
+  it("retrieves a causally eligible historical resolved case but not the querying ticket itself", async () => {
+    const ticketId = "TKT-9001";
+    const diagnosisAudit = AuditEventSchema.parse({
+      id: "20000000-0000-4000-8000-000000000901", timestamp: "2026-09-12T10:00:00.000Z", actor: "support", action: "diagnosis-completed", ticketId,
+      before: {}, after: { sourceTicketRevision: 1, sourceConversationWatermark: { state: "none" }, diagnosis: { status: "completed", causeType: "performance", customerSafeSummary: "Campaign editor browser-session issue.", evidenceUsed: ["private window works"], evidenceReferences: [], confidence: "confirmed", owner: "support", recommendedNextAction: "Clear the affected browser session.", doNotSay: [] } }, rationale: "Recorded diagnosis.", knowledgeArticleIds: [], result: "success",
+    });
+    const projected = projectResolvedCase({
+      ticket: { id: ticketId, status: "resolved", revision: 1, updatedAt: "2026-09-12T10:02:00.000Z", customer: { name: "Synthetic historical case" } },
+      audits: [diagnosisAudit],
+      diagnoses: [{ diagnosis: { id: `diagnosis-${diagnosisAudit.id}`, ticketId, problem: "Campaign editor browser-session issue.", symptoms: ["performance", "private window works"], evidenceUsed: ["private window works"], evidenceReferences: [], ownerTeam: "support", fixSteps: ["Apply the completed diagnosis next action through the governed support workflow."], verificationSteps: ["Confirm the customer-safe outcome after the governed next action."], completedAt: diagnosisAudit.timestamp }, originalAudit: diagnosisAudit, operationalEventId: diagnosisAudit.id }],
+      events: [
+        { id: diagnosisAudit.id, ticketId, sequence: 1, occurredAt: diagnosisAudit.timestamp, actor: "support", action: "diagnosis-completed", commandId: "30000000-0000-4000-8000-000000000901", facts: { status: "completed", sourceRevision: 1 } },
+        { id: "20000000-0000-4000-8000-000000000902", ticketId, sequence: 2, occurredAt: "2026-09-12T10:02:00.000Z", actor: "support", action: "ticket-updated", commandId: "30000000-0000-4000-8000-000000000902", facts: { status: "resolved", verificationType: "customer-confirmed" } },
+      ],
+    } as any);
+    expect(projected).toBeDefined();
+    const store = RetrievalStore.open(":memory:");
+    store.initialize();
+    store.reconcile({ resources: [projected!], unavailableFamilies: [] });
+
+    const result = await retrieve({ query: { queryText: "campaign editor private browser session", queryHash: "q", ticketId: "TKT-9002", sourceRevision: 1, customerReplyWatermark: "none", queryTruncated: false, references: [] }, store, limits: { "knowledge-article": { lexical: 5, semantic: 5 }, "known-cause": { lexical: 5, semantic: 5 }, "diagnostic-playbook": { lexical: 5, semantic: 5 }, "resolved-ticket": { lexical: 5, semantic: 5 } }, signal: new AbortController().signal });
+    expect(result.candidates.map(({ resourceKey }) => resourceKey)).toContain(`resolved-ticket:${ticketId}`);
     store.close();
   });
 

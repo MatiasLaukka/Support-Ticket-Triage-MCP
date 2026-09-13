@@ -18,6 +18,7 @@ import { embeddingProviderFromEnv } from "../src/retrieval/embedding-provider.js
 import { buildConversationContextForTicket } from "../src/approval-desk/conversation-context.js";
 import { classifyTicketFromContext } from "../src/approval-desk/classifier.js";
 import type { CompletedDiagnosisReadSnapshot } from "../src/knowledge-evolution/completed-diagnosis-source.js";
+import { SYNTHETIC_RETRIEVAL_EVALUATION_SCENARIOS } from "../src/retrieval/evaluation-fixtures.js";
 import type { Candidate, EmbeddingProvider, Reference, ResourceKey } from "../src/retrieval/types.js";
 
 const K_BUDGET = {
@@ -36,6 +37,7 @@ const CONTRAST_FAMILIES = [
 
 type ScenarioReport = {
   ticketId: string;
+  syntheticFixtureId?: string;
   family?: string;
   contrastGroup?: string;
   lexicalKeys: readonly string[];
@@ -84,10 +86,12 @@ export async function evaluateRetrieval(input: { provider?: EmbeddingProvider; c
   const store = RetrievalStore.open(":memory:");
   try {
     await tickets.initialize();
-    const [articles, oracles] = await Promise.all([
+    const [articles, seedOracles] = await Promise.all([
       new KnowledgeRepository(resolve("data/knowledge")).list(),
       loadEvaluationOracles(),
     ]);
+    const syntheticScenarios = SYNTHETIC_RETRIEVAL_EVALUATION_SCENARIOS;
+    const oracles = [...seedOracles, ...syntheticScenarios.map(({ oracle }) => oracle)];
     const completedSnapshots = snapshotsAtOrBeforeCutoff(input.completedSnapshots ?? []);
     const snapshot = loadRetrievalSources({ articles, reusable: unavailableReusableKnowledge(), completedSnapshots });
     const frozenCorpusKeys = new Set(snapshot.resources.map(({ resource }) => resource.key));
@@ -95,9 +99,14 @@ export async function evaluateRetrieval(input: { provider?: EmbeddingProvider; c
     const manager = new IndexManager({ store, load: async () => snapshot, ...(input.provider === undefined ? {} : { provider: input.provider }) });
     await manager.refresh(new AbortController().signal);
     const scenarios: ScenarioReport[] = [];
-    for (const oracle of oracles) {
+    const evaluationInputs = [
+      ...(await Promise.all(seedOracles
+        .filter((oracle) => oracle.retrieval !== undefined)
+        .map(async (oracle) => ({ fixtureId: undefined, ticket: await tickets.get(oracle.ticketId), oracle })))),
+      ...syntheticScenarios.map(({ fixtureId, ticket, oracle }) => ({ fixtureId, ticket, oracle })),
+    ];
+    for (const { ticket, oracle, fixtureId } of evaluationInputs) {
       if (oracle.retrieval === undefined) continue;
-      const ticket = await tickets.get(oracle.ticketId);
       const references = deterministicReferences(ticket);
       const query = buildRetrievalQuery({ ticket, customerReplies: [], customerReplyWatermark: "seed", references });
       const result = await retrieve({ query, store, limits: K_BUDGET, ...(input.provider === undefined ? {} : { provider: input.provider }), signal: new AbortController().signal });
@@ -112,6 +121,7 @@ export async function evaluateRetrieval(input: { provider?: EmbeddingProvider; c
       }]));
       scenarios.push({
         ticketId: oracle.ticketId,
+        ...(fixtureId === undefined ? {} : { syntheticFixtureId: fixtureId }),
         ...(oracle.family ? { family: oracle.family } : {}),
         ...(oracle.contrastGroup ? { contrastGroup: oracle.contrastGroup } : {}),
         lexicalKeys,
@@ -133,6 +143,7 @@ export async function evaluateRetrieval(input: { provider?: EmbeddingProvider; c
     }
     const corpusHash = store.metadata().corpusHash;
     const oracleHash = createHash("sha256").update(JSON.stringify(oracles)).digest("hex");
+    const syntheticScenarioHash = createHash("sha256").update(JSON.stringify(syntheticScenarios)).digest("hex");
     const perTypeMetrics = metricBreakdown(scenarios, new Map(oracles.map((oracle) => [oracle.ticketId, oracle])));
     const perFamilyMetrics = familyBreakdown(scenarios);
     const excludedCounts = exclusionBreakdown(scenarios, new Map(oracles.map((oracle) => [oracle.ticketId, oracle])));
@@ -148,6 +159,8 @@ export async function evaluateRetrieval(input: { provider?: EmbeddingProvider; c
       semanticEvidence: input.provider === undefined ? "outstanding" : "measured",
       sourceCommit: sourceCommit(),
       oracleHash,
+      syntheticScenarioHash,
+      syntheticScenarioCount: syntheticScenarios.length,
       scenarioCutoff: SCENARIO_CUTOFF,
       corpusHash,
       representationVersion: store.metadata().representationVersion,
@@ -227,8 +240,10 @@ function referenceChannelBreakdown(scenarios: readonly ScenarioReport[]): Record
 
 function contrastCoverage(scenarios: readonly ScenarioReport[]): Record<string, unknown> {
   return Object.fromEntries(CONTRAST_FAMILIES.map((family) => {
-    const ticketIds = scenarios.filter((scenario) => scenario.contrastGroup === family).map((scenario) => scenario.ticketId).sort();
-    return [family, { status: ticketIds.length >= 2 ? "covered" : "missing-counterpart", scenarioCount: ticketIds.length, ticketIds }];
+    const covered = scenarios.filter((scenario) => scenario.contrastGroup === family);
+    const ticketIds = covered.map((scenario) => scenario.ticketId).sort();
+    const syntheticFixtureIds = covered.flatMap((scenario) => scenario.syntheticFixtureId === undefined ? [] : [scenario.syntheticFixtureId]).sort();
+    return [family, { status: ticketIds.length >= 2 ? "covered" : "missing-counterpart", scenarioCount: ticketIds.length, ticketIds, syntheticFixtureIds }];
   }));
 }
 
@@ -344,6 +359,8 @@ export function markdownReport(report: Record<string, unknown>): string {
     `- Semantic evidence: ${report.semanticEvidence}`,
     `- Source commit: ${report.sourceCommit}`,
     `- Oracle hash: ${report.oracleHash}`,
+    `- Synthetic scenario hash: ${report.syntheticScenarioHash}`,
+    `- Synthetic scenario count: ${report.syntheticScenarioCount}`,
     `- Scenario cutoff: ${report.scenarioCutoff}`,
     `- Corpus hash: ${report.corpusHash}`,
     `- Representation version: ${report.representationVersion}`,

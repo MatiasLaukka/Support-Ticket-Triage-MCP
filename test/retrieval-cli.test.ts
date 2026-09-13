@@ -92,4 +92,14 @@ describe("retrieval maintenance CLI", () => {
       { ticketId: "TKT-0001", retrieval: { requiredResourceKeys: ["knowledge-article:missing"], relevantResourceKeys: ["knowledge-article:missing"], hardNegativeResourceKeys: [], labelsComplete: true, resourceCoverage: {} } },
     ], new Set(["knowledge-article:present"]))).toThrow(/not present in the frozen corpus/i);
   });
+
+  it("excludes resolved-case snapshots created after the frozen evaluation cutoff", () => {
+    const snapshots = [
+      { ticket: { id: "TKT-PAST", updatedAt: "2026-09-12T23:59:59.999Z" } },
+      { ticket: { id: "TKT-FUTURE", updatedAt: "2026-09-13T00:00:00.000Z" } },
+    ];
+
+    expect((retrievalEvaluation as any).snapshotsAtOrBeforeCutoff(snapshots).map((snapshot: any) => snapshot.ticket.id))
+      .toEqual(["TKT-PAST"]);
+  });
 });

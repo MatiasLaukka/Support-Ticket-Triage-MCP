@@ -17,6 +17,7 @@ import { unavailableReusableKnowledge } from "../src/knowledge-evolution/reusabl
 import { embeddingProviderFromEnv } from "../src/retrieval/embedding-provider.js";
 import { buildConversationContextForTicket } from "../src/approval-desk/conversation-context.js";
 import { classifyTicketFromContext } from "../src/approval-desk/classifier.js";
+import type { CompletedDiagnosisReadSnapshot } from "../src/knowledge-evolution/completed-diagnosis-source.js";
 import type { Candidate, EmbeddingProvider, Reference, ResourceKey } from "../src/retrieval/types.js";
 
 const K_BUDGET = {
@@ -72,7 +73,12 @@ export function validateLabelsAgainstCorpus(oracles: readonly Pick<EvaluationOra
   }
 }
 
-export async function evaluateRetrieval(input: { provider?: EmbeddingProvider } = {}): Promise<Record<string, unknown>> {
+/** Keep the evaluation corpus reproducible and prevent future cases from leaking into it. */
+export function snapshotsAtOrBeforeCutoff<T extends { ticket: { updatedAt: string } }>(snapshots: readonly T[]): readonly T[] {
+  return snapshots.filter(({ ticket }) => ticket.updatedAt <= SCENARIO_CUTOFF);
+}
+
+export async function evaluateRetrieval(input: { provider?: EmbeddingProvider; completedSnapshots?: readonly CompletedDiagnosisReadSnapshot[] } = {}): Promise<Record<string, unknown>> {
   const sourceRoot = mkdtempSync(join(tmpdir(), "triage-retrieval-eval-"));
   const tickets = new TicketRepository(sourceRoot, resolve("data/seed/tickets.json"));
   const store = RetrievalStore.open(":memory:");
@@ -82,7 +88,8 @@ export async function evaluateRetrieval(input: { provider?: EmbeddingProvider } 
       new KnowledgeRepository(resolve("data/knowledge")).list(),
       loadEvaluationOracles(),
     ]);
-    const snapshot = loadRetrievalSources({ articles, reusable: unavailableReusableKnowledge(), completedSnapshots: [] });
+    const completedSnapshots = snapshotsAtOrBeforeCutoff(input.completedSnapshots ?? []);
+    const snapshot = loadRetrievalSources({ articles, reusable: unavailableReusableKnowledge(), completedSnapshots });
     const frozenCorpusKeys = new Set(snapshot.resources.map(({ resource }) => resource.key));
     validateLabelsAgainstCorpus(oracles, frozenCorpusKeys);
     const manager = new IndexManager({ store, load: async () => snapshot, ...(input.provider === undefined ? {} : { provider: input.provider }) });
@@ -171,7 +178,7 @@ export async function evaluateRetrieval(input: { provider?: EmbeddingProvider } 
         status: snapshot.resources.some(({ resource }) => resource.type === "resolved-ticket") ? "covered" : "corpus-gap",
         reviewedScenarioTickets: scenarios.filter(({ ticketId }) => ticketId === "TKT-1024").map(({ ticketId }) => ticketId),
         eligibleCaseCount: snapshot.resources.filter(({ resource }) => resource.type === "resolved-ticket").length,
-        futureCasesExcluded: 0,
+        futureCasesExcluded: (input.completedSnapshots?.length ?? 0) - completedSnapshots.length,
         selfTicketExclusion: "enforced at retrieval query time",
       },
       unjudgedHits: scenarios.flatMap(({ ticketId, pool }) => pool.unjudgedKeys.map((resourceKey) => ({ ticketId, resourceKey }))),

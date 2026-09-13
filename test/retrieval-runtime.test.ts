@@ -34,4 +34,20 @@ describe("retrieval runtime configuration", () => {
     await shadow.close();
     rmSync(root, { recursive: true, force: true });
   });
+
+  it("keeps normal runtime available when retrieval provider configuration is invalid", async () => {
+    const root = mkdtempSync(join(tmpdir(), "triage-b3-runtime-invalid-"));
+    const env = {
+      TRIAGE_DATA_ROOT: root,
+      TRIAGE_SEED_FILE: resolve("data/seed/tickets.json"),
+      TRIAGE_KNOWLEDGE_ROOT: resolve("data/knowledge"),
+      TRIAGE_RETRIEVAL_MODE: "shadow",
+      TRIAGE_EMBEDDING_MODEL: "configured-without-provider-tuple",
+    };
+    const runtime = await createRuntimeDependencies({ env });
+    expect(runtime.retrievalObserver).toBeDefined();
+    await expect(runtime.retrievalObserver!.observe({ queryText: "test", queryHash: "q", ticketId: "TKT-0001", sourceRevision: 1, customerReplyWatermark: "none", queryTruncated: false, references: [] }, "cmd-invalid-provider")).resolves.toBeUndefined();
+    await runtime.close();
+    rmSync(root, { recursive: true, force: true });
+  });
 });

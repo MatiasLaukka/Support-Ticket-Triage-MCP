@@ -4,8 +4,9 @@ import { resolve } from "node:path";
 
 import { KNOWN_CAUSES } from "../src/approval-desk/known-cause-catalog.js";
 import { PLAYBOOK_DESCRIPTORS } from "../src/approval-desk/diagnostic-playbook-descriptors.js";
+import { AuditEventSchema } from "../src/domain.js";
 import { KnowledgeRepository } from "../src/knowledge-repository.js";
-import { loadRetrievalSources, projectLearnedCause, projectStaticCause } from "../src/retrieval/sources.js";
+import { loadRetrievalSources, projectLearnedCause, projectResolvedCase, projectStaticCause } from "../src/retrieval/sources.js";
 import { retrievalArticle } from "./retrieval-fixtures.js";
 
 describe("retrieval sources", () => {
@@ -84,5 +85,57 @@ describe("retrieval sources", () => {
       completedSnapshots: [{ ticket: { ...({ id: "TKT-0001", status: "open" } as any) }, audits: [], diagnoses: [] }],
     });
     expect(snapshot.unavailableFamilies).toContain("resolved-ticket");
+  });
+
+  it("includes a customer-confirmed outcome only when linked operational history proves closure", () => {
+    const ticketId = "TKT-0001";
+    const diagnosisAudit = AuditEventSchema.parse({
+      id: "20000000-0000-4000-8000-000000000001",
+      timestamp: "2026-09-12T10:00:00.000Z",
+      actor: "support",
+      action: "diagnosis-completed",
+      ticketId,
+      before: {},
+      after: {
+        sourceTicketRevision: 1,
+        sourceConversationWatermark: { state: "none" },
+        diagnosis: {
+          status: "completed",
+          causeType: "performance",
+          customerSafeSummary: "The campaign editor was restored.",
+          evidenceUsed: ["blank editor"],
+          evidenceReferences: [],
+          confidence: "confirmed",
+          owner: "support",
+          recommendedNextAction: "Apply the governed mitigation.",
+          doNotSay: [],
+        },
+      },
+      rationale: "Recorded diagnosis.",
+      knowledgeArticleIds: [],
+      result: "success",
+    });
+    const diagnosis = {
+      id: `diagnosis-${diagnosisAudit.id}`,
+      ticketId,
+      problem: "The campaign editor was restored.",
+      symptoms: ["performance", "blank editor"],
+      evidenceUsed: ["blank editor"],
+      evidenceReferences: [],
+      ownerTeam: "support",
+      fixSteps: ["Apply the completed diagnosis next action through the governed support workflow."],
+      verificationSteps: ["Confirm the customer-safe outcome after the governed next action."],
+      completedAt: diagnosisAudit.timestamp,
+    };
+    const base = {
+      ticket: { id: ticketId, status: "resolved", revision: 1, updatedAt: "2026-09-12T10:02:00.000Z", customer: { name: "Maple Studio" } },
+      audits: [diagnosisAudit],
+      diagnoses: [{ diagnosis, originalAudit: diagnosisAudit, operationalEventId: diagnosisAudit.id }],
+    } as any;
+    const event = (sequence: number, facts: Record<string, unknown>) => ({ id: sequence === 1 ? diagnosisAudit.id : "20000000-0000-4000-8000-000000000002", ticketId, sequence, occurredAt: sequence === 1 ? diagnosisAudit.timestamp : "2026-09-12T10:02:00.000Z", actor: "support", action: sequence === 1 ? "diagnosis-completed" : "ticket-updated", commandId: "30000000-0000-4000-8000-000000000001", facts });
+    const confirmed = projectResolvedCase({ ...base, events: [event(1, { status: "completed", sourceRevision: 1 }), event(2, { status: "resolved", verificationType: "customer-confirmed" })] });
+    const unconfirmed = projectResolvedCase({ ...base, events: [event(1, { status: "completed", sourceRevision: 1 })] });
+    expect(confirmed?.representations[0]?.semanticText).toContain("Customer confirmed resolution");
+    expect(unconfirmed?.representations[0]?.semanticText).not.toContain("Customer confirmed resolution");
   });
 });

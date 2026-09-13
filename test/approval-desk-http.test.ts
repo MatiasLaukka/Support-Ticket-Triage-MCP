@@ -4782,6 +4782,9 @@ async function startFixture(
       TRIAGE_DATA_ROOT: dataRoot,
       TRIAGE_SEED_FILE: resolve("data/seed/tickets.json"),
       TRIAGE_KNOWLEDGE_ROOT: resolve("data/knowledge"),
+      // Retrieval lifecycle and authority parity are covered in B3-specific tests.
+      // Keep this broad Approval Desk fixture focused on its HTTP contract.
+      TRIAGE_RETRIEVAL_MODE: "off",
     },
     now: fixtureOptions.now ?? (() => now),
   });

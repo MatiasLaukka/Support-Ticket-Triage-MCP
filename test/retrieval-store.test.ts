@@ -97,4 +97,16 @@ describe("retrieval store", () => {
     expect(db.readSnapshot('"replacement"').resources.map(({ key }) => key)).toEqual(["knowledge-article:original"]);
     db.close();
   });
+
+  it("rejects incompatible model vectors during atomic publication", () => {
+    const db = RetrievalStore.open(":memory:");
+    db.initialize();
+    const original = projectArticle({ id: "original-model", title: "Original", tags: [], body: "Original content" });
+    db.reconcile({ resources: [original], unavailableFamilies: [] });
+    db.configureModel({ id: "model-a", revision: "1", dimensions: 2 });
+    const replacement = projectArticle({ id: "replacement-model", title: "Replacement", tags: [], body: "Replacement content" });
+    expect(() => db.replaceAll({ resources: [replacement], unavailableFamilies: [] }, [{ representationId: replacement.representations[0]!.id, resourceKey: replacement.resource.key, contentHash: replacement.representations[0]!.contentHash, model: { id: "model-b", revision: "2", dimensions: 2 }, values: [1, 0] }])).toThrow();
+    expect(db.readSnapshot('"original"').resources.map(({ key }) => key)).toEqual(["knowledge-article:original-model"]);
+    db.close();
+  });
 });

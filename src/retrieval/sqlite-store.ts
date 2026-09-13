@@ -220,9 +220,10 @@ export class RetrievalStore {
   }
 
   private applyVectors(rows: readonly SearchSnapshot["vectors"][number][]): void {
+    const configuredModel = this.metadata().model;
     for (const row of rows) {
       const representation = this.database.prepare("SELECT content_hash FROM retrieval_representations WHERE representation_id=?").get(row.representationId) as { content_hash: string } | undefined;
-      if (!representation || representation.content_hash !== row.contentHash || row.values.length !== row.model.dimensions || row.values.some((value) => !Number.isFinite(value)) || row.values.every((value) => value === 0)) throw new RetrievalIntegrityError("Embedding does not match current representation.");
+      if (!configuredModel || row.model.id !== configuredModel.id || row.model.revision !== configuredModel.revision || row.model.dimensions !== configuredModel.dimensions || !representation || representation.content_hash !== row.contentHash || row.values.length !== row.model.dimensions || row.values.some((value) => !Number.isFinite(value)) || row.values.every((value) => value === 0)) throw new RetrievalIntegrityError("Embedding does not match current representation or configured model.");
       this.database.prepare("INSERT OR REPLACE INTO retrieval_embeddings VALUES (?,?,?,?,?,?,?)").run(row.representationId, row.model.id, row.model.revision, row.model.dimensions, Buffer.from(new Float32Array(row.values).buffer), row.contentHash, "ready");
     }
     if (rows.length > 0) this.setMeta("semanticGeneration", String(this.metadata().generation));

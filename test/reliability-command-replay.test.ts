@@ -26,8 +26,18 @@ const activeRuntimes: Array<{ close(): Promise<void> }> = [];
 const temporaryRoots: string[] = [];
 
 afterEach(async () => {
-  await Promise.all(activeRuntimes.splice(0).map((runtime) => runtime.close()));
-  await Promise.all(temporaryRoots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
+  const errors: unknown[] = [];
+  // Some tests deliberately open two SQLite connections to the same database.
+  // Close the later runtime first so its handle is released before its peer's
+  // data-root cleanup can remove the shared database.
+  for (const runtime of activeRuntimes.splice(0).reverse()) {
+    try { await runtime.close(); } catch (error) { errors.push(error); }
+  }
+  for (const root of temporaryRoots.splice(0)) {
+    try { await rm(root, { recursive: true, force: true }); } catch (error) { errors.push(error); }
+  }
+  if (errors.length === 1) throw errors[0];
+  if (errors.length > 1) throw new AggregateError(errors, "Reliability fixture cleanup failed.");
 });
 
 describe("reliability command replay", () => {
@@ -809,6 +819,7 @@ describe("reliability command replay", () => {
     const secondRoot = await mkdtemp(join(tmpdir(), "triage-r1-second-"));
     const sharedStore = OperationalSqliteStore.open(join(harness.root, "operational.sqlite"));
     sharedStore.initialize();
+    const closeSharedStore = vi.spyOn(sharedStore, "close");
     const secondRuntime = await createRuntimeDependencies({
       env: {
         TRIAGE_DATA_ROOT: secondRoot,
@@ -824,13 +835,24 @@ describe("reliability command replay", () => {
       draftProvider: createControlledDraftProvider(),
     });
     await listen(secondServer);
-    activeRuntimes.push({
+    let secondClosed = false;
+    const secondResources = {
       async close() {
-        await closeServer(secondServer);
-        await secondRuntime.close();
-        await rm(secondRoot, { recursive: true, force: true });
+        if (secondClosed) return;
+        secondClosed = true;
+        const errors: unknown[] = [];
+        for (const close of [
+          () => closeServer(secondServer),
+          () => secondRuntime.close(),
+          () => rm(secondRoot, { recursive: true, force: true }),
+        ]) {
+          try { await close(); } catch (error) { errors.push(error); }
+        }
+        if (errors.length === 1) throw errors[0];
+        if (errors.length > 1) throw new AggregateError(errors, "Second runtime cleanup failed.");
       },
-    });
+    };
+    activeRuntimes.push(secondResources);
     const address = secondServer.address();
     if (address === null || typeof address === "string") throw new Error("No second HTTP port");
     const key = randomUUID();
@@ -846,6 +868,9 @@ describe("reliability command replay", () => {
     expect(providerCalls).toBe(2);
     expect((await harness.runtime.recommendations.list())
       .filter((recommendation) => recommendation.ticketId === "TKT-1010")).toHaveLength(1);
+    await secondResources.close();
+    expect(closeSharedStore).toHaveBeenCalledOnce();
+    activeRuntimes.splice(activeRuntimes.indexOf(secondResources), 1);
   });
 });
 

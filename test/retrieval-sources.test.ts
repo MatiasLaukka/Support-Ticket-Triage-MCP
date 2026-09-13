@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { existsSync } from "node:fs";
+import { resolve } from "node:path";
 
 import { KNOWN_CAUSES } from "../src/approval-desk/known-cause-catalog.js";
 import { PLAYBOOK_DESCRIPTORS } from "../src/approval-desk/diagnostic-playbook-descriptors.js";
+import { KnowledgeRepository } from "../src/knowledge-repository.js";
 import { loadRetrievalSources, projectLearnedCause, projectStaticCause } from "../src/retrieval/sources.js";
 import { retrievalArticle } from "./retrieval-fixtures.js";
 
@@ -65,6 +67,13 @@ describe("retrieval sources", () => {
       expect(descriptor.executablePath.startsWith(`${playbookFile}#`)).toBe(true);
       expect(descriptor.executablePath.split("#")[1]).toBeTruthy();
       expect(descriptor.linkedKnowledgeArticleIds.every((id) => id.length > 0)).toBe(true);
+    }
+  });
+
+  it("links descriptors only to knowledge articles in the authoritative catalog", async () => {
+    const articleIds = new Set((await new KnowledgeRepository(resolve("data/knowledge")).list()).map((article) => article.id));
+    for (const descriptor of PLAYBOOK_DESCRIPTORS) {
+      for (const articleId of descriptor.linkedKnowledgeArticleIds) expect(articleIds.has(articleId)).toBe(true);
     }
   });
 });

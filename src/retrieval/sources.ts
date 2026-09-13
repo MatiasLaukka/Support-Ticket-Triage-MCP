@@ -47,9 +47,9 @@ export function projectPlaybook(descriptor: DiagnosticPlaybookDescriptor): Proje
 export function projectResolvedCase(snapshot: CompletedDiagnosisReadSnapshot): ProjectedResource | undefined {
   if (snapshot.ticket.status !== "resolved") return undefined;
   const eligible = new Set(eligibleCompletedDiagnoses(snapshot).map((diagnosis) => diagnosis.id));
-  const latest = latestAuditPosition(snapshot.audits, (audit) => audit.action === "diagnosis-completed" && eligible.has(`diagnosis-${audit.id}`))
-    ?? undefined;
-  const record = latest === undefined ? undefined : snapshot.diagnoses.find(({ originalAudit }) => originalAudit.id === latest.event.id);
+  const latest = latestAuditPosition(snapshot.audits, (audit) => audit.action === "diagnosis-completed" && eligible.has(`diagnosis-${audit.id}`));
+  if (latest === undefined) return undefined;
+  const record = snapshot.diagnoses.find(({ originalAudit }) => originalAudit.id === latest.event.id);
   const diagnosis = record?.diagnosis;
   if (diagnosis === undefined) return undefined;
   const identifiers = [snapshot.ticket.customer.name, snapshot.ticket.requester?.name].filter((value): value is string => value !== undefined);

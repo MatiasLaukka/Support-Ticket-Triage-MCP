@@ -88,7 +88,7 @@ export async function evaluateRetrieval(): Promise<Record<string, unknown>> {
     }
     const corpusHash = store.metadata().corpusHash;
     const oracleHash = createHash("sha256").update(JSON.stringify(oracles)).digest("hex");
-    const perTypeMetrics = metricBreakdown(scenarios, (scenario) => scenario.unionKeys.map((key) => key.split(":", 1)[0]));
+    const perTypeMetrics = metricBreakdown(scenarios, new Map(oracles.map((oracle) => [oracle.ticketId, oracle])));
     const perFamilyMetrics = familyBreakdown(scenarios);
     const required = scenarios.map(({ pool }) => pool.requiredCoverage).filter((value): value is number => value !== null);
     const baselineRequired = scenarios.map((scenario) => {
@@ -134,15 +134,35 @@ function sourceCommit(): string {
 
 function average(values: readonly number[]): number | null { return values.length === 0 ? null : values.reduce((sum, value) => sum + value, 0) / values.length; }
 
-function metricBreakdown(scenarios: readonly ScenarioReport[], typeOf: (scenario: ScenarioReport) => readonly string[]): Record<string, unknown> {
-  const result: Record<string, { scenarios: number; lexicalHits: number; unionHits: number }> = {};
-  for (const scenario of scenarios) for (const type of new Set(typeOf(scenario))) {
-    const entry = result[type] ?? (result[type] = { scenarios: 0, lexicalHits: 0, unionHits: 0 });
-    entry.scenarios += 1;
-    entry.lexicalHits += scenario.lexicalKeys.some((key) => key.startsWith(`${type}:`)) ? 1 : 0;
-    entry.unionHits += scenario.unionKeys.some((key) => key.startsWith(`${type}:`)) ? 1 : 0;
+function metricBreakdown(scenarios: readonly ScenarioReport[], oracles: ReadonlyMap<string, EvaluationOracle>): Record<string, unknown> {
+  const result: Record<string, { scenarios: number; lexical: Record<string, number | null>; semantic: Record<string, number | null> }> = {};
+  for (const scenario of scenarios) {
+    const expectation = oracles.get(scenario.ticketId)?.retrieval;
+    if (expectation === undefined) continue;
+    for (const type of ["knowledge-article", "known-cause", "diagnostic-playbook", "resolved-ticket"] as const) {
+      const relevant = expectation.relevantResourceKeys.filter((key) => key.startsWith(`${type}:`));
+      if (relevant.length === 0) continue;
+      const typedOracle = { ...expectation, requiredResourceKeys: expectation.requiredResourceKeys.filter((key) => key.startsWith(`${type}:`)), relevantResourceKeys: relevant, hardNegativeResourceKeys: expectation.hardNegativeResourceKeys.filter((key) => key.startsWith(`${type}:`)) };
+      const entry = result[type] ?? (result[type] = { scenarios: 0, lexical: {}, semantic: {} });
+      entry.scenarios += 1;
+      for (const k of [1, 3, 5] as const) {
+        const lexical = scoreRanked(scenario.lexicalKeys.filter((key) => key.startsWith(`${type}:`)) as any, typedOracle, k);
+        entry.lexical[`recallAt${k}`] = averageMetric(entry.lexical[`recallAt${k}`], lexical.recallAtK, entry.scenarios);
+        entry.lexical[`precisionAt${k}`] = averageMetric(entry.lexical[`precisionAt${k}`], lexical.precisionAtK, entry.scenarios);
+        const semantic = scenario.channelStatuses.semantic === "used"
+          ? scoreRanked(scenario.semanticKeys.filter((key) => key.startsWith(`${type}:`)) as any, typedOracle, k)
+          : { recallAtK: null, precisionAtK: null };
+        entry.semantic[`recallAt${k}`] = averageMetric(entry.semantic[`recallAt${k}`], semantic.recallAtK, entry.scenarios);
+        entry.semantic[`precisionAt${k}`] = averageMetric(entry.semantic[`precisionAt${k}`], semantic.precisionAtK, entry.scenarios);
+      }
+    }
   }
   return result;
+}
+
+function averageMetric(current: number | null | undefined, next: number | null, count: number): number | null {
+  if (next === null) return current ?? null;
+  return current === undefined || current === null ? next : current + (next - current) / count;
 }
 
 function familyBreakdown(scenarios: readonly ScenarioReport[]): Record<string, unknown> {

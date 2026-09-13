@@ -207,8 +207,20 @@ function coverageBreakdown(oracles: readonly EvaluationOracle[]): Record<string,
   return result;
 }
 
-function markdownReport(report: Record<string, unknown>): string {
+export function markdownReport(report: Record<string, unknown>): string {
   const pools = Array.isArray(report.candidatePools) ? report.candidatePools as Array<Record<string, unknown>> : [];
+  const perType = (report.perTypeMetrics ?? {}) as Record<string, { scenarios: number; lexical: Record<string, number | null>; semantic: Record<string, number | null> }>;
+  const perFamily = (report.perFamilyMetrics ?? {}) as Record<string, { scenarios: number; candidateRecall: number | null; requiredCoverage: number | null }>;
+  const representationRows = pools.flatMap((pool) => {
+    const returned = (pool.returnedRepresentations ?? {}) as Record<string, { lexical?: readonly { representationId: string; score: number; rank: number }[]; semantic?: readonly { representationId: string; score: number; rank: number }[] }>;
+    return Object.entries(returned).flatMap(([resourceKey, channels]) => (["lexical", "semantic"] as const).flatMap((channel) =>
+      (channels[channel] ?? []).map((match) => `| ${pool.ticketId} | ${resourceKey} | ${channel} | ${match.representationId} | ${match.rank} | ${match.score} |`),
+    ));
+  });
+  const metricValue = (entry: { lexical: Record<string, number | null>; semantic: Record<string, number | null> }, channel: "lexical" | "semantic", metric: "recallAt" | "precisionAt", k: 1 | 3 | 5): string | number => entry[channel][`${metric}${k}`] ?? "n/a";
+  const familyRows = Object.entries(perFamily).sort(([left], [right]) => left.localeCompare(right)).map(([family, metrics]) => `| ${family} | ${metrics.scenarios} | ${metrics.candidateRecall ?? "n/a"} | ${metrics.requiredCoverage ?? "n/a"} |`);
+  const typeRows = Object.entries(perType).sort(([left], [right]) => left.localeCompare(right)).map(([type, metrics]) => `| ${type} | ${metrics.scenarios} | ${metricValue(metrics, "lexical", "recallAt", 1)} | ${metricValue(metrics, "lexical", "recallAt", 3)} | ${metricValue(metrics, "lexical", "recallAt", 5)} | ${metricValue(metrics, "lexical", "precisionAt", 1)} | ${metricValue(metrics, "lexical", "precisionAt", 3)} | ${metricValue(metrics, "lexical", "precisionAt", 5)} | ${metricValue(metrics, "semantic", "recallAt", 1)} | ${metricValue(metrics, "semantic", "recallAt", 3)} | ${metricValue(metrics, "semantic", "recallAt", 5)} |`);
+  const unjudged = Array.isArray(report.unjudgedHits) ? report.unjudgedHits as Array<{ ticketId: string; resourceKey: string }> : [];
   return [
     "# B3 hybrid retrieval evaluation",
     "",
@@ -219,6 +231,10 @@ function markdownReport(report: Record<string, unknown>): string {
     `- Scenario cutoff: ${report.scenarioCutoff}`,
     `- Corpus hash: ${report.corpusHash}`,
     `- Representation version: ${report.representationVersion}`,
+    `- FTS tokenization: ${report.ftsTokenization}`,
+    `- Model: ${JSON.stringify(report.model)}`,
+    `- K budget: ${JSON.stringify(report.kBudget)}`,
+    `- Channel statuses: ${JSON.stringify(report.channelStatuses)}`,
     `- Scenarios: ${report.scenarioCount}`,
     `- Excluded from complete precision: ${(report.excludedCounts as { incompletePrecision: number } | undefined)?.incompletePrecision ?? "n/a"}`,
     `- Semantic-unavailable scenarios: ${(report.excludedCounts as { semanticUnavailable: number } | undefined)?.semanticUnavailable ?? "n/a"}`,
@@ -228,6 +244,41 @@ function markdownReport(report: Record<string, unknown>): string {
     "| Ticket | Pool size | Candidate recall | Required coverage | Unjudged hits |",
     "|---|---:|---:|---:|---:|",
     ...pools.map((pool) => `| ${pool.ticketId} | ${pool.candidateCount} | ${(pool.pool as { candidateRecall: number | null }).candidateRecall ?? "n/a"} | ${(pool.pool as { requiredCoverage: number | null }).requiredCoverage ?? "n/a"} | ${(pool.pool as { unjudgedKeys: unknown[] }).unjudgedKeys.length} |`),
+    "",
+    "## Per-representation provenance",
+    "",
+    "| Ticket | Resource | Channel | Representation | Rank | Score |",
+    "|---|---|---|---|---:|---:|",
+    ...representationRows,
+    "",
+    "## Per-type metrics",
+    "",
+    "| Type | Scenarios | Lexical R@1 | Lexical R@3 | Lexical R@5 | Lexical P@1 | Lexical P@3 | Lexical P@5 | Semantic R@1 | Semantic R@3 | Semantic R@5 |",
+    "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+    ...typeRows,
+    "",
+    "## Per-family metrics",
+    "",
+    "| Family | Scenarios | Candidate recall | Required coverage |",
+    "|---|---:|---:|---:|",
+    ...familyRows,
+    "",
+    "## Baseline comparison",
+    "",
+    `- ${JSON.stringify(report.baselineComparison)}`,
+    "",
+    "## Corpus coverage",
+    "",
+    `- ${JSON.stringify(report.corpusCoverage)}`,
+    "",
+    "## Unjudged hits",
+    "",
+    `- Count: ${unjudged.length}`,
+    ...(unjudged.length === 0 ? ["- None."] : unjudged.map(({ ticketId, resourceKey }) => `- ${ticketId}: ${resourceKey}`)),
+    "",
+    "## Reviewed contrast families",
+    "",
+    ...(Array.isArray(report.reviewedContrastFamilies) ? (report.reviewedContrastFamilies as string[]).map((family) => `- ${family}`) : ["- None." ]),
     "",
     "## Notes",
     "",

@@ -2,8 +2,10 @@
 
 - Mode: offline-lexical-only
 - Semantic evidence: outstanding
-- Source commit: d136a375c55a5cb1ffb9ca292de3cbc83ccd5200
-- Oracle hash: 83435586f4b4fcbc66069ad5c80ff7d79e6c7c271c0b1b9d254d6f2697aaab0e
+- Source commit: c19c75d304ee95af5aef067638c3fbe18e32b083
+- Oracle hash: d3e9d25d6ae708f85cbfe11231f1b24c127beeeb3684adc392d2535e744a1b09
+- Synthetic scenario hash: b03944b31f33fd47373658c47df40dce714910a2f08e70dacadb3d857df4d497
+- Synthetic scenario count: 1
 - Scenario cutoff: 2026-09-12T23:59:59.999Z
 - Corpus hash: 1dd1ccb213252a34bb777e46c7d628c447a45bd192c6cf03ac3d1f1d95850476
 - Representation version: 2
@@ -11,9 +13,9 @@
 - Model: null
 - K budget: {"knowledge-article":{"lexical":5,"semantic":5},"known-cause":{"lexical":5,"semantic":5},"diagnostic-playbook":{"lexical":5,"semantic":5},"resolved-ticket":{"lexical":5,"semantic":5}}
 - Channel statuses: {"lexical":"available","semantic":"unavailable:provider-not-configured"}
-- Scenarios: 8
-- Excluded from complete precision: 2
-- Semantic-unavailable scenarios: 8
+- Scenarios: 9
+- Excluded from complete precision: 3
+- Semantic-unavailable scenarios: 9
 
 ## Candidate pools
 
@@ -27,6 +29,7 @@
 | TKT-1024 | 15 | 1 | n/a | 14 |
 | TKT-1007 | 15 | 1 | 1 | 12 |
 | TKT-1018 | 16 | 1 | 1 | 13 |
+| TKT-1031 | 19 | 1 | n/a | 17 |
 
 ## Per-representation provenance
 
@@ -174,13 +177,32 @@
 | TKT-1018 | known-cause:track-api-local-time-timestamp | lexical | known-cause:track-api-local-time-timestamp:canonical:0 | 24 | -0.0000019209871125102333 |
 | TKT-1018 | known-cause:webhook-delivery-latency | lexical | known-cause:webhook-delivery-latency:canonical:0 | 18 | -1.6275324904335302 |
 | TKT-1018 | known-cause:webhook-secret-rotation | lexical | known-cause:webhook-secret-rotation:canonical:0 | 19 | -0.0000034104728131244776 |
+| TKT-1031 | diagnostic-playbook:article-backed | lexical | diagnostic-playbook:article-backed:canonical:0 | 33 | -0.0000014592290086613114 |
+| TKT-1031 | diagnostic-playbook:campaign-editor | lexical | diagnostic-playbook:campaign-editor:canonical:0 | 3 | -13.392063684891177 |
+| TKT-1031 | diagnostic-playbook:event-processing-delay | lexical | diagnostic-playbook:event-processing-delay:canonical:0 | 31 | -0.0000029446230473171838 |
+| TKT-1031 | diagnostic-playbook:flow-trigger | lexical | diagnostic-playbook:flow-trigger:canonical:0 | 32 | -0.000001867340492735313 |
+| TKT-1031 | knowledge-article:authentication | lexical | knowledge-article:authentication:section:0 | 2 | -13.396563271466439 |
+| TKT-1031 | knowledge-article:campaign-send-failures | lexical | knowledge-article:campaign-send-failures:section:0 | 9 | -3.4974472420350375 |
+| TKT-1031 | knowledge-article:performance-troubleshooting | lexical | knowledge-article:performance-troubleshooting:section:0 | 1 | -14.917648555122023 |
+| TKT-1031 | knowledge-article:security-incident-response | lexical | knowledge-article:security-incident-response:section:0 | 8 | -4.10423793110812 |
+| TKT-1031 | knowledge-article:support-operations-playbook | lexical | knowledge-article:support-operations-playbook:section:2 | 5 | -4.95624133692041 |
+| TKT-1031 | knowledge-article:support-operations-playbook | lexical | knowledge-article:support-operations-playbook:section:3 | 6 | -4.510900262704638 |
+| TKT-1031 | knowledge-article:support-operations-playbook | lexical | knowledge-article:support-operations-playbook:section:1 | 7 | -4.314175117732113 |
+| TKT-1031 | knowledge-article:support-operations-playbook | lexical | knowledge-article:support-operations-playbook:section:5 | 12 | -3.3906785809511786 |
+| TKT-1031 | knowledge-article:support-operations-playbook | lexical | knowledge-article:support-operations-playbook:section:4 | 16 | -2.401186084770788 |
+| TKT-1031 | knowledge-article:support-operations-playbook | lexical | knowledge-article:support-operations-playbook:section:0 | 28 | -0.000005767994468049158 |
+| TKT-1031 | known-cause:shopify-custom-field-mapping | lexical | known-cause:shopify-custom-field-mapping:canonical:0 | 27 | -0.000007041963971698858 |
+| TKT-1031 | known-cause:sms-quiet-hours | lexical | known-cause:sms-quiet-hours:canonical:0 | 4 | -7.0556276786641225 |
+| TKT-1031 | known-cause:sms-stop-sync-delay | lexical | known-cause:sms-stop-sync-delay:canonical:0 | 29 | -0.000004943768153092321 |
+| TKT-1031 | known-cause:track-api-local-time-timestamp | lexical | known-cause:track-api-local-time-timestamp:canonical:0 | 13 | -3.3553234136575605 |
+| TKT-1031 | known-cause:webhook-secret-rotation | lexical | known-cause:webhook-secret-rotation:canonical:0 | 19 | -1.6023774575093037 |
 
 ## Per-type metrics
 
 | Type | Scenarios | Lexical R@1 | Lexical R@3 | Lexical R@5 | Lexical P@1 | Lexical P@3 | Lexical P@5 | Semantic R@1 | Semantic R@3 | Semantic R@5 |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| diagnostic-playbook | 1 | 1 | 1 | 1 | n/a | n/a | n/a | n/a | n/a | n/a |
-| knowledge-article | 8 | 0.5 | 0.875 | 0.875 | 0.5 | 0.3333333333333333 | 0.19999999999999998 | n/a | n/a | n/a |
+| diagnostic-playbook | 2 | 1 | 1 | 1 | n/a | n/a | n/a | n/a | n/a | n/a |
+| knowledge-article | 9 | 0.5555555555555556 | 0.8888888888888888 | 0.8888888888888888 | 0.5 | 0.3333333333333333 | 0.19999999999999998 | n/a | n/a | n/a |
 | known-cause | 6 | 1 | 1 | 1 | 1 | 0.3333333333333333 | 0.19999999999999998 | n/a | n/a | n/a |
 | resolved-ticket | 0 | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
 
@@ -194,6 +216,7 @@
 | known-cause | 1 | 1 | 1 |
 | shopify-catalog | 2 | 1 | 1 |
 | sms-compliance | 1 | 1 | 1 |
+| synthetic-browser-session | 1 | 1 | n/a |
 | webhooks | 1 | 1 | 1 |
 
 ## Baseline comparison
@@ -204,14 +227,14 @@
 
 | Channel | Kind | Scenarios | Candidate recall | Required coverage | Excluded recall | Excluded required | Provenance |
 |---|---|---:|---:|---:|---:|---:|---|
-| deterministic | unordered-pool | 8 | 0.6875 | 1 | 0 | 2 | deterministic classifier associations |
-| knownCause | unordered-pool | 8 | 0.375 | 1 | 0 | 2 | direct approved links from retrieved known causes |
+| deterministic | unordered-pool | 9 | 0.6666666666666666 | 1 | 0 | 3 | deterministic classifier associations |
+| knownCause | unordered-pool | 9 | 0.3333333333333333 | 1 | 0 | 3 | direct approved links from retrieved known causes |
 
 ## Retrieval, corpus, and oracle-review gaps
 
 - Retrieval misses: None.
 - Corpus gaps: TKT-1017:diagnostic-playbook, TKT-1028:diagnostic-playbook, TKT-1020:diagnostic-playbook, TKT-1023:diagnostic-playbook, TKT-1024:resolved-ticket, TKT-1007:diagnostic-playbook, TKT-1018:diagnostic-playbook
-- Oracle-review candidates: TKT-1017:diagnostic-playbook:article-backed, TKT-1017:diagnostic-playbook:campaign-editor, TKT-1017:diagnostic-playbook:event-processing-delay, TKT-1017:diagnostic-playbook:flow-trigger, TKT-1017:knowledge-article:campaign-send-failures, TKT-1017:knowledge-article:email-deliverability, TKT-1017:knowledge-article:event-tracking-debugging, TKT-1017:knowledge-article:profile-sync-issues, TKT-1017:knowledge-article:support-operations-playbook, TKT-1017:knowledge-article:webhook-signature-validation, TKT-1017:known-cause:track-api-local-time-timestamp, TKT-1017:known-cause:webhook-delivery-latency, TKT-1017:known-cause:webhook-secret-rotation, TKT-1028:diagnostic-playbook:article-backed, TKT-1028:diagnostic-playbook:campaign-editor, TKT-1028:diagnostic-playbook:event-processing-delay, TKT-1028:diagnostic-playbook:flow-trigger, TKT-1028:knowledge-article:coupon-catalog-sync, TKT-1028:knowledge-article:event-tracking-debugging, TKT-1028:knowledge-article:flow-trigger-troubleshooting, TKT-1028:knowledge-article:profile-sync-issues, TKT-1028:knowledge-article:shopify-integration-sync, TKT-1028:knowledge-article:sms-compliance, TKT-1028:knowledge-article:support-operations-playbook, TKT-1028:known-cause:shopify-custom-field-mapping, TKT-1028:known-cause:sms-stop-sync-delay, TKT-1028:known-cause:track-api-local-time-timestamp, TKT-1010:diagnostic-playbook:flow-trigger, TKT-1010:knowledge-article:email-deliverability, TKT-1010:knowledge-article:event-tracking-debugging, TKT-1010:knowledge-article:flow-trigger-troubleshooting, TKT-1010:knowledge-article:profile-sync-issues, TKT-1010:knowledge-article:security-incident-response, TKT-1010:knowledge-article:shopify-integration-sync, TKT-1010:knowledge-article:sms-compliance, TKT-1010:knowledge-article:support-operations-playbook, TKT-1010:knowledge-article:webhook-signature-validation, TKT-1010:known-cause:shopify-custom-field-mapping, TKT-1010:known-cause:sms-stop-sync-delay, TKT-1010:known-cause:webhook-secret-rotation, TKT-1020:diagnostic-playbook:article-backed, TKT-1020:diagnostic-playbook:campaign-editor, TKT-1020:diagnostic-playbook:event-processing-delay, TKT-1020:knowledge-article:event-tracking-debugging, TKT-1020:knowledge-article:product-feedback, TKT-1020:knowledge-article:profile-sync-issues, TKT-1020:knowledge-article:sms-compliance, TKT-1020:knowledge-article:support-operations-playbook, TKT-1020:knowledge-article:webhook-signature-validation, TKT-1020:known-cause:sms-quiet-hours, TKT-1020:known-cause:sms-stop-sync-delay, TKT-1020:known-cause:track-api-local-time-timestamp, TKT-1020:known-cause:webhook-secret-rotation, TKT-1023:diagnostic-playbook:article-backed, TKT-1023:diagnostic-playbook:campaign-editor, TKT-1023:diagnostic-playbook:event-processing-delay, TKT-1023:diagnostic-playbook:flow-trigger, TKT-1023:knowledge-article:event-tracking-debugging, TKT-1023:knowledge-article:flow-trigger-troubleshooting, TKT-1023:knowledge-article:segmentation-audience-rules, TKT-1023:knowledge-article:shopify-integration-sync, TKT-1023:knowledge-article:sms-compliance, TKT-1023:knowledge-article:support-operations-playbook, TKT-1023:knowledge-article:webhook-signature-validation, TKT-1023:known-cause:shopify-custom-field-mapping, TKT-1023:known-cause:track-api-local-time-timestamp, TKT-1023:known-cause:webhook-secret-rotation, TKT-1024:diagnostic-playbook:article-backed, TKT-1024:diagnostic-playbook:campaign-editor, TKT-1024:knowledge-article:campaign-send-failures, TKT-1024:knowledge-article:event-tracking-debugging, TKT-1024:knowledge-article:profile-sync-issues, TKT-1024:knowledge-article:segmentation-audience-rules, TKT-1024:knowledge-article:sms-compliance, TKT-1024:knowledge-article:support-operations-playbook, TKT-1024:knowledge-article:webhook-signature-validation, TKT-1024:known-cause:sms-quiet-hours, TKT-1024:known-cause:sms-stop-sync-delay, TKT-1024:known-cause:track-api-local-time-timestamp, TKT-1024:known-cause:webhook-delivery-latency, TKT-1024:known-cause:webhook-secret-rotation, TKT-1007:diagnostic-playbook:article-backed, TKT-1007:diagnostic-playbook:event-processing-delay, TKT-1007:knowledge-article:campaign-send-failures, TKT-1007:knowledge-article:event-tracking-debugging, TKT-1007:knowledge-article:profile-sync-issues, TKT-1007:knowledge-article:security-incident-response, TKT-1007:knowledge-article:shopify-integration-sync, TKT-1007:knowledge-article:sms-compliance, TKT-1007:knowledge-article:support-operations-playbook, TKT-1007:known-cause:shopify-custom-field-mapping, TKT-1007:known-cause:sms-stop-sync-delay, TKT-1007:known-cause:track-api-local-time-timestamp, TKT-1018:diagnostic-playbook:article-backed, TKT-1018:diagnostic-playbook:campaign-editor, TKT-1018:diagnostic-playbook:flow-trigger, TKT-1018:knowledge-article:event-tracking-debugging, TKT-1018:knowledge-article:product-feedback, TKT-1018:knowledge-article:profile-sync-issues, TKT-1018:knowledge-article:sms-compliance, TKT-1018:knowledge-article:support-operations-playbook, TKT-1018:knowledge-article:webhook-signature-validation, TKT-1018:known-cause:sms-stop-sync-delay, TKT-1018:known-cause:track-api-local-time-timestamp, TKT-1018:known-cause:webhook-delivery-latency, TKT-1018:known-cause:webhook-secret-rotation
+- Oracle-review candidates: TKT-1017:diagnostic-playbook:article-backed, TKT-1017:diagnostic-playbook:campaign-editor, TKT-1017:diagnostic-playbook:event-processing-delay, TKT-1017:diagnostic-playbook:flow-trigger, TKT-1017:knowledge-article:campaign-send-failures, TKT-1017:knowledge-article:email-deliverability, TKT-1017:knowledge-article:event-tracking-debugging, TKT-1017:knowledge-article:profile-sync-issues, TKT-1017:knowledge-article:support-operations-playbook, TKT-1017:knowledge-article:webhook-signature-validation, TKT-1017:known-cause:track-api-local-time-timestamp, TKT-1017:known-cause:webhook-delivery-latency, TKT-1017:known-cause:webhook-secret-rotation, TKT-1028:diagnostic-playbook:article-backed, TKT-1028:diagnostic-playbook:campaign-editor, TKT-1028:diagnostic-playbook:event-processing-delay, TKT-1028:diagnostic-playbook:flow-trigger, TKT-1028:knowledge-article:coupon-catalog-sync, TKT-1028:knowledge-article:event-tracking-debugging, TKT-1028:knowledge-article:flow-trigger-troubleshooting, TKT-1028:knowledge-article:profile-sync-issues, TKT-1028:knowledge-article:shopify-integration-sync, TKT-1028:knowledge-article:sms-compliance, TKT-1028:knowledge-article:support-operations-playbook, TKT-1028:known-cause:shopify-custom-field-mapping, TKT-1028:known-cause:sms-stop-sync-delay, TKT-1028:known-cause:track-api-local-time-timestamp, TKT-1010:diagnostic-playbook:flow-trigger, TKT-1010:knowledge-article:email-deliverability, TKT-1010:knowledge-article:event-tracking-debugging, TKT-1010:knowledge-article:flow-trigger-troubleshooting, TKT-1010:knowledge-article:profile-sync-issues, TKT-1010:knowledge-article:security-incident-response, TKT-1010:knowledge-article:shopify-integration-sync, TKT-1010:knowledge-article:sms-compliance, TKT-1010:knowledge-article:support-operations-playbook, TKT-1010:knowledge-article:webhook-signature-validation, TKT-1010:known-cause:shopify-custom-field-mapping, TKT-1010:known-cause:sms-stop-sync-delay, TKT-1010:known-cause:webhook-secret-rotation, TKT-1020:diagnostic-playbook:article-backed, TKT-1020:diagnostic-playbook:campaign-editor, TKT-1020:diagnostic-playbook:event-processing-delay, TKT-1020:knowledge-article:event-tracking-debugging, TKT-1020:knowledge-article:product-feedback, TKT-1020:knowledge-article:profile-sync-issues, TKT-1020:knowledge-article:sms-compliance, TKT-1020:knowledge-article:support-operations-playbook, TKT-1020:knowledge-article:webhook-signature-validation, TKT-1020:known-cause:sms-quiet-hours, TKT-1020:known-cause:sms-stop-sync-delay, TKT-1020:known-cause:track-api-local-time-timestamp, TKT-1020:known-cause:webhook-secret-rotation, TKT-1023:diagnostic-playbook:article-backed, TKT-1023:diagnostic-playbook:campaign-editor, TKT-1023:diagnostic-playbook:event-processing-delay, TKT-1023:diagnostic-playbook:flow-trigger, TKT-1023:knowledge-article:event-tracking-debugging, TKT-1023:knowledge-article:flow-trigger-troubleshooting, TKT-1023:knowledge-article:segmentation-audience-rules, TKT-1023:knowledge-article:shopify-integration-sync, TKT-1023:knowledge-article:sms-compliance, TKT-1023:knowledge-article:support-operations-playbook, TKT-1023:knowledge-article:webhook-signature-validation, TKT-1023:known-cause:shopify-custom-field-mapping, TKT-1023:known-cause:track-api-local-time-timestamp, TKT-1023:known-cause:webhook-secret-rotation, TKT-1024:diagnostic-playbook:article-backed, TKT-1024:diagnostic-playbook:campaign-editor, TKT-1024:knowledge-article:campaign-send-failures, TKT-1024:knowledge-article:event-tracking-debugging, TKT-1024:knowledge-article:profile-sync-issues, TKT-1024:knowledge-article:segmentation-audience-rules, TKT-1024:knowledge-article:sms-compliance, TKT-1024:knowledge-article:support-operations-playbook, TKT-1024:knowledge-article:webhook-signature-validation, TKT-1024:known-cause:sms-quiet-hours, TKT-1024:known-cause:sms-stop-sync-delay, TKT-1024:known-cause:track-api-local-time-timestamp, TKT-1024:known-cause:webhook-delivery-latency, TKT-1024:known-cause:webhook-secret-rotation, TKT-1007:diagnostic-playbook:article-backed, TKT-1007:diagnostic-playbook:event-processing-delay, TKT-1007:knowledge-article:campaign-send-failures, TKT-1007:knowledge-article:event-tracking-debugging, TKT-1007:knowledge-article:profile-sync-issues, TKT-1007:knowledge-article:security-incident-response, TKT-1007:knowledge-article:shopify-integration-sync, TKT-1007:knowledge-article:sms-compliance, TKT-1007:knowledge-article:support-operations-playbook, TKT-1007:known-cause:shopify-custom-field-mapping, TKT-1007:known-cause:sms-stop-sync-delay, TKT-1007:known-cause:track-api-local-time-timestamp, TKT-1018:diagnostic-playbook:article-backed, TKT-1018:diagnostic-playbook:campaign-editor, TKT-1018:diagnostic-playbook:flow-trigger, TKT-1018:knowledge-article:event-tracking-debugging, TKT-1018:knowledge-article:product-feedback, TKT-1018:knowledge-article:profile-sync-issues, TKT-1018:knowledge-article:sms-compliance, TKT-1018:knowledge-article:support-operations-playbook, TKT-1018:knowledge-article:webhook-signature-validation, TKT-1018:known-cause:sms-stop-sync-delay, TKT-1018:known-cause:track-api-local-time-timestamp, TKT-1018:known-cause:webhook-delivery-latency, TKT-1018:known-cause:webhook-secret-rotation, TKT-1031:diagnostic-playbook:article-backed, TKT-1031:diagnostic-playbook:event-processing-delay, TKT-1031:diagnostic-playbook:flow-trigger, TKT-1031:knowledge-article:authentication, TKT-1031:knowledge-article:campaign-send-failures, TKT-1031:knowledge-article:event-tracking-debugging, TKT-1031:knowledge-article:profile-sync-issues, TKT-1031:knowledge-article:security-incident-response, TKT-1031:knowledge-article:shopify-integration-sync, TKT-1031:knowledge-article:sms-compliance, TKT-1031:knowledge-article:support-operations-playbook, TKT-1031:knowledge-article:webhook-signature-validation, TKT-1031:known-cause:shopify-custom-field-mapping, TKT-1031:known-cause:sms-quiet-hours, TKT-1031:known-cause:sms-stop-sync-delay, TKT-1031:known-cause:track-api-local-time-timestamp, TKT-1031:known-cause:webhook-secret-rotation
 
 ## Approved contrast coverage
 
@@ -220,7 +243,7 @@
 | webhook rotation/latency | covered | 2 | TKT-1007, TKT-1028 |
 | SMS quiet-hours/consent delay | covered | 2 | TKT-1017, TKT-1023 |
 | Shopify mapping/general sync | covered | 2 | TKT-1018, TKT-1020 |
-| editor session/platform loading | missing-counterpart | 1 | TKT-1010 |
+| editor session/platform loading | covered | 2 | TKT-1010, TKT-1031 |
 
 ## Resolved-case evaluation
 
@@ -228,11 +251,11 @@
 
 ## Corpus coverage
 
-- {"knowledge-article":{"adequate":8},"known-cause":{"adequate":6,"uncertain":2},"diagnostic-playbook":{"missing":6,"adequate":1,"uncertain":1},"resolved-ticket":{"not-expected":7,"missing":1}}
+- {"knowledge-article":{"adequate":9},"known-cause":{"adequate":6,"uncertain":2,"not-expected":1},"diagnostic-playbook":{"missing":6,"adequate":2,"uncertain":1},"resolved-ticket":{"not-expected":8,"missing":1}}
 
 ## Unjudged hits
 
-- Count: 106
+- Count: 123
 - TKT-1017: diagnostic-playbook:article-backed
 - TKT-1017: diagnostic-playbook:campaign-editor
 - TKT-1017: diagnostic-playbook:event-processing-delay
@@ -339,6 +362,23 @@
 - TKT-1018: known-cause:track-api-local-time-timestamp
 - TKT-1018: known-cause:webhook-delivery-latency
 - TKT-1018: known-cause:webhook-secret-rotation
+- TKT-1031: diagnostic-playbook:article-backed
+- TKT-1031: diagnostic-playbook:event-processing-delay
+- TKT-1031: diagnostic-playbook:flow-trigger
+- TKT-1031: knowledge-article:authentication
+- TKT-1031: knowledge-article:campaign-send-failures
+- TKT-1031: knowledge-article:event-tracking-debugging
+- TKT-1031: knowledge-article:profile-sync-issues
+- TKT-1031: knowledge-article:security-incident-response
+- TKT-1031: knowledge-article:shopify-integration-sync
+- TKT-1031: knowledge-article:sms-compliance
+- TKT-1031: knowledge-article:support-operations-playbook
+- TKT-1031: knowledge-article:webhook-signature-validation
+- TKT-1031: known-cause:shopify-custom-field-mapping
+- TKT-1031: known-cause:sms-quiet-hours
+- TKT-1031: known-cause:sms-stop-sync-delay
+- TKT-1031: known-cause:track-api-local-time-timestamp
+- TKT-1031: known-cause:webhook-secret-rotation
 
 ## Reviewed contrast families
 

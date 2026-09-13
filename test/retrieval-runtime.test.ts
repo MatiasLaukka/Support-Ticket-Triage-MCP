@@ -13,6 +13,39 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { createTriageServer } from "../src/server.js";
 import { openReliabilityRuntime } from "./reliability-runtime-fixture.js";
 
+function commandFixture(input: { dispatcher: unknown; service: unknown; retrievalObserver?: unknown }) {
+  const ticket = TicketSchema.parse({
+    id: "TKT-9999",
+    createdAt: "2026-09-12T00:00:00.000Z",
+    updatedAt: "2026-09-12T00:00:00.000Z",
+    customer: { name: "Northstar Labs", plan: "enterprise", region: "eu-west", vip: false },
+    subject: "Accepted API requests are delayed",
+    description: "Accepted requests remain absent from the profile timeline.",
+    status: "triage",
+    category: "api",
+    priority: "P2",
+    team: "api-platform",
+    tags: ["api", "delay"],
+    sla: { responseDueAt: "2026-09-12T04:00:00.000Z", breached: false },
+    relatedTicketIds: [],
+    revision: 0,
+  });
+  return {
+    ticket,
+    deps: {
+      dispatcher: input.dispatcher,
+      service: input.service,
+      tickets: { get: async () => ticket },
+      audits: { list: async () => [] },
+      knowledge: { list: async () => [] },
+      knowledgeEvolution: { listReusableApproved: async () => ({ status: "available", contexts: [], issues: [] }) },
+      now: () => new Date("2026-09-12T00:00:00.000Z"),
+      env: {},
+      ...(input.retrievalObserver === undefined ? {} : { retrievalObserver: input.retrievalObserver }),
+    } as any,
+  };
+}
+
 describe("retrieval runtime configuration", () => {
   it("defaults to shadow and accepts the explicit off comparison mode", () => {
     expect(parseRetrievalMode({})).toBe("shadow");
@@ -144,6 +177,80 @@ describe("retrieval runtime configuration", () => {
       expect(reported).toBe(1);
     });
     expect(shadowResult).toEqual(offResult);
+  });
+
+  it("observes exactly once when a same-key command joins a successful committed evaluation", async () => {
+    let claimed = false;
+    let releaseCommit!: () => void;
+    let receiptReady!: () => void;
+    const commitGate = new Promise<void>((resolve) => { releaseCommit = resolve; });
+    const receiptGate = new Promise<void>((resolve) => { receiptReady = resolve; });
+    let receipt: unknown;
+    let commits = 0;
+    let observed = 0;
+    const service = {
+      commitOperationalEvaluation: () => ({ committed: true, authority: "unchanged" }),
+      replayOperationalEvaluation: (_reader: unknown, result: unknown) => result,
+    };
+    const dispatcher = {
+      async run(definition: any, raw: unknown, commandId: string) {
+        const parsed = definition.parse(raw);
+        const prepared = await definition.prepare(parsed);
+        if (!claimed) {
+          claimed = true;
+          await commitGate;
+          commits += 1;
+          receipt = definition.commit({}, prepared, commandId);
+          receiptReady();
+        } else {
+          await receiptGate;
+        }
+        return definition.replay({}, receipt, commandId);
+      },
+    };
+    const { ticket, deps } = commandFixture({ dispatcher, service, retrievalObserver: { observe: async () => { observed += 1; }, recent: () => [], close: async () => undefined } });
+    const input = { ticketId: ticket.id, aiPreference: "deterministic", responseStyle: "auto" } as const;
+    const commandId = "40000000-0000-4000-8000-000000000010";
+    const first = evaluateTicketCommand(deps, input, commandId);
+    await vi.waitFor(() => expect(claimed).toBe(true));
+    const joined = evaluateTicketCommand(deps, input, commandId);
+    releaseCommit();
+    await expect(Promise.all([first, joined])).resolves.toEqual([{ committed: true, authority: "unchanged" }, { committed: true, authority: "unchanged" }]);
+    await vi.waitFor(() => expect(observed).toBe(1));
+    expect(commits).toBe(1);
+  });
+
+  it("does not observe a receipt race which returns an existing result without a commit", async () => {
+    let observed = 0;
+    const existing = { committed: true, authority: "existing" };
+    const { ticket, deps } = commandFixture({
+      dispatcher: { run: async () => existing },
+      service: { commitOperationalEvaluation: () => { throw new Error("must not commit"); }, replayOperationalEvaluation: (_reader: unknown, result: unknown) => result },
+      retrievalObserver: { observe: async () => { observed += 1; }, recent: () => [], close: async () => undefined },
+    });
+    await expect(evaluateTicketCommand(deps, { ticketId: ticket.id, aiPreference: "deterministic", responseStyle: "auto" }, "40000000-0000-4000-8000-000000000011")).resolves.toEqual(existing);
+    await Promise.resolve();
+    expect(observed).toBe(0);
+  });
+
+  it("does not observe failed or rolled-back evaluation commits", async () => {
+    let observed = 0;
+    const observer = { observe: async () => { observed += 1; }, recent: () => [], close: async () => undefined };
+    const service = { commitOperationalEvaluation: () => { throw new Error("commit failed"); }, replayOperationalEvaluation: (_reader: unknown, result: unknown) => result };
+    const failed = commandFixture({
+      dispatcher: { async run(definition: any, raw: unknown, commandId: string) { const prepared = await definition.prepare(definition.parse(raw)); return definition.commit({}, prepared, commandId); } },
+      service,
+      retrievalObserver: observer,
+    });
+    await expect(evaluateTicketCommand(failed.deps, { ticketId: failed.ticket.id, aiPreference: "deterministic", responseStyle: "auto" }, "40000000-0000-4000-8000-000000000012")).rejects.toThrow("commit failed");
+    const rolledBack = commandFixture({
+      dispatcher: { async run(definition: any, raw: unknown, commandId: string) { const prepared = await definition.prepare(definition.parse(raw)); definition.commit({}, prepared, commandId); throw new Error("transaction rolled back"); } },
+      service: { commitOperationalEvaluation: () => ({ committed: true }), replayOperationalEvaluation: (_reader: unknown, result: unknown) => result },
+      retrievalObserver: observer,
+    });
+    await expect(evaluateTicketCommand(rolledBack.deps, { ticketId: rolledBack.ticket.id, aiPreference: "deterministic", responseStyle: "auto" }, "40000000-0000-4000-8000-000000000013")).rejects.toThrow("transaction rolled back");
+    await Promise.resolve();
+    expect(observed).toBe(0);
   });
 
   it("does not hold a committed evaluation open for shadow observation", async () => {

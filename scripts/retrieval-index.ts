@@ -18,7 +18,7 @@ export async function runRetrievalIndex(args: readonly string[], dataRoot = reso
     store.initialize();
     if (command === "status") return { status: "ready", path, metadata: store.metadata() };
     if (command === "validate") { store.validate(); return { status: "valid", path, metadata: store.metadata() }; }
-    manager = new IndexManager({ store, load: async () => ({ resources: loadRetrievalSources({ articles: await new KnowledgeRepository(resolve("data/knowledge")).list(), reusable: unavailableReusableKnowledge(), completedSnapshots: [] }).resources, unavailableFamilies: ["learned-known-cause", "resolved-ticket"] }) });
+    manager = new IndexManager({ store, load: async () => ({ resources: loadRetrievalSources({ articles: await new KnowledgeRepository(resolve("data/knowledge")).list(), reusable: unavailableReusableKnowledge() }).resources, unavailableFamilies: ["learned-known-cause", "resolved-ticket"] }) });
     const metadata = command === "rebuild" ? await manager.rebuild(new AbortController().signal) : await manager.refresh(new AbortController().signal);
     return { status: "refreshed", path, metadata };
   } finally {

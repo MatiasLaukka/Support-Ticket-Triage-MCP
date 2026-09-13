@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { RetrievalStore } from "../src/retrieval/sqlite-store.js";
-import { projectArticle } from "../src/retrieval/representations.js";
+import { hashRepresentation, hashResource, projectArticle } from "../src/retrieval/representations.js";
 import { projectLearnedCause } from "../src/retrieval/sources.js";
 
 describe("retrieval store", () => {
@@ -60,6 +60,25 @@ describe("retrieval store", () => {
     db.close();
   });
 
+  it("retains a cached resolved case only while its source is unavailable, then removes it after an authoritative empty read", () => {
+    const db = RetrievalStore.open(":memory:");
+    db.initialize();
+    const key = "resolved-ticket:TKT-9001" as const;
+    const representation = { id: `${key}:case`, resourceKey: key, kind: "case", ordinal: 0, title: "Resolved case", keywords: ["resolved"], lexicalText: "Resolved case", semanticText: "Resolved case" };
+    const projected = {
+      resource: { key, type: "resolved-ticket" as const, sourceId: "TKT-9001", family: "resolved-ticket" as const, linkedResourceKeys: [] as const },
+      representations: [{ ...representation, contentHash: hashRepresentation(representation) }],
+    };
+    const resolved = { ...projected, resource: { ...projected.resource, contentHash: hashResource(projected.resource, projected.representations) } };
+    db.reconcile({ resources: [resolved], unavailableFamilies: [] });
+    db.reconcile({ resources: [], unavailableFamilies: ["resolved-ticket"] });
+    const raw = (db as unknown as { database: { prepare(sql: string): { get(): { count: number } } } }).database;
+    expect(raw.prepare("SELECT count(*) AS count FROM retrieval_resources WHERE resource_type='resolved-ticket'").get().count).toBe(1);
+    db.reconcile({ resources: [], unavailableFamilies: [] });
+    expect(raw.prepare("SELECT count(*) AS count FROM retrieval_resources WHERE resource_type='resolved-ticket'").get().count).toBe(0);
+    db.close();
+  });
+
   it("excludes vectors after the configured embedding model changes", () => {
     const db = RetrievalStore.open(":memory:");
     db.initialize();
@@ -89,6 +108,19 @@ describe("retrieval store", () => {
     db.reconcile({ resources: [], unavailableFamilies: [] });
     const raw = (db as unknown as { database: { prepare(sql: string): { run(...values: unknown[]): void } } }).database;
     raw.prepare("UPDATE retrieval_index_metadata SET value=? WHERE key='corpusHash'").run("{");
+    expect(() => db.validate()).toThrow();
+    db.close();
+  });
+
+  it("rejects invalid bounded metadata instead of serving it as a normal snapshot", () => {
+    const db = RetrievalStore.open(":memory:");
+    db.initialize();
+    const raw = (db as unknown as { database: { prepare(sql: string): { run(...values: unknown[]): void } } }).database;
+    raw.prepare("UPDATE retrieval_index_metadata SET value=? WHERE key='state'").run("bogus");
+    expect(() => db.validate()).toThrow();
+    expect(() => db.readSnapshot("")).toThrow();
+    raw.prepare("UPDATE retrieval_index_metadata SET value=? WHERE key='state'").run("ready");
+    raw.prepare("UPDATE retrieval_index_metadata SET value=? WHERE key='generation'").run("-1");
     expect(() => db.validate()).toThrow();
     db.close();
   });

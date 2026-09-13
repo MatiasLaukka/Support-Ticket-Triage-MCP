@@ -1,5 +1,6 @@
 import type { EmbeddingProvider, IndexMetadata, Representation, SearchSnapshot, SourceSnapshot } from "./types.js";
-import { RetrievalStore } from "./sqlite-store.js";
+import { RetrievalIntegrityError, RetrievalStore } from "./sqlite-store.js";
+import { EmbeddingProviderError } from "./embedding-provider.js";
 
 export class IndexManager {
   private tail: Promise<void> = Promise.resolve();
@@ -35,6 +36,7 @@ export class IndexManager {
         this.input.store.installVectors(await this.embed(pending, signal));
       } catch (error) {
         if (signal.aborted || this.controller.signal.aborted) throw error;
+        if (error instanceof RetrievalIntegrityError || !(error instanceof EmbeddingProviderError)) throw error;
         return this.input.store.metadata();
       }
     }

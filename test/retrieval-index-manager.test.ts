@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { IndexManager } from "../src/retrieval/index-manager.js";
-import { RetrievalStore } from "../src/retrieval/sqlite-store.js";
+import { RetrievalIntegrityError, RetrievalStore } from "../src/retrieval/sqlite-store.js";
 import { projectArticle } from "../src/retrieval/representations.js";
+import { EmbeddingProviderError } from "../src/retrieval/embedding-provider.js";
 
 describe("retrieval index manager", () => {
   it("embeds pending representations once and refreshes lexical data", async () => {
@@ -24,12 +25,28 @@ describe("retrieval index manager", () => {
     const store = RetrievalStore.open(":memory:");
     const article = projectArticle({ id: "a", title: "A", tags: [], body: "Webhook signing" });
     let fail = true;
-    const manager = new IndexManager({ store, load: async () => ({ resources: [article], unavailableFamilies: [] }), provider: { model: { id: "test", revision: "1", dimensions: 2 }, embed: async () => { if (fail) { fail = false; throw new Error("provider"); } return [[1, 0]]; } } });
+    const manager = new IndexManager({ store, load: async () => ({ resources: [article], unavailableFamilies: [] }), provider: { model: { id: "test", revision: "1", dimensions: 2 }, embed: async () => { if (fail) { fail = false; throw new EmbeddingProviderError("PROVIDER_UNREACHABLE", "provider"); } return [[1, 0]]; } } });
     await expect(manager.refresh(new AbortController().signal)).resolves.toMatchObject({ state: "degraded", semanticGeneration: 0 });
     expect(store.readSnapshot('"webhook"').lexicalMatches).toHaveLength(1);
     expect(store.readSnapshot('"webhook"').vectors).toHaveLength(0);
     await expect(manager.refresh(new AbortController().signal)).resolves.toBeDefined();
     expect(store.readSnapshot('"webhook"').vectors).toHaveLength(1);
+    await manager.close();
+  });
+
+  it("propagates a malformed store vector instead of treating it as provider degradation", async () => {
+    const store = RetrievalStore.open(":memory:");
+    const article = projectArticle({ id: "bad-vector", title: "Bad vector", tags: [], body: "Webhook signing" });
+    const manager = new IndexManager({ store, load: async () => ({ resources: [article], unavailableFamilies: [] }), provider: { model: { id: "test", revision: "1", dimensions: 2 }, embed: async () => [[0, 0]] } });
+    await expect(manager.refresh(new AbortController().signal)).rejects.toBeInstanceOf(RetrievalIntegrityError);
+    await manager.close();
+  });
+
+  it("rethrows unexpected embedding failures instead of reporting a degraded provider state", async () => {
+    const store = RetrievalStore.open(":memory:");
+    const article = projectArticle({ id: "unexpected", title: "Unexpected", tags: [], body: "Webhook signing" });
+    const manager = new IndexManager({ store, load: async () => ({ resources: [article], unavailableFamilies: [] }), provider: { model: { id: "test", revision: "1", dimensions: 2 }, embed: async () => { throw new Error("unexpected embedding failure"); } } });
+    await expect(manager.refresh(new AbortController().signal)).rejects.toThrow("unexpected embedding failure");
     await manager.close();
   });
 

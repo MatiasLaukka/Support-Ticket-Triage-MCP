@@ -141,7 +141,8 @@ export async function evaluateRetrieval(input: { provider?: EmbeddingProvider; c
         channelStatuses: { lexical: result.lexical.status, semantic: result.semantic.status },
       });
     }
-    const corpusHash = store.metadata().corpusHash;
+    const evaluatedMetadata = store.metadata();
+    const corpusHash = evaluatedMetadata.corpusHash;
     const oracleHash = createHash("sha256").update(JSON.stringify(oracles)).digest("hex");
     const syntheticScenarioHash = createHash("sha256").update(JSON.stringify(syntheticScenarios)).digest("hex");
     const perTypeMetrics = metricBreakdown(scenarios, new Map(oracles.map((oracle) => [oracle.ticketId, oracle])));
@@ -150,9 +151,10 @@ export async function evaluateRetrieval(input: { provider?: EmbeddingProvider; c
     const required = scenarios.map(({ pool }) => pool.requiredCoverage).filter((value): value is number => value !== null);
     const baselineRequired = scenarios.map((scenario) => {
       const oracle = oracles.find((candidate) => candidate.ticketId === scenario.ticketId)?.retrieval;
-      if (!oracle || oracle.requiredResourceKeys.length === 0) return null;
-      const articles = new Set(scenario.deterministicReferenceKeys.filter((key) => key.startsWith("knowledge-article:")));
-      return oracle.requiredResourceKeys.filter((key) => articles.has(key)).length / oracle.requiredResourceKeys.length;
+      return deterministicArticleRequiredCoverage(
+        scenario.deterministicReferenceKeys as ResourceKey[],
+        (oracle?.requiredResourceKeys ?? []) as ResourceKey[],
+      );
     }).filter((value): value is number => value !== null);
     return {
       mode: input.provider === undefined ? "offline-lexical-only" : "live-embeddings",
@@ -163,7 +165,10 @@ export async function evaluateRetrieval(input: { provider?: EmbeddingProvider; c
       syntheticScenarioCount: syntheticScenarios.length,
       scenarioCutoff: SCENARIO_CUTOFF,
       corpusHash,
-      representationVersion: store.metadata().representationVersion,
+      indexGeneration: evaluatedMetadata.generation,
+      lexicalGeneration: evaluatedMetadata.lexicalGeneration,
+      semanticGeneration: evaluatedMetadata.semanticGeneration,
+      representationVersion: evaluatedMetadata.representationVersion,
       ftsTokenization: "unicode-letter-number-v1; quoted OR terms; max 128 tokens",
       model: input.provider?.model ?? null,
       kBudget: K_BUDGET,
@@ -201,6 +206,16 @@ export async function evaluateRetrieval(input: { provider?: EmbeddingProvider; c
     store.close();
     rmSync(sourceRoot, { recursive: true, force: true });
   }
+}
+
+export function deterministicArticleRequiredCoverage(
+  deterministicReferenceKeys: readonly ResourceKey[],
+  requiredResourceKeys: readonly ResourceKey[],
+): number | null {
+  const articleRequired = requiredResourceKeys.filter((key) => key.startsWith("knowledge-article:"));
+  if (articleRequired.length === 0) return null;
+  const articles = new Set(deterministicReferenceKeys.filter((key) => key.startsWith("knowledge-article:")));
+  return articleRequired.filter((key) => articles.has(key)).length / articleRequired.length;
 }
 
 function deterministicReferences(ticket: Parameters<typeof buildConversationContextForTicket>[0]["ticket"]): readonly Reference[] {
@@ -363,6 +378,9 @@ export function markdownReport(report: Record<string, unknown>): string {
     `- Synthetic scenario count: ${report.syntheticScenarioCount}`,
     `- Scenario cutoff: ${report.scenarioCutoff}`,
     `- Corpus hash: ${report.corpusHash}`,
+    `- Index generation: ${report.indexGeneration}`,
+    `- Lexical generation: ${report.lexicalGeneration}`,
+    `- Semantic generation: ${report.semanticGeneration}`,
     `- Representation version: ${report.representationVersion}`,
     `- FTS tokenization: ${report.ftsTokenization}`,
     `- Model: ${JSON.stringify(report.model)}`,

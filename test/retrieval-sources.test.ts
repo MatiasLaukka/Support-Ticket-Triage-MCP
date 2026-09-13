@@ -85,11 +85,19 @@ describe("retrieval sources", () => {
     }
   });
 
-  it("marks resolved-ticket sources unavailable when verification yields no eligible cases", () => {
+  it("treats a successful read with no eligible resolved cases as an authoritative empty family", () => {
     const snapshot = loadRetrievalSources({
       articles: [retrievalArticle()],
       reusable: { status: "available", contexts: [], issues: [] },
       completedSnapshots: [{ ticket: { ...({ id: "TKT-0001", status: "open" } as any) }, audits: [], diagnoses: [] }],
+    });
+    expect(snapshot.unavailableFamilies).not.toContain("resolved-ticket");
+  });
+
+  it("marks resolved-ticket sources unavailable only when their authority read is unavailable", () => {
+    const snapshot = loadRetrievalSources({
+      articles: [retrievalArticle()],
+      reusable: { status: "available", contexts: [], issues: [] },
     });
     expect(snapshot.unavailableFamilies).toContain("resolved-ticket");
   });

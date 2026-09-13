@@ -4,10 +4,12 @@ import { dirname } from "node:path";
 import { hashResource, hashRepresentation, hashText, REPRESENTATION_VERSION } from "./representations.js";
 import type { IndexMetadata, ModelIdentity, Representation, Resource, ResourceKey, ResourceType, SearchSnapshot, SourceSnapshot, TaxonomyMetadata } from "./types.js";
 
-const SCHEMA_VERSION = 2;
+export const RETRIEVAL_SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = RETRIEVAL_SCHEMA_VERSION;
 const UNAVAILABLE_FAMILIES = new Set(["learned-known-cause", "resolved-ticket"]);
 const RESOURCE_TYPES = new Set<ResourceType>(["knowledge-article", "known-cause", "diagnostic-playbook", "resolved-ticket"]);
 const RESOURCE_FAMILIES = new Set<Resource["family"]>(["article", "static-known-cause", "learned-known-cause", "playbook", "resolved-ticket"]);
+const INDEX_STATES = new Set<IndexMetadata["state"]>(["ready", "degraded", "rebuilding", "stale", "unavailable"]);
 
 export class RetrievalIntegrityError extends Error {
   readonly code = "INDEX_INTEGRITY_ERROR";
@@ -184,8 +186,9 @@ export class RetrievalStore {
       if (integrity.integrity_check !== "ok") throw new Error();
       const metadata = this.database.prepare("SELECT key,value FROM retrieval_index_metadata").all() as { key: string; value: string }[];
       const values = new Map(metadata.map((row) => [row.key, row.value]));
-      for (const key of ["schemaVersion", "representationVersion", "generation", "lexicalGeneration", "semanticGeneration"]) if (!Number.isInteger(Number(values.get(key)))) throw new Error();
+      for (const key of ["schemaVersion", "representationVersion", "generation", "lexicalGeneration", "semanticGeneration"]) if (!Number.isInteger(Number(values.get(key))) || Number(values.get(key)) < 0) throw new Error();
       if (Number(values.get("schemaVersion")) !== SCHEMA_VERSION || Number(values.get("representationVersion")) !== REPRESENTATION_VERSION) throw new Error();
+      if (!INDEX_STATES.has(values.get("state") as IndexMetadata["state"])) throw new Error();
       if (values.get("corpusHash") !== "" && !/^[0-9a-f]{64}$/.test(values.get("corpusHash") ?? "")) throw new Error();
       let configuredModel: ModelIdentity | undefined;
       if (values.has("model")) {

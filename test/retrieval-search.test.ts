@@ -4,12 +4,41 @@ import { RetrievalStore } from "../src/retrieval/sqlite-store.js";
 import { hashRepresentation, hashResource, projectArticle } from "../src/retrieval/representations.js";
 import { projectResolvedCase } from "../src/retrieval/sources.js";
 import { AuditEventSchema } from "../src/domain.js";
+import { EmbeddingProviderError } from "../src/retrieval/embedding-provider.js";
 
 describe("retrieval search", () => {
   it("quotes literal FTS tokens and computes exact cosine", () => {
     expect(makeFtsQuery('webhook OR "secret"')).toBe('"webhook" OR "or" OR "secret"');
     expect(cosine([1, 0], [1, 0])).toBeCloseTo(1);
     expect(cosine([1, 0], [0, 1])).toBeCloseTo(0);
+  });
+
+  it("searches compatible vectors while changed representations remain pending", async () => {
+    const store = RetrievalStore.open(":memory:");
+    const model = { id: "test", revision: "1", dimensions: 2 };
+    const stable = projectArticle({ id: "stable", title: "Stable", tags: [], body: "stable semantic match" });
+    const oldChanged = projectArticle({ id: "changed", title: "Changed", tags: [], body: "old value" });
+    const changed = projectArticle({ id: "changed", title: "Changed", tags: [], body: "new value" });
+    store.reconcile({ resources: [stable, oldChanged], unavailableFamilies: [] });
+    store.configureModel(model);
+    store.installVectors([stable, oldChanged].map((item) => ({ representationId: item.representations[0]!.id, resourceKey: item.resource.key, contentHash: item.representations[0]!.contentHash, model, values: item === stable ? [1, 0] : [0, 1] })));
+    store.reconcile({ resources: [stable, changed], unavailableFamilies: [] });
+    const result = await retrieve({ query: { queryText: "stable", queryHash: "q", ticketId: "TKT-0001", sourceRevision: 1, customerReplyWatermark: "none", queryTruncated: false, references: [] }, store, provider: { model, embed: async () => [[1, 0]] }, limits: { "knowledge-article": { lexical: 5, semantic: 5 }, "known-cause": { lexical: 5, semantic: 5 }, "diagnostic-playbook": { lexical: 5, semantic: 5 }, "resolved-ticket": { lexical: 5, semantic: 5 } }, signal: new AbortController().signal });
+    expect(result.semantic).toMatchObject({ status: "stale", reason: "pending-vectors" });
+    expect(result.candidates.find(({ resourceKey }) => resourceKey === stable.resource.key)?.semantic).toBeDefined();
+    store.close();
+  });
+
+  it("preserves safe provider failure provenance", async () => {
+    const store = RetrievalStore.open(":memory:");
+    const article = projectArticle({ id: "provider", title: "Provider", tags: [], body: "provider failure" });
+    store.reconcile({ resources: [article], unavailableFamilies: [] });
+    const model = { id: "test", revision: "1", dimensions: 2 };
+    store.configureModel(model);
+    store.installVectors([{ representationId: article.representations[0]!.id, resourceKey: article.resource.key, contentHash: article.representations[0]!.contentHash, model, values: [1, 0] }]);
+    const result = await retrieve({ query: { queryText: "provider", queryHash: "q", ticketId: "TKT-0001", sourceRevision: 1, customerReplyWatermark: "none", queryTruncated: false, references: [] }, store, provider: { model, embed: async () => { throw new EmbeddingProviderError("PROVIDER_HTTP_ERROR", "safe"); } }, limits: { "knowledge-article": { lexical: 5, semantic: 5 }, "known-cause": { lexical: 5, semantic: 5 }, "diagnostic-playbook": { lexical: 5, semantic: 5 }, "resolved-ticket": { lexical: 5, semantic: 5 } }, signal: new AbortController().signal });
+    expect(result.semantic).toEqual({ status: "failed", reason: "provider-http-error" });
+    store.close();
   });
 
   it("aggregates several matching chunks into one article and preserves references", async () => {
@@ -70,7 +99,7 @@ describe("retrieval search", () => {
     store.close();
   });
 
-  it("reports partial semantic coverage as stale without querying the provider", async () => {
+  it("reports partial semantic coverage as stale while searching compatible vectors", async () => {
     const store = RetrievalStore.open(":memory:");
     store.initialize();
     const first = projectArticle({ id: "first", title: "First", tags: [], body: "Webhook signing" });
@@ -91,7 +120,8 @@ describe("retrieval search", () => {
 
     expect(result.lexical.status).toBe("used");
     expect(result.semantic).toEqual({ status: "stale", reason: "pending-vectors" });
-    expect(calls).toBe(0);
+    expect(calls).toBe(1);
+    expect(result.candidates.find(({ resourceKey }) => resourceKey === first.resource.key)?.semantic).toBeDefined();
     store.close();
   });
 

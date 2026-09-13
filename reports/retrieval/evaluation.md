@@ -2,12 +2,15 @@
 
 - Mode: offline-lexical-only
 - Semantic evidence: outstanding
-- Source commit: c19c75d304ee95af5aef067638c3fbe18e32b083
+- Source commit: ed321b992c1e1e7091239a592e9f2dda480bcaf8
 - Oracle hash: d3e9d25d6ae708f85cbfe11231f1b24c127beeeb3684adc392d2535e744a1b09
 - Synthetic scenario hash: b03944b31f33fd47373658c47df40dce714910a2f08e70dacadb3d857df4d497
 - Synthetic scenario count: 1
 - Scenario cutoff: 2026-09-12T23:59:59.999Z
 - Corpus hash: 1dd1ccb213252a34bb777e46c7d628c447a45bd192c6cf03ac3d1f1d95850476
+- Index generation: 1
+- Lexical generation: 1
+- Semantic generation: 0
 - Representation version: 2
 - FTS tokenization: unicode-letter-number-v1; quoted OR terms; max 128 tokens
 - Model: null

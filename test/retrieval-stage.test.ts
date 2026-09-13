@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { buildRetrievalQuery, createRetrievalObserver, createUnavailableRetrievalObserver, RETRIEVAL_QUERY_MAX_CHARS } from "../src/retrieval/stage.js";
-import { RetrievalIntegrityError } from "../src/retrieval/sqlite-store.js";
+import { RETRIEVAL_SCHEMA_VERSION, RetrievalIntegrityError } from "../src/retrieval/sqlite-store.js";
+import { REPRESENTATION_VERSION } from "../src/retrieval/representations.js";
 
 describe("retrieval stage", () => {
   it("builds customer-only deterministic queries and hashes reply identities", () => {
@@ -77,6 +78,7 @@ describe("retrieval stage", () => {
     });
     await observer.observe({ queryText: "test", queryHash: "q", ticketId: "TKT-0001", sourceRevision: 1, customerReplyWatermark: "none", queryTruncated: false, references: [] }, "cmd-startup-corrupt");
     expect(observer.recent()[0]).toMatchObject({ failureCode: "INDEX_INTEGRITY_ERROR", result: { lexical: { status: "failed", reason: "index-integrity-error" }, semantic: { status: "failed", reason: "index-integrity-error" } } });
+    expect(observer.recent()[0]!.result.metadata).toMatchObject({ schemaVersion: RETRIEVAL_SCHEMA_VERSION, representationVersion: REPRESENTATION_VERSION });
     expect(diagnostics).toEqual([{ code: "INDEX_INTEGRITY_ERROR", commandId: "cmd-startup-corrupt" }]);
     await observer.close();
   });

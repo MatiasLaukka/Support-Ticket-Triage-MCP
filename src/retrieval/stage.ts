@@ -4,7 +4,8 @@ import type { CustomerReply } from "../approval-desk/ai-evaluation.js";
 import { retrieve } from "./search.js";
 import type { IndexManager } from "./index-manager.js";
 import type { EmbeddingProvider, IndexMetadata, Limits, Query, Reference, RetrievalTrace } from "./types.js";
-import { RetrievalIntegrityError, type RetrievalStore } from "./sqlite-store.js";
+import { RETRIEVAL_SCHEMA_VERSION, RetrievalIntegrityError, type RetrievalStore } from "./sqlite-store.js";
+import { REPRESENTATION_VERSION } from "./representations.js";
 
 export const RETRIEVAL_QUERY_MAX_CHARS = 12_000;
 const TRACE_LIMIT = 100;
@@ -77,7 +78,7 @@ function recordIntegrityFailure(query: Query, commandId: string, store: Retrieva
   try {
     metadata = store.metadata();
   } catch {
-    metadata = { schemaVersion: 1, representationVersion: 1, generation: 0, lexicalGeneration: 0, semanticGeneration: 0, corpusHash: "", state: "unavailable" };
+    metadata = { schemaVersion: RETRIEVAL_SCHEMA_VERSION, representationVersion: REPRESENTATION_VERSION, generation: 0, lexicalGeneration: 0, semanticGeneration: 0, corpusHash: "", state: "unavailable" };
   }
   traces.push({ commandId, queryHash: query.queryHash, ticketId: query.ticketId, sourceRevision: query.sourceRevision, customerReplyWatermark: query.customerReplyWatermark, queryTruncated: query.queryTruncated, result: { metadata, lexical: { status: "failed", reason: "index-integrity-error" }, semantic: { status: "failed", reason: "index-integrity-error" }, candidates: [], referenceDiagnostics: [] }, candidateCount: 0, truncated: query.queryTruncated, truncatedCount: query.queryTruncated ? 1 : 0, failureCode: "INDEX_INTEGRITY_ERROR" });
   while (traces.length > TRACE_LIMIT) traces.shift();
@@ -90,7 +91,7 @@ export function createUnavailableRetrievalObserver(input: ((diagnostic: { code: 
   return {
     async observe(query, commandId) {
       const integrity = failureCode === "INDEX_INTEGRITY_ERROR";
-      traces.push({ commandId, queryHash: query.queryHash, ticketId: query.ticketId, sourceRevision: query.sourceRevision, customerReplyWatermark: query.customerReplyWatermark, queryTruncated: query.queryTruncated, result: { metadata: { schemaVersion: 2, representationVersion: 2, generation: 0, lexicalGeneration: 0, semanticGeneration: 0, corpusHash: "", state: "unavailable" }, lexical: integrity ? { status: "failed", reason: "index-integrity-error" } : { status: "unavailable", reason: "index-unavailable" }, semantic: integrity ? { status: "failed", reason: "index-integrity-error" } : { status: "unavailable", reason: "index-unavailable" }, candidates: [], referenceDiagnostics: [] }, candidateCount: 0, truncated: query.queryTruncated, truncatedCount: query.queryTruncated ? 1 : 0, ...(failureCode ? { failureCode } : {}) });
+      traces.push({ commandId, queryHash: query.queryHash, ticketId: query.ticketId, sourceRevision: query.sourceRevision, customerReplyWatermark: query.customerReplyWatermark, queryTruncated: query.queryTruncated, result: { metadata: { schemaVersion: RETRIEVAL_SCHEMA_VERSION, representationVersion: REPRESENTATION_VERSION, generation: 0, lexicalGeneration: 0, semanticGeneration: 0, corpusHash: "", state: "unavailable" }, lexical: integrity ? { status: "failed", reason: "index-integrity-error" } : { status: "unavailable", reason: "index-unavailable" }, semantic: integrity ? { status: "failed", reason: "index-integrity-error" } : { status: "unavailable", reason: "index-unavailable" }, candidates: [], referenceDiagnostics: [] }, candidateCount: 0, truncated: query.queryTruncated, truncatedCount: query.queryTruncated ? 1 : 0, ...(failureCode ? { failureCode } : {}) });
       while (traces.length > TRACE_LIMIT) traces.shift();
       reportRetrievalFailure(commandId, report, failureCode ?? "RETRIEVAL_OBSERVATION_FAILED");
     },

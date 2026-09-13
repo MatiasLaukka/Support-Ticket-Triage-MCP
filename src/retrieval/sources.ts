@@ -82,8 +82,9 @@ export function projectResolvedCase(snapshot: CompletedDiagnosisReadSnapshot): P
   return one({ key: key("resolved-ticket", snapshot.ticket.id), type: "resolved-ticket", sourceId: snapshot.ticket.id, sourceVersion: snapshot.ticket.updatedAt, contentHash: "", family: "resolved-ticket", linkedResourceKeys: [] }, `Resolved case ${snapshot.ticket.id}`, [problem, ...symptoms, ...evidence, ...(confidence ? [confidence] : []), ...(customerConfirmedClosure ? ["Verified outcome: Customer confirmed resolution after diagnosis."] : [])].join("\n"), [...symptoms, ...evidence]);
 }
 
-export function loadRetrievalSources(input: { articles: readonly KnowledgeArticle[]; reusable: ReusableKnowledgeResult; completedSnapshots: readonly CompletedDiagnosisReadSnapshot[] }): SourceSnapshot {
-  const resolvedResources = input.completedSnapshots.map(projectResolvedCase).filter((item): item is ProjectedResource => item !== undefined);
+export function loadRetrievalSources(input: { articles: readonly KnowledgeArticle[]; reusable: ReusableKnowledgeResult; completedSnapshots?: readonly CompletedDiagnosisReadSnapshot[] }): SourceSnapshot {
+  const resolvedAvailable = input.completedSnapshots !== undefined;
+  const resolvedResources = (input.completedSnapshots ?? []).map(projectResolvedCase).filter((item): item is ProjectedResource => item !== undefined);
   const resources = [
     ...input.articles.map(projectArticle),
     ...KNOWN_CAUSES.map(projectStaticCause),
@@ -100,7 +101,7 @@ export function loadRetrievalSources(input: { articles: readonly KnowledgeArticl
     resources,
     unavailableFamilies: [
       ...(input.reusable.status === "available" ? [] : ["learned-known-cause" as const]),
-      ...(resolvedResources.length === 0 ? ["resolved-ticket" as const] : []),
+      ...(resolvedAvailable ? [] : ["resolved-ticket" as const]),
     ],
   };
 }

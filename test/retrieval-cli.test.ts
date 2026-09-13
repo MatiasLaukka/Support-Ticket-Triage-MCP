@@ -37,6 +37,9 @@ describe("retrieval maintenance CLI", () => {
       mode: "offline-lexical-only",
       semanticEvidence: "outstanding",
       representationVersion: 2,
+      indexGeneration: expect.any(Number),
+      lexicalGeneration: expect.any(Number),
+      semanticGeneration: expect.any(Number),
       ftsTokenization: expect.any(String),
       oracleHash: expect.stringMatching(/^[0-9a-f]{64}$/),
       corpusHash: expect.stringMatching(/^[0-9a-f]{64}$/),
@@ -55,6 +58,7 @@ describe("retrieval maintenance CLI", () => {
       }),
       reviewedContrastFamilies: expect.arrayContaining(["webhook rotation/latency", "editor session/platform loading"]),
     });
+    expect(markdown).toContain("Index generation:");
     expect(JSON.stringify(report)).not.toContain("Webhook deliveries delayed by ten minutes");
     expect(markdown).toContain("## Per-type metrics");
     expect(markdown).toContain("## Per-family metrics");
@@ -85,6 +89,17 @@ describe("retrieval maintenance CLI", () => {
     expect((retrievalEvaluation as any).rankedCandidateKeys(candidates, "lexical"))
       .toEqual(["knowledge-article:webhook", "known-cause:rotation"]);
     expect((retrievalEvaluation as any).averageApplicable([null, 0.5, 1])).toBe(0.75);
+  });
+
+  it("uses only article requirements as the deterministic baseline denominator", () => {
+    expect((retrievalEvaluation as any).deterministicArticleRequiredCoverage(
+      ["knowledge-article:rotation"],
+      ["knowledge-article:rotation", "known-cause:webhook-delivery-latency"],
+    )).toBe(1);
+    expect((retrievalEvaluation as any).deterministicArticleRequiredCoverage(
+      ["knowledge-article:rotation"],
+      ["known-cause:webhook-delivery-latency"],
+    )).toBeNull();
   });
 
   it("rejects retrieval labels absent from the frozen corpus", () => {

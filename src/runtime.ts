@@ -379,7 +379,7 @@ export async function createRuntimeDependencies(
         return loadRetrievalSources({
           articles,
           reusable,
-          completedSnapshots: sqliteOperationalStore?.readCompletedDiagnosisSnapshots() ?? [],
+          ...(sqliteOperationalStore === undefined ? {} : { completedSnapshots: sqliteOperationalStore.readCompletedDiagnosisSnapshots() }),
         });
       };
       const manager = new IndexManager({ store: retrievalStore, load, ...(provider === undefined ? {} : { provider }) });

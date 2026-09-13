@@ -2,12 +2,14 @@
 
 - Mode: offline-lexical-only
 - Semantic evidence: outstanding
-- Source commit: 5bf92638bfa8c58c9458040e54316de1b8431986
+- Source commit: 59f8d2c9e8dceed88caabf63b6e55f7571aa496d
 - Oracle hash: dcb56214562d4d3a68c6ea5ccb0b421f789f185c10aaa7c114c7e3a34aa183d9
 - Scenario cutoff: 2026-09-12T23:59:59.999Z
 - Corpus hash: 7bdf5d216fde8db344b2f83602a7e4a26465e361a90b253ba89c2ca863cfc521
 - Representation version: 1
 - Scenarios: 4
+- Excluded from complete precision: 1
+- Semantic-unavailable scenarios: 4
 
 ## Candidate pools
 

@@ -1,9 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runRetrievalIndex } from "../scripts/retrieval-index.js";
 import { evaluateRetrieval, providerForEvaluation } from "../scripts/evaluate-retrieval.js";
+import { IndexManager } from "../src/retrieval/index-manager.js";
 
 describe("retrieval maintenance CLI", () => {
   it("reports absent status without creating a database and rejects unknown commands", async () => {
@@ -12,6 +13,20 @@ describe("retrieval maintenance CLI", () => {
       await expect(runRetrievalIndex(["status"], root)).resolves.toMatchObject({ status: "absent" });
       await expect(runRetrievalIndex(["unknown"], root)).rejects.toThrow();
     } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
+  it("closes the index manager when refresh fails", async () => {
+    const root = await mkdtemp(join(tmpdir(), "retrieval-cli-failure-"));
+    const refresh = vi.spyOn(IndexManager.prototype, "refresh").mockRejectedValueOnce(new Error("refresh failed"));
+    const close = vi.spyOn(IndexManager.prototype, "close");
+    try {
+      await expect(runRetrievalIndex(["refresh"], root)).rejects.toThrow("refresh failed");
+      expect(close).toHaveBeenCalledOnce();
+    } finally {
+      refresh.mockRestore();
+      close.mockRestore();
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   it("returns a frozen, channel-complete offline evaluation report", async () => {

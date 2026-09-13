@@ -13,15 +13,18 @@ export async function runRetrievalIndex(args: readonly string[], dataRoot = reso
   const path = resolve(dataRoot, "retrieval.sqlite");
   if ((command === "status" || command === "validate") && !existsSync(path)) return { status: "absent", path };
   const store = RetrievalStore.open(path);
+  let manager: IndexManager | undefined;
   try {
     store.initialize();
     if (command === "status") return { status: "ready", path, metadata: store.metadata() };
     if (command === "validate") { store.validate(); return { status: "valid", path, metadata: store.metadata() }; }
-    const manager = new IndexManager({ store, load: async () => ({ resources: loadRetrievalSources({ articles: await new KnowledgeRepository(resolve("data/knowledge")).list(), reusable: unavailableReusableKnowledge(), completedSnapshots: [] }).resources, unavailableFamilies: ["learned-known-cause", "resolved-ticket"] }) });
+    manager = new IndexManager({ store, load: async () => ({ resources: loadRetrievalSources({ articles: await new KnowledgeRepository(resolve("data/knowledge")).list(), reusable: unavailableReusableKnowledge(), completedSnapshots: [] }).resources, unavailableFamilies: ["learned-known-cause", "resolved-ticket"] }) });
     const metadata = command === "rebuild" ? await manager.rebuild(new AbortController().signal) : await manager.refresh(new AbortController().signal);
-    await manager.close();
     return { status: "refreshed", path, metadata };
-  } finally { if (command === "status" || command === "validate") store.close(); }
+  } finally {
+    await manager?.close();
+    store.close();
+  }
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) runRetrievalIndex(process.argv.slice(2)).then((result) => console.log(JSON.stringify(result, null, 2))).catch((error: unknown) => { console.error(error instanceof Error ? error.message : error); process.exitCode = 1; });

@@ -5,6 +5,8 @@ import { join, resolve } from "node:path";
 
 import { createRuntimeDependencies, parseRetrievalMode } from "../src/runtime.js";
 import { RetrievalStore } from "../src/retrieval/sqlite-store.js";
+import { TicketSchema } from "../src/domain.js";
+import { evaluateTicketCommand } from "../src/evaluation-command.js";
 
 describe("retrieval runtime configuration", () => {
   it("defaults to shadow and accepts the explicit off comparison mode", () => {
@@ -69,5 +71,51 @@ describe("retrieval runtime configuration", () => {
     await expect(runtime.retrievalObserver!.observe({ queryText: "test", queryHash: "q", ticketId: "TKT-0001", sourceRevision: 1, customerReplyWatermark: "none", queryTruncated: false, references: [] }, "cmd-invalid-provider")).resolves.toBeUndefined();
     await runtime.close();
     rmSync(root, { recursive: true, force: true });
+  });
+
+  it("preserves the authoritative evaluation result when shadow observation fails", async () => {
+    const ticket = TicketSchema.parse({
+      id: "TKT-0001",
+      createdAt: "2026-09-12T00:00:00.000Z",
+      updatedAt: "2026-09-12T00:00:00.000Z",
+      customer: { name: "Northstar Labs", plan: "enterprise", region: "eu-west", vip: false },
+      subject: "Accepted API requests are delayed",
+      description: "Accepted requests remain absent from the profile timeline.",
+      status: "triage",
+      category: "api",
+      priority: "P2",
+      team: "api-platform",
+      tags: ["api", "delay"],
+      sla: { responseDueAt: "2026-09-12T04:00:00.000Z", breached: false },
+      relatedTicketIds: [],
+      revision: 0,
+    });
+    const dispatcher = {
+      async run(definition: any, raw: unknown, commandId: string) {
+        const parsed = definition.parse(raw);
+        const prepared = await definition.prepare(parsed);
+        const committed = definition.commit({}, prepared, commandId);
+        return definition.replay({}, committed, commandId);
+      },
+    };
+    const service = {
+      commitOperationalEvaluation: () => ({ committed: true, authority: "unchanged" }),
+      replayOperationalEvaluation: (_reader: unknown, result: unknown) => result,
+    };
+    const base = {
+      dispatcher,
+      service,
+      tickets: { get: async () => ticket },
+      audits: { list: async () => [] },
+      knowledge: { list: async () => [] },
+      knowledgeEvolution: { listReusableApproved: async () => ({ status: "available", contexts: [], issues: [] }) },
+      now: () => new Date("2026-09-12T00:00:00.000Z"),
+      env: {},
+    } as any;
+    const offResult = await evaluateTicketCommand(base, { ticketId: ticket.id, aiPreference: "deterministic", responseStyle: "auto" }, "40000000-0000-4000-8000-000000000001");
+    let observed = 0;
+    const shadowResult = await evaluateTicketCommand({ ...base, retrievalObserver: { observe: async () => { observed += 1; throw new Error("shadow failure"); }, recent: () => [], close: async () => undefined } }, { ticketId: ticket.id, aiPreference: "deterministic", responseStyle: "auto" }, "40000000-0000-4000-8000-000000000002");
+    expect(observed).toBe(1);
+    expect(shadowResult).toEqual(offResult);
   });
 });

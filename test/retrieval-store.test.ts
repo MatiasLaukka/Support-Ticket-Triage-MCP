@@ -84,4 +84,17 @@ describe("retrieval store", () => {
     expect(() => db.validate()).toThrow();
     db.close();
   });
+
+  it("publishes a full rebuild atomically when replacement validation fails", () => {
+    const db = RetrievalStore.open(":memory:");
+    db.initialize();
+    const original = projectArticle({ id: "original", title: "Original", tags: [], body: "Original content" });
+    db.reconcile({ resources: [original], unavailableFamilies: [] });
+    const replacement = projectArticle({ id: "replacement", title: "Replacement", tags: [], body: "Replacement content" });
+    const malformed = { resource: replacement.resource, representations: [...replacement.representations, ...replacement.representations] };
+    expect(() => db.replaceAll({ resources: [malformed], unavailableFamilies: [] }, [])).toThrow();
+    expect(db.readSnapshot('"original"').resources.map(({ key }) => key)).toEqual(["knowledge-article:original"]);
+    expect(db.readSnapshot('"replacement"').resources.map(({ key }) => key)).toEqual(["knowledge-article:original"]);
+    db.close();
+  });
 });

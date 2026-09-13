@@ -43,9 +43,13 @@ export function createRetrievalObserver(input: { manager: IndexManager; store: R
       try {
         await input.manager.refresh(controller.signal);
         const result = await retrieve({ query, store: input.store, provider: input.provider, limits: input.limits, signal: controller.signal });
-        const trace: RetrievalTrace = { commandId, queryHash: query.queryHash, ticketId: query.ticketId, sourceRevision: query.sourceRevision, customerReplyWatermark: query.customerReplyWatermark, queryTruncated: query.queryTruncated, result, candidateCount: result.candidates.length, truncated: query.queryTruncated };
+        const trace: RetrievalTrace = { commandId, queryHash: query.queryHash, ticketId: query.ticketId, sourceRevision: query.sourceRevision, customerReplyWatermark: query.customerReplyWatermark, queryTruncated: query.queryTruncated, result, candidateCount: result.candidates.length, truncated: query.queryTruncated, truncatedCount: query.queryTruncated ? 1 : 0 };
         const serialized = JSON.stringify(trace);
-        traces.push(serialized.length > TRACE_MAX_BYTES ? { ...trace, result: { ...result, candidates: [] }, truncated: true } : trace);
+        if (serialized.length > TRACE_MAX_BYTES) {
+          traces.push({ ...trace, result: { ...result, candidates: [] }, truncated: true, truncatedCount: trace.truncatedCount + Math.max(1, trace.candidateCount) });
+        } else {
+          traces.push(trace);
+        }
         while (traces.length > TRACE_LIMIT) traces.shift();
       } catch {
         if (!controller.signal.aborted) reportRetrievalFailure(commandId, report);

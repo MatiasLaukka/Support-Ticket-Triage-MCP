@@ -26,6 +26,16 @@ describe("retrieval maintenance CLI", () => {
       candidatePools: expect.arrayContaining([
         expect.objectContaining({ ticketId: "TKT-1017", channelStatuses: { lexical: "used", semantic: "unavailable" } }),
       ]),
+      perTypeMetrics: expect.objectContaining({
+        "knowledge-article": expect.any(Object),
+        "known-cause": expect.any(Object),
+        "diagnostic-playbook": expect.any(Object),
+        "resolved-ticket": expect.any(Object),
+      }),
+      excludedCounts: expect.objectContaining({
+        incompletePrecision: expect.any(Number),
+        semanticUnavailable: expect.any(Number),
+      }),
       reviewedContrastFamilies: expect.arrayContaining(["webhook rotation/latency", "editor session/platform loading"]),
     });
     expect(JSON.stringify(report)).not.toContain("Webhook deliveries delayed by ten minutes");

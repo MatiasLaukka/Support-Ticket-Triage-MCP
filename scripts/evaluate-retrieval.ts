@@ -92,6 +92,7 @@ export async function evaluateRetrieval(input: { provider?: EmbeddingProvider } 
     const oracleHash = createHash("sha256").update(JSON.stringify(oracles)).digest("hex");
     const perTypeMetrics = metricBreakdown(scenarios, new Map(oracles.map((oracle) => [oracle.ticketId, oracle])));
     const perFamilyMetrics = familyBreakdown(scenarios);
+    const excludedCounts = exclusionBreakdown(scenarios, new Map(oracles.map((oracle) => [oracle.ticketId, oracle])));
     const required = scenarios.map(({ pool }) => pool.requiredCoverage).filter((value): value is number => value !== null);
     const baselineRequired = scenarios.map((scenario) => {
       const oracle = oracles.find((candidate) => candidate.ticketId === scenario.ticketId)?.retrieval;
@@ -115,6 +116,7 @@ export async function evaluateRetrieval(input: { provider?: EmbeddingProvider } 
       channelStatuses: { lexical: "available", semantic: input.provider === undefined ? "unavailable:provider-not-configured" : "measured" },
       perTypeMetrics,
       perFamilyMetrics,
+      excludedCounts,
       baselineComparison: {
         articleOnlyRequiredCoverage: average(baselineRequired),
         unionRequiredCoverage: average(required),
@@ -137,7 +139,9 @@ function sourceCommit(): string {
 function average(values: readonly number[]): number | null { return values.length === 0 ? null : values.reduce((sum, value) => sum + value, 0) / values.length; }
 
 function metricBreakdown(scenarios: readonly ScenarioReport[], oracles: ReadonlyMap<string, EvaluationOracle>): Record<string, unknown> {
-  const result: Record<string, { scenarios: number; lexical: Record<string, number | null>; semantic: Record<string, number | null> }> = {};
+  const result: Record<string, { scenarios: number; lexical: Record<string, number | null>; semantic: Record<string, number | null> }> = Object.fromEntries(([
+    "knowledge-article", "known-cause", "diagnostic-playbook", "resolved-ticket",
+  ] as const).map((type) => [type, { scenarios: 0, lexical: emptyRankedMetrics(), semantic: emptyRankedMetrics() }]));
   for (const scenario of scenarios) {
     const expectation = oracles.get(scenario.ticketId)?.retrieval;
     if (expectation === undefined) continue;
@@ -145,7 +149,7 @@ function metricBreakdown(scenarios: readonly ScenarioReport[], oracles: Readonly
       const relevant = expectation.relevantResourceKeys.filter((key) => key.startsWith(`${type}:`));
       if (relevant.length === 0) continue;
       const typedOracle = { ...expectation, requiredResourceKeys: expectation.requiredResourceKeys.filter((key) => key.startsWith(`${type}:`)), relevantResourceKeys: relevant, hardNegativeResourceKeys: expectation.hardNegativeResourceKeys.filter((key) => key.startsWith(`${type}:`)) };
-      const entry = result[type] ?? (result[type] = { scenarios: 0, lexical: {}, semantic: {} });
+      const entry = result[type];
       entry.scenarios += 1;
       for (const k of [1, 3, 5] as const) {
         const lexical = scoreRanked(scenario.lexicalKeys.filter((key) => key.startsWith(`${type}:`)) as any, typedOracle, k);
@@ -160,6 +164,19 @@ function metricBreakdown(scenarios: readonly ScenarioReport[], oracles: Readonly
     }
   }
   return result;
+}
+
+function emptyRankedMetrics(): Record<string, number | null> {
+  return Object.fromEntries([1, 3, 5].flatMap((k) => [[`recallAt${k}`, null], [`precisionAt${k}`, null]]));
+}
+
+function exclusionBreakdown(scenarios: readonly ScenarioReport[], oracles: ReadonlyMap<string, EvaluationOracle>): { incompletePrecision: number; semanticUnavailable: number } {
+  let incompletePrecision = 0;
+  for (const scenario of scenarios) {
+    const expectation = oracles.get(scenario.ticketId)?.retrieval;
+    if (expectation !== undefined && !expectation.labelsComplete) incompletePrecision += 1;
+  }
+  return { incompletePrecision, semanticUnavailable: scenarios.filter(({ channelStatuses }) => channelStatuses.semantic !== "used").length };
 }
 
 function averageMetric(current: number | null | undefined, next: number | null, count: number): number | null {
@@ -203,6 +220,8 @@ function markdownReport(report: Record<string, unknown>): string {
     `- Corpus hash: ${report.corpusHash}`,
     `- Representation version: ${report.representationVersion}`,
     `- Scenarios: ${report.scenarioCount}`,
+    `- Excluded from complete precision: ${(report.excludedCounts as { incompletePrecision: number } | undefined)?.incompletePrecision ?? "n/a"}`,
+    `- Semantic-unavailable scenarios: ${(report.excludedCounts as { semanticUnavailable: number } | undefined)?.semanticUnavailable ?? "n/a"}`,
     "",
     "## Candidate pools",
     "",

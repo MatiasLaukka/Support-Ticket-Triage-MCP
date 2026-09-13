@@ -22,6 +22,7 @@ describe("retrieval stage", () => {
     const observer = createRetrievalObserver({ manager, store, limits: { "knowledge-article": { lexical: 1, semantic: 1 }, "known-cause": { lexical: 1, semantic: 1 }, "diagnostic-playbook": { lexical: 1, semantic: 1 }, "resolved-ticket": { lexical: 1, semantic: 1 } } });
     await observer.observe({ queryText: "test", queryHash: "q", ticketId: "TKT-0001", sourceRevision: 1, customerReplyWatermark: "none", queryTruncated: false, references: [] }, "cmd-1");
     expect(refreshes).toBe(1);
+    expect(observer.recent()[0]).toMatchObject({ truncated: false, truncatedCount: 0 });
     await observer.close();
     expect(closed).toBe(true);
   });

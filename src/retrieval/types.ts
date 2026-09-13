@@ -15,5 +15,5 @@ export type IndexMetadata = { schemaVersion: number; representationVersion: numb
 export type Query = { queryText: string; queryHash: string; ticketId: string; sourceRevision: number; customerReplyWatermark: string; queryTruncated: boolean; taxonomy?: TaxonomyMetadata; references: readonly Reference[] };
 export type SearchSnapshot = { metadata: IndexMetadata; resources: readonly Resource[]; lexical: ChannelState; lexicalMatches: readonly Match[]; vectors: readonly { representationId: string; resourceKey: ResourceKey; contentHash: string; model: ModelIdentity; values: readonly number[] }[] };
 export type RetrievalResult = { metadata: IndexMetadata; lexical: ChannelState; semantic: ChannelState; candidates: readonly Candidate[] };
-export type RetrievalTrace = Omit<Query, "queryText" | "references" | "taxonomy"> & { commandId: string; result: RetrievalResult; candidateCount: number; truncated: boolean; truncatedCount: number };
+export type RetrievalTrace = Omit<Query, "queryText" | "references" | "taxonomy"> & { commandId: string; result: RetrievalResult; candidateCount: number; truncated: boolean; truncatedCount: number; failureCode?: "INDEX_INTEGRITY_ERROR" | "RETRIEVAL_OBSERVATION_FAILED" };
 export type Limits = Record<ResourceType, { lexical: number; semantic: number }>;

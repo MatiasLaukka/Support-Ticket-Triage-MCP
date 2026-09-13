@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { buildRetrievalQuery, createRetrievalObserver, RETRIEVAL_QUERY_MAX_CHARS } from "../src/retrieval/stage.js";
+import { RetrievalIntegrityError } from "../src/retrieval/sqlite-store.js";
 
 describe("retrieval stage", () => {
   it("builds customer-only deterministic queries and hashes reply identities", () => {
@@ -36,5 +37,19 @@ describe("retrieval stage", () => {
     expect(observer.recent()[0]).toMatchObject({ truncated: false, truncatedCount: 0 });
     await observer.close();
     expect(closed).toBe(true);
+  });
+
+  it("records an explicit failed trace when the retrieval index is corrupt", async () => {
+    const diagnostics: Array<{ code: string; commandId: string }> = [];
+    const observer = createRetrievalObserver({
+      manager: { refresh: async () => undefined, close: async () => undefined } as any,
+      store: { readSnapshot: () => { throw new RetrievalIntegrityError("corrupt"); }, close: () => undefined } as any,
+      limits: { "knowledge-article": { lexical: 1, semantic: 1 }, "known-cause": { lexical: 1, semantic: 1 }, "diagnostic-playbook": { lexical: 1, semantic: 1 }, "resolved-ticket": { lexical: 1, semantic: 1 } },
+      report: (diagnostic) => diagnostics.push(diagnostic),
+    });
+    await observer.observe({ queryText: "test", queryHash: "q", ticketId: "TKT-0001", sourceRevision: 1, customerReplyWatermark: "none", queryTruncated: false, references: [] }, "cmd-corrupt");
+    expect(observer.recent()[0]).toMatchObject({ failureCode: "INDEX_INTEGRITY_ERROR", result: { lexical: { status: "failed", reason: "index-integrity-error" }, semantic: { status: "failed", reason: "index-integrity-error" } } });
+    expect(diagnostics).toEqual([{ code: "RETRIEVAL_OBSERVATION_FAILED", commandId: "cmd-corrupt" }]);
+    await observer.close();
   });
 });

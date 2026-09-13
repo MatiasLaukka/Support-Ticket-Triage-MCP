@@ -3,8 +3,8 @@ import type { Ticket } from "../domain.js";
 import type { CustomerReply } from "../approval-desk/ai-evaluation.js";
 import { retrieve } from "./search.js";
 import type { IndexManager } from "./index-manager.js";
-import type { EmbeddingProvider, Limits, Query, Reference, RetrievalTrace } from "./types.js";
-import type { RetrievalStore } from "./sqlite-store.js";
+import type { EmbeddingProvider, IndexMetadata, Limits, Query, Reference, RetrievalTrace } from "./types.js";
+import { RetrievalIntegrityError, type RetrievalStore } from "./sqlite-store.js";
 
 export const RETRIEVAL_QUERY_MAX_CHARS = 12_000;
 const TRACE_LIMIT = 100;
@@ -53,8 +53,11 @@ export function createRetrievalObserver(input: { manager: IndexManager; store: R
           traces.push(trace);
         }
         while (traces.length > TRACE_LIMIT) traces.shift();
-      } catch {
-        if (!controller.signal.aborted) reportRetrievalFailure(commandId, report);
+      } catch (error) {
+        if (!controller.signal.aborted) {
+          if (error instanceof RetrievalIntegrityError) recordIntegrityFailure(query, commandId, input.store, traces);
+          reportRetrievalFailure(commandId, report);
+        }
       }
     })();
     active.add(work);
@@ -66,6 +69,17 @@ export function createRetrievalObserver(input: { manager: IndexManager; store: R
     recent() { return traces.map((trace) => structuredClone(trace)); },
     async close() { if (closed) return; closed = true; controller.abort(); await Promise.allSettled([...active]); await input.manager.close(); input.store.close(); },
   };
+}
+
+function recordIntegrityFailure(query: Query, commandId: string, store: RetrievalStore, traces: RetrievalTrace[]): void {
+  let metadata: IndexMetadata;
+  try {
+    metadata = store.metadata();
+  } catch {
+    metadata = { schemaVersion: 1, representationVersion: 1, generation: 0, lexicalGeneration: 0, semanticGeneration: 0, corpusHash: "", state: "unavailable" };
+  }
+  traces.push({ commandId, queryHash: query.queryHash, ticketId: query.ticketId, sourceRevision: query.sourceRevision, customerReplyWatermark: query.customerReplyWatermark, queryTruncated: query.queryTruncated, result: { metadata, lexical: { status: "failed", reason: "index-integrity-error" }, semantic: { status: "failed", reason: "index-integrity-error" }, candidates: [] }, candidateCount: 0, truncated: query.queryTruncated, truncatedCount: query.queryTruncated ? 1 : 0, failureCode: "INDEX_INTEGRITY_ERROR" });
+  while (traces.length > TRACE_LIMIT) traces.shift();
 }
 
 export function createUnavailableRetrievalObserver(report: (diagnostic: { code: string; commandId: string }) => void = () => undefined): RetrievalObserver {

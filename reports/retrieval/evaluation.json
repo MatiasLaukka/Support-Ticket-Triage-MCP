@@ -1,7 +1,7 @@
 {
   "mode": "offline-lexical-only",
   "semanticEvidence": "outstanding",
-  "sourceCommit": "255b146ef402b32e43ba9f33b5202cf01e27f0b2",
+  "sourceCommit": "c93bd1c481b025cb83859e6fc7a24ae72a49f86d",
   "oracleHash": "dcb56214562d4d3a68c6ea5ccb0b421f789f185c10aaa7c114c7e3a34aa183d9",
   "scenarioCutoff": "2026-09-12T23:59:59.999Z",
   "corpusHash": "7bdf5d216fde8db344b2f83602a7e4a26465e361a90b253ba89c2ca863cfc521",
@@ -913,20 +913,62 @@
     "semantic": "unavailable:provider-not-configured"
   },
   "perTypeMetrics": {
-    "diagnostic-playbook": {
-      "scenarios": 4,
-      "lexicalHits": 4,
-      "unionHits": 4
-    },
     "knowledge-article": {
       "scenarios": 4,
-      "lexicalHits": 4,
-      "unionHits": 4
+      "lexical": {
+        "recallAt1": 0,
+        "precisionAt1": 0,
+        "recallAt3": 0,
+        "precisionAt3": 0,
+        "recallAt5": 0.75,
+        "precisionAt5": 0.2
+      },
+      "semantic": {
+        "recallAt1": null,
+        "precisionAt1": null,
+        "recallAt3": null,
+        "precisionAt3": null,
+        "recallAt5": null,
+        "precisionAt5": null
+      }
     },
     "known-cause": {
-      "scenarios": 4,
-      "lexicalHits": 4,
-      "unionHits": 4
+      "scenarios": 3,
+      "lexical": {
+        "recallAt1": 0.6666666666666666,
+        "precisionAt1": 0.6666666666666666,
+        "recallAt3": 0.6666666666666666,
+        "precisionAt3": 0.2222222222222222,
+        "recallAt5": 1,
+        "precisionAt5": 0.2
+      },
+      "semantic": {
+        "recallAt1": null,
+        "precisionAt1": null,
+        "recallAt3": null,
+        "precisionAt3": null,
+        "recallAt5": null,
+        "precisionAt5": null
+      }
+    },
+    "diagnostic-playbook": {
+      "scenarios": 1,
+      "lexical": {
+        "recallAt1": 1,
+        "precisionAt1": null,
+        "recallAt3": 1,
+        "precisionAt3": null,
+        "recallAt5": 1,
+        "precisionAt5": null
+      },
+      "semantic": {
+        "recallAt1": null,
+        "precisionAt1": null,
+        "recallAt3": null,
+        "precisionAt3": null,
+        "recallAt5": null,
+        "precisionAt5": null
+      }
     }
   },
   "perFamilyMetrics": {

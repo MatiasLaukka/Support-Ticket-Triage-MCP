@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { RetrievalStore } from "../src/retrieval/sqlite-store.js";
+import { RetrievalIntegrityError, RetrievalStore } from "../src/retrieval/sqlite-store.js";
 import { hashRepresentation, hashResource, projectArticle } from "../src/retrieval/representations.js";
 import { projectLearnedCause } from "../src/retrieval/sources.js";
 
@@ -123,6 +123,37 @@ describe("retrieval store", () => {
     raw.prepare("UPDATE retrieval_index_metadata SET value=? WHERE key='generation'").run("-1");
     expect(() => db.validate()).toThrow();
     db.close();
+  });
+
+  it("rejects impossible lexical and semantic generation ordering before serving a snapshot", () => {
+    const db = RetrievalStore.open(":memory:");
+    db.initialize();
+    const raw = (db as unknown as { database: { prepare(sql: string): { run(...values: unknown[]): void } } }).database;
+    raw.prepare("UPDATE retrieval_index_metadata SET value=? WHERE key='generation'").run("1");
+    raw.prepare("UPDATE retrieval_index_metadata SET value=? WHERE key='lexicalGeneration'").run("1");
+    raw.prepare("UPDATE retrieval_index_metadata SET value=? WHERE key='semanticGeneration'").run("2");
+    raw.prepare("UPDATE retrieval_index_metadata SET value=? WHERE key='state'").run("ready");
+    expect(() => db.validate()).toThrow(RetrievalIntegrityError);
+    expect(() => db.readSnapshot("")).toThrow(RetrievalIntegrityError);
+    db.close();
+  });
+
+  it("rejects blank and whitespace-only persisted model identities before serving a snapshot", () => {
+    for (const model of [
+      { id: "", revision: "r1", dimensions: 2 },
+      { id: "  ", revision: "r1", dimensions: 2 },
+      { id: "model", revision: "", dimensions: 2 },
+      { id: "model", revision: "\t", dimensions: 2 },
+    ]) {
+      const db = RetrievalStore.open(":memory:");
+      db.initialize();
+      db.configureModel({ id: "valid", revision: "r1", dimensions: 2 });
+      const raw = (db as unknown as { database: { prepare(sql: string): { run(...values: unknown[]): void } } }).database;
+      raw.prepare("UPDATE retrieval_index_metadata SET value=? WHERE key='model'").run(JSON.stringify(model));
+      expect(() => db.validate()).toThrow(RetrievalIntegrityError);
+      expect(() => db.readSnapshot("")).toThrow(RetrievalIntegrityError);
+      db.close();
+    }
   });
 
   it("detects tampered canonical representation and FTS rows during validation", () => {

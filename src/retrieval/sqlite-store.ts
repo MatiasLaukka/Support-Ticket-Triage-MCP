@@ -187,13 +187,14 @@ export class RetrievalStore {
       const metadata = this.database.prepare("SELECT key,value FROM retrieval_index_metadata").all() as { key: string; value: string }[];
       const values = new Map(metadata.map((row) => [row.key, row.value]));
       for (const key of ["schemaVersion", "representationVersion", "generation", "lexicalGeneration", "semanticGeneration"]) if (!Number.isInteger(Number(values.get(key))) || Number(values.get(key)) < 0) throw new Error();
+      if (Number(values.get("lexicalGeneration")) !== Number(values.get("generation")) || Number(values.get("semanticGeneration")) > Number(values.get("generation"))) throw new Error();
       if (Number(values.get("schemaVersion")) !== SCHEMA_VERSION || Number(values.get("representationVersion")) !== REPRESENTATION_VERSION) throw new Error();
       if (!INDEX_STATES.has(values.get("state") as IndexMetadata["state"])) throw new Error();
       if (values.get("corpusHash") !== "" && !/^[0-9a-f]{64}$/.test(values.get("corpusHash") ?? "")) throw new Error();
       let configuredModel: ModelIdentity | undefined;
       if (values.has("model")) {
         const parsedModel = JSON.parse(values.get("model")!) as Partial<ModelIdentity>;
-        if (typeof parsedModel.id !== "string" || typeof parsedModel.revision !== "string" || typeof parsedModel.dimensions !== "number" || !Number.isInteger(parsedModel.dimensions) || parsedModel.dimensions <= 0) throw new Error();
+        if (typeof parsedModel.id !== "string" || !parsedModel.id.trim() || typeof parsedModel.revision !== "string" || !parsedModel.revision.trim() || typeof parsedModel.dimensions !== "number" || !Number.isInteger(parsedModel.dimensions) || parsedModel.dimensions <= 0) throw new Error();
         configuredModel = parsedModel as ModelIdentity;
       }
       parseUnavailableFamilies(values.get("unavailableFamilies") ?? "[]");

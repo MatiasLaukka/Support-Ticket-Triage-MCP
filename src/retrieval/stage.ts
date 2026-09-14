@@ -1,0 +1,104 @@
+import { createHash } from "node:crypto";
+import type { Ticket } from "../domain.js";
+import type { CustomerReply } from "../approval-desk/ai-evaluation.js";
+import { retrieve } from "./search.js";
+import type { IndexManager } from "./index-manager.js";
+import type { EmbeddingProvider, IndexMetadata, Limits, Query, Reference, RetrievalTrace } from "./types.js";
+import { RETRIEVAL_SCHEMA_VERSION, RetrievalIntegrityError, type RetrievalStore } from "./sqlite-store.js";
+import { REPRESENTATION_VERSION } from "./representations.js";
+
+export const RETRIEVAL_QUERY_MAX_CHARS = 12_000;
+const TRACE_LIMIT = 100;
+const TRACE_MAX_BYTES = 64 * 1024;
+
+export function buildRetrievalQuery(input: {
+  ticket: Ticket;
+  customerReplies: readonly CustomerReply[];
+  customerReplyWatermark: string;
+  references: readonly Reference[];
+  taxonomy?: { productSurfaces: readonly string[]; problemClasses: readonly string[] };
+}): Query {
+  const subject = input.ticket.subject.trim();
+  const description = input.ticket.description.trim();
+  const fullPrefix = `${subject}\n\n${description}`;
+  const prefix = fullPrefix.slice(0, RETRIEVAL_QUERY_MAX_CHARS);
+  const ordered = [...input.customerReplies].sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
+  const room = Math.max(0, RETRIEVAL_QUERY_MAX_CHARS - prefix.length - 2);
+  const replyText = ordered.map((reply) => reply.body.trim()).filter(Boolean).join("\n\n");
+  const clippedReplyText = room === 0 ? "" : replyText.length <= room ? replyText : replyText.slice(-room);
+  const queryText = `${prefix}${clippedReplyText ? `\n\n${clippedReplyText}` : ""}`;
+  const queryTruncated = queryText.length < fullPrefix.length + (replyText ? replyText.length + 2 : 0);
+  const queryHash = createHash("sha256").update(JSON.stringify({ subject, description, replies: ordered.map(({ id, body }) => ({ id, body })) })).digest("hex");
+  return { queryText, queryHash, ticketId: input.ticket.id, sourceRevision: input.ticket.revision, customerReplyWatermark: input.customerReplyWatermark, queryTruncated, references: [...input.references], ...(input.taxonomy ? { taxonomy: input.taxonomy } : {}) };
+}
+
+export interface RetrievalObserver { observe(query: Query, commandId: string): Promise<void>; reportFailure?(commandId: string): void; recent(): readonly RetrievalTrace[]; close(): Promise<void> }
+
+export function createRetrievalObserver(input: { manager: IndexManager; store: RetrievalStore; limits: Limits; provider?: EmbeddingProvider; report?: (diagnostic: { code: string; commandId: string }) => void }): RetrievalObserver {
+  const traces: RetrievalTrace[] = [];
+  const report = input.report ?? (() => undefined);
+  const controller = new AbortController();
+  const active = new Set<Promise<void>>();
+  let closed = false;
+  const observe = (query: Query, commandId: string): Promise<void> => {
+    if (closed) return Promise.resolve();
+    const work = (async () => {
+      try {
+        await input.manager.refresh(controller.signal);
+        const result = await retrieve({ query, store: input.store, provider: input.provider, limits: input.limits, signal: controller.signal });
+        const trace: RetrievalTrace = { commandId, queryHash: query.queryHash, ticketId: query.ticketId, sourceRevision: query.sourceRevision, customerReplyWatermark: query.customerReplyWatermark, queryTruncated: query.queryTruncated, result, candidateCount: result.candidates.length, truncated: query.queryTruncated, truncatedCount: query.queryTruncated ? 1 : 0 };
+        const serialized = JSON.stringify(trace);
+        if (Buffer.byteLength(serialized, "utf8") > TRACE_MAX_BYTES) {
+          traces.push({ ...trace, result: { ...result, candidates: [] }, truncated: true, truncatedCount: trace.truncatedCount + Math.max(1, trace.candidateCount) });
+        } else {
+          traces.push(trace);
+        }
+        while (traces.length > TRACE_LIMIT) traces.shift();
+      } catch (error) {
+        if (!controller.signal.aborted) {
+          if (error instanceof RetrievalIntegrityError) recordIntegrityFailure(query, commandId, input.store, traces);
+          reportRetrievalFailure(commandId, report, error instanceof RetrievalIntegrityError ? "INDEX_INTEGRITY_ERROR" : "RETRIEVAL_OBSERVATION_FAILED");
+        }
+      }
+    })();
+    active.add(work);
+    void work.finally(() => active.delete(work));
+    return work;
+  };
+  return {
+    observe,
+    reportFailure(commandId) { reportRetrievalFailure(commandId, report); },
+    recent() { return traces.map((trace) => structuredClone(trace)); },
+    async close() { if (closed) return; closed = true; controller.abort(); await Promise.allSettled([...active]); await input.manager.close(); input.store.close(); },
+  };
+}
+
+function recordIntegrityFailure(query: Query, commandId: string, store: RetrievalStore, traces: RetrievalTrace[]): void {
+  let metadata: IndexMetadata;
+  try {
+    metadata = store.metadata();
+  } catch {
+    metadata = { schemaVersion: RETRIEVAL_SCHEMA_VERSION, representationVersion: REPRESENTATION_VERSION, generation: 0, lexicalGeneration: 0, semanticGeneration: 0, corpusHash: "", state: "unavailable" };
+  }
+  traces.push({ commandId, queryHash: query.queryHash, ticketId: query.ticketId, sourceRevision: query.sourceRevision, customerReplyWatermark: query.customerReplyWatermark, queryTruncated: query.queryTruncated, result: { metadata, lexical: { status: "failed", reason: "index-integrity-error" }, semantic: { status: "failed", reason: "index-integrity-error" }, candidates: [], referenceDiagnostics: [] }, candidateCount: 0, truncated: query.queryTruncated, truncatedCount: query.queryTruncated ? 1 : 0, failureCode: "INDEX_INTEGRITY_ERROR" });
+  while (traces.length > TRACE_LIMIT) traces.shift();
+}
+
+export function createUnavailableRetrievalObserver(input: ((diagnostic: { code: string; commandId: string }) => void) | { report?: (diagnostic: { code: string; commandId: string }) => void; failureCode?: RetrievalTrace["failureCode"] } = () => undefined): RetrievalObserver {
+  const report = typeof input === "function" ? input : input.report ?? (() => undefined);
+  const failureCode = typeof input === "function" ? undefined : input.failureCode;
+  const traces: RetrievalTrace[] = [];
+  return {
+    async observe(query, commandId) {
+      const integrity = failureCode === "INDEX_INTEGRITY_ERROR";
+      traces.push({ commandId, queryHash: query.queryHash, ticketId: query.ticketId, sourceRevision: query.sourceRevision, customerReplyWatermark: query.customerReplyWatermark, queryTruncated: query.queryTruncated, result: { metadata: { schemaVersion: RETRIEVAL_SCHEMA_VERSION, representationVersion: REPRESENTATION_VERSION, generation: 0, lexicalGeneration: 0, semanticGeneration: 0, corpusHash: "", state: "unavailable" }, lexical: integrity ? { status: "failed", reason: "index-integrity-error" } : { status: "unavailable", reason: "index-unavailable" }, semantic: integrity ? { status: "failed", reason: "index-integrity-error" } : { status: "unavailable", reason: "index-unavailable" }, candidates: [], referenceDiagnostics: [] }, candidateCount: 0, truncated: query.queryTruncated, truncatedCount: query.queryTruncated ? 1 : 0, ...(failureCode ? { failureCode } : {}) });
+      while (traces.length > TRACE_LIMIT) traces.shift();
+      reportRetrievalFailure(commandId, report, failureCode ?? "RETRIEVAL_OBSERVATION_FAILED");
+    },
+    reportFailure(commandId) { reportRetrievalFailure(commandId, report); },
+    recent() { return traces.map((trace) => structuredClone(trace)); },
+    async close() { /* no derived resources were opened */ },
+  };
+}
+
+export function reportRetrievalFailure(commandId: string, report: (diagnostic: { code: string; commandId: string }) => void = () => undefined, code = "RETRIEVAL_OBSERVATION_FAILED"): void { try { report({ code, commandId }); } catch { /* diagnostics must never affect command authority */ } }

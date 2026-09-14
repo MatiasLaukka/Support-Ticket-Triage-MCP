@@ -21,6 +21,7 @@ import {
   type ProblemClass,
 } from "./diagnostic-taxonomy.js";
 import type { TaxonomyInferenceCandidate } from "./taxonomy-inference.js";
+import { RetrievalExpectationSchema } from "./retrieval/evaluation.js";
 
 const UniqueSlugArraySchema = z
   .array(z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/))
@@ -116,6 +117,7 @@ export const EvaluationOracleSchema = z
       })
       .strict()
       .optional(),
+    retrieval: RetrievalExpectationSchema.optional(),
     family: z.string().trim().min(1).optional(),
     contrastGroup: z.string().trim().min(1).optional(),
     labelRationale: z.string().trim().min(1),

@@ -45,6 +45,16 @@ import {
   OperationalCommandDispatcher,
   type DispatchableOperationalStore,
 } from "./operational-command-dispatch.js";
+import { RetrievalIntegrityError, RetrievalStore } from "./retrieval/sqlite-store.js";
+import { IndexManager } from "./retrieval/index-manager.js";
+import { embeddingProviderFromEnv } from "./retrieval/embedding-provider.js";
+import { loadRetrievalSources } from "./retrieval/sources.js";
+import {
+  createRetrievalObserver,
+  createUnavailableRetrievalObserver,
+  type RetrievalObserver,
+} from "./retrieval/stage.js";
+import { unavailableReusableKnowledge } from "./knowledge-evolution/reusable-context.js";
 
 const STARTUP_PATH_MESSAGES = {
   TRIAGE_DATA_ROOT: "TRIAGE_DATA_ROOT must not be blank.",
@@ -97,6 +107,7 @@ export interface RuntimeDependencies {
   service: TriageService;
   operationalStore?: OperationalCommandStore;
   operationalCommandDispatcher?: OperationalCommandDispatcher;
+  retrievalObserver?: RetrievalObserver;
   evaluationGuard?: TicketEvaluationGuard;
   learningOutbox?: LearningOutboxWorker;
   learningDeliveryRunner?: LearningDeliveryRunner;
@@ -115,8 +126,24 @@ export type LearningAvailability =
       readonly message: string;
     };
 
+export type RetrievalMode = "off" | "shadow";
+
+export function parseRetrievalMode(env: RuntimeEnvironment): RetrievalMode {
+  const configured = env.TRIAGE_RETRIEVAL_MODE?.trim().toLowerCase();
+  if (configured === undefined || configured === "") return "shadow";
+  if (configured === "off" || configured === "shadow") return configured;
+  throw new StartupConfigError("TRIAGE_RETRIEVAL_MODE must be off or shadow.");
+}
+
 const LEARNING_UNAVAILABLE_MESSAGE =
   "Advisory learning is unavailable. Check TRIAGE_LEARNING_LEDGER_PATH and SQLite permissions, then restart.";
+
+const DEFAULT_RETRIEVAL_LIMITS = {
+  "knowledge-article": { lexical: 5, semantic: 5 },
+  "known-cause": { lexical: 5, semantic: 5 },
+  "diagnostic-playbook": { lexical: 5, semantic: 5 },
+  "resolved-ticket": { lexical: 5, semantic: 5 },
+} as const;
 
 export function environmentPath(
   name: keyof typeof STARTUP_PATH_MESSAGES,
@@ -213,6 +240,7 @@ export async function createRuntimeDependencies(
   };
   const minutesPerAcceptedRecommendation = minutesSaved(env);
   const approvers = knowledgeApprovers(env);
+  const retrievalMode = parseRetrievalMode(env);
   const now = options.now ?? (() => new Date());
   const knowledgeCandidateDraftProvider = options.knowledgeCandidateDraftProvider ??
     createKnowledgeCandidateDraftProviderFromEnv(env);
@@ -224,6 +252,7 @@ export async function createRuntimeDependencies(
     : undefined;
   let ledger: SqliteLearningLedger | undefined;
   let learningDeliveryRunner: LearningDeliveryRunner | undefined;
+  let retrievalObserver: RetrievalObserver | undefined;
   try {
   if (runtimeOperationalStore === undefined && options.legacyFixtureRepositories !== true) {
     sqliteOperationalStore = OperationalSqliteStore.open(operationalDatabase);
@@ -333,6 +362,44 @@ export async function createRuntimeDependencies(
     ? new OperationalCommandDispatcher(serviceOperationalStore)
     : undefined;
 
+  if (retrievalMode === "shadow") {
+    let retrievalStore: RetrievalStore | undefined;
+    try {
+      retrievalStore = RetrievalStore.open(resolve(dataRoot, "retrieval.sqlite"));
+      retrievalStore.initialize();
+      retrievalStore.validate();
+      const provider = embeddingProviderFromEnv(env);
+      const load = async () => {
+        const [articles, reusable] = await Promise.all([
+          knowledge.list(),
+          learningAvailability.status === "unavailable"
+            ? Promise.resolve(unavailableReusableKnowledge())
+            : knowledgeEvolution.service.listReusableApproved({ asOf: now().toISOString() }),
+        ]);
+        return loadRetrievalSources({
+          articles,
+          reusable,
+          ...(sqliteOperationalStore === undefined ? {} : { completedSnapshots: sqliteOperationalStore.readCompletedDiagnosisSnapshots() }),
+        });
+      };
+      const manager = new IndexManager({ store: retrievalStore, load, ...(provider === undefined ? {} : { provider }) });
+      // Startup publishes lexical resources immediately. Embedding work is deliberately deferred to query-time refresh.
+      const initial = await load();
+      if (provider !== undefined) retrievalStore.configureModel(provider.model);
+      retrievalStore.reconcile(initial);
+      retrievalObserver = createRetrievalObserver({
+        manager,
+        store: retrievalStore,
+        limits: DEFAULT_RETRIEVAL_LIMITS,
+        ...(provider === undefined ? {} : { provider }),
+        report: reportRetrievalDiagnostic,
+      });
+    } catch (error) {
+      retrievalStore?.close();
+      retrievalObserver = createUnavailableRetrievalObserver({ report: reportRetrievalDiagnostic, ...(error instanceof RetrievalIntegrityError ? { failureCode: "INDEX_INTEGRITY_ERROR" } : {}) });
+    }
+  }
+
   return {
     env,
     tickets,
@@ -344,6 +411,7 @@ export async function createRuntimeDependencies(
     service,
     ...(runtimeOperationalStore === undefined ? {} : { operationalStore: runtimeOperationalStore }),
     ...(operationalCommandDispatcher === undefined ? {} : { operationalCommandDispatcher }),
+    ...(retrievalObserver === undefined ? {} : { retrievalObserver }),
     evaluationGuard,
     ...(learningOutbox === undefined ? {} : { learningOutbox }),
     ...(learningDeliveryRunner === undefined ? {} : { learningDeliveryRunner }),
@@ -363,6 +431,7 @@ export async function createRuntimeDependencies(
       let closePromise: Promise<void> | undefined;
       return () => closePromise ??= closeRuntimeResourcesAsync({
         learningDeliveryRunner,
+        retrievalObserver,
         sqliteOperationalStore,
         ledger,
         usageLease,
@@ -373,6 +442,7 @@ export async function createRuntimeDependencies(
     try {
       await closeRuntimeResourcesAsync({
         learningDeliveryRunner,
+        retrievalObserver,
         sqliteOperationalStore,
         ledger,
         usageLease,
@@ -420,6 +490,7 @@ function closeRuntimeResources(input: {
 
 async function closeRuntimeResourcesAsync(input: {
   readonly learningDeliveryRunner: LearningDeliveryRunner | undefined;
+  readonly retrievalObserver: RetrievalObserver | undefined;
   readonly sqliteOperationalStore: OperationalSqliteStore | undefined;
   readonly ledger: SqliteLearningLedger | undefined;
   readonly usageLease: DemoStateUsageLease;
@@ -431,6 +502,15 @@ async function closeRuntimeResourcesAsync(input: {
   } catch (error) {
     stopFailed = true;
     stopError = error;
+  }
+
+  let retrievalStopFailed = false;
+  let retrievalStopError: unknown;
+  try {
+    await input.retrievalObserver?.close();
+  } catch (error) {
+    retrievalStopFailed = true;
+    retrievalStopError = error;
   }
 
   let cleanupFailed = false;
@@ -446,6 +526,18 @@ async function closeRuntimeResourcesAsync(input: {
     cleanupError = error;
   }
 
+  if (stopFailed && retrievalStopFailed && cleanupFailed) {
+    throw new AggregateError(
+      [stopError, retrievalStopError, cleanupError],
+      "Learning delivery, retrieval shutdown, and runtime cleanup failed.",
+    );
+  }
+  if (stopFailed && retrievalStopFailed) {
+    throw new AggregateError([stopError, retrievalStopError], "Learning delivery and retrieval shutdown failed.");
+  }
+  if (retrievalStopFailed && cleanupFailed) {
+    throw new AggregateError([retrievalStopError, cleanupError], "Retrieval shutdown and runtime cleanup failed.");
+  }
   if (stopFailed && cleanupFailed) {
     throw new AggregateError(
       [stopError, cleanupError],
@@ -453,6 +545,7 @@ async function closeRuntimeResourcesAsync(input: {
     );
   }
   if (stopFailed) throw stopError;
+  if (retrievalStopFailed) throw retrievalStopError;
   if (cleanupFailed) throw cleanupError;
 }
 
@@ -507,6 +600,10 @@ function isOperationalLearningOutboxStore(
 
 function reportLearningDeliveryError(): void {
   console.error("[LEARNING_DELIVERY_ERROR] Learning delivery runner pass failed.");
+}
+
+function reportRetrievalDiagnostic(input: { code: string; commandId: string }): void {
+  console.error(`[${input.code}] Retrieval shadow observation unavailable for command ${input.commandId}.`);
 }
 
 function invalidMinutesSaved(): StartupConfigError {

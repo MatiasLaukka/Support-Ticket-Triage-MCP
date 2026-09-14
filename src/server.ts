@@ -511,6 +511,7 @@ export interface TriageServerDependencies {
   learningAvailability?: { readonly status: "available" | "unavailable" };
   operationalStore?: DecisionTimelineSource;
   operationalCommandDispatcher?: import("./operational-command-dispatch.js").OperationalCommandDispatcher;
+  retrievalObserver?: import("./retrieval/stage.js").RetrievalObserver;
   evaluationGuard?: import("./approval-desk/evaluation-guard.js").TicketEvaluationGuard;
   operationalDiagnoses?: {
     list(ticketId?: TicketId): Promise<OperationalWorkflowSnapshot["diagnoses"]>;
@@ -1167,6 +1168,7 @@ async function evaluateTicket(
       draftProvider: deps.draftProvider,
       classificationReasoningProvider: deps.classificationReasoningProvider,
       taxonomyReasoningProvider: deps.taxonomyReasoningProvider,
+      retrievalObserver: deps.retrievalObserver,
     }, {
       ticketId: input.ticketId,
       actor: input.actor,

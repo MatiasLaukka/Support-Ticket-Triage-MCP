@@ -1,7 +1,7 @@
 # Knowledge Readiness Before B4 — Design Record
 
 Date: 2026-09-14
-Status: Approved conversational scope; written specification awaiting user review
+Status: Approved scope, including program-wide review corrections; implementation planning authorized
 Repository: MatiasLaukka/Support-Ticket-Triage-MCP
 Verified baseline: `aa53992d84ffd37a61a570ce387c5592b8ed8b1b` (merged PR #24)
 
@@ -12,6 +12,8 @@ Make the existing knowledge sufficiently detailed, faithfully searchable, and ev
 This slice enriches the corpus in three topic families and corrects one narrow chunking discrepancy. It does not implement B4 ranking or B5 applicability. Retrieval remains advisory/shadow-only; operational routing, recommendations, drafting orchestration, diagnosis logic, approval, receipts, replay, and lifecycle code are not changed.
 
 Content is already consumed by existing article-backed workflows. Consequently, article edits can change the guidance available to drafts even without changing orchestration. Review customer-facing guidance and run affected regressions; do not describe this slice as having no possible effect on draft wording.
+
+The diagnosis reasoning provider currently sends only `article.body.slice(0, 1800)`; classification and draft-response providers send full bodies. Inspect and regression-test actual serialized provider requests, not just source Markdown. Each edited article must begin with a concise scope/safety summary whose essential qualifications survive the 1,800-character projection. Bound and record full-body character growth without inventing token measurements. Do not increase provider limits or introduce retrieval-selected prompt chunks in this slice. If authoring cannot preserve safe meaning in the existing projection, stop for review rather than silently changing the provider contract.
 
 References:
 
@@ -98,6 +100,8 @@ Formatting normalization must preserve paragraph separation. Critical qualificat
 
 Advance the representation version from the verified baseline version to mark changed semantics. Use existing reconciliation/rebuild mechanisms and compatibility checks: no old vector may represent newly chunked text, and references to historical chunk ordinals must be interpreted with the recorded source/representation identity. No new database authority or migration framework is introduced.
 
+An existing version-2 database is an explicit upgrade test target. At the baseline, validation rejects a representation-version mismatch and `replaceAll` does not update that metadata. Therefore changing the version constant alone is insufficient. Support a narrow explicit maintenance rebuild from valid version 2 to version 3: validate the old index using its supported version's hashes, regenerate from authoritative sources, and publish current representations, FTS, vector compatibility state, and version metadata together in the existing transaction. A failed publication must roll back. Startup must not serve the old representation or silently erase the database; expose an upgrade-required diagnostic distinct from corruption and direct the operator to the explicit rebuild. Unknown/future versions and malformed indexes are not silently repaired. No operational database is modified. Test the real old hashing/layout, reopening, successful rebuild, failed rebuild, missing provider, source unavailability, and no-op subsequent reconciliation. Unavailable cached source families must retain their established exclusion/recovery semantics; if they cannot be safely reprojected for upgrade, block publication and report the missing source instead of discarding them.
+
 Tests cover heading context, paragraph packing, oversized-paragraph fallback, long unbroken input, exact-limit behavior, Unicode content, deterministic output, content preservation, bounded chunk bodies, and stale/incompatible vector exclusion after representation changes. Retrieval still aggregates chunks into one resource; more chunks do not create extra ranking votes.
 
 ## 7. Reviewed case coverage
@@ -133,6 +137,8 @@ Assign related paraphrases, contrast variants, and cases derived from one seed s
 
 Complete content authoring before finalizing independent held-out queries; never use held-out query wording to optimize resources. Keep holdout judgments separate from development inspection during future tuning; if holdout results drive changes, mark that set as consumed and obtain fresh independent cases before another held-out claim. Do not claim a statistically persuasive holdout from a tiny set.
 
+The implementation review checkpoint is concrete: present the changed content, provider projections, descriptors, development cases, source-section rationales, and unresolved gaps to the user before marking those cases reviewed or freezing the development baseline. Record the user's actual decision, not an agent-generated approval identity. Then finalize independent holdout groups and their separate label-review record without exposing them to content tuning. This slice may structurally validate holdout IDs, references, split membership, and judgments, but must not run or inspect holdout retrieval rankings. Reserve that evaluation for a later explicitly authorized frozen B4 comparison. Default evaluation and reports select development only; accidental holdout execution must fail closed.
+
 Evaluation-only queries must not enter the searchable corpus. Historical case memories require a separate, governed corpus decision; this slice does not manufacture resolved cases.
 
 ## 9. Evaluation and reproducibility
@@ -145,6 +151,8 @@ Use isolated evaluation indexes and new report directories. Preserve previous co
 
 Report lexical and semantic rankings separately and existing candidate-pool/reference coverage separately. Use Recall@K only over reviewed relevance sets with disclosed completeness; precision requires complete judgments for the measured pool. Required coverage with a zero denominator is not a success. Keep per-topic and case-family breakdowns, concrete misses, uncertainty, and the zero-real-resolved-case limitation. No fused ranking or unsupported applicability metric is introduced.
 
+Add a bounded section-evidence diagnostic alongside unchanged resource metrics. For each returned, section-judged article, compare the best matching representation in each channel with the reviewed supporting sections at the frozen source hash. Report supporting-best-match, right-article/wrong-best-section, and unjudged-section separately, preserving actual representation IDs. Also report whether any returned match covers a supporting section, but do not let a low-ranked supporting chunk conceal the wrong best match. Missing articles and unavailable channels are separate exclusions, not section successes. Do not mark an entire article irrelevant just because one section describes an inapplicable alternative. This is a diagnostic of evidence exposure, not a new ranking algorithm or applicability score.
+
 Local Ollama/Qwen is the existing semantic baseline, not a required new download. A later implementation/evaluation task must have authorization for local provider calls. No remote calls or operational-data ingestion are implied. Missing provider access produces an explicit semantic-evidence gap, never lexical-only results labeled as semantic success. Report provider variation and timing scope honestly.
 
 ## 10. Acceptance and verification
@@ -154,8 +162,12 @@ Completion requires:
 - Source-grounded content in all three scoped families, with alternatives, missing/contradictory evidence, safe next actions, verification, and escalation.
 - Accurate descriptors and valid scoped links without new executable behavior.
 - Generated-chunk review proving that scoped guidance remains interpretable and its safety qualifications stay attached.
+- Serialized diagnosis/classification/draft-request checks for the edited articles, with first-1,800-character safety review and full-body character-growth reporting.
 - Passing chunker/compatibility regressions and existing affected retrieval and diagnostic tests.
+- Version-2-to-3 upgrade/reopen/rollback and upgrade-required-versus-corruption regressions on an existing index.
 - Reviewed matrix coverage, grouped split validation, valid source references, explicit unjudged handling, and no synthetic content passed off as operational history.
+- The recorded user content/development-label review checkpoint, structurally validated independent holdout assignments, and proof that default evaluation does not run holdout rankings.
+- Section-evidence diagnostics that distinguish a correct article from its wrong best-matching section without changing resource-level scoring.
 - Reproducible new evaluation artifacts, or an explicit blocker where provider authorization or reviewed cases are missing; no full evidence-completion claim while these remain unresolved.
 - Typecheck, build, relevant oracle/taxonomy audits, full suite with `--maxWorkers=2`, and `git diff --check` for the implementation slice, with actual results and environmental limitations reported.
 

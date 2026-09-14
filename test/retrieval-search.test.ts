@@ -41,6 +41,30 @@ describe("retrieval search", () => {
     store.close();
   });
 
+  it("uses an evaluation-only semantic query format without changing lexical query text", async () => {
+    const store = RetrievalStore.open(":memory:");
+    const article = projectArticle({ id: "formatted", title: "Formatted", tags: [], body: "webhook signing secret" });
+    const model = { id: "test", revision: "1", dimensions: 2 };
+    store.reconcile({ resources: [article], unavailableFamilies: [] });
+    store.configureModel(model);
+    store.installVectors([{ representationId: article.representations[0]!.id, resourceKey: article.resource.key, contentHash: article.representations[0]!.contentHash, model, values: [1, 0] }]);
+    const embedded: string[] = [];
+
+    const result = await retrieve({
+      query: { queryText: "webhook secret", queryHash: "q", ticketId: "TKT-0001", sourceRevision: 1, customerReplyWatermark: "none", queryTruncated: false, references: [] },
+      semanticQueryText: "Instruct: Retrieve relevant support resources.\n Query:webhook secret",
+      store,
+      provider: { model, embed: async (texts) => { embedded.push(...texts); return [[1, 0]]; } },
+      limits: { "knowledge-article": { lexical: 5, semantic: 5 }, "known-cause": { lexical: 5, semantic: 5 }, "diagnostic-playbook": { lexical: 5, semantic: 5 }, "resolved-ticket": { lexical: 5, semantic: 5 } },
+      signal: new AbortController().signal,
+    });
+
+    expect(embedded).toEqual(["Instruct: Retrieve relevant support resources.\n Query:webhook secret"]);
+    expect(result.lexical.status).toBe("used");
+    expect(result.candidates[0]?.lexical).toBeDefined();
+    store.close();
+  });
+
   it("aggregates several matching chunks into one article and preserves references", async () => {
     const store = RetrievalStore.open(":memory:");
     store.initialize();

@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runRetrievalIndex } from "../scripts/retrieval-index.js";
 import * as retrievalEvaluation from "../scripts/evaluate-retrieval.js";
-import { evaluateRetrieval, markdownReport, providerForEvaluation } from "../scripts/evaluate-retrieval.js";
+import { evaluateRetrieval, evaluationOptionsFor, markdownReport, providerForEvaluation, QWEN3_RETRIEVAL_QUERY_FORMAT, QWEN3_RETRIEVAL_QUERY_INSTRUCTION } from "../scripts/evaluate-retrieval.js";
 import { IndexManager } from "../src/retrieval/index-manager.js";
 
 describe("retrieval maintenance CLI", () => {
@@ -79,6 +79,46 @@ describe("retrieval maintenance CLI", () => {
     expect(providerForEvaluation([], {})).toBeUndefined();
     expect(() => providerForEvaluation(["--live-embeddings"], { TRIAGE_EMBEDDING_MODEL: "model-only" })).toThrow(/complete .* tuple/i);
     expect(() => providerForEvaluation(["--unexpected"], {})).toThrow(/Unknown retrieval evaluation option/);
+  });
+
+  it("records the explicit Qwen query-only instruction and isolates a requested output directory", () => {
+    const options = evaluationOptionsFor([
+      "--live-embeddings",
+      "--qwen3-retrieval-instruction",
+      "--output-dir",
+      "reports/retrieval/semantic-qwen",
+    ], {
+      TRIAGE_EMBEDDING_ENDPOINT: "http://localhost:11434/v1/embeddings",
+      TRIAGE_EMBEDDING_MODEL: "qwen3-embedding:0.6b",
+      TRIAGE_EMBEDDING_REVISION: "ac6da0dfba84",
+      TRIAGE_EMBEDDING_DIMENSIONS: "1024",
+    });
+    expect(options.semanticQueryFormat).toEqual({
+      kind: "qwen3-retrieval-instruction-v1",
+      instruction: QWEN3_RETRIEVAL_QUERY_INSTRUCTION,
+      template: "Instruct: {instruction}\\n Query:{query}",
+    });
+    expect(options.outputDir).toBe("reports/retrieval/semantic-qwen");
+    expect(() => evaluationOptionsFor(["--qwen3-retrieval-instruction"], {})).toThrow(/requires --live-embeddings/i);
+  });
+
+  it("formats only semantic evaluation queries and records the configured format", async () => {
+    const inputs: string[][] = [];
+    const report = await evaluateRetrieval({
+      provider: {
+        model: { id: "fixture", revision: "1", dimensions: 1 },
+        embed: async (texts) => { inputs.push([...texts]); return texts.map(() => [1]); },
+      },
+      semanticQueryFormat: QWEN3_RETRIEVAL_QUERY_FORMAT,
+    });
+
+    expect(inputs.filter((texts) => texts.length === 1).map(([text]) => text))
+      .toEqual(expect.arrayContaining([expect.stringMatching(/^Instruct: Given a support ticket, retrieve relevant support resources\.\n Query:/)]));
+    expect(inputs.filter((texts) => texts.length > 1).flat()).not.toContainEqual(expect.stringMatching(/^Instruct:/));
+    expect(report).toMatchObject({
+      semanticQueryFormatting: QWEN3_RETRIEVAL_QUERY_FORMAT,
+      timingsMs: expect.objectContaining({ embeddingCalls: expect.any(Number), embeddingInputs: expect.any(Number) }),
+    });
   });
 
   it("scores each retrieval channel in its own rank order and excludes null metrics from averages", () => {

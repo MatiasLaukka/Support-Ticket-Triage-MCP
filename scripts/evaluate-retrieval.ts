@@ -34,6 +34,21 @@ const CONTRAST_FAMILIES = [
   "Shopify mapping/general sync",
   "editor session/platform loading",
 ] as const;
+export const QWEN3_RETRIEVAL_QUERY_INSTRUCTION = "Given a support ticket, retrieve relevant support resources.";
+export type SemanticQueryFormat = {
+  kind: "qwen3-retrieval-instruction-v1";
+  instruction: string;
+  template: "Instruct: {instruction}\\n Query:{query}";
+};
+export const QWEN3_RETRIEVAL_QUERY_FORMAT: SemanticQueryFormat = {
+  kind: "qwen3-retrieval-instruction-v1",
+  instruction: QWEN3_RETRIEVAL_QUERY_INSTRUCTION,
+  template: "Instruct: {instruction}\\n Query:{query}",
+};
+
+export function formatQwen3RetrievalQuery(query: string, format: SemanticQueryFormat = QWEN3_RETRIEVAL_QUERY_FORMAT): string {
+  return `Instruct: ${format.instruction}\n Query:${query}`;
+}
 
 type ScenarioReport = {
   ticketId: string;
@@ -80,10 +95,26 @@ export function snapshotsAtOrBeforeCutoff<T extends { ticket: { updatedAt: strin
   return snapshots.filter(({ ticket }) => ticket.updatedAt <= SCENARIO_CUTOFF);
 }
 
-export async function evaluateRetrieval(input: { provider?: EmbeddingProvider; completedSnapshots?: readonly CompletedDiagnosisReadSnapshot[] } = {}): Promise<Record<string, unknown>> {
+export async function evaluateRetrieval(input: { provider?: EmbeddingProvider; completedSnapshots?: readonly CompletedDiagnosisReadSnapshot[]; semanticQueryFormat?: SemanticQueryFormat } = {}): Promise<Record<string, unknown>> {
   const sourceRoot = mkdtempSync(join(tmpdir(), "triage-retrieval-eval-"));
   const tickets = new TicketRepository(sourceRoot, resolve("data/seed/tickets.json"));
   const store = RetrievalStore.open(":memory:");
+  const evaluationStartedAt = performance.now();
+  let refreshMs = 0;
+  let retrievalMs = 0;
+  let embeddingCalls = 0;
+  let embeddingInputs = 0;
+  let embeddingMs = 0;
+  const provider = input.provider === undefined ? undefined : {
+    model: input.provider.model,
+    embed: async (texts: readonly string[], signal: AbortSignal) => {
+      const startedAt = performance.now();
+      embeddingCalls += 1;
+      embeddingInputs += texts.length;
+      try { return await input.provider!.embed(texts, signal); }
+      finally { embeddingMs += performance.now() - startedAt; }
+    },
+  };
   try {
     await tickets.initialize();
     const [articles, seedOracles] = await Promise.all([
@@ -96,8 +127,10 @@ export async function evaluateRetrieval(input: { provider?: EmbeddingProvider; c
     const snapshot = loadRetrievalSources({ articles, reusable: unavailableReusableKnowledge(), completedSnapshots });
     const frozenCorpusKeys = new Set(snapshot.resources.map(({ resource }) => resource.key));
     validateLabelsAgainstCorpus(oracles, frozenCorpusKeys);
-    const manager = new IndexManager({ store, load: async () => snapshot, ...(input.provider === undefined ? {} : { provider: input.provider }) });
+    const manager = new IndexManager({ store, load: async () => snapshot, ...(provider === undefined ? {} : { provider }) });
+    const refreshStartedAt = performance.now();
     await manager.refresh(new AbortController().signal);
+    refreshMs = performance.now() - refreshStartedAt;
     const scenarios: ScenarioReport[] = [];
     const evaluationInputs = [
       ...(await Promise.all(seedOracles
@@ -109,7 +142,9 @@ export async function evaluateRetrieval(input: { provider?: EmbeddingProvider; c
       if (oracle.retrieval === undefined) continue;
       const references = deterministicReferences(ticket);
       const query = buildRetrievalQuery({ ticket, customerReplies: [], customerReplyWatermark: "seed", references });
-      const result = await retrieve({ query, store, limits: K_BUDGET, ...(input.provider === undefined ? {} : { provider: input.provider }), signal: new AbortController().signal });
+      const retrievalStartedAt = performance.now();
+      const result = await retrieve({ query, ...(input.semanticQueryFormat === undefined ? {} : { semanticQueryText: formatQwen3RetrievalQuery(query.queryText, input.semanticQueryFormat) }), store, limits: K_BUDGET, ...(provider === undefined ? {} : { provider }), signal: new AbortController().signal });
+      retrievalMs += performance.now() - retrievalStartedAt;
       const lexicalKeys = rankedCandidateKeys(result.candidates, "lexical");
       const semanticKeys = rankedCandidateKeys(result.candidates, "semantic");
       const deterministicReferenceKeys = result.candidates.filter((candidate) => candidate.deterministicReferences.length > 0).map((candidate) => candidate.resourceKey);
@@ -170,7 +205,16 @@ export async function evaluateRetrieval(input: { provider?: EmbeddingProvider; c
       semanticGeneration: evaluatedMetadata.semanticGeneration,
       representationVersion: evaluatedMetadata.representationVersion,
       ftsTokenization: "unicode-letter-number-v1; quoted OR terms; max 128 tokens",
-      model: input.provider?.model ?? null,
+      model: provider?.model ?? null,
+      semanticQueryFormatting: input.semanticQueryFormat ?? { kind: "none", instruction: null, template: null },
+      timingsMs: {
+        total: performance.now() - evaluationStartedAt,
+        refresh: refreshMs,
+        retrieval: retrievalMs,
+        embedding: embeddingMs,
+        embeddingCalls,
+        embeddingInputs,
+      },
       kBudget: K_BUDGET,
       scenarioCount: scenarios.length,
       candidatePools: scenarios,
@@ -384,6 +428,8 @@ export function markdownReport(report: Record<string, unknown>): string {
     `- Representation version: ${report.representationVersion}`,
     `- FTS tokenization: ${report.ftsTokenization}`,
     `- Model: ${JSON.stringify(report.model)}`,
+    `- Semantic query formatting: ${JSON.stringify(report.semanticQueryFormatting)}`,
+    `- Timings (ms): ${JSON.stringify(report.timingsMs)}`,
     `- K budget: ${JSON.stringify(report.kBudget)}`,
     `- Channel statuses: ${JSON.stringify(report.channelStatuses)}`,
     `- Scenarios: ${report.scenarioCount}`,
@@ -463,9 +509,9 @@ export function markdownReport(report: Record<string, unknown>): string {
 }
 
 async function main(): Promise<void> {
-  const provider = providerForEvaluation(process.argv.slice(2), process.env);
-  const report = await evaluateRetrieval(provider === undefined ? {} : { provider });
-  const outputDir = resolve("reports/retrieval");
+  const options = evaluationOptionsFor(process.argv.slice(2), process.env);
+  const report = await evaluateRetrieval({ ...(options.provider === undefined ? {} : { provider: options.provider }), ...(options.semanticQueryFormat === undefined ? {} : { semanticQueryFormat: options.semanticQueryFormat }) });
+  const outputDir = resolve(options.outputDir);
   mkdirSync(outputDir, { recursive: true });
   writeFileSync(resolve(outputDir, "evaluation.json"), `${JSON.stringify(report, null, 2)}\n`, "utf8");
   writeFileSync(resolve(outputDir, "evaluation.md"), markdownReport(report), "utf8");
@@ -474,13 +520,32 @@ async function main(): Promise<void> {
 }
 
 export function providerForEvaluation(args: readonly string[], env: NodeJS.ProcessEnv): EmbeddingProvider | undefined {
-  const unknown = args.filter((arg) => arg !== "--live-embeddings");
-  if (unknown.length > 0) throw new Error(`Unknown retrieval evaluation option: ${unknown[0]}.`);
-  if (!args.includes("--live-embeddings")) return undefined;
+  return evaluationOptionsFor(args, env).provider;
+}
+
+export function evaluationOptionsFor(args: readonly string[], env: NodeJS.ProcessEnv): { provider?: EmbeddingProvider; semanticQueryFormat?: SemanticQueryFormat; outputDir: string } {
+  let liveEmbeddings = false;
+  let useQwen3Instruction = false;
+  let outputDir = "reports/retrieval";
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg === "--live-embeddings") { liveEmbeddings = true; continue; }
+    if (arg === "--qwen3-retrieval-instruction") { useQwen3Instruction = true; continue; }
+    if (arg === "--output-dir") {
+      const value = args[index + 1];
+      if (!value || value.startsWith("--")) throw new Error("--output-dir requires a directory.");
+      outputDir = value;
+      index += 1;
+      continue;
+    }
+    throw new Error(`Unknown retrieval evaluation option: ${arg}.`);
+  }
+  if (useQwen3Instruction && !liveEmbeddings) throw new Error("--qwen3-retrieval-instruction requires --live-embeddings.");
+  if (!liveEmbeddings) return { outputDir };
   let provider: EmbeddingProvider | undefined;
   try { provider = embeddingProviderFromEnv(env); } catch { throw new Error("--live-embeddings requires the complete TRIAGE_EMBEDDING_ENDPOINT, TRIAGE_EMBEDDING_MODEL, TRIAGE_EMBEDDING_REVISION, and TRIAGE_EMBEDDING_DIMENSIONS tuple."); }
   if (provider === undefined) throw new Error("--live-embeddings requires the complete TRIAGE_EMBEDDING_ENDPOINT, TRIAGE_EMBEDDING_MODEL, TRIAGE_EMBEDDING_REVISION, and TRIAGE_EMBEDDING_DIMENSIONS tuple.");
-  return provider;
+  return { provider, ...(useQwen3Instruction ? { semanticQueryFormat: QWEN3_RETRIEVAL_QUERY_FORMAT } : {}), outputDir };
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) main().catch((error: unknown) => { console.error(error instanceof Error ? error.message : error); process.exitCode = 1; });

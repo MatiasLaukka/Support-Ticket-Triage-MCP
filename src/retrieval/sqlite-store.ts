@@ -1,7 +1,7 @@
 import Database from "better-sqlite3";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
-import { hashResource, hashRepresentation, hashText, REPRESENTATION_VERSION } from "./representations.js";
+import { hashResourceForVersion, hashRepresentationForVersion, hashText, REPRESENTATION_VERSION } from "./representations.js";
 import type { IndexMetadata, ModelIdentity, Representation, Resource, ResourceKey, ResourceType, SearchSnapshot, SourceSnapshot, TaxonomyMetadata } from "./types.js";
 
 export const RETRIEVAL_SCHEMA_VERSION = 2;
@@ -13,6 +13,22 @@ const INDEX_STATES = new Set<IndexMetadata["state"]>(["ready", "degraded", "rebu
 
 export class RetrievalIntegrityError extends Error {
   readonly code = "INDEX_INTEGRITY_ERROR";
+}
+
+export class RetrievalRepresentationVersionError extends Error {
+  readonly code = "INDEX_UPGRADE_REQUIRED";
+  constructor(readonly storedVersion: number, readonly requiredVersion: number) {
+    super(`Retrieval representation version ${storedVersion} requires version ${requiredVersion}. Run npm run retrieval:index -- rebuild. This maintenance command loads static sources only and refuses to erase unavailable cached learned or resolved sources.`);
+    this.name = "RetrievalRepresentationVersionError";
+  }
+}
+
+export class RetrievalUpgradeSourceUnavailableError extends Error {
+  readonly code = "INDEX_UPGRADE_SOURCE_UNAVAILABLE";
+  constructor() {
+    super("Retrieval rebuild requires authoritative learned/resolved sources that are unavailable. Cached rows were preserved. Restore those sources and rebuild with an all-source loader; the maintenance CLI loads static sources only.");
+    this.name = "RetrievalUpgradeSourceUnavailableError";
+  }
 }
 
 type ResourceRow = {
@@ -132,14 +148,28 @@ export class RetrievalStore {
 
   replaceAll(snapshot: SourceSnapshot, vectors: readonly SearchSnapshot["vectors"][number][], model?: ModelIdentity): void {
     this.assertReady();
+    this.validateForRebuild();
+    this.assertRebuildSourcesAvailable(snapshot);
     const nextHash = corpusHash(snapshot);
     this.database.transaction(() => {
       this.database.exec("DELETE FROM retrieval_fts; DELETE FROM retrieval_embeddings; DELETE FROM retrieval_representations; DELETE FROM retrieval_resources;");
       if (model) this.setMeta("model", JSON.stringify(model));
+      this.setMeta("representationVersion", String(REPRESENTATION_VERSION));
       this.applySnapshot(snapshot, nextHash);
       this.applyVectors(vectors);
       if (vectors.length === 0) this.setMeta("semanticGeneration", "0");
+      this.validate();
     })();
+  }
+
+  assertRebuildSourcesAvailable(snapshot: SourceSnapshot): void {
+    this.assertReady();
+    const unavailable = new Set(snapshot.unavailableFamilies);
+    for (const row of this.database.prepare("SELECT metadata_json FROM retrieval_resources").all() as { metadata_json: string }[]) {
+      if (unavailable.has(parseResourceMetadata(row.metadata_json).family as SourceSnapshot["unavailableFamilies"][number])) {
+        throw new RetrievalUpgradeSourceUnavailableError();
+      }
+    }
   }
 
   readSnapshot(ftsQuery: string): SearchSnapshot {
@@ -180,6 +210,11 @@ export class RetrievalStore {
   }
 
   validate(): void {
+    const storedVersion = this.validateForRebuild();
+    if (storedVersion !== REPRESENTATION_VERSION) throw new RetrievalRepresentationVersionError(storedVersion, REPRESENTATION_VERSION);
+  }
+
+  validateForRebuild(): 2 | 3 {
     this.assertReady();
     try {
       const integrity = this.database.prepare("PRAGMA integrity_check").get() as { integrity_check?: string };
@@ -188,7 +223,9 @@ export class RetrievalStore {
       const values = new Map(metadata.map((row) => [row.key, row.value]));
       for (const key of ["schemaVersion", "representationVersion", "generation", "lexicalGeneration", "semanticGeneration"]) if (!Number.isInteger(Number(values.get(key))) || Number(values.get(key)) < 0) throw new Error();
       if (Number(values.get("lexicalGeneration")) !== Number(values.get("generation")) || Number(values.get("semanticGeneration")) > Number(values.get("generation"))) throw new Error();
-      if (Number(values.get("schemaVersion")) !== SCHEMA_VERSION || Number(values.get("representationVersion")) !== REPRESENTATION_VERSION) throw new Error();
+      const storedVersion = Number(values.get("representationVersion"));
+      if (!["2", "3"].includes(values.get("representationVersion") ?? "")) throw new Error();
+      if (Number(values.get("schemaVersion")) !== SCHEMA_VERSION || (storedVersion !== 2 && storedVersion !== 3)) throw new Error();
       if (!INDEX_STATES.has(values.get("state") as IndexMetadata["state"])) throw new Error();
       if (values.get("corpusHash") !== "" && !/^[0-9a-f]{64}$/.test(values.get("corpusHash") ?? "")) throw new Error();
       let configuredModel: ModelIdentity | undefined;
@@ -202,7 +239,7 @@ export class RetrievalStore {
       for (const row of this.database.prepare("SELECT representation_id,resource_key,kind,ordinal,title,heading,keywords_json,lexical_text,semantic_text,content_hash FROM retrieval_representations ORDER BY resource_key,representation_id").all() as RepresentationRow[]) {
         const representation = representationFromRow(row);
         const { contentHash, ...canonical } = representation;
-        if (contentHash !== hashRepresentation(canonical)) throw new Error();
+        if (contentHash !== hashRepresentationForVersion(canonical, storedVersion)) throw new Error();
         const entries = representations.get(row.resource_key) ?? [];
         entries.push(row);
         representations.set(row.resource_key, entries);
@@ -213,7 +250,7 @@ export class RetrievalStore {
         if (!RESOURCE_TYPES.has(row.resource_type as ResourceType) || !isResourceKey(row.resource_key) || !row.resource_key.startsWith(`${row.resource_type}:`) || !row.source_id || !/^[0-9a-f]{64}$/.test(row.content_hash)) throw new Error();
         const resource = { key: row.resource_key as ResourceKey, type: row.resource_type as ResourceType, sourceId: row.source_id, ...(row.source_version === null ? {} : { sourceVersion: row.source_version }), family: metadata.family, linkedResourceKeys: metadata.linkedResourceKeys, ...(metadata.taxonomy ? { taxonomy: metadata.taxonomy } : {}) };
         const rows = representations.get(row.resource_key) ?? [];
-        if (rows.length === 0 || row.content_hash !== hashResource(resource, rows.map(({ representation_id, content_hash }) => ({ id: representation_id, contentHash: content_hash })))) throw new Error();
+        if (rows.length === 0 || row.content_hash !== hashResourceForVersion(resource, rows.map(({ representation_id, content_hash }) => ({ id: representation_id, contentHash: content_hash })), storedVersion)) throw new Error();
       }
       for (const row of this.database.prepare("SELECT e.model_id,e.model_revision,e.dimensions,e.vector_blob,e.content_hash,r.content_hash AS representation_hash FROM retrieval_embeddings e JOIN retrieval_representations r ON r.representation_id=e.representation_id WHERE e.status='ready'").all() as any[]) {
         const model = configuredModel;
@@ -233,6 +270,7 @@ export class RetrievalStore {
         if (!fts || fts.resource_key !== row.resource_key || fts.title !== row.title || fts.heading !== (row.heading ?? "") || fts.body !== row.lexical_text || fts.keywords !== parseKeywords(row.keywords_json).join(" ")) throw new Error();
       }
       this.database.prepare("INSERT INTO retrieval_fts(retrieval_fts) VALUES('integrity-check')").run();
+      return storedVersion;
     } catch { throw new RetrievalIntegrityError("Retrieval index integrity check failed."); }
   }
 

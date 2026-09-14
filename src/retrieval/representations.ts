@@ -1,13 +1,17 @@
 import { createHash } from "node:crypto";
 import type { KnowledgeArticle } from "../domain.js";
 import type { ProjectedResource, Representation, Resource, ResourceKey } from "./types.js";
-export const REPRESENTATION_VERSION = 2;
+export const REPRESENTATION_VERSION = 3;
 export const ARTICLE_SECTION_BODY_LIMIT = 4_000;
 export const normalizeText = (text: string): string => text.normalize("NFC").replace(/\r\n?/g, "\n").trim();
 export const hashText = (text: string): string => createHash("sha256").update(text, "utf8").digest("hex");
 export function hashRepresentation(representation: Omit<Representation, "contentHash">): string {
+  return hashRepresentationForVersion(representation, REPRESENTATION_VERSION);
+}
+// Legacy validation hashes persisted canonical fields exactly as v2 did; it never reprojects them.
+export function hashRepresentationForVersion(representation: Omit<Representation, "contentHash">, version: 2 | 3): string {
   return hashText(JSON.stringify({
-    version: REPRESENTATION_VERSION,
+    version,
     resourceKey: representation.resourceKey,
     kind: representation.kind,
     ordinal: representation.ordinal,
@@ -19,8 +23,11 @@ export function hashRepresentation(representation: Omit<Representation, "content
   }));
 }
 export function hashResource(resource: Omit<Resource, "contentHash">, representations: readonly Pick<Representation, "id" | "contentHash">[]): string {
+  return hashResourceForVersion(resource, representations, REPRESENTATION_VERSION);
+}
+export function hashResourceForVersion(resource: Omit<Resource, "contentHash">, representations: readonly Pick<Representation, "id" | "contentHash">[], version: 2 | 3): string {
   return hashText(JSON.stringify({
-    version: REPRESENTATION_VERSION,
+    version,
     resource,
     representations: representations.map(({ id, contentHash }) => ({ id, contentHash })).sort((left, right) => left.id.localeCompare(right.id)),
   }));

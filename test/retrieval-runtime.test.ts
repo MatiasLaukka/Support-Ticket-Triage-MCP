@@ -12,6 +12,8 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { createTriageServer } from "../src/server.js";
 import { openReliabilityRuntime } from "./reliability-runtime-fixture.js";
+import { loadRetrievalV2Fixture, retrievalV2Fixture } from "./retrieval-fixtures.js";
+import type Database from "better-sqlite3";
 
 function commandFixture(input: { dispatcher: unknown; service: unknown; retrievalObserver?: unknown }) {
   const ticket = TicketSchema.parse({
@@ -47,6 +49,28 @@ function commandFixture(input: { dispatcher: unknown; service: unknown; retrieva
 }
 
 describe("retrieval runtime configuration", () => {
+  it("preserves genuine v2 on startup and reports upgrade-required while command authority remains available", async () => {
+    const root = mkdtempSync(join(tmpdir(), "triage-v2-runtime-"));
+    const path = join(root, "retrieval.sqlite");
+    loadRetrievalV2Fixture(path).close();
+    const runtime = await createRuntimeDependencies({ env: { TRIAGE_DATA_ROOT: root, TRIAGE_SEED_FILE: resolve("data/seed/tickets.json"), TRIAGE_KNOWLEDGE_ROOT: resolve("data/knowledge"), TRIAGE_RETRIEVAL_MODE: "shadow" } });
+    try {
+      await runtime.retrievalObserver!.observe({ queryText: "test", queryHash: "q", ticketId: "TKT-0001", sourceRevision: 1, customerReplyWatermark: "none", queryTruncated: false, references: [] }, "cmd-upgrade");
+      expect(runtime.retrievalObserver!.recent()[0]).toMatchObject({ failureCode: "INDEX_UPGRADE_REQUIRED", result: { lexical: { status: "unavailable", reason: "index-upgrade-required" }, semantic: { status: "unavailable", reason: "index-upgrade-required" }, candidates: [] } });
+      const service = { commitOperationalEvaluation: () => ({ committed: true, authority: "unchanged" }), replayOperationalEvaluation: (_reader: unknown, result: unknown) => result };
+      const dispatcher = { async run(definition: any, raw: unknown, commandId: string) { const prepared = await definition.prepare(definition.parse(raw)); return definition.replay({}, definition.commit({}, prepared, commandId), commandId); } };
+      const off = commandFixture({ dispatcher, service });
+      const shadow = commandFixture({ dispatcher, service, retrievalObserver: runtime.retrievalObserver });
+      const input = { ticketId: off.ticket.id, aiPreference: "deterministic", responseStyle: "auto" } as const;
+      expect(await evaluateTicketCommand(shadow.deps, input, randomUUID())).toEqual(await evaluateTicketCommand(off.deps, input, randomUUID()));
+      const store = RetrievalStore.open(path);
+      try {
+        const database = (store as unknown as { database: Database.Database }).database;
+        for (const [table, rows] of Object.entries(retrievalV2Fixture.tables)) expect(JSON.parse(JSON.stringify(database.prepare(`SELECT * FROM ${table}`).all()))).toEqual(rows);
+      } finally { store.close(); }
+    } finally { await runtime.close(); rmSync(root, { recursive: true, force: true }); }
+  });
+
   it("defaults to shadow and accepts the explicit off comparison mode", () => {
     expect(parseRetrievalMode({})).toBe("shadow");
     expect(parseRetrievalMode({ TRIAGE_RETRIEVAL_MODE: "off" })).toBe("off");

@@ -60,7 +60,7 @@ describe("retrieval stage", () => {
     const observer = createRetrievalObserver({
       manager: { refresh: async () => undefined, close: async () => undefined } as any,
       store: {
-        readSnapshot: () => ({ metadata: { schemaVersion: 2, representationVersion: 2, generation: 1, lexicalGeneration: 1, semanticGeneration: 0, corpusHash: "", state: "degraded" }, resources: [{ key: resourceKey, type: "knowledge-article", sourceId: "emoji", contentHash: "hash", family: "article", linkedResourceKeys: [] }], lexical: { status: "used" }, lexicalMatches: [{ representationId: "emoji", resourceKey, score: -1, rank: 1 }], vectors: [] }),
+        readSnapshot: () => ({ metadata: { schemaVersion: 2, representationVersion: REPRESENTATION_VERSION, generation: 1, lexicalGeneration: 1, semanticGeneration: 0, corpusHash: "", state: "degraded" }, resources: [{ key: resourceKey, type: "knowledge-article", sourceId: "emoji", contentHash: "hash", family: "article", linkedResourceKeys: [] }], lexical: { status: "used" }, lexicalMatches: [{ representationId: "emoji", resourceKey, score: -1, rank: 1 }], vectors: [] }),
         close: () => undefined,
       } as any,
       limits: { "knowledge-article": { lexical: 1, semantic: 1 }, "known-cause": { lexical: 1, semantic: 1 }, "diagnostic-playbook": { lexical: 1, semantic: 1 }, "resolved-ticket": { lexical: 1, semantic: 1 } },

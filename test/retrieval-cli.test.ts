@@ -6,8 +6,41 @@ import { runRetrievalIndex } from "../scripts/retrieval-index.js";
 import * as retrievalEvaluation from "../scripts/evaluate-retrieval.js";
 import { evaluateRetrieval, evaluationOptionsFor, formatQwen3RetrievalQuery, markdownReport, providerForEvaluation, QWEN3_RETRIEVAL_QUERY_FORMAT, QWEN3_RETRIEVAL_QUERY_INSTRUCTION } from "../scripts/evaluate-retrieval.js";
 import { IndexManager } from "../src/retrieval/index-manager.js";
+import { loadRetrievalV2Fixture } from "./retrieval-fixtures.js";
+import { hashRepresentation, hashResource, REPRESENTATION_VERSION } from "../src/retrieval/representations.js";
+import { RetrievalStore, RetrievalUpgradeSourceUnavailableError } from "../src/retrieval/sqlite-store.js";
 
 describe("retrieval maintenance CLI", () => {
+  it.each(["learned-known-cause", "resolved-ticket"] as const)("retains cached %s rows when static-only CLI rebuild refuses their unavailable source", async (family) => {
+    const root = await mkdtemp(join(tmpdir(), "retrieval-cli-cache-"));
+    const store = RetrievalStore.open(join(root, "retrieval.sqlite"));
+    const type = family === "resolved-ticket" ? "resolved-ticket" : "known-cause";
+    const key = `${type}:cached` as const;
+    const resource = { key, type, sourceId: "cached", family, linkedResourceKeys: [] } as const;
+    const representation = { id: `${key}:canonical:0`, resourceKey: key, kind: "canonical", ordinal: 0, title: "Cached source", keywords: [], lexicalText: "Cached source", semanticText: "Cached source" };
+    const representations = [{ ...representation, contentHash: hashRepresentation(representation) }];
+    try {
+      store.initialize();
+      store.reconcile({ resources: [{ resource: { ...resource, contentHash: hashResource(resource, representations) }, representations }], unavailableFamilies: [] });
+      const before = store.readSnapshot("");
+      await expect(runRetrievalIndex(["rebuild"], root)).rejects.toBeInstanceOf(RetrievalUpgradeSourceUnavailableError);
+      expect(store.readSnapshot("")).toEqual(before);
+    } finally { store.close(); await rm(root, { recursive: true, force: true }); }
+  });
+
+  it("reports upgrade-required status and only upgrades v2 through explicit static-source rebuild", async () => {
+    const root = await mkdtemp(join(tmpdir(), "retrieval-v2-cli-"));
+    loadRetrievalV2Fixture(join(root, "retrieval.sqlite")).close();
+    try {
+      await expect(runRetrievalIndex(["status"], root)).resolves.toMatchObject({ status: "upgrade-required", code: "INDEX_UPGRADE_REQUIRED", instruction: expect.stringContaining("npm run retrieval:index -- rebuild") });
+      await expect(runRetrievalIndex(["refresh"], root)).rejects.toMatchObject({ code: "INDEX_UPGRADE_REQUIRED" });
+      await expect(runRetrievalIndex(["validate"], root)).rejects.toMatchObject({ code: "INDEX_UPGRADE_REQUIRED" });
+      await expect(runRetrievalIndex(["rebuild"], root)).resolves.toMatchObject({ status: "refreshed", sourceScope: "static-only", unavailableFamilies: ["learned-known-cause", "resolved-ticket"], metadata: { representationVersion: 3, semanticGeneration: 0 } });
+      const store = RetrievalStore.open(join(root, "retrieval.sqlite"));
+      try { expect(() => store.validate()).not.toThrow(); } finally { store.close(); }
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
   it("reports absent status without creating a database and rejects unknown commands", async () => {
     const root = await mkdtemp(join(tmpdir(), "retrieval-cli-"));
     try {
@@ -36,7 +69,7 @@ describe("retrieval maintenance CLI", () => {
     expect(report).toMatchObject({
       mode: "offline-lexical-only",
       semanticEvidence: "outstanding",
-      representationVersion: 2,
+      representationVersion: REPRESENTATION_VERSION,
       indexGeneration: expect.any(Number),
       lexicalGeneration: expect.any(Number),
       semanticGeneration: expect.any(Number),

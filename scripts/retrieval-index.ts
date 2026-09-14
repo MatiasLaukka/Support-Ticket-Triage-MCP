@@ -5,7 +5,7 @@ import { KnowledgeRepository } from "../src/knowledge-repository.js";
 import { unavailableReusableKnowledge } from "../src/knowledge-evolution/reusable-context.js";
 import { loadRetrievalSources } from "../src/retrieval/sources.js";
 import { IndexManager } from "../src/retrieval/index-manager.js";
-import { RetrievalStore } from "../src/retrieval/sqlite-store.js";
+import { RetrievalRepresentationVersionError, RetrievalStore } from "../src/retrieval/sqlite-store.js";
 
 export async function runRetrievalIndex(args: readonly string[], dataRoot = resolve("data/runtime")): Promise<Record<string, unknown>> {
   const command = args[0];
@@ -16,11 +16,20 @@ export async function runRetrievalIndex(args: readonly string[], dataRoot = reso
   let manager: IndexManager | undefined;
   try {
     store.initialize();
-    if (command === "status") return { status: "ready", path, metadata: store.metadata() };
+    if (command === "status") {
+      try { store.validate(); }
+      catch (error) {
+        if (error instanceof RetrievalRepresentationVersionError) return { status: "upgrade-required", code: error.code, instruction: error.message, path, metadata: store.metadata() };
+        throw error;
+      }
+      return { status: "ready", path, metadata: store.metadata() };
+    }
     if (command === "validate") { store.validate(); return { status: "valid", path, metadata: store.metadata() }; }
+    // Maintenance currently reloads static sources only. Rebuild refuses to erase cached
+    // learned/resolved families until an authoritative loader can supply them.
     manager = new IndexManager({ store, load: async () => ({ resources: loadRetrievalSources({ articles: await new KnowledgeRepository(resolve("data/knowledge")).list(), reusable: unavailableReusableKnowledge() }).resources, unavailableFamilies: ["learned-known-cause", "resolved-ticket"] }) });
     const metadata = command === "rebuild" ? await manager.rebuild(new AbortController().signal) : await manager.refresh(new AbortController().signal);
-    return { status: "refreshed", path, metadata };
+    return { status: "refreshed", path, metadata, sourceScope: "static-only", unavailableFamilies: ["learned-known-cause", "resolved-ticket"] };
   } finally {
     await manager?.close();
     store.close();

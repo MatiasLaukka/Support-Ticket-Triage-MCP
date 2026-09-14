@@ -21,8 +21,11 @@ export class IndexManager {
   }
 
   private async runRefresh(signal: AbortSignal, rebuild: boolean): Promise<IndexMetadata> {
+    if (rebuild) this.input.store.validateForRebuild();
+    else this.input.store.validate();
     const snapshot = await this.input.load();
     if (rebuild) {
+      this.input.store.assertRebuildSourcesAvailable(snapshot);
       const vectors = this.input.provider === undefined
         ? []
         : await this.embed(snapshot.resources.flatMap(({ representations }) => representations), signal);

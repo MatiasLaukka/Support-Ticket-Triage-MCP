@@ -45,7 +45,7 @@ import {
   OperationalCommandDispatcher,
   type DispatchableOperationalStore,
 } from "./operational-command-dispatch.js";
-import { RetrievalIntegrityError, RetrievalStore } from "./retrieval/sqlite-store.js";
+import { RetrievalIntegrityError, RetrievalRepresentationVersionError, RetrievalStore } from "./retrieval/sqlite-store.js";
 import { IndexManager } from "./retrieval/index-manager.js";
 import { embeddingProviderFromEnv } from "./retrieval/embedding-provider.js";
 import { loadRetrievalSources } from "./retrieval/sources.js";
@@ -396,7 +396,7 @@ export async function createRuntimeDependencies(
       });
     } catch (error) {
       retrievalStore?.close();
-      retrievalObserver = createUnavailableRetrievalObserver({ report: reportRetrievalDiagnostic, ...(error instanceof RetrievalIntegrityError ? { failureCode: "INDEX_INTEGRITY_ERROR" } : {}) });
+      retrievalObserver = createUnavailableRetrievalObserver({ report: reportRetrievalDiagnostic, ...(error instanceof RetrievalRepresentationVersionError ? { failureCode: "INDEX_UPGRADE_REQUIRED" } : error instanceof RetrievalIntegrityError ? { failureCode: "INDEX_INTEGRITY_ERROR" } : {}) });
     }
   }
 

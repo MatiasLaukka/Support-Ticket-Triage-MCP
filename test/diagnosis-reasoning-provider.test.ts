@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { resolve } from "node:path";
+import { KnowledgeRepository } from "../src/knowledge-repository.js";
 import {
   InvalidDiagnosisSchemaError,
   OpenAiDiagnosisReasoningProvider,
@@ -117,7 +119,18 @@ describe("OpenAiDiagnosisReasoningProvider", () => {
       },
     });
 
-    const result = await provider.reason(providerInput());
+    const editedArticles = (await new KnowledgeRepository(resolve("data/knowledge")).list())
+      .filter((article) => ["performance-troubleshooting", "webhook-signature-validation",
+        "flow-trigger-troubleshooting", "event-tracking-debugging"].includes(article.id));
+    expect(editedArticles).toHaveLength(4);
+    const result = await provider.reason({ ...providerInput(), knowledgeArticles: editedArticles });
+    const diagnosisInput = JSON.parse(requestBody!.input as string);
+    expect(diagnosisInput.approvedKnowledge.map((article: { body: string }) => article.body))
+      .toEqual(editedArticles.map((article) => article.body.slice(0, 1800)));
+    for (const article of diagnosisInput.approvedKnowledge) {
+      expect(article.body).toContain("A symptom alone does not confirm a cause.");
+      expect(article.body).toContain("Do not claim a fix without verification.");
+    }
 
     expect(result.reasoning).toMatchObject({ causeType: "performance", confidence: "likely" });
     expect(result.telemetry).toEqual({ model: "gpt-5.6-luna", latencyMs: 125 });

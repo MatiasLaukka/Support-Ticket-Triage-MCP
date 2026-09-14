@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { resolve } from "node:path";
+import { KnowledgeRepository } from "../src/knowledge-repository.js";
 import {
   createCustomerResponseDraftProviderFromEnv,
   DeterministicCustomerResponseDraftProvider,
@@ -57,10 +59,14 @@ describe("OpenAiCustomerResponseDraftProvider", () => {
       },
     });
 
+    const editedArticles = (await new KnowledgeRepository(resolve("data/knowledge")).list())
+      .filter((article) => ["performance-troubleshooting", "webhook-signature-validation",
+        "flow-trigger-troubleshooting", "event-tracking-debugging"].includes(article.id));
+    expect(editedArticles).toHaveLength(4);
     const draft = await provider.draft({
       ticket,
       outcome,
-      knowledgeArticles: [article],
+      knowledgeArticles: editedArticles,
       deterministicDraft: "Fallback draft.",
       responseStyle: "auto",
       actor: "approval-desk",
@@ -110,7 +116,9 @@ describe("OpenAiCustomerResponseDraftProvider", () => {
         },
       },
     });
-    expect(requests[0]!.init.body).toContain(article.body);
+    const draftInput = JSON.parse(JSON.parse(requests[0]!.init.body).input);
+    expect(draftInput.knowledgeArticles.map((article: { body: string }) => article.body))
+      .toEqual(editedArticles.map((article) => article.body));
     expect(requests[0]!.init.body).toContain("Fallback draft.");
     expect(requests[0]!.init.body).toContain("Marketing Coordinator");
     expect(JSON.parse(requests[0]!.init.body).instructions).toContain(

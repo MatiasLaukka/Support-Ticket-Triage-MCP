@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runRetrievalIndex } from "../scripts/retrieval-index.js";
 import * as retrievalEvaluation from "../scripts/evaluate-retrieval.js";
-import { evaluateRetrieval, evaluationOptionsFor, markdownReport, providerForEvaluation, QWEN3_RETRIEVAL_QUERY_FORMAT, QWEN3_RETRIEVAL_QUERY_INSTRUCTION } from "../scripts/evaluate-retrieval.js";
+import { evaluateRetrieval, evaluationOptionsFor, formatQwen3RetrievalQuery, markdownReport, providerForEvaluation, QWEN3_RETRIEVAL_QUERY_FORMAT, QWEN3_RETRIEVAL_QUERY_INSTRUCTION } from "../scripts/evaluate-retrieval.js";
 import { IndexManager } from "../src/retrieval/index-manager.js";
 
 describe("retrieval maintenance CLI", () => {
@@ -96,10 +96,28 @@ describe("retrieval maintenance CLI", () => {
     expect(options.semanticQueryFormat).toEqual({
       kind: "qwen3-retrieval-instruction-v1",
       instruction: QWEN3_RETRIEVAL_QUERY_INSTRUCTION,
-      template: "Instruct: {instruction}\\n Query:{query}",
+      template: "Instruct: {instruction}\n Query:{query}",
     });
     expect(options.outputDir).toBe("reports/retrieval/semantic-qwen");
     expect(() => evaluationOptionsFor(["--qwen3-retrieval-instruction"], {})).toThrow(/requires --live-embeddings/i);
+  });
+
+  it("rejects the Qwen-specific instruction for a non-Qwen embedding model", () => {
+    expect(() => evaluationOptionsFor(["--live-embeddings", "--qwen3-retrieval-instruction"], {
+      TRIAGE_EMBEDDING_ENDPOINT: "http://localhost:11434/v1/embeddings",
+      TRIAGE_EMBEDDING_MODEL: "text-embedding-3-small",
+      TRIAGE_EMBEDDING_REVISION: "r1",
+      TRIAGE_EMBEDDING_DIMENSIONS: "1024",
+    })).toThrow(/requires a qwen3-embedding model/i);
+  });
+
+  it("records the newline-bearing template that it sends to Qwen", () => {
+    expect(QWEN3_RETRIEVAL_QUERY_FORMAT.template).toBe("Instruct: {instruction}\n Query:{query}");
+    expect(formatQwen3RetrievalQuery("webhook secret")).toBe(
+      QWEN3_RETRIEVAL_QUERY_FORMAT.template
+        .replace("{instruction}", QWEN3_RETRIEVAL_QUERY_FORMAT.instruction)
+        .replace("{query}", "webhook secret"),
+    );
   });
 
   it("formats only semantic evaluation queries and records the configured format", async () => {

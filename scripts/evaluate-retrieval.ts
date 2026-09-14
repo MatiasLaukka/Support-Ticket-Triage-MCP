@@ -38,16 +38,16 @@ export const QWEN3_RETRIEVAL_QUERY_INSTRUCTION = "Given a support ticket, retrie
 export type SemanticQueryFormat = {
   kind: "qwen3-retrieval-instruction-v1";
   instruction: string;
-  template: "Instruct: {instruction}\\n Query:{query}";
+  template: "Instruct: {instruction}\n Query:{query}";
 };
 export const QWEN3_RETRIEVAL_QUERY_FORMAT: SemanticQueryFormat = {
   kind: "qwen3-retrieval-instruction-v1",
   instruction: QWEN3_RETRIEVAL_QUERY_INSTRUCTION,
-  template: "Instruct: {instruction}\\n Query:{query}",
+  template: "Instruct: {instruction}\n Query:{query}",
 };
 
 export function formatQwen3RetrievalQuery(query: string, format: SemanticQueryFormat = QWEN3_RETRIEVAL_QUERY_FORMAT): string {
-  return `Instruct: ${format.instruction}\n Query:${query}`;
+  return format.template.replace("{instruction}", format.instruction).replace("{query}", query);
 }
 
 type ScenarioReport = {
@@ -545,6 +545,7 @@ export function evaluationOptionsFor(args: readonly string[], env: NodeJS.Proces
   let provider: EmbeddingProvider | undefined;
   try { provider = embeddingProviderFromEnv(env); } catch { throw new Error("--live-embeddings requires the complete TRIAGE_EMBEDDING_ENDPOINT, TRIAGE_EMBEDDING_MODEL, TRIAGE_EMBEDDING_REVISION, and TRIAGE_EMBEDDING_DIMENSIONS tuple."); }
   if (provider === undefined) throw new Error("--live-embeddings requires the complete TRIAGE_EMBEDDING_ENDPOINT, TRIAGE_EMBEDDING_MODEL, TRIAGE_EMBEDDING_REVISION, and TRIAGE_EMBEDDING_DIMENSIONS tuple.");
+  if (useQwen3Instruction && !/^qwen3-embedding(?::|$)/i.test(provider.model.id)) throw new Error("--qwen3-retrieval-instruction requires a qwen3-embedding model.");
   return { provider, ...(useQwen3Instruction ? { semanticQueryFormat: QWEN3_RETRIEVAL_QUERY_FORMAT } : {}), outputDir };
 }
 

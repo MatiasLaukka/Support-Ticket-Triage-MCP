@@ -10,6 +10,37 @@ import { loadRetrievalV2Fixture, retrievalV2Fixture } from "./retrieval-fixtures
 import { RetrievalRepresentationVersionError } from "../src/retrieval/sqlite-store.js";
 
 describe("retrieval store", () => {
+  it.each([
+    "PRAGMA foreign_keys=OFF; UPDATE retrieval_embeddings SET representation_id='missing'",
+    "UPDATE retrieval_embeddings SET status='broken'",
+    "UPDATE retrieval_embeddings SET status='stale', model_id=' '",
+    "UPDATE retrieval_embeddings SET status='stale', model_revision=' '",
+    "UPDATE retrieval_embeddings SET status='stale', dimensions=0",
+    "UPDATE retrieval_embeddings SET status='stale', vector_blob=zeroblob(8)",
+    "UPDATE retrieval_embeddings SET status='stale', vector_blob=X'0000807f00000000'",
+    "UPDATE retrieval_embeddings SET status='stale', vector_blob='abcdefgh'",
+    "UPDATE retrieval_embeddings SET status='stale', content_hash='" + "a".repeat(64) + "'",
+  ])("rejects malformed embedding rows even when not ready or joined: %s", (sql) => {
+    const root = mkdtempSync(join(tmpdir(), "retrieval-v2-embedding-"));
+    const store = loadRetrievalV2Fixture(join(root, "retrieval.sqlite"));
+    try {
+      const database = (store as unknown as { database: Database.Database }).database;
+      database.exec(sql);
+      expect(() => store.validateForRebuild()).toThrow(RetrievalIntegrityError);
+      expect(() => store.readSnapshot("")).toThrow(RetrievalIntegrityError);
+    } finally { store.close(); rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it("accepts structurally valid stale vectors from a previous model during v2 validation", () => {
+    const root = mkdtempSync(join(tmpdir(), "retrieval-v2-stale-"));
+    const store = loadRetrievalV2Fixture(join(root, "retrieval.sqlite"));
+    try {
+      store.configureModel({ id: "replacement-model", revision: "r2", dimensions: 3 });
+      expect(store.validateForRebuild()).toBe(2);
+      expect(() => store.validate()).toThrow(RetrievalRepresentationVersionError);
+    } finally { store.close(); rmSync(root, { recursive: true, force: true }); }
+  });
+
   it("loads exact legacy SQL columns, validates original v2 hashes, and refuses normal snapshots", () => {
     const root = mkdtempSync(join(tmpdir(), "retrieval-v2-store-"));
     const store = loadRetrievalV2Fixture(join(root, "retrieval.sqlite"));

@@ -252,9 +252,12 @@ export class RetrievalStore {
         const rows = representations.get(row.resource_key) ?? [];
         if (rows.length === 0 || row.content_hash !== hashResourceForVersion(resource, rows.map(({ representation_id, content_hash }) => ({ id: representation_id, contentHash: content_hash })), storedVersion)) throw new Error();
       }
-      for (const row of this.database.prepare("SELECT e.model_id,e.model_revision,e.dimensions,e.vector_blob,e.content_hash,r.content_hash AS representation_hash FROM retrieval_embeddings e JOIN retrieval_representations r ON r.representation_id=e.representation_id WHERE e.status='ready'").all() as any[]) {
+      for (const row of this.database.prepare("SELECT e.model_id,e.model_revision,e.dimensions,e.vector_blob,e.content_hash,e.status,r.content_hash AS representation_hash FROM retrieval_embeddings e LEFT JOIN retrieval_representations r ON r.representation_id=e.representation_id").all() as any[]) {
         const model = configuredModel;
-        if (!Number.isInteger(row.dimensions) || row.dimensions <= 0 || row.vector_blob.byteLength !== row.dimensions * 4 || row.content_hash !== row.representation_hash || model === undefined || row.model_id !== model.id || row.model_revision !== model.revision || row.dimensions !== model.dimensions) throw new Error();
+        if ((row.status !== "ready" && row.status !== "stale") || typeof row.model_id !== "string" || !row.model_id.trim() || typeof row.model_revision !== "string" || !row.model_revision.trim() || !Number.isInteger(row.dimensions) || row.dimensions <= 0 || !Buffer.isBuffer(row.vector_blob) || row.vector_blob.byteLength !== row.dimensions * 4 || row.content_hash !== row.representation_hash || model === undefined) throw new Error();
+        // Stale vectors may belong to the previous model, but must still be valid
+        // persisted vectors attached to their original canonical representation.
+        if (row.status === "ready" && (row.model_id !== model.id || row.model_revision !== model.revision || row.dimensions !== model.dimensions)) throw new Error();
         const vector = Array.from(new Float32Array(row.vector_blob.buffer, row.vector_blob.byteOffset, row.vector_blob.byteLength / 4));
         if (vector.some((value) => !Number.isFinite(value)) || vector.every((value) => value === 0)) throw new Error();
       }

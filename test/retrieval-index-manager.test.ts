@@ -72,6 +72,8 @@ describe("supported version-2 rebuild", () => {
     "UPDATE retrieval_index_metadata SET value='broken' WHERE key='representationVersion'",
     "UPDATE retrieval_index_metadata SET value='2.0' WHERE key='representationVersion'",
     "UPDATE retrieval_index_metadata SET value='2e0' WHERE key='representationVersion'",
+    "PRAGMA foreign_keys=OFF; UPDATE retrieval_embeddings SET representation_id='missing'",
+    "UPDATE retrieval_embeddings SET status='broken'",
   ])("rejects corrupt or unsupported legacy data before loading: %s", async (sql) => {
     setup();
     raw().exec(sql);

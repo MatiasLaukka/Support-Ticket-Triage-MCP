@@ -1,6 +1,6 @@
 # Knowledge readiness content review
 
-Status: pending user/domain review. This packet is author-prepared review material, not an approval record. No reviewer identity or decision has been supplied. Task 5 remains the human review checkpoint; Task 3 does not approve content or case labels.
+Status: scoped content and the current 21 development labels are approved by Matu under `KR-B4-T5-DEVELOPMENT-APPROVAL-2026-09-15`, recorded at `2026-09-15T11:21:18.000Z`. The current nine static holdout labels and their development/holdout independence judgment are separately approved by Matu under `KR-B4-T5-HOLDOUT-APPROVAL-2026-09-15`, recorded at `2026-09-15T11:39:11.455Z`. Task 5's reviewed case sets are frozen in `data/evaluation/knowledge-readiness/manifest.json`; no holdout retrieval has been run.
 
 Source baseline: `978a7a6e9cf88c61ab2fed623b4004ba37076231` (Task 2 completion). The four article frontmatter IDs, titles, and tags remain unchanged. No provider limit, schema, diagnostic path, cause detection, routing, or drafting implementation changed.
 
@@ -442,7 +442,7 @@ The content test verifies nonempty unique descriptive headings, at least five se
 
 ## Deferred gaps
 
-- Human/domain approval of this content and the subsequent development case labels remains pending at Task 5. This packet creates no approved reviewer identity.
+- Matu separately approved the scoped content/current 21 development labels and the current nine static holdout labels plus their development/holdout independence judgment. Task 5 freezes those exact reviewed inputs without retrieval execution.
 - The Track API accepted timestamp syntax remains undefined. Existing generic references to accepted formats are not authority to invent one.
 - Cryptographic schemes, exact webhook header/endpoint schemas, timestamp tolerances, retry schedules, ingestion SLAs, and frontend/event mitigation procedures are not defined here.
 - Executable confirmation from textual signals may be stronger than the domain evidence warrants; review that mismatch separately. No behavior was changed.
@@ -451,7 +451,66 @@ The content test verifies nonempty unique descriptive headings, at least five se
 
 ## Approval history
 
-Pending. No user/domain review decision has been recorded. Author inspection and passing tests are technical evidence only and do not approve the content.
+Matu explicitly approved the scoped content and the current revised 21 development cases. Decision reference: `KR-B4-T5-DEVELOPMENT-APPROVAL-2026-09-15`. Approval recording timestamp: `2026-09-15T11:21:18.000Z` (current UTC time when provenance was recorded; no exact earlier user-message time is inferred). Every development case contains this identical reviewer, reference, and `reviewedAt` value. Development labels and other case fields were preserved.
+
+Matu separately approved only the current nine static holdout labels and their development/holdout independence judgment. Decision reference: `KR-B4-T5-HOLDOUT-APPROVAL-2026-09-15`. Approval recording timestamp: `2026-09-15T11:39:11.455Z` (actual current UTC time when this provenance was recorded; no exact earlier user-message time is inferred). Every holdout case contains this identical reviewer, reference, and `reviewedAt` value. This approval does not authorize holdout retrieval, ranking, scoring, output inspection, corpus tuning, a provider call, a model download, or Task 6+ work.
+
+## Task 5 approved development-label packet
+
+Status: **approved and frozen for the scoped content, development labels, current nine static holdout labels, and the reviewed split-independence judgment**. `data/evaluation/knowledge-readiness/development.json` contains the same 21 synthetic development cases with their development decision provenance. `holdout.json` contains the same nine independent static cases with their separate holdout decision provenance. No case content or label field other than the holdout review objects changed during the freeze.
+
+### Changed-content and projection audit
+
+Task 5 changes no knowledge article, descriptor, known-cause definition, or implementation source. Article bindings were mechanically populated from current `projectArticle` projections at worktree baseline `01b3c3eec4d5ef81c90b836fefa1ca5944eecead`; canonical playbook and known-cause bindings were populated from current source projections. Every binding and rationale was then manually inspected for usefulness and necessity.
+
+| Resource | Current source hash | Projected sections | Development use |
+| --- | --- | ---: | --- |
+| `knowledge-article:performance-troubleshooting` | `5fd0753b02a40fcc1c284cf1aa3bf233c49f7b7f2a6e09df9a6df7af79624773` | 5 | Editor evidence, isolation, frontend rule-out, and verification boundaries |
+| `knowledge-article:webhook-signature-validation` | `4a392e4e557658c772d1d20ac63e5fc7da548f8e1f30ca32ac861368e7790740` | 5 | Delivery identity, rotation/raw-body alternatives, and delay/retry separation |
+| `knowledge-article:event-tracking-debugging` | `a6785dc2e3b89b815bddbc8a5a4be5e6ec8107b753a465d59478824ac1654a41` | 5 | Event identity/timing and the presence-versus-qualification rule-out |
+| `knowledge-article:flow-trigger-troubleshooting` | `cdaf23245ef63b96587de06e0addb41f2d78ec3ef44302e7f9d1d23a8229cc57` | 5 | Trigger presence, eligibility filters, and contradictory-observation handling |
+| `diagnostic-playbook:campaign-editor` | `30e183b2a564ca707d781d3ff314bffac24fa3a4a155e6b6c54c3166ff2046d7` | 1 canonical | Next-step editor isolation, console, and disagreement checks |
+| `diagnostic-playbook:flow-trigger` | `40e5aca249564ce6247dd700ad80e2a8ff428b4086f4a5278a8fe54cd6410926` | 1 canonical | Next-step event-presence and eligibility checks |
+| `diagnostic-playbook:event-processing-delay` | `3b38083b5dcfc5f49f7b352e0107087f50f596d8fb1c250fd56de1b22a27c417` | 1 canonical | Accepted-event, missing-timeline, and multi-store comparison |
+| `diagnostic-playbook:article-backed` | `04e13a97e9357ef049e53e0dfd305ff141ee6e86c18957e4e6ccba73c949b3b2` | 1 canonical | Substantive webhook identity, signature, raw-body, and latency evidence |
+| `known-cause:webhook-secret-rotation` | `9b4e6cb36291e75d178159e62c47f94d4428fe3982010cce418ecd9ca48a164b` | 1 canonical | Provisional post-rotation investigation or explicit no-rotation hard negative |
+| `known-cause:webhook-delivery-latency` | `b4ddd0860866bd79eb10a72361eb86d3c76239147eeac45360554b47c89a065f` | 1 canonical | Provisional timing/retry investigation for delayed deliveries |
+
+Each relevant label has a current source hash, heading or canonical title, complete representation-ID set, and a source-section rationale. Broad articles and non-article resources are labeled relevant only when they supply a concrete next investigation step or rule-out. Relevance never asserts diagnostic-playbook applicability, known-cause confirmation, cause, SLA, mitigation, or executable authority. Explicit no-rotation variants mark `known-cause:webhook-secret-rotation` hard-negative. The opaque delivery-ID control has no relevant binding and marks the webhook article, article-backed playbook, rotation known cause, and latency known cause hard-negative. `labelsComplete` is false throughout, so unrelated corpus material remains unjudged.
+
+### Descriptor summary
+
+The packet does not alter descriptors. It now explicitly reviews their retrieval usefulness: `campaign-editor` is relevant to the editor evidence and rule-out cases; `flow-trigger` is relevant to the flow/event-presence and eligibility cases; `event-processing-delay` is relevant to the independent accepted-event/missing-timeline multi-store case; and the enriched `article-backed` descriptor is relevant to substantive webhook cases but a hard negative for the opaque-ID-only control. `webhook-secret-rotation` is relevant to the post-rotation signature case and hard-negative when rotation is explicitly ruled out; `webhook-delivery-latency` is relevant to delayed-delivery evidence cases and hard-negative for the opaque-ID-only control. These are retrieval usefulness labels, not applicability or selection decisions.
+
+### Coverage and source-section matrix
+
+| Family | Campaign editor | Webhook | Flow/event |
+| --- | --- | --- | --- |
+| Exact | `chunkload-001`, `no-code-001` | `rotation-001`, `opaque-id-negative-001` | `viewed-product-001`, `accepted-missing-multi-store-001` |
+| Paraphrase | `screen-001` | `late-001` | `automation-001` |
+| Contrast | `private-001` | `raw-body-001` | `excluded-001` |
+| Disagreement probe | `disagreement-001` | `disagreement-001` | `disagreement-001` |
+| Insufficient | `insufficient-001` | `insufficient-001` | `insufficient-001` |
+| Near-match | `near-match-001` | `near-match-001` | `near-match-001` |
+
+All topic/family cells are represented. The independent multi-store case binds `Event isolated versus broad impact` and reviews the event-processing-delay playbook without making root-cause, SLA, applicability, or mitigation claims. Truthful controlled variants share scenario groups, and each variant links to its source through `derivedFrom`: editor private-session contrast/platform-fix near-match, webhook raw-body/no-rotation contrast/rotation-request near-match, flow filter-exclusion contrast/ingestion-request near-match, editor `ChunkLoadError`/no-code exact control, and webhook rotation/opaque-ID control using the repeated `wh_7Qp9` seed. All of those linked cases remain in development, so the grouping preserves future split isolation instead of claiming false independence.
+
+Every required label now states why the resource is necessary, not merely useful. The required resources are limited to the article branch that carries the decisive bounded distinction in the editor exact and private-session cases, webhook rotation and raw-body cases, flow exact and exclusion cases, and the multi-store broad-impact case. For `readiness-flow-contrast-excluded-001`, `knowledge-article:flow-trigger-troubleshooting` remains required while `knowledge-article:event-tracking-debugging` is relevant-only for its ingestion rule-out.
+
+### Deferred and unresolved gaps
+
+- The Track API accepted timestamp format remains unsupported and is not invented by any case.
+- Unrelated article topics are unjudged; coverage does not claim broad corpus readiness.
+- There are no real resolved-case resources or real resolved-ticket cases in this packet.
+- The packet judges only the named playbooks and webhook known causes above; other playbooks, known causes, and resolved-ticket resources remain unjudged or not expected as declared per case.
+- Retrieval relevance is not an applicability oracle. B5 or another governed consumer must still decide whether a diagnostic branch or known cause applies.
+- No semantic/provider evidence, retrieval ranking, or overall B4 readiness claim exists. The human holdout-independence decision and frozen static identities are documented below; approval of static labels is not retrieval-quality evidence.
+
+### Separate development and holdout decisions recorded
+
+The development decision is recorded above and in every approved development case. The separate holdout decision is recorded above and in every approved holdout case. The manifest freezes the exact case-file hashes, current static corpus identity, representation version, scenario cutoff, relative file paths, and split assignments. It deliberately has no self-hash or future commit identity.
+
+Structural validation evidence for the corrected packet is recorded in the appended Task 5 report after rerunning the current compiled `validateReadinessCases` helper against freshly projected article, playbook, and known-cause resources. No scoring or ranking inspection is part of that validation.
 
 ## Verification evidence
 
@@ -460,3 +519,199 @@ Pending. No user/domain review decision has been recorded. Author inspection and
 - Focused GREEN: `npx vitest run test/knowledge-readiness-content.test.ts test/retrieval-sources.test.ts test/diagnosis-reasoning-provider.test.ts test/classification-reasoning-provider.test.ts test/openai-draft-provider.test.ts test/diagnostic-playbooks.test.ts test/diagnostic-evaluation.test.ts test/draft-contract.test.ts test/draft-quality-guardrails.test.ts --maxWorkers=2` — 9 files passed, 105 tests passed.
 - `npx tsc -p tsconfig.build.json` — exit 0. `npm run typecheck` — exit 0.
 - No full suite or live provider call was run for Task 3.
+
+## Task 5 approved static holdout-label packet
+
+Status: **approved for the current static labels and frozen without retrieval execution**. [holdout.json](../data/evaluation/knowledge-readiness/holdout.json) contains nine synthetic cases (`TKT-9601` through `TKT-9609`), nine independent scenario groups, zero derived links, and 19 current source bindings. All nine review objects contain the exact holdout approval provenance recorded above. These are static labels against unchanged approved content at source revision `01b3c3eec4d5ef81c90b836fefa1ca5944eecead`.
+
+No retrieval, index creation, provider call, ranking, scoring, holdout retrieval output inspection, corpus tuning, or live Ollama/Qwen was performed. Inspecting the static labels and source references is the only holdout inspection in this pass.
+
+### Frozen manifest and split membership
+
+The manifest uses paths relative to its own `data/evaluation/knowledge-readiness/` directory and contains no self-hash.
+
+| Frozen identity | Value |
+| --- | --- |
+| Manifest schema | `1` |
+| Source revision | `01b3c3eec4d5ef81c90b836fefa1ca5944eecead` |
+| Static corpus SHA-256 | `43f9e3b0c9c3ca9095f7a15fd90e8a72d685a693c5a749646ffb4022de6082c5` |
+| Representation version | `3` |
+| Scenario cutoff | `2026-09-15T23:59:59.999Z` |
+| Development file | `development.json` — `9a97bda213a3b2b1804464f5d9f343a79e907c257d3031c4c0c3952fd99a2f4a` |
+| Holdout file | `holdout.json` — `12c2707681331a1938c6b5caa94189f55d42b9ecd1dcce2b4937bc9d0d1614b1` |
+
+Frozen development membership (21): `readiness-editor-exact-chunkload-001`, `readiness-webhook-exact-rotation-001`, `readiness-flow-exact-viewed-product-001`, `readiness-editor-paraphrase-screen-001`, `readiness-webhook-paraphrase-late-001`, `readiness-flow-paraphrase-automation-001`, `readiness-editor-contrast-private-001`, `readiness-webhook-contrast-raw-body-001`, `readiness-flow-contrast-excluded-001`, `readiness-editor-disagreement-001`, `readiness-webhook-disagreement-001`, `readiness-flow-disagreement-001`, `readiness-editor-insufficient-001`, `readiness-webhook-insufficient-001`, `readiness-flow-insufficient-001`, `readiness-editor-near-match-001`, `readiness-webhook-near-match-001`, `readiness-flow-near-match-001`, `readiness-editor-exact-no-code-001`, `readiness-webhook-opaque-id-negative-001`, and `readiness-event-exact-accepted-missing-multi-store-001`.
+
+Frozen holdout membership (9): `readiness-holdout-editor-expensive-list-control-001`, `readiness-holdout-editor-correction-recheck-failure-001`, `readiness-holdout-editor-stale-console-capture-001`, `readiness-holdout-webhook-cross-delivery-comparison-001`, `readiness-holdout-webhook-retry-response-verification-conflict-001`, `readiness-holdout-webhook-tolerance-request-001`, `readiness-holdout-flow-entry-message-protection-001`, `readiness-holdout-event-correction-downstream-unchecked-001`, and `readiness-holdout-event-capture-window-dispute-001`.
+
+### Case summary and family matrix
+
+The full case IDs below all have prefix `readiness-holdout-` and suffix `-001`. Each multi-tagged case states a separate rationale for each family in its label rationale. Required means the named article supplies a necessary distinction; relevant-only means a concrete next evidence check. Labels never confirm cause, playbook applicability, mitigation, or a fix.
+
+| Case suffix | Topic | Families | Required article | Relevant-only resources | Hard negative |
+| --- | --- | --- | --- | --- | --- |
+| `editor-expensive-list-control` | campaign-editor | contrast, near-match | knowledge-article:performance-troubleshooting | none | diagnostic-playbook:campaign-editor |
+| `editor-correction-recheck-failure` | campaign-editor | paraphrase | knowledge-article:performance-troubleshooting | diagnostic-playbook:campaign-editor | none |
+| `editor-stale-console-capture` | campaign-editor | exact, insufficient | none | knowledge-article:performance-troubleshooting, diagnostic-playbook:campaign-editor | none |
+| `webhook-cross-delivery-comparison` | webhook | exact, contrast | knowledge-article:webhook-signature-validation | diagnostic-playbook:article-backed | none |
+| `webhook-retry-response-verification-conflict` | webhook | paraphrase, disagreement-probe | knowledge-article:webhook-signature-validation | diagnostic-playbook:article-backed | none |
+| `webhook-tolerance-request` | webhook | insufficient, near-match | none | knowledge-article:webhook-signature-validation, diagnostic-playbook:article-backed | none |
+| `flow-entry-message-protection` | flow-event | exact, near-match | knowledge-article:flow-trigger-troubleshooting | diagnostic-playbook:flow-trigger | none |
+| `event-correction-downstream-unchecked` | flow-event | paraphrase, contrast | knowledge-article:event-tracking-debugging | knowledge-article:flow-trigger-troubleshooting, diagnostic-playbook:flow-trigger | none |
+| `event-capture-window-dispute` | flow-event | disagreement-probe, insufficient | knowledge-article:event-tracking-debugging | diagnostic-playbook:event-processing-delay | none |
+
+| Family | Campaign editor | Webhook | Flow/event |
+| --- | --- | --- | --- |
+| exact | `editor-stale-console-capture` | `webhook-cross-delivery-comparison` | `flow-entry-message-protection` |
+| paraphrase | `editor-correction-recheck-failure` | `webhook-retry-response-verification-conflict` | `event-correction-downstream-unchecked` |
+| contrast | `editor-expensive-list-control` | `webhook-cross-delivery-comparison` | `event-correction-downstream-unchecked` |
+| disagreement-probe | deferred | `webhook-retry-response-verification-conflict` | `event-capture-window-dispute` |
+| insufficient | `editor-stale-console-capture` | `webhook-tolerance-request` | `event-capture-window-dispute` |
+| near-match | `editor-expensive-list-control` | `webhook-tolerance-request` | `flow-entry-message-protection` |
+
+The holdout covers 17 of 18 topic/family cells. Campaign-editor disagreement-probe is deferred: the existing development packet already contains mixed browser/admin/object/time results, and relabeling a variant as independent would weaken split isolation. Development retains all 18 required cells. The nine-case holdout is small authored coverage, not a statistical sample or readiness completion claim.
+
+### Static case details and source bindings
+
+The source hashes below bind to unchanged source projections, not to case-file hashes. Every article heading lists the complete representation-ID set generated mechanically from its current projection. Canonical non-article bindings use their exact titles. Required resources are also in the relevant set. Other resources are unjudged (`labelsComplete: false`), and real resolved-ticket and known-cause coverage are `not-expected` throughout this holdout.
+
+#### readiness-holdout-editor-expensive-list-control-001
+
+- Ticket: `TKT-9601`; scenario group: `holdout-editor-expensive-list-control`; split: `holdout`; `derivedFrom: []`; review: `approved` under `KR-B4-T5-HOLDOUT-APPROVAL-2026-09-15`.
+- Scenario: Use the blank-editor remedy for a campaign list timeout. Opening the campaign list times out when its large saved view is selected. Opening the same campaigns directly in their editors succeeds in ordinary and private sessions for both admins. The requester asks for the blank-editor frontend mitigation; no editor loading failure occurred.
+- Evidence limits: The affected object is the campaign list view, not an editor. The successful editors are direct observations; no frontend repair or platform telemetry is supplied.
+- Family and label rationale: Contrast: the failing list and working editors separate object scope. Near-match: editor remedy wording does not make that path useful. The performance article is required for the necessary expensive-object and impact comparison; the campaign-editor playbook is a hard negative for the explicitly working editor. No cause or mitigation is selected.
+
+| Resource and source hash | Heading / canonical title | Representation IDs | Binding rationale |
+| --- | --- | --- | --- |
+| `knowledge-article:performance-troubleshooting` / `5fd0753b02a40fcc1c284cf1aa3bf233c49f7b7f2a6e09df9a6df7af79624773` | Performance verification and unresolved checks | `knowledge-article:performance-troubleshooting:section:4` | This article is required because the affected expensive list view needs object, timing, account and telemetry comparisons; editor isolation does not explain the list timeout. |
+
+Hard-negative source identity: `diagnostic-playbook:campaign-editor`, source hash `30e183b2a564ca707d781d3ff314bffac24fa3a4a155e6b6c54c3166ff2046d7`, canonical title `Campaign editor loading`, representation `diagnostic-playbook:campaign-editor:canonical:0`. This is recorded here for review; the strict contract allows supporting sections only for relevant resources. Its rationale is the explicit successful editor observations and separately failing list view above.
+
+#### readiness-holdout-editor-correction-recheck-failure-001
+
+- Ticket: `TKT-9602`; scenario group: `holdout-editor-correction-recheck-failure`; split: `holdout`; `derivedFrom: []`; review: `approved` under `KR-B4-T5-HOLDOUT-APPROVAL-2026-09-15`.
+- Scenario: The composition workspace still cannot be used after the support change. An authorized support change is recorded for campaign Harbor. At 07:20Z the requester reopens Harbor in the tested session and the composition workspace remains empty. The change log says completed, but no successful opening has been observed afterward.
+- Evidence limits: A completed change and a failed affected-campaign recheck are separate records. The change procedure and root cause are deliberately unspecified.
+- Family and label rationale: Paraphrase: composition workspace names the editing surface without its usual loading vocabulary. The performance article is required for the necessary failed-verification handoff; the editor playbook is relevant to recording the affected campaign, session and recheck. A completed change does not establish resolution.
+
+| Resource and source hash | Heading / canonical title | Representation IDs | Binding rationale |
+| --- | --- | --- | --- |
+| `knowledge-article:performance-troubleshooting` / `5fd0753b02a40fcc1c284cf1aa3bf233c49f7b7f2a6e09df9a6df7af79624773` | Performance verification and unresolved checks | `knowledge-article:performance-troubleshooting:section:4` | This article is required because continued failure after a correction requires recording the result and handing off failed checks instead of claiming resolution. |
+| `diagnostic-playbook:campaign-editor` / `30e183b2a564ca707d781d3ff314bffac24fa3a4a155e6b6c54c3166ff2046d7` | Campaign editor loading | `diagnostic-playbook:campaign-editor:canonical:0` | The descriptor is relevant for the next affected-campaign, session and verification comparison; it authorizes no additional correction. |
+
+#### readiness-holdout-editor-stale-console-capture-001
+
+- Ticket: `TKT-9603`; scenario group: `holdout-editor-stale-console-capture`; split: `holdout`; `derivedFrom: []`; review: `approved` under `KR-B4-T5-HOLDOUT-APPROVAL-2026-09-15`.
+- Scenario: ChunkLoadError from an earlier day attached to today's blank screen. Today's report says campaign Summit is blank at 08:40Z. The attached console export contains ChunkLoadError at 16:10Z yesterday during an earlier session; it has no campaign identifier. No console capture from today's failure or session comparisons are available.
+- Evidence limits: The exact console code exists, but its time and object binding do not match the current observation. There is no contradictory current isolation outcome.
+- Family and label rationale: Exact: ChunkLoadError is a real console term. Insufficient: the available export cannot establish current loading evidence because it belongs to another time and lacks object identity. Article and playbook are relevant for fresh aligned evidence, with no required branch or cause label.
+
+| Resource and source hash | Heading / canonical title | Representation IDs | Binding rationale |
+| --- | --- | --- | --- |
+| `knowledge-article:performance-troubleshooting` / `5fd0753b02a40fcc1c284cf1aa3bf233c49f7b7f2a6e09df9a6df7af79624773` | Campaign editor evidence and scope | `knowledge-article:performance-troubleshooting:section:1` | The section is relevant for comparing object and time separately and collecting the missing current console and isolation evidence. |
+| `diagnostic-playbook:campaign-editor` / `30e183b2a564ca707d781d3ff314bffac24fa3a4a155e6b6c54c3166ff2046d7` | Campaign editor loading | `diagnostic-playbook:campaign-editor:canonical:0` | The descriptor is relevant for current console, same-campaign and session checks; the stale code does not confirm its frontend branch. |
+
+#### readiness-holdout-webhook-cross-delivery-comparison-001
+
+- Ticket: `TKT-9604`; scenario group: `holdout-webhook-cross-delivery-comparison`; split: `holdout`; `derivedFrom: []`; review: `approved` under `KR-B4-T5-HOLDOUT-APPROVAL-2026-09-15`.
+- Scenario: Raw body and signed headers came from different deliveries. Receiver verification failed for delivery packet_R41 at 06:12Z. The redacted comparison bundle contains the exact raw body for packet_R41 but signed headers labeled packet_R42 at 06:13Z. The receiver owner has not yet supplied a body-and-header pair for either individual delivery; rotation history is unknown.
+- Evidence limits: Each artifact has an explicit delivery identity. No secret, signing scheme or completed verification comparison is supplied.
+- Family and label rationale: Exact: raw body and signed headers describe the precise comparison inputs. Contrast: individually exact artifacts from different deliveries are not a matched pair. The webhook article is required for that necessary identity distinction; article-backed guidance is relevant for the next comparison. Unknown rotation is unjudged, not a hard negative.
+
+| Resource and source hash | Heading / canonical title | Representation IDs | Binding rationale |
+| --- | --- | --- | --- |
+| `knowledge-article:webhook-signature-validation` / `4a392e4e557658c772d1d20ac63e5fc7da548f8e1f30ca32ac861368e7790740` | Webhook evidence and delivery identity | `knowledge-article:webhook-signature-validation:section:1` | This article is required because matching body and headers to one delivery is necessary before receiver verification can be interpreted. |
+| `diagnostic-playbook:article-backed` / `04e13a97e9357ef049e53e0dfd305ff141ee6e86c18957e4e6ccba73c949b3b2` | Article-backed diagnosis | `diagnostic-playbook:article-backed:canonical:0` | The descriptor is relevant for the next redacted delivery-identity and exact-body comparison; it does not confirm any signature cause. |
+
+#### readiness-holdout-webhook-retry-response-verification-conflict-001
+
+- Ticket: `TKT-9605`; scenario group: `holdout-webhook-retry-response-verification-conflict`; split: `holdout`; `derivedFrom: []`; review: `approved` under `KR-B4-T5-HOLDOUT-APPROVAL-2026-09-15`.
+- Scenario: The callback retry was accepted but the receiver still says it cannot authenticate it. After current-secret confirmation and raw-body verification, support retried one callback through the governed workflow. Its endpoint response is 200, but the receiver's verification record for that same delivery and attempt says failed. The operator proposes closing the signature issue based on the response alone.
+- Evidence limits: Both outcomes refer to the same delivery and retry, so the disagreement is between response and verification results rather than record identity. No further retry or cause is proposed.
+- Family and label rationale: Paraphrase: callback authentication describes webhook signature verification. Disagreement-probe: endpoint success and verification failure coexist for the same attempt. The webhook article is required for the necessary verification/handoff distinction; the playbook is relevant to unresolved evidence. HTTP success alone does not establish a signature fix.
+
+| Resource and source hash | Heading / canonical title | Representation IDs | Binding rationale |
+| --- | --- | --- | --- |
+| `knowledge-article:webhook-signature-validation` / `4a392e4e557658c772d1d20ac63e5fc7da548f8e1f30ca32ac861368e7790740` | Webhook verification and handoff | `knowledge-article:webhook-signature-validation:section:4` | This article is required because both verification outcome and endpoint response must be checked for the retried delivery; the failed verification requires handoff. |
+| `diagnostic-playbook:article-backed` / `04e13a97e9357ef049e53e0dfd305ff141ee6e86c18957e4e6ccba73c949b3b2` | Article-backed diagnosis | `diagnostic-playbook:article-backed:canonical:0` | The descriptor is relevant for reconciling the same-delivery response and verification evidence while keeping cause provisional. |
+
+#### readiness-holdout-webhook-tolerance-request-001
+
+- Ticket: `TKT-9606`; scenario group: `holdout-webhook-tolerance-request`; split: `holdout`; `derivedFrom: []`; review: `approved` under `KR-B4-T5-HOLDOUT-APPROVAL-2026-09-15`.
+- Scenario: Give us the exact receiver timestamp tolerance for the signature error. The receiver rejects a callback and the operator requests a numeric timestamp tolerance to configure. No current tolerance setting, redacted signed timestamp, receive time, delivery identity, rotation history or raw-body comparison is available. The report supplies no delivery-latency observation.
+- Evidence limits: This is a request for an undocumented numeric configuration value. Neither clock mismatch nor any rotation or latency cause is established.
+- Family and label rationale: Insufficient: the relevant receiver setting and signed/received observations are missing. Near-match: a signature-related configuration request does not authorize a numeric recipe. Article and playbook are relevant for collecting scoped evidence; other known causes stay unjudged.
+
+| Resource and source hash | Heading / canonical title | Representation IDs | Binding rationale |
+| --- | --- | --- | --- |
+| `knowledge-article:webhook-signature-validation` / `4a392e4e557658c772d1d20ac63e5fc7da548f8e1f30ca32ac861368e7790740` | Webhook evidence and delivery identity | `knowledge-article:webhook-signature-validation:section:1` | The section explicitly asks about the receiver timestamp tolerance without prescribing one and requests the missing redacted delivery evidence. |
+| `diagnostic-playbook:article-backed` / `04e13a97e9357ef049e53e0dfd305ff141ee6e86c18957e4e6ccba73c949b3b2` | Article-backed diagnosis | `diagnostic-playbook:article-backed:canonical:0` | The descriptor is relevant for the next delivery, body and signature evidence checks; it supplies no numeric tolerance or confirmed cause. |
+
+#### readiness-holdout-flow-entry-message-protection-001
+
+- Ticket: `TKT-9607`; scenario group: `holdout-flow-entry-message-protection`; split: `holdout`; `derivedFrom: []`; review: `approved` under `KR-B4-T5-HOLDOUT-APPROVAL-2026-09-15`.
+- Scenario: Disable smart sending because entry should guarantee a message. The Loyalty Reminder flow history shows profile member-C entered at 09:05Z for its matched trigger. Message analytics records smart sending as the exclusion at 09:06Z. The requester asks to disable the protection because entry should guarantee a message. Consent and remaining qualification checks have not been reviewed.
+- Evidence limits: Flow entry is observed; this is not a missing-entry or event-ingestion report. One message-protection exclusion is known, without an all-eligibility claim.
+- Family and label rationale: Exact: smart sending names the observed protection. Near-match: entry does not justify bypassing message protection. The flow article is required for the necessary entry-versus-message-eligibility distinction; flow-trigger guidance is relevant to remaining qualifications. No setting change or cause selection is authorized.
+
+| Resource and source hash | Heading / canonical title | Representation IDs | Binding rationale |
+| --- | --- | --- | --- |
+| `knowledge-article:flow-trigger-troubleshooting` / `cdaf23245ef63b96587de06e0addb41f2d78ec3ef44302e7f9d1d23a8229cc57` | Flow correction verification and handoff | `knowledge-article:flow-trigger-troubleshooting:section:4` | This article is required because entry alone is not proof of message eligibility and the affected qualification outcome must be verified. |
+| `knowledge-article:flow-trigger-troubleshooting` / `cdaf23245ef63b96587de06e0addb41f2d78ec3ef44302e7f9d1d23a8229cc57` | Flow filters and message eligibility | `knowledge-article:flow-trigger-troubleshooting:section:2` | The section is relevant for retaining smart-sending and consent protections while comparing remaining checks. |
+| `diagnostic-playbook:flow-trigger` / `40e5aca249564ce6247dd700ad80e2a8ff428b4086f4a5278a8fe54cd6410926` | Flow trigger troubleshooting | `diagnostic-playbook:flow-trigger:canonical:0` | The descriptor is relevant for the next message-eligibility and consent comparison even though flow entry already succeeded; relevance is not branch applicability. |
+
+#### readiness-holdout-event-correction-downstream-unchecked-001
+
+- Ticket: `TKT-9608`; scenario group: `holdout-event-correction-downstream-unchecked`; split: `holdout`; `derivedFrom: []`; review: `approved` under `KR-B4-T5-HOLDOUT-APPROVAL-2026-09-15`.
+- Scenario: The activity returned after the change; can the follow-up automation be called fixed?. After a governed correction, a redacted request log and profile timeline show the affected Membership Renewed event for member-D at 10:22Z. The follow-up flow history and qualification outcome have not been checked. Support asks whether the visible activity is enough to say both tracking and the automation are fixed.
+- Evidence limits: The affected timeline observation was verified after a recorded correction. Downstream results are absent, not observed exclusions. No correction procedure or broad incident is invented.
+- Family and label rationale: Paraphrase: activity and follow-up automation describe event appearance and downstream flow behavior. Contrast: verified timeline appearance and unverified downstream results support different claims. The event article is required for the necessary verification limit; the flow article and flow-trigger playbook supply the next qualification checks.
+
+| Resource and source hash | Heading / canonical title | Representation IDs | Binding rationale |
+| --- | --- | --- | --- |
+| `knowledge-article:event-tracking-debugging` / `a6785dc2e3b89b815bddbc8a5a4be5e6ec8107b753a465d59478824ac1654a41` | Event verification and escalation | `knowledge-article:event-tracking-debugging:section:4` | This article is required because a visible affected event verifies that observation only and does not establish downstream qualification. |
+| `knowledge-article:flow-trigger-troubleshooting` / `cdaf23245ef63b96587de06e0addb41f2d78ec3ef44302e7f9d1d23a8229cc57` | Flow correction verification and handoff | `knowledge-article:flow-trigger-troubleshooting:section:4` | The section is relevant for checking the affected profile's history and expected qualification result before a flow fix claim. |
+| `diagnostic-playbook:flow-trigger` / `40e5aca249564ce6247dd700ad80e2a8ff428b4086f4a5278a8fe54cd6410926` | Flow trigger troubleshooting | `diagnostic-playbook:flow-trigger:canonical:0` | The descriptor is relevant for the next flow history, status and qualification comparison; no failure branch or applicability is inferred. |
+
+#### readiness-holdout-event-capture-window-dispute-001
+
+- Ticket: `TKT-9609`; scenario group: `holdout-event-capture-window-dispute`; split: `holdout`; `derivedFrom: []`; review: `approved` under `KR-B4-T5-HOLDOUT-APPROVAL-2026-09-15`.
+- Scenario: Accepted record and timeline screenshots use different observation windows. For one identified profile, the API log records Membership Paused accepted at 11:42Z. A timeline screenshot captured at 11:35Z contains no such event. The operator calls this contradictory evidence of lost processing. No screenshot or timeline query after acceptance, redacted payload comparison, or other affected profile is available.
+- Evidence limits: The only absence observation predates acceptance. Identity is aligned, but there is no post-acceptance absence observation and no broad-impact evidence.
+- Family and label rationale: Disagreement-probe: the requester frames acceptance and absence as a contradiction. Insufficient: the timeline capture predates the accepted event, so current appearance is unknown. The event article is required for the necessary temporal comparison; event-processing guidance is relevant only for obtaining an aligned timeline and scope check, without data-loss or platform-delay claims.
+
+| Resource and source hash | Heading / canonical title | Representation IDs | Binding rationale |
+| --- | --- | --- | --- |
+| `knowledge-article:event-tracking-debugging` / `a6785dc2e3b89b815bddbc8a5a4be5e6ec8107b753a465d59478824ac1654a41` | Event identity and timing evidence | `knowledge-article:event-tracking-debugging:section:1` | This article is required because comparing accepted and timeline times is necessary to reject a pre-acceptance screenshot as evidence of later absence. |
+| `diagnostic-playbook:event-processing-delay` / `3b38083b5dcfc5f49f7b352e0107087f50f596d8fb1c250fd56de1b22a27c417` | Event processing delay | `diagnostic-playbook:event-processing-delay:canonical:0` | The descriptor is relevant for a fresh identity/timing/timeline comparison and checking affected scope; a single pre-acceptance screenshot does not establish platform delay, root cause or mitigation. |
+
+### Independence evidence
+
+Authoring used approved article sections and descriptor projections as domain references. Source sharing is intentional; it is not scenario derivation. The current 21 development descriptions/groups/links, 30 published seed ticket descriptions (`data/seed/tickets.json`), and published browser-session fixture (`src/retrieval/evaluation-fixtures.ts`, `TKT-1031`) were inspected for scenario overlap. Those published seeds are exclusion references, not templates or new holdout provenance. No development or seed scenario was paraphrased, renamed, or linked into holdout. Empty derived links describe this authoring history; the validator cannot prove semantic independence by itself.
+
+| Holdout scenario | Distinct observation structure used for author independence judgment |
+| --- | --- |
+| editor-expensive-list-control | A list view times out while editors explicitly work; the development editor failures/private-session controls and published browser-session fixture do not cover a different failing product object. |
+| editor-correction-recheck-failure | A recorded correction is followed by a failed affected-campaign recheck; development does not contain this verification sequence. |
+| editor-stale-console-capture | A historical, unidentified console artifact is being used for a current failure; no mixed current browser outcomes or published seed is reused. |
+| webhook-cross-delivery-comparison | Individually identified body and headers belong to different deliveries; no rotation/raw-body-change or delay/retry seed event is reused. |
+| webhook-retry-response-verification-conflict | One governed retry has a successful endpoint response and failed verification for that same attempt; this is not development's separate-delivery signature/latency mixture. |
+| webhook-tolerance-request | A request for an undocumented numeric tolerance with missing receiver observations; no rotation event, middleware change or delayed-delivery scenario is reused. |
+| flow-entry-message-protection | Flow entry succeeds and smart sending excludes the message; this is distinct from development and published missing-entry/filter cases. |
+| event-correction-downstream-unchecked | A corrected timeline observation is verified while downstream results remain unchecked; this is not the development missing-timeline or filter-exclusion scenario. |
+| event-capture-window-dispute | Same-profile absence screenshot predates API acceptance, so post-acceptance absence was never observed; this is distinct from development's cross-profile disagreement and multi-store absence. |
+
+All holdout case IDs, ticket IDs and scenario groups are unique and separate from development and seed identities. All nine derivation lists are empty; development's five linked control pairs remain entirely in development. Structural split validation traversed the combined case/group/derived-link graph and found no cross-split component. Matu approved the independence judgment under the holdout decision recorded above; the static checks support the declared identities and links but do not prove semantic independence.
+
+### Deferred gaps and frozen boundary
+
+- The current nine holdout labels and the author independence judgments are reviewed and frozen; any later wording, label, lineage, or source change requires new review and a new case-file hash.
+- Campaign-editor disagreement-probe holdout coverage is deferred; development covers it.
+- Track API accepted timestamp syntax, numeric receiver tolerance, signing recipes, retry schedules, ingestion SLAs and mitigation procedures remain undocumented and are not authored by these cases.
+- Unrelated topic labels, real resolved cases, learned causes, and empirical retrieval/provider quality remain outside this packet. Known causes are unjudged in this holdout; none supplies a necessary distinct next step beyond the bound resources for these scenarios.
+- `manifest.json` freezes the exact static inputs listed above. Task 6+, holdout retrieval/ranking/scoring/output inspection, corpus tuning, provider calls and model downloads remain unperformed and unauthorized in this pass.
+
+### Fresh structural-only evidence
+
+`node .superpowers/sdd/2026-09-14-knowledge-readiness/task-5-structural-check.mjs` passed (exit 0). The helper imports only static repository/projector/catalog modules plus `ReadinessManifestSchema`, `validateReadinessCases`, and `validateReadinessSplits`; it does not import the evaluator, index manager, store, search, embedding provider, or retrieval execution entry points. It validated 21 development and nine holdout cases, exact approval objects, 28 current static resources, all source hashes/headings/representation IDs, nine independent holdout groups, zero holdout derivation links, split isolation, manifest schema/version/cutoff/source revision, exact relative paths, both case-file SHA-256 values, the current corpus SHA-256, and the absence of manifest self-hash/commit fields. Result: 18 development and 17 holdout topic/family cells. No index, retrieval, ranking, scoring, provider call, model download, corpus tuning, or holdout output inspection occurred. This validates frozen structure and identity, not retrieval quality.

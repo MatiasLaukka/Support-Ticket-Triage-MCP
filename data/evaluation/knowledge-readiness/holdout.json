@@ -1,0 +1,828 @@
+[
+  {
+    "id": "readiness-holdout-editor-expensive-list-control-001",
+    "topic": "campaign-editor",
+    "families": [
+      "contrast",
+      "near-match"
+    ],
+    "scenarioGroup": "holdout-editor-expensive-list-control",
+    "split": "holdout",
+    "provenance": {
+      "kind": "synthetic",
+      "basis": [
+        "knowledge-article:performance-troubleshooting / Performance verification and unresolved checks; approved static content at 01b3c3eec4d5ef81c90b836fefa1ca5944eecead"
+      ],
+      "derivedFrom": []
+    },
+    "ticket": {
+      "id": "TKT-9601",
+      "createdAt": "2026-09-15T11:00:00.000Z",
+      "updatedAt": "2026-09-15T11:05:00.000Z",
+      "customer": {
+        "name": "Synthetic holdout merchant",
+        "plan": "sandbox",
+        "region": "test",
+        "vip": false
+      },
+      "subject": "Use the blank-editor remedy for a campaign list timeout",
+      "description": "Opening the campaign list times out when its large saved view is selected. Opening the same campaigns directly in their editors succeeds in ordinary and private sessions for both admins. The requester asks for the blank-editor frontend mitigation; no editor loading failure occurred.",
+      "status": "triage",
+      "category": "performance",
+      "priority": "P3",
+      "team": "product",
+      "tags": [
+        "synthetic-readiness",
+        "holdout",
+        "campaign-editor"
+      ],
+      "sla": {
+        "responseDueAt": "2026-09-16T11:00:00.000Z",
+        "breached": false
+      },
+      "relatedTicketIds": [],
+      "revision": 0
+    },
+    "expectation": {
+      "requiredResourceKeys": [
+        "knowledge-article:performance-troubleshooting"
+      ],
+      "relevantResourceKeys": [
+        "knowledge-article:performance-troubleshooting"
+      ],
+      "hardNegativeResourceKeys": [
+        "diagnostic-playbook:campaign-editor"
+      ],
+      "labelsComplete": false,
+      "resourceCoverage": {
+        "knowledge-article": "adequate",
+        "known-cause": "not-expected",
+        "diagnostic-playbook": "adequate",
+        "resolved-ticket": "not-expected"
+      }
+    },
+    "supportingSections": [
+      {
+        "resourceKey": "knowledge-article:performance-troubleshooting",
+        "sourceHash": "5fd0753b02a40fcc1c284cf1aa3bf233c49f7b7f2a6e09df9a6df7af79624773",
+        "heading": "Performance verification and unresolved checks",
+        "representationIds": [
+          "knowledge-article:performance-troubleshooting:section:4"
+        ],
+        "rationale": "This article is required because the affected expensive list view needs object, timing, account and telemetry comparisons; editor isolation does not explain the list timeout."
+      }
+    ],
+    "evidenceNotes": "The affected object is the campaign list view, not an editor. The successful editors are direct observations; no frontend repair or platform telemetry is supplied.",
+    "labelRationale": "Contrast: the failing list and working editors separate object scope. Near-match: editor remedy wording does not make that path useful. The performance article is required for the necessary expensive-object and impact comparison; the campaign-editor playbook is a hard negative for the explicitly working editor. No cause or mitigation is selected.",
+    "review": {
+      "status": "approved",
+      "reviewedBy": "Matu",
+      "reviewedAt": "2026-09-15T11:39:11.455Z",
+      "decisionRef": "KR-B4-T5-HOLDOUT-APPROVAL-2026-09-15"
+    }
+  },
+  {
+    "id": "readiness-holdout-editor-correction-recheck-failure-001",
+    "topic": "campaign-editor",
+    "families": [
+      "paraphrase"
+    ],
+    "scenarioGroup": "holdout-editor-correction-recheck-failure",
+    "split": "holdout",
+    "provenance": {
+      "kind": "synthetic",
+      "basis": [
+        "knowledge-article:performance-troubleshooting / Performance verification and unresolved checks; approved static content at 01b3c3eec4d5ef81c90b836fefa1ca5944eecead",
+        "diagnostic-playbook:campaign-editor / Campaign editor loading; approved static content at 01b3c3eec4d5ef81c90b836fefa1ca5944eecead"
+      ],
+      "derivedFrom": []
+    },
+    "ticket": {
+      "id": "TKT-9602",
+      "createdAt": "2026-09-15T11:00:00.000Z",
+      "updatedAt": "2026-09-15T11:05:00.000Z",
+      "customer": {
+        "name": "Synthetic holdout merchant",
+        "plan": "sandbox",
+        "region": "test",
+        "vip": false
+      },
+      "subject": "The composition workspace still cannot be used after the support change",
+      "description": "An authorized support change is recorded for campaign Harbor. At 07:20Z the requester reopens Harbor in the tested session and the composition workspace remains empty. The change log says completed, but no successful opening has been observed afterward.",
+      "status": "triage",
+      "category": "performance",
+      "priority": "P3",
+      "team": "product",
+      "tags": [
+        "synthetic-readiness",
+        "holdout",
+        "campaign-editor"
+      ],
+      "sla": {
+        "responseDueAt": "2026-09-16T11:00:00.000Z",
+        "breached": false
+      },
+      "relatedTicketIds": [],
+      "revision": 0
+    },
+    "expectation": {
+      "requiredResourceKeys": [
+        "knowledge-article:performance-troubleshooting"
+      ],
+      "relevantResourceKeys": [
+        "knowledge-article:performance-troubleshooting",
+        "diagnostic-playbook:campaign-editor"
+      ],
+      "hardNegativeResourceKeys": [],
+      "labelsComplete": false,
+      "resourceCoverage": {
+        "knowledge-article": "adequate",
+        "known-cause": "not-expected",
+        "diagnostic-playbook": "adequate",
+        "resolved-ticket": "not-expected"
+      }
+    },
+    "supportingSections": [
+      {
+        "resourceKey": "knowledge-article:performance-troubleshooting",
+        "sourceHash": "5fd0753b02a40fcc1c284cf1aa3bf233c49f7b7f2a6e09df9a6df7af79624773",
+        "heading": "Performance verification and unresolved checks",
+        "representationIds": [
+          "knowledge-article:performance-troubleshooting:section:4"
+        ],
+        "rationale": "This article is required because continued failure after a correction requires recording the result and handing off failed checks instead of claiming resolution."
+      },
+      {
+        "resourceKey": "diagnostic-playbook:campaign-editor",
+        "sourceHash": "30e183b2a564ca707d781d3ff314bffac24fa3a4a155e6b6c54c3166ff2046d7",
+        "heading": "Campaign editor loading",
+        "representationIds": [
+          "diagnostic-playbook:campaign-editor:canonical:0"
+        ],
+        "rationale": "The descriptor is relevant for the next affected-campaign, session and verification comparison; it authorizes no additional correction."
+      }
+    ],
+    "evidenceNotes": "A completed change and a failed affected-campaign recheck are separate records. The change procedure and root cause are deliberately unspecified.",
+    "labelRationale": "Paraphrase: composition workspace names the editing surface without its usual loading vocabulary. The performance article is required for the necessary failed-verification handoff; the editor playbook is relevant to recording the affected campaign, session and recheck. A completed change does not establish resolution.",
+    "review": {
+      "status": "approved",
+      "reviewedBy": "Matu",
+      "reviewedAt": "2026-09-15T11:39:11.455Z",
+      "decisionRef": "KR-B4-T5-HOLDOUT-APPROVAL-2026-09-15"
+    }
+  },
+  {
+    "id": "readiness-holdout-editor-stale-console-capture-001",
+    "topic": "campaign-editor",
+    "families": [
+      "exact",
+      "insufficient"
+    ],
+    "scenarioGroup": "holdout-editor-stale-console-capture",
+    "split": "holdout",
+    "provenance": {
+      "kind": "synthetic",
+      "basis": [
+        "knowledge-article:performance-troubleshooting / Campaign editor evidence and scope; approved static content at 01b3c3eec4d5ef81c90b836fefa1ca5944eecead",
+        "diagnostic-playbook:campaign-editor / Campaign editor loading; approved static content at 01b3c3eec4d5ef81c90b836fefa1ca5944eecead"
+      ],
+      "derivedFrom": []
+    },
+    "ticket": {
+      "id": "TKT-9603",
+      "createdAt": "2026-09-15T11:00:00.000Z",
+      "updatedAt": "2026-09-15T11:05:00.000Z",
+      "customer": {
+        "name": "Synthetic holdout merchant",
+        "plan": "sandbox",
+        "region": "test",
+        "vip": false
+      },
+      "subject": "ChunkLoadError from an earlier day attached to today's blank screen",
+      "description": "Today's report says campaign Summit is blank at 08:40Z. The attached console export contains ChunkLoadError at 16:10Z yesterday during an earlier session; it has no campaign identifier. No console capture from today's failure or session comparisons are available.",
+      "status": "triage",
+      "category": "performance",
+      "priority": "P3",
+      "team": "product",
+      "tags": [
+        "synthetic-readiness",
+        "holdout",
+        "campaign-editor"
+      ],
+      "sla": {
+        "responseDueAt": "2026-09-16T11:00:00.000Z",
+        "breached": false
+      },
+      "relatedTicketIds": [],
+      "revision": 0
+    },
+    "expectation": {
+      "requiredResourceKeys": [],
+      "relevantResourceKeys": [
+        "knowledge-article:performance-troubleshooting",
+        "diagnostic-playbook:campaign-editor"
+      ],
+      "hardNegativeResourceKeys": [],
+      "labelsComplete": false,
+      "resourceCoverage": {
+        "knowledge-article": "adequate",
+        "known-cause": "not-expected",
+        "diagnostic-playbook": "adequate",
+        "resolved-ticket": "not-expected"
+      }
+    },
+    "supportingSections": [
+      {
+        "resourceKey": "knowledge-article:performance-troubleshooting",
+        "sourceHash": "5fd0753b02a40fcc1c284cf1aa3bf233c49f7b7f2a6e09df9a6df7af79624773",
+        "heading": "Campaign editor evidence and scope",
+        "representationIds": [
+          "knowledge-article:performance-troubleshooting:section:1"
+        ],
+        "rationale": "The section is relevant for comparing object and time separately and collecting the missing current console and isolation evidence."
+      },
+      {
+        "resourceKey": "diagnostic-playbook:campaign-editor",
+        "sourceHash": "30e183b2a564ca707d781d3ff314bffac24fa3a4a155e6b6c54c3166ff2046d7",
+        "heading": "Campaign editor loading",
+        "representationIds": [
+          "diagnostic-playbook:campaign-editor:canonical:0"
+        ],
+        "rationale": "The descriptor is relevant for current console, same-campaign and session checks; the stale code does not confirm its frontend branch."
+      }
+    ],
+    "evidenceNotes": "The exact console code exists, but its time and object binding do not match the current observation. There is no contradictory current isolation outcome.",
+    "labelRationale": "Exact: ChunkLoadError is a real console term. Insufficient: the available export cannot establish current loading evidence because it belongs to another time and lacks object identity. Article and playbook are relevant for fresh aligned evidence, with no required branch or cause label.",
+    "review": {
+      "status": "approved",
+      "reviewedBy": "Matu",
+      "reviewedAt": "2026-09-15T11:39:11.455Z",
+      "decisionRef": "KR-B4-T5-HOLDOUT-APPROVAL-2026-09-15"
+    }
+  },
+  {
+    "id": "readiness-holdout-webhook-cross-delivery-comparison-001",
+    "topic": "webhook",
+    "families": [
+      "exact",
+      "contrast"
+    ],
+    "scenarioGroup": "holdout-webhook-cross-delivery-comparison",
+    "split": "holdout",
+    "provenance": {
+      "kind": "synthetic",
+      "basis": [
+        "knowledge-article:webhook-signature-validation / Webhook evidence and delivery identity; approved static content at 01b3c3eec4d5ef81c90b836fefa1ca5944eecead",
+        "diagnostic-playbook:article-backed / Article-backed diagnosis; approved static content at 01b3c3eec4d5ef81c90b836fefa1ca5944eecead"
+      ],
+      "derivedFrom": []
+    },
+    "ticket": {
+      "id": "TKT-9604",
+      "createdAt": "2026-09-15T11:00:00.000Z",
+      "updatedAt": "2026-09-15T11:05:00.000Z",
+      "customer": {
+        "name": "Synthetic holdout merchant",
+        "plan": "sandbox",
+        "region": "test",
+        "vip": false
+      },
+      "subject": "Raw body and signed headers came from different deliveries",
+      "description": "Receiver verification failed for delivery packet_R41 at 06:12Z. The redacted comparison bundle contains the exact raw body for packet_R41 but signed headers labeled packet_R42 at 06:13Z. The receiver owner has not yet supplied a body-and-header pair for either individual delivery; rotation history is unknown.",
+      "status": "triage",
+      "category": "integration",
+      "priority": "P3",
+      "team": "integrations",
+      "tags": [
+        "synthetic-readiness",
+        "holdout",
+        "webhook"
+      ],
+      "sla": {
+        "responseDueAt": "2026-09-16T11:00:00.000Z",
+        "breached": false
+      },
+      "relatedTicketIds": [],
+      "revision": 0
+    },
+    "expectation": {
+      "requiredResourceKeys": [
+        "knowledge-article:webhook-signature-validation"
+      ],
+      "relevantResourceKeys": [
+        "knowledge-article:webhook-signature-validation",
+        "diagnostic-playbook:article-backed"
+      ],
+      "hardNegativeResourceKeys": [],
+      "labelsComplete": false,
+      "resourceCoverage": {
+        "knowledge-article": "adequate",
+        "known-cause": "not-expected",
+        "diagnostic-playbook": "adequate",
+        "resolved-ticket": "not-expected"
+      }
+    },
+    "supportingSections": [
+      {
+        "resourceKey": "knowledge-article:webhook-signature-validation",
+        "sourceHash": "4a392e4e557658c772d1d20ac63e5fc7da548f8e1f30ca32ac861368e7790740",
+        "heading": "Webhook evidence and delivery identity",
+        "representationIds": [
+          "knowledge-article:webhook-signature-validation:section:1"
+        ],
+        "rationale": "This article is required because matching body and headers to one delivery is necessary before receiver verification can be interpreted."
+      },
+      {
+        "resourceKey": "diagnostic-playbook:article-backed",
+        "sourceHash": "04e13a97e9357ef049e53e0dfd305ff141ee6e86c18957e4e6ccba73c949b3b2",
+        "heading": "Article-backed diagnosis",
+        "representationIds": [
+          "diagnostic-playbook:article-backed:canonical:0"
+        ],
+        "rationale": "The descriptor is relevant for the next redacted delivery-identity and exact-body comparison; it does not confirm any signature cause."
+      }
+    ],
+    "evidenceNotes": "Each artifact has an explicit delivery identity. No secret, signing scheme or completed verification comparison is supplied.",
+    "labelRationale": "Exact: raw body and signed headers describe the precise comparison inputs. Contrast: individually exact artifacts from different deliveries are not a matched pair. The webhook article is required for that necessary identity distinction; article-backed guidance is relevant for the next comparison. Unknown rotation is unjudged, not a hard negative.",
+    "review": {
+      "status": "approved",
+      "reviewedBy": "Matu",
+      "reviewedAt": "2026-09-15T11:39:11.455Z",
+      "decisionRef": "KR-B4-T5-HOLDOUT-APPROVAL-2026-09-15"
+    }
+  },
+  {
+    "id": "readiness-holdout-webhook-retry-response-verification-conflict-001",
+    "topic": "webhook",
+    "families": [
+      "paraphrase",
+      "disagreement-probe"
+    ],
+    "scenarioGroup": "holdout-webhook-retry-response-verification-conflict",
+    "split": "holdout",
+    "provenance": {
+      "kind": "synthetic",
+      "basis": [
+        "knowledge-article:webhook-signature-validation / Webhook verification and handoff; approved static content at 01b3c3eec4d5ef81c90b836fefa1ca5944eecead",
+        "diagnostic-playbook:article-backed / Article-backed diagnosis; approved static content at 01b3c3eec4d5ef81c90b836fefa1ca5944eecead"
+      ],
+      "derivedFrom": []
+    },
+    "ticket": {
+      "id": "TKT-9605",
+      "createdAt": "2026-09-15T11:00:00.000Z",
+      "updatedAt": "2026-09-15T11:05:00.000Z",
+      "customer": {
+        "name": "Synthetic holdout merchant",
+        "plan": "sandbox",
+        "region": "test",
+        "vip": false
+      },
+      "subject": "The callback retry was accepted but the receiver still says it cannot authenticate it",
+      "description": "After current-secret confirmation and raw-body verification, support retried one callback through the governed workflow. Its endpoint response is 200, but the receiver's verification record for that same delivery and attempt says failed. The operator proposes closing the signature issue based on the response alone.",
+      "status": "triage",
+      "category": "integration",
+      "priority": "P3",
+      "team": "integrations",
+      "tags": [
+        "synthetic-readiness",
+        "holdout",
+        "webhook"
+      ],
+      "sla": {
+        "responseDueAt": "2026-09-16T11:00:00.000Z",
+        "breached": false
+      },
+      "relatedTicketIds": [],
+      "revision": 0
+    },
+    "expectation": {
+      "requiredResourceKeys": [
+        "knowledge-article:webhook-signature-validation"
+      ],
+      "relevantResourceKeys": [
+        "knowledge-article:webhook-signature-validation",
+        "diagnostic-playbook:article-backed"
+      ],
+      "hardNegativeResourceKeys": [],
+      "labelsComplete": false,
+      "resourceCoverage": {
+        "knowledge-article": "adequate",
+        "known-cause": "not-expected",
+        "diagnostic-playbook": "adequate",
+        "resolved-ticket": "not-expected"
+      }
+    },
+    "supportingSections": [
+      {
+        "resourceKey": "knowledge-article:webhook-signature-validation",
+        "sourceHash": "4a392e4e557658c772d1d20ac63e5fc7da548f8e1f30ca32ac861368e7790740",
+        "heading": "Webhook verification and handoff",
+        "representationIds": [
+          "knowledge-article:webhook-signature-validation:section:4"
+        ],
+        "rationale": "This article is required because both verification outcome and endpoint response must be checked for the retried delivery; the failed verification requires handoff."
+      },
+      {
+        "resourceKey": "diagnostic-playbook:article-backed",
+        "sourceHash": "04e13a97e9357ef049e53e0dfd305ff141ee6e86c18957e4e6ccba73c949b3b2",
+        "heading": "Article-backed diagnosis",
+        "representationIds": [
+          "diagnostic-playbook:article-backed:canonical:0"
+        ],
+        "rationale": "The descriptor is relevant for reconciling the same-delivery response and verification evidence while keeping cause provisional."
+      }
+    ],
+    "evidenceNotes": "Both outcomes refer to the same delivery and retry, so the disagreement is between response and verification results rather than record identity. No further retry or cause is proposed.",
+    "labelRationale": "Paraphrase: callback authentication describes webhook signature verification. Disagreement-probe: endpoint success and verification failure coexist for the same attempt. The webhook article is required for the necessary verification/handoff distinction; the playbook is relevant to unresolved evidence. HTTP success alone does not establish a signature fix.",
+    "review": {
+      "status": "approved",
+      "reviewedBy": "Matu",
+      "reviewedAt": "2026-09-15T11:39:11.455Z",
+      "decisionRef": "KR-B4-T5-HOLDOUT-APPROVAL-2026-09-15"
+    }
+  },
+  {
+    "id": "readiness-holdout-webhook-tolerance-request-001",
+    "topic": "webhook",
+    "families": [
+      "insufficient",
+      "near-match"
+    ],
+    "scenarioGroup": "holdout-webhook-tolerance-request",
+    "split": "holdout",
+    "provenance": {
+      "kind": "synthetic",
+      "basis": [
+        "knowledge-article:webhook-signature-validation / Webhook evidence and delivery identity; approved static content at 01b3c3eec4d5ef81c90b836fefa1ca5944eecead",
+        "diagnostic-playbook:article-backed / Article-backed diagnosis; approved static content at 01b3c3eec4d5ef81c90b836fefa1ca5944eecead"
+      ],
+      "derivedFrom": []
+    },
+    "ticket": {
+      "id": "TKT-9606",
+      "createdAt": "2026-09-15T11:00:00.000Z",
+      "updatedAt": "2026-09-15T11:05:00.000Z",
+      "customer": {
+        "name": "Synthetic holdout merchant",
+        "plan": "sandbox",
+        "region": "test",
+        "vip": false
+      },
+      "subject": "Give us the exact receiver timestamp tolerance for the signature error",
+      "description": "The receiver rejects a callback and the operator requests a numeric timestamp tolerance to configure. No current tolerance setting, redacted signed timestamp, receive time, delivery identity, rotation history or raw-body comparison is available. The report supplies no delivery-latency observation.",
+      "status": "triage",
+      "category": "integration",
+      "priority": "P3",
+      "team": "integrations",
+      "tags": [
+        "synthetic-readiness",
+        "holdout",
+        "webhook"
+      ],
+      "sla": {
+        "responseDueAt": "2026-09-16T11:00:00.000Z",
+        "breached": false
+      },
+      "relatedTicketIds": [],
+      "revision": 0
+    },
+    "expectation": {
+      "requiredResourceKeys": [],
+      "relevantResourceKeys": [
+        "knowledge-article:webhook-signature-validation",
+        "diagnostic-playbook:article-backed"
+      ],
+      "hardNegativeResourceKeys": [],
+      "labelsComplete": false,
+      "resourceCoverage": {
+        "knowledge-article": "adequate",
+        "known-cause": "not-expected",
+        "diagnostic-playbook": "adequate",
+        "resolved-ticket": "not-expected"
+      }
+    },
+    "supportingSections": [
+      {
+        "resourceKey": "knowledge-article:webhook-signature-validation",
+        "sourceHash": "4a392e4e557658c772d1d20ac63e5fc7da548f8e1f30ca32ac861368e7790740",
+        "heading": "Webhook evidence and delivery identity",
+        "representationIds": [
+          "knowledge-article:webhook-signature-validation:section:1"
+        ],
+        "rationale": "The section explicitly asks about the receiver timestamp tolerance without prescribing one and requests the missing redacted delivery evidence."
+      },
+      {
+        "resourceKey": "diagnostic-playbook:article-backed",
+        "sourceHash": "04e13a97e9357ef049e53e0dfd305ff141ee6e86c18957e4e6ccba73c949b3b2",
+        "heading": "Article-backed diagnosis",
+        "representationIds": [
+          "diagnostic-playbook:article-backed:canonical:0"
+        ],
+        "rationale": "The descriptor is relevant for the next delivery, body and signature evidence checks; it supplies no numeric tolerance or confirmed cause."
+      }
+    ],
+    "evidenceNotes": "This is a request for an undocumented numeric configuration value. Neither clock mismatch nor any rotation or latency cause is established.",
+    "labelRationale": "Insufficient: the relevant receiver setting and signed/received observations are missing. Near-match: a signature-related configuration request does not authorize a numeric recipe. Article and playbook are relevant for collecting scoped evidence; other known causes stay unjudged.",
+    "review": {
+      "status": "approved",
+      "reviewedBy": "Matu",
+      "reviewedAt": "2026-09-15T11:39:11.455Z",
+      "decisionRef": "KR-B4-T5-HOLDOUT-APPROVAL-2026-09-15"
+    }
+  },
+  {
+    "id": "readiness-holdout-flow-entry-message-protection-001",
+    "topic": "flow-event",
+    "families": [
+      "exact",
+      "near-match"
+    ],
+    "scenarioGroup": "holdout-flow-entry-message-protection",
+    "split": "holdout",
+    "provenance": {
+      "kind": "synthetic",
+      "basis": [
+        "knowledge-article:flow-trigger-troubleshooting / Flow correction verification and handoff; approved static content at 01b3c3eec4d5ef81c90b836fefa1ca5944eecead",
+        "knowledge-article:flow-trigger-troubleshooting / Flow filters and message eligibility; approved static content at 01b3c3eec4d5ef81c90b836fefa1ca5944eecead",
+        "diagnostic-playbook:flow-trigger / Flow trigger troubleshooting; approved static content at 01b3c3eec4d5ef81c90b836fefa1ca5944eecead"
+      ],
+      "derivedFrom": []
+    },
+    "ticket": {
+      "id": "TKT-9607",
+      "createdAt": "2026-09-15T11:00:00.000Z",
+      "updatedAt": "2026-09-15T11:05:00.000Z",
+      "customer": {
+        "name": "Synthetic holdout merchant",
+        "plan": "sandbox",
+        "region": "test",
+        "vip": false
+      },
+      "subject": "Disable smart sending because entry should guarantee a message",
+      "description": "The Loyalty Reminder flow history shows profile member-C entered at 09:05Z for its matched trigger. Message analytics records smart sending as the exclusion at 09:06Z. The requester asks to disable the protection because entry should guarantee a message. Consent and remaining qualification checks have not been reviewed.",
+      "status": "triage",
+      "category": "integration",
+      "priority": "P3",
+      "team": "product",
+      "tags": [
+        "synthetic-readiness",
+        "holdout",
+        "flow-event"
+      ],
+      "sla": {
+        "responseDueAt": "2026-09-16T11:00:00.000Z",
+        "breached": false
+      },
+      "relatedTicketIds": [],
+      "revision": 0
+    },
+    "expectation": {
+      "requiredResourceKeys": [
+        "knowledge-article:flow-trigger-troubleshooting"
+      ],
+      "relevantResourceKeys": [
+        "knowledge-article:flow-trigger-troubleshooting",
+        "diagnostic-playbook:flow-trigger"
+      ],
+      "hardNegativeResourceKeys": [],
+      "labelsComplete": false,
+      "resourceCoverage": {
+        "knowledge-article": "adequate",
+        "known-cause": "not-expected",
+        "diagnostic-playbook": "adequate",
+        "resolved-ticket": "not-expected"
+      }
+    },
+    "supportingSections": [
+      {
+        "resourceKey": "knowledge-article:flow-trigger-troubleshooting",
+        "sourceHash": "cdaf23245ef63b96587de06e0addb41f2d78ec3ef44302e7f9d1d23a8229cc57",
+        "heading": "Flow correction verification and handoff",
+        "representationIds": [
+          "knowledge-article:flow-trigger-troubleshooting:section:4"
+        ],
+        "rationale": "This article is required because entry alone is not proof of message eligibility and the affected qualification outcome must be verified."
+      },
+      {
+        "resourceKey": "knowledge-article:flow-trigger-troubleshooting",
+        "sourceHash": "cdaf23245ef63b96587de06e0addb41f2d78ec3ef44302e7f9d1d23a8229cc57",
+        "heading": "Flow filters and message eligibility",
+        "representationIds": [
+          "knowledge-article:flow-trigger-troubleshooting:section:2"
+        ],
+        "rationale": "The section is relevant for retaining smart-sending and consent protections while comparing remaining checks."
+      },
+      {
+        "resourceKey": "diagnostic-playbook:flow-trigger",
+        "sourceHash": "40e5aca249564ce6247dd700ad80e2a8ff428b4086f4a5278a8fe54cd6410926",
+        "heading": "Flow trigger troubleshooting",
+        "representationIds": [
+          "diagnostic-playbook:flow-trigger:canonical:0"
+        ],
+        "rationale": "The descriptor is relevant for the next message-eligibility and consent comparison even though flow entry already succeeded; relevance is not branch applicability."
+      }
+    ],
+    "evidenceNotes": "Flow entry is observed; this is not a missing-entry or event-ingestion report. One message-protection exclusion is known, without an all-eligibility claim.",
+    "labelRationale": "Exact: smart sending names the observed protection. Near-match: entry does not justify bypassing message protection. The flow article is required for the necessary entry-versus-message-eligibility distinction; flow-trigger guidance is relevant to remaining qualifications. No setting change or cause selection is authorized.",
+    "review": {
+      "status": "approved",
+      "reviewedBy": "Matu",
+      "reviewedAt": "2026-09-15T11:39:11.455Z",
+      "decisionRef": "KR-B4-T5-HOLDOUT-APPROVAL-2026-09-15"
+    }
+  },
+  {
+    "id": "readiness-holdout-event-correction-downstream-unchecked-001",
+    "topic": "flow-event",
+    "families": [
+      "paraphrase",
+      "contrast"
+    ],
+    "scenarioGroup": "holdout-event-correction-downstream-unchecked",
+    "split": "holdout",
+    "provenance": {
+      "kind": "synthetic",
+      "basis": [
+        "knowledge-article:event-tracking-debugging / Event verification and escalation; approved static content at 01b3c3eec4d5ef81c90b836fefa1ca5944eecead",
+        "knowledge-article:flow-trigger-troubleshooting / Flow correction verification and handoff; approved static content at 01b3c3eec4d5ef81c90b836fefa1ca5944eecead",
+        "diagnostic-playbook:flow-trigger / Flow trigger troubleshooting; approved static content at 01b3c3eec4d5ef81c90b836fefa1ca5944eecead"
+      ],
+      "derivedFrom": []
+    },
+    "ticket": {
+      "id": "TKT-9608",
+      "createdAt": "2026-09-15T11:00:00.000Z",
+      "updatedAt": "2026-09-15T11:05:00.000Z",
+      "customer": {
+        "name": "Synthetic holdout merchant",
+        "plan": "sandbox",
+        "region": "test",
+        "vip": false
+      },
+      "subject": "The activity returned after the change; can the follow-up automation be called fixed?",
+      "description": "After a governed correction, a redacted request log and profile timeline show the affected Membership Renewed event for member-D at 10:22Z. The follow-up flow history and qualification outcome have not been checked. Support asks whether the visible activity is enough to say both tracking and the automation are fixed.",
+      "status": "triage",
+      "category": "integration",
+      "priority": "P3",
+      "team": "product",
+      "tags": [
+        "synthetic-readiness",
+        "holdout",
+        "flow-event"
+      ],
+      "sla": {
+        "responseDueAt": "2026-09-16T11:00:00.000Z",
+        "breached": false
+      },
+      "relatedTicketIds": [],
+      "revision": 0
+    },
+    "expectation": {
+      "requiredResourceKeys": [
+        "knowledge-article:event-tracking-debugging"
+      ],
+      "relevantResourceKeys": [
+        "knowledge-article:event-tracking-debugging",
+        "knowledge-article:flow-trigger-troubleshooting",
+        "diagnostic-playbook:flow-trigger"
+      ],
+      "hardNegativeResourceKeys": [],
+      "labelsComplete": false,
+      "resourceCoverage": {
+        "knowledge-article": "adequate",
+        "known-cause": "not-expected",
+        "diagnostic-playbook": "adequate",
+        "resolved-ticket": "not-expected"
+      }
+    },
+    "supportingSections": [
+      {
+        "resourceKey": "knowledge-article:event-tracking-debugging",
+        "sourceHash": "a6785dc2e3b89b815bddbc8a5a4be5e6ec8107b753a465d59478824ac1654a41",
+        "heading": "Event verification and escalation",
+        "representationIds": [
+          "knowledge-article:event-tracking-debugging:section:4"
+        ],
+        "rationale": "This article is required because a visible affected event verifies that observation only and does not establish downstream qualification."
+      },
+      {
+        "resourceKey": "knowledge-article:flow-trigger-troubleshooting",
+        "sourceHash": "cdaf23245ef63b96587de06e0addb41f2d78ec3ef44302e7f9d1d23a8229cc57",
+        "heading": "Flow correction verification and handoff",
+        "representationIds": [
+          "knowledge-article:flow-trigger-troubleshooting:section:4"
+        ],
+        "rationale": "The section is relevant for checking the affected profile's history and expected qualification result before a flow fix claim."
+      },
+      {
+        "resourceKey": "diagnostic-playbook:flow-trigger",
+        "sourceHash": "40e5aca249564ce6247dd700ad80e2a8ff428b4086f4a5278a8fe54cd6410926",
+        "heading": "Flow trigger troubleshooting",
+        "representationIds": [
+          "diagnostic-playbook:flow-trigger:canonical:0"
+        ],
+        "rationale": "The descriptor is relevant for the next flow history, status and qualification comparison; no failure branch or applicability is inferred."
+      }
+    ],
+    "evidenceNotes": "The affected timeline observation was verified after a recorded correction. Downstream results are absent, not observed exclusions. No correction procedure or broad incident is invented.",
+    "labelRationale": "Paraphrase: activity and follow-up automation describe event appearance and downstream flow behavior. Contrast: verified timeline appearance and unverified downstream results support different claims. The event article is required for the necessary verification limit; the flow article and flow-trigger playbook supply the next qualification checks.",
+    "review": {
+      "status": "approved",
+      "reviewedBy": "Matu",
+      "reviewedAt": "2026-09-15T11:39:11.455Z",
+      "decisionRef": "KR-B4-T5-HOLDOUT-APPROVAL-2026-09-15"
+    }
+  },
+  {
+    "id": "readiness-holdout-event-capture-window-dispute-001",
+    "topic": "flow-event",
+    "families": [
+      "disagreement-probe",
+      "insufficient"
+    ],
+    "scenarioGroup": "holdout-event-capture-window-dispute",
+    "split": "holdout",
+    "provenance": {
+      "kind": "synthetic",
+      "basis": [
+        "knowledge-article:event-tracking-debugging / Event identity and timing evidence; approved static content at 01b3c3eec4d5ef81c90b836fefa1ca5944eecead",
+        "diagnostic-playbook:event-processing-delay / Event processing delay; approved static content at 01b3c3eec4d5ef81c90b836fefa1ca5944eecead"
+      ],
+      "derivedFrom": []
+    },
+    "ticket": {
+      "id": "TKT-9609",
+      "createdAt": "2026-09-15T11:00:00.000Z",
+      "updatedAt": "2026-09-15T11:05:00.000Z",
+      "customer": {
+        "name": "Synthetic holdout merchant",
+        "plan": "sandbox",
+        "region": "test",
+        "vip": false
+      },
+      "subject": "Accepted record and timeline screenshots use different observation windows",
+      "description": "For one identified profile, the API log records Membership Paused accepted at 11:42Z. A timeline screenshot captured at 11:35Z contains no such event. The operator calls this contradictory evidence of lost processing. No screenshot or timeline query after acceptance, redacted payload comparison, or other affected profile is available.",
+      "status": "triage",
+      "category": "integration",
+      "priority": "P3",
+      "team": "product",
+      "tags": [
+        "synthetic-readiness",
+        "holdout",
+        "flow-event"
+      ],
+      "sla": {
+        "responseDueAt": "2026-09-16T11:00:00.000Z",
+        "breached": false
+      },
+      "relatedTicketIds": [],
+      "revision": 0
+    },
+    "expectation": {
+      "requiredResourceKeys": [
+        "knowledge-article:event-tracking-debugging"
+      ],
+      "relevantResourceKeys": [
+        "knowledge-article:event-tracking-debugging",
+        "diagnostic-playbook:event-processing-delay"
+      ],
+      "hardNegativeResourceKeys": [],
+      "labelsComplete": false,
+      "resourceCoverage": {
+        "knowledge-article": "adequate",
+        "known-cause": "not-expected",
+        "diagnostic-playbook": "adequate",
+        "resolved-ticket": "not-expected"
+      }
+    },
+    "supportingSections": [
+      {
+        "resourceKey": "knowledge-article:event-tracking-debugging",
+        "sourceHash": "a6785dc2e3b89b815bddbc8a5a4be5e6ec8107b753a465d59478824ac1654a41",
+        "heading": "Event identity and timing evidence",
+        "representationIds": [
+          "knowledge-article:event-tracking-debugging:section:1"
+        ],
+        "rationale": "This article is required because comparing accepted and timeline times is necessary to reject a pre-acceptance screenshot as evidence of later absence."
+      },
+      {
+        "resourceKey": "diagnostic-playbook:event-processing-delay",
+        "sourceHash": "3b38083b5dcfc5f49f7b352e0107087f50f596d8fb1c250fd56de1b22a27c417",
+        "heading": "Event processing delay",
+        "representationIds": [
+          "diagnostic-playbook:event-processing-delay:canonical:0"
+        ],
+        "rationale": "The descriptor is relevant for a fresh identity/timing/timeline comparison and checking affected scope; a single pre-acceptance screenshot does not establish platform delay, root cause or mitigation."
+      }
+    ],
+    "evidenceNotes": "The only absence observation predates acceptance. Identity is aligned, but there is no post-acceptance absence observation and no broad-impact evidence.",
+    "labelRationale": "Disagreement-probe: the requester frames acceptance and absence as a contradiction. Insufficient: the timeline capture predates the accepted event, so current appearance is unknown. The event article is required for the necessary temporal comparison; event-processing guidance is relevant only for obtaining an aligned timeline and scope check, without data-loss or platform-delay claims.",
+    "review": {
+      "status": "approved",
+      "reviewedBy": "Matu",
+      "reviewedAt": "2026-09-15T11:39:11.455Z",
+      "decisionRef": "KR-B4-T5-HOLDOUT-APPROVAL-2026-09-15"
+    }
+  }
+]

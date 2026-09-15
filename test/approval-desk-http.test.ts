@@ -3364,14 +3364,12 @@ describe("createApprovalDeskHttpServer", () => {
   });
 
   it("creates recommendations with a provider draft from cited knowledge", async () => {
-    const seenArticleBodies: string[] = [];
+    const seenArticleIds: string[][] = [];
     const seenResponseStyles: string[] = [];
     const { json } = await startFixture({
       draftProvider: {
         draft: async (input) => {
-          seenArticleBodies.push(
-            ...input.knowledgeArticles.map((article) => article.body),
-          );
+          seenArticleIds.push(input.knowledgeArticles.map(({ id }) => id));
           seenResponseStyles.push(input.responseStyle);
           return {
             source: "openai",
@@ -3434,7 +3432,7 @@ describe("createApprovalDeskHttpServer", () => {
         status: "pass",
       }),
     );
-    expect(seenArticleBodies.join("\n")).toContain("webhook");
+    expect(seenArticleIds).toEqual([["webhook-signature-validation"]]);
     expect(seenResponseStyles).toEqual(["technical"]);
   });
 

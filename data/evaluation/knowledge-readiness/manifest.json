@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "sourceRevision": "01b3c3eec4d5ef81c90b836fefa1ca5944eecead",
+  "corpusHash": "43f9e3b0c9c3ca9095f7a15fd90e8a72d685a693c5a749646ffb4022de6082c5",
+  "representationVersion": 3,
+  "cutoff": "2026-09-15T23:59:59.999Z",
+  "development": {
+    "path": "development.json",
+    "sha256": "9a97bda213a3b2b1804464f5d9f343a79e907c257d3031c4c0c3952fd99a2f4a"
+  },
+  "holdout": {
+    "path": "holdout.json",
+    "sha256": "12c2707681331a1938c6b5caa94189f55d42b9ecd1dcce2b4937bc9d0d1614b1"
+  }
+}

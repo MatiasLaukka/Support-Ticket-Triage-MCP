@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
+import { resolve } from "node:path";
+import { KnowledgeRepository } from "../src/knowledge-repository.js";
 import {
   OpenAiClassificationReasoningProvider,
   createClassificationReasoningProviderFromEnv,
@@ -81,18 +83,11 @@ describe("OpenAiClassificationReasoningProvider", () => {
       fetch,
     });
 
-    const execution = await provider.reason({
-      ...providerInput(),
-      knowledgeArticles: [
-        {
-          id: "performance-troubleshooting",
-          title: "Performance Troubleshooting",
-          tags: ["performance", "loading", "browser", "investigation"],
-          body:
-            "Blank pages and repeated loading states can be caused by browser session state or platform-side delays.",
-        },
-      ],
-    });
+    const editedArticles = (await new KnowledgeRepository(resolve("data/knowledge")).list())
+      .filter((article) => ["performance-troubleshooting", "webhook-signature-validation",
+        "flow-trigger-troubleshooting", "event-tracking-debugging"].includes(article.id));
+    expect(editedArticles).toHaveLength(4);
+    const execution = await provider.reason({ ...providerInput(), knowledgeArticles: editedArticles });
 
     expect(execution.reasoning).toMatchObject({
       issueType: "campaign-editor",
@@ -109,15 +104,9 @@ describe("OpenAiClassificationReasoningProvider", () => {
     const schema = request.text.format.schema;
     const reasoningInput = JSON.parse(request.input);
 
-    expect(reasoningInput.knowledgeArticles).toEqual([
-      {
-        id: "performance-troubleshooting",
-        title: "Performance Troubleshooting",
-        tags: ["performance", "loading", "browser", "investigation"],
-        body:
-          "Blank pages and repeated loading states can be caused by browser session state or platform-side delays.",
-      },
-    ]);
+    expect(reasoningInput.knowledgeArticles).toEqual(editedArticles);
+    expect(reasoningInput.knowledgeArticles.map((article: { body: string }) => article.body))
+      .toEqual(editedArticles.map((article) => article.body));
     expect(request).toMatchObject({ store: false });
     expect(schema.required).toEqual(expect.arrayContaining(Object.keys(schema.properties)));
     expect(schema.properties.candidateCategory).toMatchObject({ type: ["string", "null"] });

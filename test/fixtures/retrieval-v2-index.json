@@ -1,0 +1,115 @@
+{
+  "provenance": {
+    "commit": "5c7bab58f22a3535c2594912d27f6f49eb42d5de",
+    "projection": "src/retrieval/representations.ts projectArticle",
+    "store": "src/retrieval/sqlite-store.ts initialize/reconcile/configureModel/installVectors/validate",
+    "representationVersion": 2,
+    "originalResourceHash": "c631d6bbfcb48b6ba3ad28090ebfddcac48db527ac79b0f2d34f58d8acdede3e",
+    "originalRepresentationHash": "21ac38a30fc904d8c18a982e3e74f1c82c8a495f0c27f9373247eeb512812fd8"
+  },
+  "article": {
+    "id": "legacy",
+    "title": "Legacy guide",
+    "tags": [
+      "webhook"
+    ],
+    "body": "# Signing\nFirst paragraph.\n\nSecond paragraph."
+  },
+  "tables": {
+    "retrieval_index_metadata": [
+      {
+        "key": "schemaVersion",
+        "value": "2"
+      },
+      {
+        "key": "representationVersion",
+        "value": "2"
+      },
+      {
+        "key": "generation",
+        "value": "1"
+      },
+      {
+        "key": "lexicalGeneration",
+        "value": "1"
+      },
+      {
+        "key": "semanticGeneration",
+        "value": "1"
+      },
+      {
+        "key": "corpusHash",
+        "value": "fe1934af58e2ce6fa45568504aa37c08189b69258a7a0f52afac5880d6815268"
+      },
+      {
+        "key": "state",
+        "value": "ready"
+      },
+      {
+        "key": "unavailableFamilies",
+        "value": "[]"
+      },
+      {
+        "key": "model",
+        "value": "{\"id\":\"legacy-model\",\"revision\":\"r1\",\"dimensions\":2}"
+      }
+    ],
+    "retrieval_resources": [
+      {
+        "resource_key": "knowledge-article:legacy",
+        "resource_type": "knowledge-article",
+        "source_id": "legacy",
+        "source_version": null,
+        "content_hash": "c631d6bbfcb48b6ba3ad28090ebfddcac48db527ac79b0f2d34f58d8acdede3e",
+        "metadata_json": "{\"family\":\"article\",\"linkedResourceKeys\":[]}"
+      }
+    ],
+    "retrieval_representations": [
+      {
+        "representation_id": "knowledge-article:legacy:section:0",
+        "resource_key": "knowledge-article:legacy",
+        "kind": "section",
+        "ordinal": 0,
+        "title": "Legacy guide",
+        "heading": "Signing",
+        "keywords_json": "[\"webhook\"]",
+        "lexical_text": "Legacy guide\nSigning\nwebhook\nFirst paragraph.\n\nSecond paragraph.",
+        "semantic_text": "Legacy guide\n\nSigning\n\nFirst paragraph.\n\nSecond paragraph.",
+        "content_hash": "21ac38a30fc904d8c18a982e3e74f1c82c8a495f0c27f9373247eeb512812fd8"
+      }
+    ],
+    "retrieval_fts": [
+      {
+        "representation_id": "knowledge-article:legacy:section:0",
+        "resource_key": "knowledge-article:legacy",
+        "title": "Legacy guide",
+        "heading": "Signing",
+        "body": "Legacy guide\nSigning\nwebhook\nFirst paragraph.\n\nSecond paragraph.",
+        "keywords": "webhook"
+      }
+    ],
+    "retrieval_embeddings": [
+      {
+        "representation_id": "knowledge-article:legacy:section:0",
+        "model_id": "legacy-model",
+        "model_revision": "r1",
+        "dimensions": 2,
+        "vector_blob": {
+          "type": "Buffer",
+          "data": [
+            0,
+            0,
+            128,
+            63,
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        "content_hash": "21ac38a30fc904d8c18a982e3e74f1c82c8a495f0c27f9373247eeb512812fd8",
+        "status": "ready"
+      }
+    ]
+  }
+}

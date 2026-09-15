@@ -3,6 +3,111 @@ import { IndexManager } from "../src/retrieval/index-manager.js";
 import { RetrievalIntegrityError, RetrievalStore } from "../src/retrieval/sqlite-store.js";
 import { projectArticle } from "../src/retrieval/representations.js";
 import { EmbeddingProviderError } from "../src/retrieval/embedding-provider.js";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import type Database from "better-sqlite3";
+import { afterEach } from "vitest";
+import { loadRetrievalV2Fixture, retrievalV2Fixture } from "./retrieval-fixtures.js";
+
+describe("supported version-2 rebuild", () => {
+  let store: RetrievalStore;
+  let manager: IndexManager | undefined;
+  let root: string;
+  const signal = () => new AbortController().signal;
+  const raw = () => (store as unknown as { database: Database.Database }).database;
+  const rows = () => Object.fromEntries(Object.keys(retrievalV2Fixture.tables).map((table) => [table, raw().prepare(`SELECT * FROM ${table} ORDER BY 1`).all()]));
+  function setup(provider?: ConstructorParameters<typeof IndexManager>[0]["provider"]) {
+    root = mkdtempSync(join(tmpdir(), "retrieval-v2-upgrade-"));
+    store = loadRetrievalV2Fixture(join(root, "retrieval.sqlite"));
+    manager = new IndexManager({ store, load: async () => ({ resources: [projectArticle(retrievalV2Fixture.article)], unavailableFamilies: [] }), ...(provider ? { provider } : {}) });
+    return manager;
+  }
+  afterEach(async () => { await manager?.close(); store?.close(); if (root) rmSync(root, { recursive: true, force: true }); });
+
+  it("refuses refresh of genuine v2 before loading sources or changing rows", async () => {
+    setup();
+    const before = rows();
+    let loaded = false;
+    manager = new IndexManager({ store, load: async () => { loaded = true; throw new Error("must not load"); } });
+    await expect(manager.refresh(signal())).rejects.toMatchObject({ code: "INDEX_UPGRADE_REQUIRED", storedVersion: 2, requiredVersion: 3 });
+    expect(loaded).toBe(false);
+    expect(rows()).toEqual(before);
+  });
+
+  it("explicitly rebuilds v2 from authoritative sources as lexical-only and reopens v3", async () => {
+    const manager = setup();
+    await expect(manager.rebuild(signal())).resolves.toMatchObject({ schemaVersion: 2, representationVersion: 3, generation: 2, lexicalGeneration: 2, semanticGeneration: 0 });
+    expect(store.readSnapshot('"paragraph"').vectors).toEqual([]);
+    expect(store.readSnapshot('"paragraph"').lexicalMatches).toHaveLength(1);
+    expect(store.readSnapshot("").resources[0]!.contentHash).not.toBe(retrievalV2Fixture.provenance.originalResourceHash);
+    store.close();
+    store = RetrievalStore.open(join(root, "retrieval.sqlite"));
+    expect(() => store.validate()).not.toThrow();
+    expect(store.metadata().representationVersion).toBe(3);
+  });
+
+  it("publishes only replacement vectors and preserves no-op generation relationships", async () => {
+    const manager = setup({ model: { id: "current", revision: "3", dimensions: 2 }, embed: async (texts) => texts.map(() => [0, 1]) });
+    const rebuilt = await manager.rebuild(signal());
+    expect(rebuilt).toMatchObject({ representationVersion: 3, generation: 2, lexicalGeneration: 2, semanticGeneration: 2 });
+    expect(store.readSnapshot("").vectors).toMatchObject([{ model: { id: "current" }, values: [0, 1] }]);
+    expect(await manager.refresh(signal())).toEqual(rebuilt);
+  });
+
+  it("preserves all v2 rows on provider failure and permits an explicit lexical-only retry", async () => {
+    const manager = setup({ model: { id: "current", revision: "3", dimensions: 2 }, embed: async () => { throw new EmbeddingProviderError("PROVIDER_UNREACHABLE", "offline"); } });
+    const before = rows();
+    await expect(manager.rebuild(signal())).rejects.toMatchObject({ code: "PROVIDER_UNREACHABLE" });
+    expect(rows()).toEqual(before);
+    await manager.close();
+    const lexical = new IndexManager({ store, load: async () => ({ resources: [projectArticle(retrievalV2Fixture.article)], unavailableFamilies: [] }) });
+    try { expect(await lexical.rebuild(signal())).toMatchObject({ representationVersion: 3, semanticGeneration: 0 }); } finally { await lexical.close(); }
+  });
+
+  it.each([
+    "UPDATE retrieval_representations SET content_hash='" + "a".repeat(64) + "'",
+    "UPDATE retrieval_index_metadata SET value='2' WHERE key='semanticGeneration'",
+    "UPDATE retrieval_index_metadata SET value='4' WHERE key='representationVersion'",
+    "UPDATE retrieval_index_metadata SET value='broken' WHERE key='representationVersion'",
+    "UPDATE retrieval_index_metadata SET value='2.0' WHERE key='representationVersion'",
+    "UPDATE retrieval_index_metadata SET value='2e0' WHERE key='representationVersion'",
+    "PRAGMA foreign_keys=OFF; UPDATE retrieval_embeddings SET representation_id='missing'",
+    "UPDATE retrieval_embeddings SET status='broken'",
+  ])("rejects corrupt or unsupported legacy data before loading: %s", async (sql) => {
+    setup();
+    raw().exec(sql);
+    const before = rows();
+    let loaded = false;
+    manager = new IndexManager({ store, load: async () => { loaded = true; return { resources: [], unavailableFamilies: [] }; } });
+    await expect(manager.rebuild(signal())).rejects.toBeInstanceOf(RetrievalIntegrityError);
+    expect(loaded).toBe(false);
+    expect(rows()).toEqual(before);
+  });
+
+  it("rolls back rows, FTS, vectors and metadata when publication validation fails", async () => {
+    const manager = setup();
+    const before = rows();
+    raw().exec("CREATE TRIGGER corrupt_publication AFTER INSERT ON retrieval_resources BEGIN UPDATE retrieval_resources SET content_hash='bad' WHERE resource_key=NEW.resource_key; END");
+    await expect(manager.rebuild(signal())).rejects.toBeInstanceOf(RetrievalIntegrityError);
+    expect(rows()).toEqual(before);
+  });
+
+  it("refuses to erase unavailable cached learned sources during a v2 upgrade", async () => {
+    setup();
+    // Captured with baseline 5c7bab5 projectLearnedCause; these are original v2 hashes.
+    raw().prepare("INSERT INTO retrieval_resources(resource_key,resource_type,source_id,source_version,content_hash,metadata_json) VALUES(?,?,?,?,?,?)").run("known-cause:learned/cached", "known-cause", "cached", "1", "dfa7b53c23e264c2f0f907b20c126bf3cf4a8eb2acdb89ba9c77729f8960abe2", '{"family":"learned-known-cause","linkedResourceKeys":[]}');
+    const lexical = "Cached cause\ncache\nCached summary\ncache\nCheck cache\nRefresh cache";
+    raw().prepare("INSERT INTO retrieval_representations(representation_id,resource_key,kind,ordinal,title,heading,keywords_json,lexical_text,semantic_text,content_hash) VALUES(?,?,?,?,?,?,?,?,?,?)").run("known-cause:learned/cached:canonical:0", "known-cause:learned/cached", "canonical", 0, "Cached cause", null, '["cache"]', lexical, "Cached cause\n\nCached summary\ncache\nCheck cache\nRefresh cache", "8cf602a3555ef540d4105c6506fe1ef0c01bb60daab428674059b2fe897a226e");
+    raw().prepare("INSERT INTO retrieval_fts(representation_id,resource_key,title,heading,body,keywords) VALUES(?,?,?,?,?,?)").run("known-cause:learned/cached:canonical:0", "known-cause:learned/cached", "Cached cause", "", lexical, "cache");
+    raw().exec("UPDATE retrieval_index_metadata SET value='0' WHERE key='semanticGeneration'; UPDATE retrieval_index_metadata SET value='degraded' WHERE key='state'; UPDATE retrieval_index_metadata SET value='972276157be466a60f639707c78c8bf9efb3530bd5cc37e5a2cbfafe9f8f6d8b' WHERE key='corpusHash'");
+    expect(store.validateForRebuild()).toBe(2);
+    const before = rows();
+    manager = new IndexManager({ store, load: async () => ({ resources: [projectArticle(retrievalV2Fixture.article)], unavailableFamilies: ["learned-known-cause"] }) });
+    await expect(manager.rebuild(signal())).rejects.toMatchObject({ code: "INDEX_UPGRADE_SOURCE_UNAVAILABLE" });
+    expect(rows()).toEqual(before);
+  });
+});
 
 describe("retrieval index manager", () => {
   it("embeds pending representations once and refreshes lexical data", async () => {

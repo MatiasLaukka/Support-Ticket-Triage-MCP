@@ -85,6 +85,18 @@ describe("retrieval sources", () => {
     }
   });
 
+  it("exposes the scoped event and webhook article links without introducing playbook identities", () => {
+    expect(PLAYBOOK_DESCRIPTORS.map((descriptor) => descriptor.id)).toEqual([
+      "event-processing-delay", "flow-trigger", "campaign-editor", "article-backed",
+    ]);
+    expect(PLAYBOOK_DESCRIPTORS.find((descriptor) => descriptor.id === "event-processing-delay")
+      ?.linkedKnowledgeArticleIds).toContain("event-tracking-debugging");
+    expect(PLAYBOOK_DESCRIPTORS.find((descriptor) => descriptor.id === "flow-trigger")
+      ?.linkedKnowledgeArticleIds).toContain("event-tracking-debugging");
+    expect(PLAYBOOK_DESCRIPTORS.find((descriptor) => descriptor.id === "article-backed")
+      ?.linkedKnowledgeArticleIds).toContain("webhook-signature-validation");
+  });
+
   it("treats a successful read with no eligible resolved cases as an authoritative empty family", () => {
     const snapshot = loadRetrievalSources({
       articles: [retrievalArticle()],

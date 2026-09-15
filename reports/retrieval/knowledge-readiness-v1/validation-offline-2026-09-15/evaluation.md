@@ -1,0 +1,18 @@
+# Knowledge readiness validation
+
+- mode: "readiness-validation-only"
+- evaluatedSplit: null
+- holdoutExecuted: false
+- sourceCommit: "597c0f4e3bf0640c058acbc3ac671f42a1decf68"
+- contentSourceRevision: "01b3c3eec4d5ef81c90b836fefa1ca5944eecead"
+- manifestHash: "b62f59c3d2f4be3520fa364eb85d9c804fd75ee02a6294c0707775a3092cdc2d"
+- caseHashes: {"development":"9a97bda213a3b2b1804464f5d9f343a79e907c257d3031c4c0c3952fd99a2f4a","holdout":"12c2707681331a1938c6b5caa94189f55d42b9ecd1dcce2b4937bc9d0d1614b1"}
+- corpusHash: "43f9e3b0c9c3ca9095f7a15fd90e8a72d685a693c5a749646ffb4022de6082c5"
+- representationVersion: 3
+- scenarioCutoff: "2026-09-15T23:59:59.999Z"
+- validation: {"status":"passed","developmentCount":21,"holdoutCount":9,"developmentApproved":21}
+- semanticEvidence: "not-run"
+- articleSizes: [{"articleId":"account-access","sourceCharacters":751,"diagnosisPromptCharacters":751,"classificationAndDraftBodyCharacters":751},{"articleId":"api-reference","sourceCharacters":677,"diagnosisPromptCharacters":677,"classificationAndDraftBodyCharacters":677},{"articleId":"authentication","sourceCharacters":736,"diagnosisPromptCharacters":736,"classificationAndDraftBodyCharacters":736},{"articleId":"billing-and-invoices","sourceCharacters":800,"diagnosisPromptCharacters":800,"classificationAndDraftBodyCharacters":800},{"articleId":"campaign-send-failures","sourceCharacters":1103,"diagnosisPromptCharacters":1103,"classificationAndDraftBodyCharacters":1103},{"articleId":"coupon-catalog-sync","sourceCharacters":944,"diagnosisPromptCharacters":944,"classificationAndDraftBodyCharacters":944},{"articleId":"email-deliverability","sourceCharacters":982,"diagnosisPromptCharacters":982,"classificationAndDraftBodyCharacters":982},{"articleId":"event-tracking-debugging","sourceCharacters":3283,"diagnosisPromptCharacters":1800,"classificationAndDraftBodyCharacters":3283},{"articleId":"flow-trigger-troubleshooting","sourceCharacters":3130,"diagnosisPromptCharacters":1800,"classificationAndDraftBodyCharacters":3130},{"articleId":"performance-troubleshooting","sourceCharacters":3141,"diagnosisPromptCharacters":1800,"classificationAndDraftBodyCharacters":3141},{"articleId":"product-feedback","sourceCharacters":748,"diagnosisPromptCharacters":748,"classificationAndDraftBodyCharacters":748},{"articleId":"profile-sync-issues","sourceCharacters":922,"diagnosisPromptCharacters":922,"classificationAndDraftBodyCharacters":922},{"articleId":"security-incident-response","sourceCharacters":1012,"diagnosisPromptCharacters":1012,"classificationAndDraftBodyCharacters":1012},{"articleId":"segmentation-audience-rules","sourceCharacters":953,"diagnosisPromptCharacters":953,"classificationAndDraftBodyCharacters":953},{"articleId":"shopify-integration-sync","sourceCharacters":850,"diagnosisPromptCharacters":850,"classificationAndDraftBodyCharacters":850},{"articleId":"sms-compliance","sourceCharacters":850,"diagnosisPromptCharacters":850,"classificationAndDraftBodyCharacters":850},{"articleId":"support-operations-playbook","sourceCharacters":7906,"diagnosisPromptCharacters":1800,"classificationAndDraftBodyCharacters":7906},{"articleId":"webhook-signature-validation","sourceCharacters":3225,"diagnosisPromptCharacters":1800,"classificationAndDraftBodyCharacters":3225}]
+- timingsMs: {"embeddingCalls":0,"embeddingInputs":0}
+
+Both case files were structurally validated. No retrieval or holdout execution occurred.

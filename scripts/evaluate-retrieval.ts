@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { execFileSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
 import { loadEvaluationOracles, type EvaluationOracle } from "../src/evaluation-oracle.js";
@@ -14,12 +14,58 @@ import { IndexManager } from "../src/retrieval/index-manager.js";
 import { retrieve } from "../src/retrieval/search.js";
 import { scorePool, scoreRanked, type RetrievalExpectation } from "../src/retrieval/evaluation.js";
 import { unavailableReusableKnowledge } from "../src/knowledge-evolution/reusable-context.js";
-import { embeddingProviderFromEnv } from "../src/retrieval/embedding-provider.js";
+import { EmbeddingProviderError, embeddingProviderFromEnv } from "../src/retrieval/embedding-provider.js";
 import { buildConversationContextForTicket } from "../src/approval-desk/conversation-context.js";
 import { classifyTicketFromContext } from "../src/approval-desk/classifier.js";
 import type { CompletedDiagnosisReadSnapshot } from "../src/knowledge-evolution/completed-diagnosis-source.js";
 import { SYNTHETIC_RETRIEVAL_EVALUATION_SCENARIOS } from "../src/retrieval/evaluation-fixtures.js";
 import type { Candidate, EmbeddingProvider, Reference, ResourceKey } from "../src/retrieval/types.js";
+import { hashText, REPRESENTATION_VERSION } from "../src/retrieval/representations.js";
+import { ReadinessCaseSchema, ReadinessManifestSchema, selectReadinessDevelopment, validateReadinessCases, validateReadinessSplits, type ReadinessCase } from "../src/retrieval/readiness-cases.js";
+import { evaluateSectionEvidence, type SectionEvidenceResult } from "../src/retrieval/section-evidence.js";
+
+type ScoringOracle = Pick<EvaluationOracle, "ticketId" | "retrieval" | "family" | "contrastGroup">;
+type SectionDiagnostic = SectionEvidenceResult & { resourceKey: string; channel: "lexical" | "semantic" };
+type EvaluationInput = { provider?: EmbeddingProvider; completedSnapshots?: readonly CompletedDiagnosisReadSnapshot[]; semanticQueryFormat?: SemanticQueryFormat; caseSetPath?: string; split?: "development"; validateCasesOnly?: boolean };
+
+function caseFilePath(directory: string, path: string): string {
+  const outside = (candidate: string) => { const rel = relative(directory, candidate); return rel === ".." || rel.startsWith("../") || rel.startsWith("..\\") || isAbsolute(rel); };
+  const candidate = resolve(directory, path);
+  if (isAbsolute(path) || /^[a-z]:/i.test(path) || outside(candidate)) throw new Error("Manifest paths must remain inside the case-set directory.");
+  const canonical = realpathSync(candidate);
+  if (outside(canonical)) throw new Error("Manifest paths must remain inside the case-set directory.");
+  return canonical;
+}
+
+function loadReadiness(caseSetPath: string, validationOnly: boolean) {
+  const manifestBytes = readFileSync(caseSetPath);
+  let raw: unknown;
+  try { raw = JSON.parse(manifestBytes.toString("utf8")); } catch { throw new Error("Invalid readiness manifest JSON."); }
+  if ((raw as { representationVersion?: unknown })?.representationVersion !== REPRESENTATION_VERSION) throw new Error("Readiness representation version does not match the evaluator.");
+  const parsedManifest = ReadinessManifestSchema.safeParse(raw);
+  if (!parsedManifest.success) throw new Error("Invalid readiness manifest structure.");
+  const manifest = parsedManifest.data;
+  const directory = realpathSync(dirname(resolve(caseSetPath)));
+  // Check both byte identities before parsing any scored inputs.
+  const bytes = Object.fromEntries((["development", "holdout"] as const).map((split) => {
+    const contents = readFileSync(caseFilePath(directory, manifest[split].path));
+    if (createHash("sha256").update(contents).digest("hex") !== manifest[split].sha256) throw new Error(`Readiness ${split} case hash mismatch.`);
+    return [split, contents.toString("utf8")];
+  }));
+  const parse = (split: "development" | "holdout") => {
+    try {
+      const cases = ReadinessCaseSchema.array().parse(JSON.parse(bytes[split]!));
+      if (cases.some(({ id }) => !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(id))) throw new Error("Unsafe ID");
+      return cases;
+    } catch { throw new Error(`Invalid ${split} case structure; safe case IDs and valid labels are required.`); }
+  };
+  const development = parse("development");
+  const holdout = parse("holdout");
+  try { validateReadinessSplits(development, holdout); }
+  catch { throw new Error("Readiness split structure is invalid or scenario lineage crosses splits."); }
+  if (!validationOnly) selectReadinessDevelopment(development);
+  return { manifest, manifestHash: createHash("sha256").update(manifestBytes).digest("hex"), development, holdout };
+}
 
 const K_BUDGET = {
   "knowledge-article": { lexical: 5, semantic: 5 },
@@ -67,6 +113,10 @@ type ScenarioReport = {
   gaps: { retrievalMisses: readonly string[]; corpusGaps: readonly string[]; oracleReviewCandidates: readonly string[] };
   ranked: { lexical: ReturnType<typeof scoreRanked>; semantic: ReturnType<typeof scoreRanked> };
   channelStatuses: { lexical: string; semantic: string };
+  topic?: ReadinessCase["topic"];
+  families?: ReadinessCase["families"];
+  labelsComplete?: boolean;
+  sectionDiagnostics?: SectionDiagnostic[];
 };
 
 export function rankedCandidateKeys(candidates: readonly Candidate[], channel: "lexical" | "semantic"): readonly ResourceKey[] {
@@ -95,7 +145,10 @@ export function snapshotsAtOrBeforeCutoff<T extends { ticket: { updatedAt: strin
   return snapshots.filter(({ ticket }) => ticket.updatedAt <= SCENARIO_CUTOFF);
 }
 
-export async function evaluateRetrieval(input: { provider?: EmbeddingProvider; completedSnapshots?: readonly CompletedDiagnosisReadSnapshot[]; semanticQueryFormat?: SemanticQueryFormat } = {}): Promise<Record<string, unknown>> {
+export async function evaluateRetrieval(input: EvaluationInput = {}): Promise<Record<string, unknown>> {
+  if (input.split !== undefined && input.split !== "development") throw new Error("Holdout execution is forbidden; only development scoring is supported.");
+  if ((input.split !== undefined || input.validateCasesOnly) && input.caseSetPath === undefined) throw new Error("Readiness split or validation-only mode requires --case-set.");
+  const readiness = input.caseSetPath === undefined ? undefined : loadReadiness(input.caseSetPath, input.validateCasesOnly === true);
   const sourceRoot = mkdtempSync(join(tmpdir(), "triage-retrieval-eval-"));
   const tickets = new TicketRepository(sourceRoot, resolve("data/seed/tickets.json"));
   const store = RetrievalStore.open(":memory:");
@@ -105,6 +158,8 @@ export async function evaluateRetrieval(input: { provider?: EmbeddingProvider; c
   let embeddingCalls = 0;
   let embeddingInputs = 0;
   let embeddingMs = 0;
+  let semanticFailure: string | undefined;
+  let manager: IndexManager | undefined;
   const provider = input.provider === undefined ? undefined : {
     model: input.provider.model,
     embed: async (texts: readonly string[], signal: AbortSignal) => {
@@ -112,6 +167,7 @@ export async function evaluateRetrieval(input: { provider?: EmbeddingProvider; c
       embeddingCalls += 1;
       embeddingInputs += texts.length;
       try { return await input.provider!.embed(texts, signal); }
+      catch (error) { semanticFailure = error instanceof EmbeddingProviderError ? error.code : "PROVIDER_ERROR"; throw error; }
       finally { embeddingMs += performance.now() - startedAt; }
     },
   };
@@ -119,31 +175,51 @@ export async function evaluateRetrieval(input: { provider?: EmbeddingProvider; c
     await tickets.initialize();
     const [articles, seedOracles] = await Promise.all([
       new KnowledgeRepository(resolve("data/knowledge")).list(),
-      loadEvaluationOracles(),
+      readiness === undefined ? loadEvaluationOracles() : Promise.resolve([]),
     ]);
-    const syntheticScenarios = SYNTHETIC_RETRIEVAL_EVALUATION_SCENARIOS;
-    const oracles = [...seedOracles, ...syntheticScenarios.map(({ oracle }) => oracle)];
-    const completedSnapshots = snapshotsAtOrBeforeCutoff(input.completedSnapshots ?? []);
+    const syntheticScenarios = readiness === undefined ? SYNTHETIC_RETRIEVAL_EVALUATION_SCENARIOS : [];
+    const oracles: ScoringOracle[] = readiness === undefined
+      ? [...seedOracles, ...syntheticScenarios.map(({ oracle }) => oracle)]
+      : readiness.development.map((entry) => ({ ticketId: entry.id, retrieval: entry.expectation, family: entry.topic }));
+    const completedSnapshots = (input.completedSnapshots ?? []).filter(({ ticket }) => ticket.updatedAt <= (readiness?.manifest.cutoff ?? SCENARIO_CUTOFF));
     const snapshot = loadRetrievalSources({ articles, reusable: unavailableReusableKnowledge(), completedSnapshots });
+    const articleSizes = articles.map(({ id, body }) => ({ articleId: id, sourceCharacters: body.length, diagnosisPromptCharacters: body.slice(0, 1800).length, classificationAndDraftBodyCharacters: body.length }));
+    if (readiness !== undefined) {
+      const projectedHash = hashText(JSON.stringify(snapshot.resources.map(({ resource }) => [resource.key, resource.contentHash]).sort()));
+      if (projectedHash !== readiness.manifest.corpusHash) throw new Error("Readiness corpus hash mismatch; content requires review.");
+      validateReadinessCases(readiness.development, snapshot.resources);
+      try { validateReadinessCases(readiness.holdout, snapshot.resources); }
+      catch { throw new Error("Holdout structural/source binding validation failed; no holdout content was executed or disclosed."); }
+      if (input.validateCasesOnly) return {
+        mode: "readiness-validation-only", evaluatedSplit: null, holdoutExecuted: false,
+        sourceCommit: sourceCommit(), contentSourceRevision: readiness.manifest.sourceRevision,
+        manifestHash: readiness.manifestHash, caseHashes: { development: readiness.manifest.development.sha256, holdout: readiness.manifest.holdout.sha256 },
+        corpusHash: projectedHash, representationVersion: REPRESENTATION_VERSION, scenarioCutoff: readiness.manifest.cutoff,
+        validation: { status: "passed", developmentCount: readiness.development.length, holdoutCount: readiness.holdout.length, developmentApproved: readiness.development.filter(({ review }) => review.status === "approved").length },
+        semanticEvidence: "not-run", articleSizes, timingsMs: { embeddingCalls: 0, embeddingInputs: 0 },
+      };
+    }
     const frozenCorpusKeys = new Set(snapshot.resources.map(({ resource }) => resource.key));
     validateLabelsAgainstCorpus(oracles, frozenCorpusKeys);
-    const manager = new IndexManager({ store, load: async () => snapshot, ...(provider === undefined ? {} : { provider }) });
+    manager = new IndexManager({ store, load: async () => snapshot, ...(provider === undefined ? {} : { provider }) });
     const refreshStartedAt = performance.now();
     await manager.refresh(new AbortController().signal);
+    if (readiness && semanticFailure) throw new Error(`Readiness semantic evaluation failed: ${semanticFailure}.`);
     refreshMs = performance.now() - refreshStartedAt;
     const scenarios: ScenarioReport[] = [];
-    const evaluationInputs = [
+    const evaluationInputs = readiness === undefined ? [
       ...(await Promise.all(seedOracles
         .filter((oracle) => oracle.retrieval !== undefined)
         .map(async (oracle) => ({ fixtureId: undefined, ticket: await tickets.get(oracle.ticketId), oracle })))),
       ...syntheticScenarios.map(({ fixtureId, ticket, oracle }) => ({ fixtureId, ticket, oracle })),
-    ];
+    ] : readiness.development.map((entry, index) => ({ fixtureId: undefined, ticket: entry.ticket, oracle: oracles[index]! }));
     for (const { ticket, oracle, fixtureId } of evaluationInputs) {
       if (oracle.retrieval === undefined) continue;
       const references = deterministicReferences(ticket);
       const query = buildRetrievalQuery({ ticket, customerReplies: [], customerReplyWatermark: "seed", references });
       const retrievalStartedAt = performance.now();
       const result = await retrieve({ query, ...(input.semanticQueryFormat === undefined ? {} : { semanticQueryText: formatQwen3RetrievalQuery(query.queryText, input.semanticQueryFormat) }), store, limits: K_BUDGET, ...(provider === undefined ? {} : { provider }), signal: new AbortController().signal });
+      if (readiness && provider && result.semantic.status !== "used") throw new Error(`Readiness semantic evaluation failed: ${semanticFailure ?? result.semantic.reason ?? result.semantic.status}.`);
       retrievalMs += performance.now() - retrievalStartedAt;
       const lexicalKeys = rankedCandidateKeys(result.candidates, "lexical");
       const semanticKeys = rankedCandidateKeys(result.candidates, "semantic");
@@ -154,6 +230,7 @@ export async function evaluateRetrieval(input: { provider?: EmbeddingProvider; c
         ...(candidate.lexical ? { lexical: candidate.lexical.matches.map(({ representationId, score, rank }) => ({ representationId, score, rank })) } : {}),
         ...(candidate.semantic ? { semantic: candidate.semantic.matches.map(({ representationId, score, rank }) => ({ representationId, score, rank })) } : {}),
       }]));
+      const readinessCase = readiness?.development.find(({ id }) => id === oracle.ticketId);
       scenarios.push({
         ticketId: oracle.ticketId,
         ...(fixtureId === undefined ? {} : { syntheticFixtureId: fixtureId }),
@@ -174,6 +251,13 @@ export async function evaluateRetrieval(input: { provider?: EmbeddingProvider; c
           semantic: result.semantic.status === "used" ? scoreRanked(semanticKeys as any, oracle.retrieval, 5) : { recallAtK: null, precisionAtK: null },
         },
         channelStatuses: { lexical: result.lexical.status, semantic: result.semantic.status },
+        ...(readinessCase === undefined ? {} : {
+          topic: readinessCase.topic, families: readinessCase.families, labelsComplete: readinessCase.expectation.labelsComplete,
+          sectionDiagnostics: [...new Set([...readinessCase.expectation.relevantResourceKeys, ...unionKeys])].flatMap((resourceKey) => (["lexical", "semantic"] as const).map((channel) => ({
+            resourceKey, channel,
+            ...evaluateSectionEvidence({ candidate: result.candidates.find((candidate) => candidate.resourceKey === resourceKey), channel, channelAvailable: result[channel].status === "used", bindings: readinessCase.supportingSections }),
+          }))),
+        }),
       });
     }
     const evaluatedMetadata = store.metadata();
@@ -181,7 +265,7 @@ export async function evaluateRetrieval(input: { provider?: EmbeddingProvider; c
     const oracleHash = createHash("sha256").update(JSON.stringify(oracles)).digest("hex");
     const syntheticScenarioHash = createHash("sha256").update(JSON.stringify(syntheticScenarios)).digest("hex");
     const perTypeMetrics = metricBreakdown(scenarios, new Map(oracles.map((oracle) => [oracle.ticketId, oracle])));
-    const perFamilyMetrics = familyBreakdown(scenarios);
+    const perFamilyMetrics = readiness === undefined ? familyBreakdown(scenarios) : readinessGroupMetrics(scenarios, oracles, "families");
     const excludedCounts = exclusionBreakdown(scenarios, new Map(oracles.map((oracle) => [oracle.ticketId, oracle])));
     const required = scenarios.map(({ pool }) => pool.requiredCoverage).filter((value): value is number => value !== null);
     const baselineRequired = scenarios.map((scenario) => {
@@ -198,7 +282,7 @@ export async function evaluateRetrieval(input: { provider?: EmbeddingProvider; c
       oracleHash,
       syntheticScenarioHash,
       syntheticScenarioCount: syntheticScenarios.length,
-      scenarioCutoff: SCENARIO_CUTOFF,
+      scenarioCutoff: readiness?.manifest.cutoff ?? SCENARIO_CUTOFF,
       corpusHash,
       indexGeneration: evaluatedMetadata.generation,
       lexicalGeneration: evaluatedMetadata.lexicalGeneration,
@@ -244,9 +328,21 @@ export async function evaluateRetrieval(input: { provider?: EmbeddingProvider; c
         selfTicketExclusion: "enforced at retrieval query time",
       },
       unjudgedHits: scenarios.flatMap(({ ticketId, pool }) => pool.unjudgedKeys.map((resourceKey) => ({ ticketId, resourceKey }))),
-      reviewedContrastFamilies: CONTRAST_FAMILIES,
+      reviewedContrastFamilies: readiness === undefined ? CONTRAST_FAMILIES : [],
+      ...(readiness === undefined ? {} : {
+        evaluatedSplit: "development", holdoutExecuted: false,
+        contentSourceRevision: readiness.manifest.sourceRevision, manifestHash: readiness.manifestHash,
+        caseHashes: { development: readiness.manifest.development.sha256, holdout: readiness.manifest.holdout.sha256 },
+        articleSizes, sectionSummary: sectionSummary(scenarios),
+        perTopicMetrics: readinessGroupMetrics(scenarios, oracles, "topic"),
+        developmentDisagreements: developmentDisagreements(scenarios),
+        disagreementComparableCases: scenarios.filter(({ channelStatuses }) => channelStatuses.lexical === "used" && channelStatuses.semantic === "used").length,
+        labelCompleteness: { complete: readiness.development.filter(({ expectation }) => expectation.labelsComplete).length, incomplete: readiness.development.filter(({ expectation }) => !expectation.labelsComplete).length },
+        corpusLimitations: { unavailableFamilies: snapshot.unavailableFamilies, syntheticCasesOnly: true, historicalMetricComparison: "invalid: corpus and case set changed together", sectionOrderingEvidence: "supporting best match and lower supporting match are separate; any match alone does not establish useful ordering" },
+      }),
     };
   } finally {
+    await manager?.close();
     store.close();
     rmSync(sourceRoot, { recursive: true, force: true });
   }
@@ -260,6 +356,43 @@ export function deterministicArticleRequiredCoverage(
   if (articleRequired.length === 0) return null;
   const articles = new Set(deterministicReferenceKeys.filter((key) => key.startsWith("knowledge-article:")));
   return articleRequired.filter((key) => articles.has(key)).length / articleRequired.length;
+}
+
+function sectionSummary(scenarios: readonly ScenarioReport[]) {
+  return Object.fromEntries((["lexical", "semantic"] as const).map((channel) => {
+    const rows = scenarios.flatMap(({ sectionDiagnostics }) => sectionDiagnostics ?? []).filter((row) => row.channel === channel);
+    const supportingBestMatch = rows.filter(({ status }) => status === "supporting-best-match").length;
+    const wrongBestSection = rows.filter(({ status }) => status === "right-article-wrong-best-section").length;
+    const judged = supportingBestMatch + wrongBestSection;
+    return [channel, {
+      judged, supportingBestMatch, wrongBestSection,
+      supportingBestMatchRate: judged === 0 ? null : supportingBestMatch / judged,
+      lowerSupportingMatch: rows.filter(({ status, supportingMatchPresent }) => status === "right-article-wrong-best-section" && supportingMatchPresent).length,
+      anySupportingMatch: rows.filter(({ supportingMatchPresent }) => supportingMatchPresent === true).length,
+      excluded: Object.fromEntries((["resource-missing", "channel-unavailable", "unjudged-section"] as const).map((status) => [status, rows.filter((row) => row.status === status).length])),
+    }];
+  }));
+}
+
+function developmentDisagreements(scenarios: readonly ScenarioReport[]) {
+  return scenarios.filter(({ channelStatuses }) => channelStatuses.lexical === "used" && channelStatuses.semantic === "used").flatMap((scenario) => {
+    const sectionDifferences = (scenario.sectionDiagnostics ?? []).filter(({ channel }) => channel === "lexical").flatMap((lexical) => {
+      const semantic = scenario.sectionDiagnostics!.find((row) => row.channel === "semantic" && row.resourceKey === lexical.resourceKey)!;
+      if (lexical.bestRepresentationId === semantic.bestRepresentationId && lexical.status === semantic.status) return [];
+      return [{ resourceKey: lexical.resourceKey, lexical, semantic }];
+    });
+    const rankingDiffers = JSON.stringify(scenario.lexicalKeys) !== JSON.stringify(scenario.semanticKeys);
+    return rankingDiffers || sectionDifferences.length > 0 ? [{ caseId: scenario.ticketId, rankingDiffers, lexicalKeys: scenario.lexicalKeys, semanticKeys: scenario.semanticKeys, sectionDifferences }] : [];
+  });
+}
+
+function readinessGroupMetrics(scenarios: readonly ScenarioReport[], oracles: readonly ScoringOracle[], field: "topic" | "families") {
+  const groups = new Set(scenarios.flatMap((scenario) => field === "topic" ? [scenario.topic!] : scenario.families!));
+  const oracleMap = new Map(oracles.map((oracle) => [oracle.ticketId, oracle]));
+  return Object.fromEntries([...groups].map((group) => {
+    const selected = scenarios.filter((scenario) => field === "topic" ? scenario.topic === group : scenario.families!.some((family) => family === group));
+    return [group, { ...familyBreakdown(selected.map((scenario) => ({ ...scenario, family: group })))[group] as object, perTypeMetrics: metricBreakdown(selected, oracleMap), sectionSummary: sectionSummary(selected) }];
+  }));
 }
 
 function deterministicReferences(ticket: Parameters<typeof buildConversationContextForTicket>[0]["ticket"]): readonly Reference[] {
@@ -312,7 +445,7 @@ function sourceCommit(): string {
 
 function average(values: readonly number[]): number | null { return values.length === 0 ? null : values.reduce((sum, value) => sum + value, 0) / values.length; }
 
-function metricBreakdown(scenarios: readonly ScenarioReport[], oracles: ReadonlyMap<string, EvaluationOracle>): Record<string, unknown> {
+function metricBreakdown(scenarios: readonly ScenarioReport[], oracles: ReadonlyMap<string, ScoringOracle>): Record<string, unknown> {
   type ChannelMetrics = Record<string, number | null>;
   type MetricEntry = { scenarios: number; lexical: ChannelMetrics; semantic: ChannelMetrics; exclusions: { lexical: Record<string, number>; semantic: Record<string, number> } };
   const result: Record<string, MetricEntry> = Object.fromEntries(([
@@ -358,7 +491,7 @@ function emptyRankedMetrics(): Record<string, number | null> {
   return Object.fromEntries([1, 3, 5].flatMap((k) => [[`recallAt${k}`, null], [`precisionAt${k}`, null]]));
 }
 
-function exclusionBreakdown(scenarios: readonly ScenarioReport[], oracles: ReadonlyMap<string, EvaluationOracle>): { incompletePrecision: number; semanticUnavailable: number } {
+function exclusionBreakdown(scenarios: readonly ScenarioReport[], oracles: ReadonlyMap<string, ScoringOracle>): { incompletePrecision: number; semanticUnavailable: number } {
   let incompletePrecision = 0;
   for (const scenario of scenarios) {
     const expectation = oracles.get(scenario.ticketId)?.retrieval;
@@ -385,7 +518,7 @@ function familyBreakdown(scenarios: readonly ScenarioReport[]): Record<string, u
   }]));
 }
 
-function coverageBreakdown(oracles: readonly EvaluationOracle[]): Record<string, unknown> {
+function coverageBreakdown(oracles: readonly ScoringOracle[]): Record<string, unknown> {
   const result: Record<string, Record<string, number>> = {};
   for (const oracle of oracles) for (const [type, value] of Object.entries(oracle.retrieval!.resourceCoverage)) {
     const counts = result[type] ?? (result[type] = {});
@@ -395,6 +528,11 @@ function coverageBreakdown(oracles: readonly EvaluationOracle[]): Record<string,
 }
 
 export function markdownReport(report: Record<string, unknown>): string {
+  if (report.mode === "readiness-validation-only") return [
+    "# Knowledge readiness validation", "",
+    ...Object.entries(report).map(([key, value]) => `- ${key}: ${JSON.stringify(value)}`), "",
+    "Both case files were structurally validated. No retrieval or holdout execution occurred.", "",
+  ].join("\n");
   const pools = Array.isArray(report.candidatePools) ? report.candidatePools as Array<Record<string, unknown>> : [];
   const perType = (report.perTypeMetrics ?? {}) as Record<string, { scenarios: number; lexical: Record<string, number | null>; semantic: Record<string, number | null> }>;
   const perFamily = (report.perFamilyMetrics ?? {}) as Record<string, { scenarios: number; candidateRecall: number | null; requiredCoverage: number | null }>;
@@ -433,6 +571,11 @@ export function markdownReport(report: Record<string, unknown>): string {
     `- K budget: ${JSON.stringify(report.kBudget)}`,
     `- Channel statuses: ${JSON.stringify(report.channelStatuses)}`,
     `- Scenarios: ${report.scenarioCount}`,
+    ...(report.evaluatedSplit === "development" ? [
+      `- Evaluated split: ${report.evaluatedSplit}`, `- Holdout executed: ${report.holdoutExecuted}`,
+      `- Content/case source revision: ${report.contentSourceRevision}`, `- Manifest hash: ${report.manifestHash}`,
+      `- Case hashes: ${JSON.stringify(report.caseHashes)}`, `- Label completeness: ${JSON.stringify(report.labelCompleteness)}`,
+    ] : []),
     `- Excluded from complete precision: ${(report.excludedCounts as { incompletePrecision: number } | undefined)?.incompletePrecision ?? "n/a"}`,
     `- Semantic-unavailable scenarios: ${(report.excludedCounts as { semanticUnavailable: number } | undefined)?.semanticUnavailable ?? "n/a"}`,
     "",
@@ -501,6 +644,19 @@ export function markdownReport(report: Record<string, unknown>): string {
     "",
     "## Notes",
     "",
+    ...(report.evaluatedSplit === "development" ? [
+      "## Section evidence", "", `- ${JSON.stringify(report.sectionSummary)}`, "",
+      "Supporting best matches and lower supporting matches are counted separately. Missing resources, unavailable channels and unjudged sections are excluded from judged denominators.", "",
+      "| Case | Resource | Channel | Status | Best representation | Supporting match present |",
+      "|---|---|---|---|---|---|",
+      ...pools.flatMap((pool) => ((pool.sectionDiagnostics ?? []) as SectionDiagnostic[]).map((row) => `| ${pool.ticketId} | ${row.resourceKey} | ${row.channel} | ${row.status} | ${row.bestRepresentationId ?? "n/a"} | ${row.supportingMatchPresent ?? "n/a"} |`)), "",
+      "## Development disagreements", "",
+      `- Comparable cases: ${report.disagreementComparableCases}`,
+      `- ${JSON.stringify(report.developmentDisagreements)}`, "",
+      "## Topic metrics", "", `- ${JSON.stringify(report.perTopicMetrics)}`, "",
+      "## Article source and prompt sizes", "", `- ${JSON.stringify(report.articleSizes)}`, "",
+      "## Corpus limitations", "", `- ${JSON.stringify(report.corpusLimitations)}`, "",
+    ] : []),
     report.semanticEvidence === "outstanding"
       ? "Semantic quality evidence is outstanding because no live or cached embedding provider was configured. Lexical metrics are deterministic and the corpus/oracle hashes freeze this run's identity."
       : "Semantic quality evidence was measured with the configured provider identity recorded above.",
@@ -508,13 +664,22 @@ export function markdownReport(report: Record<string, unknown>): string {
   ].join("\n");
 }
 
-async function main(): Promise<void> {
-  const options = evaluationOptionsFor(process.argv.slice(2), process.env);
-  const report = await evaluateRetrieval({ ...(options.provider === undefined ? {} : { provider: options.provider }), ...(options.semanticQueryFormat === undefined ? {} : { semanticQueryFormat: options.semanticQueryFormat }) });
+export async function runRetrievalEvaluation(args: readonly string[], env: NodeJS.ProcessEnv): Promise<Record<string, unknown>> {
+  const options = evaluationOptionsFor(args, env);
+  const report = await evaluateRetrieval(options);
   const outputDir = resolve(options.outputDir);
-  mkdirSync(outputDir, { recursive: true });
-  writeFileSync(resolve(outputDir, "evaluation.json"), `${JSON.stringify(report, null, 2)}\n`, "utf8");
-  writeFileSync(resolve(outputDir, "evaluation.md"), markdownReport(report), "utf8");
+  if (options.caseSetPath) {
+    mkdirSync(dirname(outputDir), { recursive: true });
+    mkdirSync(outputDir);
+  } else mkdirSync(outputDir, { recursive: true });
+  const writeOptions = { encoding: "utf8" as const, flag: options.caseSetPath ? "wx" : "w" };
+  writeFileSync(resolve(outputDir, "evaluation.json"), `${JSON.stringify(report, null, 2)}\n`, writeOptions);
+  writeFileSync(resolve(outputDir, "evaluation.md"), markdownReport(report), writeOptions);
+  return report;
+}
+
+async function main(): Promise<void> {
+  const report = await runRetrievalEvaluation(process.argv.slice(2), process.env);
   console.log(JSON.stringify(report, null, 2));
   console.log(markdownReport(report));
 }
@@ -523,14 +688,31 @@ export function providerForEvaluation(args: readonly string[], env: NodeJS.Proce
   return evaluationOptionsFor(args, env).provider;
 }
 
-export function evaluationOptionsFor(args: readonly string[], env: NodeJS.ProcessEnv): { provider?: EmbeddingProvider; semanticQueryFormat?: SemanticQueryFormat; outputDir: string } {
+export function evaluationOptionsFor(args: readonly string[], env: NodeJS.ProcessEnv): EvaluationInput & { outputDir: string } {
   let liveEmbeddings = false;
   let useQwen3Instruction = false;
   let outputDir = "reports/retrieval";
+  let caseSetPath: string | undefined;
+  let split: "development" | undefined;
+  let validateCasesOnly = false;
+  const seen = new Set<string>();
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
+    if (seen.has(arg!)) throw new Error(`Duplicate retrieval evaluation option: ${arg}.`);
+    seen.add(arg!);
     if (arg === "--live-embeddings") { liveEmbeddings = true; continue; }
     if (arg === "--qwen3-retrieval-instruction") { useQwen3Instruction = true; continue; }
+    if (arg === "--validate-cases-only") { validateCasesOnly = true; continue; }
+    if (arg === "--case-set" || arg === "--split") {
+      const value = args[++index];
+      if (!value || value.startsWith("--")) throw new Error(`${arg} requires ${arg === "--case-set" ? "a manifest path" : "development"}.`);
+      if (arg === "--case-set") caseSetPath = value;
+      else {
+        if (value !== "development") throw new Error("Holdout execution is forbidden; --split supports only development.");
+        split = value;
+      }
+      continue;
+    }
     if (arg === "--output-dir") {
       const value = args[index + 1];
       if (!value || value.startsWith("--")) throw new Error("--output-dir requires a directory.");
@@ -540,13 +722,21 @@ export function evaluationOptionsFor(args: readonly string[], env: NodeJS.Proces
     }
     throw new Error(`Unknown retrieval evaluation option: ${arg}.`);
   }
+  if (caseSetPath === undefined && (split !== undefined || validateCasesOnly)) throw new Error("Readiness split or validation-only mode requires --case-set.");
+  if (validateCasesOnly && (liveEmbeddings || useQwen3Instruction)) throw new Error("Validation-only mode conflicts with live embedding options.");
+  if (caseSetPath !== undefined) {
+    if (!seen.has("--output-dir")) throw new Error("Readiness runs require an explicit --output-dir.");
+    if (existsSync(resolve(outputDir))) throw new Error("Readiness output must use a new directory; historical/existing evidence cannot be overwritten.");
+    loadReadiness(caseSetPath, validateCasesOnly);
+  }
+  const readinessOptions = caseSetPath === undefined ? {} : { caseSetPath, split: split ?? "development" as const, validateCasesOnly };
   if (useQwen3Instruction && !liveEmbeddings) throw new Error("--qwen3-retrieval-instruction requires --live-embeddings.");
-  if (!liveEmbeddings) return { outputDir };
+  if (!liveEmbeddings) return { outputDir, ...readinessOptions };
   let provider: EmbeddingProvider | undefined;
   try { provider = embeddingProviderFromEnv(env); } catch { throw new Error("--live-embeddings requires the complete TRIAGE_EMBEDDING_ENDPOINT, TRIAGE_EMBEDDING_MODEL, TRIAGE_EMBEDDING_REVISION, and TRIAGE_EMBEDDING_DIMENSIONS tuple."); }
   if (provider === undefined) throw new Error("--live-embeddings requires the complete TRIAGE_EMBEDDING_ENDPOINT, TRIAGE_EMBEDDING_MODEL, TRIAGE_EMBEDDING_REVISION, and TRIAGE_EMBEDDING_DIMENSIONS tuple.");
   if (useQwen3Instruction && !/^qwen3-embedding(?::|$)/i.test(provider.model.id)) throw new Error("--qwen3-retrieval-instruction requires a qwen3-embedding model.");
-  return { provider, ...(useQwen3Instruction ? { semanticQueryFormat: QWEN3_RETRIEVAL_QUERY_FORMAT } : {}), outputDir };
+  return { provider, ...(useQwen3Instruction ? { semanticQueryFormat: QWEN3_RETRIEVAL_QUERY_FORMAT } : {}), outputDir, ...readinessOptions };
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) main().catch((error: unknown) => { console.error(error instanceof Error ? error.message : error); process.exitCode = 1; });

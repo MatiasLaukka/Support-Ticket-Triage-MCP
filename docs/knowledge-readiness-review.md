@@ -214,7 +214,7 @@ causes from the symptom. Compare the redacted payload and validation response
 before recommending changes; this article supplies no accepted timestamp syntax.
 If the event is present but a flow or segment did not qualify, inspect its rules.
 Flow filters, consent, smart sending, and prior entry need their own evidence;
-see [flow trigger troubleshooting](flow-trigger-troubleshooting.md).
+see [flow trigger troubleshooting](../data/knowledge/flow-trigger-troubleshooting.md).
 
 ## Event isolated versus broad impact
 
@@ -235,7 +235,7 @@ If the timeline remains missing or results conflict, hand off redacted payload,
 request identifiers, times, affected scope, and the checks already completed.
 Use trusted evidence before claiming incident impact or resolution, and do not
 ask customers to repeat evidence already provided. The
-[support operations playbook](support-operations-playbook.md) sets evidence,
+[support operations playbook](../data/knowledge/support-operations-playbook.md) sets evidence,
 routing, and approval boundaries; no ingestion SLA is defined here.
 ```
 
@@ -292,9 +292,9 @@ Verify entry or the expected exclusion for that case; entry alone is not proof
 of message eligibility. Continued failure requires the event, profile, flow,
 timing, settings, and unresolved checks for handoff. Do not claim mapping or flow
 behavior is fixed without recorded correction and verification. For absent or
-delayed events, see [event tracking debugging](event-tracking-debugging.md).
+delayed events, see [event tracking debugging](../data/knowledge/event-tracking-debugging.md).
 Approval boundaries remain in the
-[support operations playbook](support-operations-playbook.md).
+[support operations playbook](../data/knowledge/support-operations-playbook.md).
 ```
 
 #### performance-troubleshooting: classification and draft knowledgeArticles body
@@ -351,7 +351,7 @@ platform activity using the affected object, time window, and impact scope.
 Check platform telemetry or other trusted evidence before claiming a fix. Explain
 the suspected area in plain language and request only evidence that changes the
 next action. Follow the approval and evidence boundaries in the
-[support operations playbook](support-operations-playbook.md).
+[support operations playbook](../data/knowledge/support-operations-playbook.md).
 ```
 
 #### webhook-signature-validation: classification and draft knowledgeArticles body
@@ -407,7 +407,7 @@ signature issue is fixed. For latency, compare its event and attempt timeline
 again; successful delivery alone does not explain the delay. If a check fails or
 evidence conflicts, hand off delivery identity, redacted comparisons, timing,
 response status, and unresolved questions. Keep the cause provisional. The
-[support operations playbook](support-operations-playbook.md) defines approval
+[support operations playbook](../data/knowledge/support-operations-playbook.md) defines approval
 and evidence boundaries; it supplies no retry schedule or cryptographic recipe.
 ```
 

@@ -1258,22 +1258,58 @@ tags: events, tracking, metrics, timeline
 ---
 # Event tracking debugging
 
-Event tracking issues require the metric name, event timestamp, profile
-identifier, payload shape, API response, and whether the event appears in the
-profile activity timeline. A successful API response does not always mean the
-event has qualified every flow or segment; ingestion delay, malformed customer
-properties, duplicate profile identifiers, or timestamp conversion can affect
-downstream behavior.
+A symptom alone does not confirm a cause. Do not claim a fix without verification.
+An accepted API response, timeline appearance, and downstream qualification are
+separate observations. Match event/profile identity and time before interpreting
+a missing entry. Multiple affected stores with accepted events and missing
+timeline updates support broad-impact investigation; one isolated example does
+not establish an incident. Event presence calls for qualification checks before
+blaming ingestion for a missing flow entry. Keep missing or contradictory
+evidence explicit. Do not claim data loss, promise an ingestion deadline, or
+prescribe an undocumented timestamp syntax. Verify the affected event and
+downstream result after any governed correction before calling it fixed.
 
-Ask for the profile email or customer ID, event name, event timestamp with time
-zone, request ID if available, and a sample payload with secrets removed.
-Compare storefront time, API accepted time, and activity timeline time before
-declaring data loss. If several customers report the same delay in one region,
-correlate tickets before treating each report as isolated.
+## Event identity and timing evidence
 
-Customer-facing phrasing should ask for profile, metric, timestamp, and payload
-details. It should explain that the team will compare the event payload,
-profile timeline, and downstream qualification before recommending a change.
+Collect metric/event name, profile email or customer ID, event timestamp with time
+zone, API response status, request/event ID when available, and a sample payload
+with secrets removed. Reuse supplied details. Compare payload shape and profile
+identity with the activity timeline. Compare storefront time, API accepted time,
+and timeline time for the same event. Record which observations are missing;
+an accepted response alone does not prove timeline appearance or data loss.
+
+## Event absence versus downstream qualification
+
+If the event is absent, compare identity and timing before narrowing the cause.
+Ingestion delay, malformed customer properties, duplicate profile identifiers,
+and timestamp conversion are possible investigation areas, not established
+causes from the symptom. Compare the redacted payload and validation response
+before recommending changes; this article supplies no accepted timestamp syntax.
+If the event is present but a flow or segment did not qualify, inspect its rules.
+Flow filters, consent, smart sending, and prior entry need their own evidence;
+see [flow trigger troubleshooting](flow-trigger-troubleshooting.md).
+
+## Event isolated versus broad impact
+
+For missing timeline updates, compare affected stores/profiles, region, event
+acceptance evidence, and overlapping times. Multiple stores with accepted events
+and missing timelines support platform investigation, but do not independently
+prove a root cause or a mitigation. Correlate related customer reports before
+treating each as isolated. A single affected profile or conflicting timeline
+results need identity/timing comparisons and further scope evidence. Do not
+promote a similar report into proof that the same cause applies.
+
+## Event verification and escalation
+
+After a governed correction, compare the affected event's response, profile
+timeline, and relevant downstream qualification. A visible event verifies that
+observation only; it does not establish that every flow or segment should qualify.
+If the timeline remains missing or results conflict, hand off redacted payload,
+request identifiers, times, affected scope, and the checks already completed.
+Use trusted evidence before claiming incident impact or resolution, and do not
+ask customers to repeat evidence already provided. The
+[support operations playbook](support-operations-playbook.md) sets evidence,
+routing, and approval boundaries; no ingestion SLA is defined here.
 `,
   "flow-trigger-troubleshooting.md": `---
 id: flow-trigger-troubleshooting
@@ -1282,22 +1318,57 @@ tags: flows, triggers, filters, consent
 ---
 # Flow trigger troubleshooting
 
-When a flow does not trigger, confirm the trigger event, profile identity, event
-timestamp, flow status, trigger filters, profile filters, consent state, smart
-sending, and whether the profile has entered the same flow before. The event may
-exist in the profile timeline while the profile is still excluded by filters or
-message eligibility rules.
+A symptom alone does not confirm a cause. Do not claim a fix without verification.
+A missing flow entry requires separate checks of event presence and profile
+eligibility. An accepted event or visible timeline entry does not establish that
+the profile should enter or receive a message. Compare event identity and timing,
+flow status, trigger/profile filters, consent, smart sending, and prior entry.
+An observed exclusion explains that check only; it does not prove every other
+eligibility condition passed. Missing or conflicting records keep the diagnosis
+open. Recommend a correction only after comparing the relevant qualification
+evidence, retain consent protections, and verify the result through the governed
+workflow before claiming a fix.
 
-Ask for the flow name, profile email, trigger event name, event timestamp, and a
-screenshot or export of the profile's flow history. Review flow analytics and
-qualification reasons before changing priority. For abandoned-cart and browse
-abandonment flows, compare the ecommerce event payload with the trigger metric
-and product identifiers.
+## Flow event-presence evidence
 
-Customer-facing phrasing should ask for profile email, trigger event, event
-timestamp, flow filters, consent state, and smart sending details. Avoid saying
-the platform failed to trigger the flow until qualification evidence confirms
-the profile should have entered.
+Collect flow name, profile email or customer ID, trigger event name, timestamp
+with time zone, and profile flow history. Reuse facts already supplied. Compare
+the event payload, profile timeline, and flow trigger metric for the same profile
+and time. For abandoned-cart and browse abandonment flows, check ecommerce
+product identifiers and the relevant event, such as Added to Cart or Viewed
+Product. A near-matching event name is not proof of the configured trigger.
+An absent event needs event-tracking investigation before a flow failure claim.
+
+## Flow filters and message eligibility
+
+When the matching event is present, compare flow status, trigger filters, profile
+filters, consent state, smart sending, and whether the profile entered before.
+Use flow analytics and qualification reasons to identify the observed exclusion.
+Presence in a timeline does not prove eligibility, and one passed filter does not
+prove every check passed. Do not bypass consent or message protections to make a
+flow appear to work. Review actual qualification evidence before changing
+priority or recommending a setup correction.
+
+## Flow missing or contradictory observations
+
+For a missing flow entry, request only absent evidence that changes the next
+action. If one record shows an event and another does not, align profile identity,
+event identity, and timestamps before choosing ingestion or eligibility as the
+explanation. If exclusion and apparent eligibility conflict, compare the relevant
+flow history and settings rather than asserting platform failure. Keep the
+diagnosis provisional while those comparisons are incomplete.
+
+## Flow correction verification and handoff
+
+After qualification evidence supports a correction, use the governed workflow
+and compare the affected profile's event, flow history, and qualification result.
+Verify entry or the expected exclusion for that case; entry alone is not proof
+of message eligibility. Continued failure requires the event, profile, flow,
+timing, settings, and unresolved checks for handoff. Do not claim mapping or flow
+behavior is fixed without recorded correction and verification. For absent or
+delayed events, see [event tracking debugging](event-tracking-debugging.md).
+Approval boundaries remain in the
+[support operations playbook](support-operations-playbook.md).
 `,
   "performance-troubleshooting.md": `---
 id: performance-troubleshooting
@@ -1306,23 +1377,56 @@ tags: performance, loading, browser, investigation
 ---
 # Performance troubleshooting
 
-Performance issues usually start with the exact action the user attempted, the
-time of failure, browser or session details, and the affected scope. A blank
-page, slow load, timeout, or repeated loading state can be caused by account
-configuration, browser session state, a campaign or segment that is expensive
-to load, or a platform-side service delay.
+A symptom alone does not confirm a cause. Do not claim a fix without verification.
+For a blank campaign editor, distinguish success in an isolated browser session
+from failure across sessions and admins with console loading evidence.
+ChunkLoadError is a clue, not proof by itself. Missing or conflicting isolation
+results require comparison before choosing a cause. Only suggest continuing in
+a working session when the same campaign actually opens there. Cross-session
+failure supports frontend investigation; it does not specify a mitigation.
+Any correction needs the governed workflow and a check of the affected campaign
+before a fix claim. Other slow pages, timeouts, and expensive campaign or segment
+loads still require object, timing, and impact evidence.
 
-Ask the customer for the page or object they were opening, the failure
-timestamp with time zone, browser and session details, and whether the same
-issue affects other users, profiles, campaigns, or accounts. If the customer
-has already provided those details, do not ask for the same evidence again.
-Compare the timing, object scope, browser/session behavior, and recent platform
-activity before recommending a workaround or escalation.
+## Campaign editor evidence and scope
 
-Customer-facing phrasing should explain the suspected area in plain language.
-Do not promise that a performance issue is fixed until the affected object,
-time window, and impact scope have been checked against platform telemetry or
-other trusted evidence.
+For editor loading failures, collect the campaign or page, failure time with time
+zone, browser/session details, and affected users or accounts. Reuse supplied
+facts. Compare the same campaign in a private window, another browser, and with
+another admin. If it remains blank, collect the console loading error and retry
+time; another screenshot of the same blank page does not distinguish the causes.
+Record which checks worked, failed, or were not tried. Compare different objects
+and time windows separately so unlike checks do not appear to agree.
+
+## Campaign editor session-isolation branch
+
+When the same campaign opens in a private window or another browser, session
+state is a supported investigation path. Continuing in that working session is
+a scoped next step, not evidence that a platform fix was applied. If clearing
+site data is proposed through the support workflow, verify the editor afterward
+before calling it resolved. A later failure or inconsistent comparison keeps
+the cause open; record both results rather than selecting only the success.
+
+## Campaign editor frontend-loading branch
+
+When private-window, different-browser, and another-admin checks all fail for
+the same campaign, compare the console error and retry time for frontend
+investigation. ChunkLoadError alone does not establish platform fault. Successful
+isolation contradicts a simple cross-session failure explanation. Hand off the
+campaign, time, checks, and console evidence to engineering when that evidence
+supports the path. Do not promise an unspecified frontend mitigation.
+
+## Performance verification and unresolved checks
+
+For an editor correction, verify that the affected campaign opens in the tested
+session and record the result and time. Continued failure requires a handoff of
+the failed checks, not a resolution claim. For other performance issues, compare
+account configuration, expensive campaign or segment loads, browser state, and
+platform activity using the affected object, time window, and impact scope.
+Check platform telemetry or other trusted evidence before claiming a fix. Explain
+the suspected area in plain language and request only evidence that changes the
+next action. Follow the approval and evidence boundaries in the
+[support operations playbook](support-operations-playbook.md).
 `,
   "product-feedback.md": `---
 id: product-feedback
@@ -1604,21 +1708,56 @@ tags: webhooks, signatures, delivery, retries
 ---
 # Webhook signature validation
 
-Webhook signature failures often come from signing secret rotation, timestamp
-tolerance, raw body handling, proxy transformations, or verification against the
-wrong delivery payload. Delayed webhooks require comparing event creation time,
-delivery attempt time, retry history, and endpoint response codes.
+A symptom alone does not confirm a cause. Do not claim a fix without verification.
+Signature failures require comparing the exact raw request body and headers that
+were signed with receiver verification. After rotation, ask for rotation time
+and confirmation that the receiver uses the current secret, never its value.
+Only retry one delivery after confirming the current secret and verifying raw
+body handling, through the governed support workflow. Delayed delivery requires
+event creation, dispatch/attempt timing, endpoint status, and retry history before
+assigning delay to the platform or receiver. Mixed or missing evidence leaves
+both paths open. Do not invent a signing scheme, retry schedule, or guarantee.
 
-Ask for the delivery ID, endpoint URL, failure timestamp, signing secret
-rotation time, timestamp tolerance, endpoint response code, and whether raw body
-parsing changed recently. Do not collect live secrets. Compare the signed
-payload and delivery headers with the customer's verification logic before
-recommending a code change.
+## Webhook evidence and delivery identity
 
-Customer-facing phrasing should ask for delivery ID, endpoint URL, failure
-timestamp, signing secret rotation, raw body handling, and timestamp tolerance.
-Avoid saying the signature is invalid on either side until payload and header
-evidence are compared.
+Collect delivery ID, endpoint URL, failure/delivery time with time zone, endpoint
+response status, rotation time if relevant, and whether raw-body handling changed.
+Reuse provided facts. Ask about parsing, proxying, compression, or middleware
+changes and the receiver's timestamp tolerance without prescribing a tolerance.
+Use redacted evidence; never request a live secret or unredacted private logs.
+Match body and headers to the same delivery before comparing verification logic.
+
+## Webhook rotation and raw-body alternatives
+
+For failures after rotation, confirm the receiver uses the current signing secret
+without collecting or regenerating it. Timing alone does not prove a mismatch;
+unchanged secrets or failures before rotation weaken that explanation. Compare
+the exact raw body and signed headers locally with the receiver's verification
+input. A parsed or transformed payload is not that comparison. Raw-body changes
+remain a separate investigation path even when rotation is ruled out. Missing or
+conflicting observations require the remaining comparison before a code change.
+
+## Webhook dispatch delay versus retries
+
+For deliveries that eventually succeed, compare source event creation time,
+platform dispatch and delivery attempt times where available, endpoint responses,
+and retry history for the same delivery. Delay before dispatch and time spent in
+retry attempts are different observations. Event creation and final success
+alone cannot distinguish them. If dispatch timing or attempt history is absent,
+request the missing record before claiming platform delay or endpoint fault.
+Signature failures and latency can coexist; retain evidence for both paths.
+
+## Webhook verification and handoff
+
+After current-secret confirmation and raw-body verification, the demo contract
+supports retrying one delivery through the governed workflow. Check the resulting
+verification outcome and endpoint response for that delivery before claiming the
+signature issue is fixed. For latency, compare its event and attempt timeline
+again; successful delivery alone does not explain the delay. If a check fails or
+evidence conflicts, hand off delivery identity, redacted comparisons, timing,
+response status, and unresolved questions. Keep the cause provisional. The
+[support operations playbook](support-operations-playbook.md) defines approval
+and evidence boundaries; it supplies no retry schedule or cryptographic recipe.
 `,
 } as const;
 

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, readFile, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runRetrievalIndex } from "../scripts/retrieval-index.js";
@@ -9,6 +10,161 @@ import { IndexManager } from "../src/retrieval/index-manager.js";
 import { loadRetrievalV2Fixture } from "./retrieval-fixtures.js";
 import { hashRepresentation, hashResource, REPRESENTATION_VERSION } from "../src/retrieval/representations.js";
 import { RetrievalStore, RetrievalUpgradeSourceUnavailableError } from "../src/retrieval/sqlite-store.js";
+import * as embeddingProviders from "../src/retrieval/embedding-provider.js";
+import type { ReadinessCase, ReadinessManifest } from "../src/retrieval/readiness-cases.js";
+import * as retrievalSearch from "../src/retrieval/search.js";
+
+async function readinessFixture(mutate?: (manifest: ReadinessManifest, development: ReadinessCase[], holdout: ReadinessCase[]) => void) {
+  const root = await mkdtemp(join(tmpdir(), "readiness-cli-"));
+  const manifest = JSON.parse(await readFile("data/evaluation/knowledge-readiness/manifest.json", "utf8")) as ReadinessManifest;
+  const development = JSON.parse(await readFile("data/evaluation/knowledge-readiness/development.json", "utf8")) as ReadinessCase[];
+  // Synthetic test-only holdout: never inspect or rank the frozen held-out scenarios.
+  const holdout: ReadinessCase[] = [{ ...structuredClone(development[0]!), id: "test-holdout", split: "holdout", scenarioGroup: "test-holdout-group", provenance: { kind: "synthetic", basis: ["test"], derivedFrom: [] }, ticket: { ...development[0]!.ticket, subject: "DO-NOT-PRINT-HELD-OUT-QUERY", description: "DO-NOT-PRINT-HELD-OUT-QUERY" } }];
+  mutate?.(manifest, development, holdout);
+  for (const [split, cases] of [["development", development], ["holdout", holdout]] as const) {
+    const bytes = JSON.stringify(cases);
+    manifest[split].sha256 = createHash("sha256").update(bytes).digest("hex");
+    await writeFile(join(root, `${split}.json`), bytes);
+  }
+  await writeFile(join(root, "manifest.json"), JSON.stringify(manifest));
+  return { root, caseSetPath: join(root, "manifest.json"), development };
+}
+
+describe("readiness evaluation CLI", () => {
+  it.each(["index", "query"] as const)("surfaces semantic %s failures instead of reporting a degraded run as measured", async (stage) => {
+    const fixture = await readinessFixture();
+    try {
+      const provider = { model: { id: "fake", revision: "1", dimensions: 1 }, embed: async (texts: readonly string[]) => {
+        if (stage === "index" || texts.length === 1) throw new embeddingProviders.EmbeddingProviderError("PROVIDER_TIMEOUT", "private provider detail");
+        return texts.map(() => [1]);
+      } };
+      const outcome = await evaluateRetrieval({ caseSetPath: fixture.caseSetPath, provider }).then(() => "resolved", (error: Error) => error.message);
+      expect(outcome).toMatch(/semantic.*PROVIDER_TIMEOUT/i);
+      expect(outcome).not.toContain("private provider detail");
+    } finally { await rm(fixture.root, { recursive: true, force: true }); }
+  });
+
+  it("writes identical JSON/Markdown identities to a fresh output and refuses reuse", async () => {
+    const fixture = await readinessFixture();
+    const outputDir = join(fixture.root, "offline-run");
+    const args = ["--case-set", fixture.caseSetPath, "--output-dir", outputDir];
+    try {
+      await (retrievalEvaluation as any).runRetrievalEvaluation(args, {});
+      const json = await readFile(join(outputDir, "evaluation.json"), "utf8");
+      const markdown = await readFile(join(outputDir, "evaluation.md"), "utf8");
+      expect(markdown).toBe(markdownReport(JSON.parse(json)));
+      expect(json).not.toContain("DO-NOT-PRINT");
+      await expect((retrievalEvaluation as any).runRetrievalEvaluation(args, {})).rejects.toThrow(/existing|historical/i);
+      expect(await readFile(join(outputDir, "evaluation.json"), "utf8")).toBe(json);
+    } finally { await rm(fixture.root, { recursive: true, force: true }); }
+  });
+
+  it("keeps any supporting match out of the best-section numerator and scores family/topic R@1 and R@5", async () => {
+    const fixture = await readinessFixture((_m, development) => { development.splice(1); });
+    const first = fixture.development[0]!;
+    const key = first.supportingSections[0]!.resourceKey;
+    const supporting = first.supportingSections[0]!.representationIds[0]!;
+    const retrieve = vi.spyOn(retrievalSearch, "retrieve").mockResolvedValue({
+      metadata: { schemaVersion: 1, representationVersion: 3, generation: 1, lexicalGeneration: 1, semanticGeneration: 0, corpusHash: "fixture", state: "ready" },
+      lexical: { status: "used" }, semantic: { status: "unavailable" }, referenceDiagnostics: [],
+      candidates: [{ resourceKey: key, resourceType: "knowledge-article", deterministicReferences: [], knownCauseReferences: [], lexical: { bestRank: 1, bestBm25Score: -2, matches: [{ representationId: `${key}:wrong`, resourceKey: key, score: -2, rank: 1 }, { representationId: supporting, resourceKey: key, score: -1, rank: 2 }] } }],
+    });
+    try {
+      const report = await evaluateRetrieval({ caseSetPath: fixture.caseSetPath });
+      expect(report.sectionSummary).toMatchObject({ lexical: { judged: 1, supportingBestMatch: 0, wrongBestSection: 1, supportingBestMatchRate: 0, lowerSupportingMatch: 1, anySupportingMatch: 1 }, semantic: { judged: 0, supportingBestMatchRate: null } });
+      expect((report.perTopicMetrics as any)[first.topic]).toMatchObject({ perTypeMetrics: { "knowledge-article": { lexical: { recallAt1: expect.any(Number), recallAt5: expect.any(Number) } } } });
+      expect((report.perFamilyMetrics as any)[first.families[0]!]).toMatchObject({ perTypeMetrics: { "knowledge-article": { lexical: { recallAt1: expect.any(Number), recallAt5: expect.any(Number) } } } });
+      expect(report.developmentDisagreements).toEqual([]);
+    } finally { retrieve.mockRestore(); await rm(fixture.root, { recursive: true, force: true }); }
+  });
+
+  it("rejects holdout selection before constructing a configured provider", () => {
+    const construct = vi.spyOn(embeddingProviders, "embeddingProviderFromEnv");
+    try {
+      expect(() => evaluationOptionsFor(["--case-set", "missing.json", "--split", "holdout", "--live-embeddings"], {})).toThrow(/holdout/i);
+      expect(construct).not.toHaveBeenCalled();
+    } finally { construct.mockRestore(); }
+  });
+
+  it.each([
+    [["--case-set"], /requires.*path/i],
+    [["--case-set", "missing.json"], /explicit.*output-dir/i],
+    [["--case-set", "missing.json", "--output-dir", "reports/retrieval"], /historical|existing/i],
+    [["--split", "development"], /requires.*case-set/i],
+    [["--validate-cases-only"], /requires.*case-set/i],
+    [["--live-embeddings", "--live-embeddings"], /duplicate/i],
+    [["--split", "development", "--split", "holdout"], /duplicate|holdout/i],
+    [["--case-set", "missing.json", "--validate-cases-only", "--live-embeddings", "--output-dir", "new-readiness-run"], /conflict|validation-only/i],
+  ] as const)("rejects invalid readiness options %j", (args, expected) => {
+    expect(() => evaluationOptionsFor(args, {})).toThrow(expected);
+  });
+
+  it("validates both files without retrieval, provider construction, query output, or holdout labels", async () => {
+    const fixture = await readinessFixture();
+    const embed = vi.fn(async (texts: readonly string[]) => texts.map(() => [1]));
+    const construct = vi.spyOn(embeddingProviders, "embeddingProviderFromEnv");
+    const refresh = vi.spyOn(IndexManager.prototype, "refresh");
+    try {
+      const options = evaluationOptionsFor(["--case-set", fixture.caseSetPath, "--validate-cases-only", "--output-dir", join(fixture.root, "validation")], {});
+      const report = await evaluateRetrieval({ ...options, provider: { model: { id: "fake", revision: "1", dimensions: 1 }, embed } });
+      expect(report).toMatchObject({ mode: "readiness-validation-only", validation: { developmentCount: fixture.development.length, holdoutCount: 1 }, evaluatedSplit: null, holdoutExecuted: false });
+      expect(report.candidatePools).toBeUndefined();
+      expect(JSON.stringify(report)).not.toContain("test-holdout");
+      expect(markdownReport(report)).not.toContain("DO-NOT-PRINT");
+      expect(construct).not.toHaveBeenCalled();
+      expect(refresh).not.toHaveBeenCalled();
+      expect(embed).not.toHaveBeenCalled();
+    } finally { construct.mockRestore(); refresh.mockRestore(); await rm(fixture.root, { recursive: true, force: true }); }
+  });
+
+  it.each([
+    ["pending review", (_m: ReadinessManifest, d: ReadinessCase[]) => { d[0]!.review = { status: "pending" }; }, /approved review/i],
+    ["wrong representation version", (m: ReadinessManifest) => { (m as any).representationVersion = 2; }, /representation version/i],
+    ["corpus mismatch", (m: ReadinessManifest) => { m.corpusHash = "0".repeat(64); }, /corpus.*hash/i],
+    ["stale section binding", (_m: ReadinessManifest, d: ReadinessCase[]) => { d[0]!.supportingSections[0]!.sourceHash = "0".repeat(64); }, /source hash/i],
+    ["unsafe case ID", (_m: ReadinessManifest, d: ReadinessCase[]) => { d[0]!.id = "unsafe | query\ntext"; }, /safe.*case.*id/i],
+    ["traversal", (m: ReadinessManifest) => { m.development.path = "../development.json"; }, /case-set directory/i],
+    ["absolute manifest path", (m: ReadinessManifest) => { m.development.path = "C:/outside/development.json"; }, /case-set directory/i],
+  ] as const)("rejects %s before any embedding call", async (_name, mutate, expected) => {
+    const fixture = await readinessFixture(mutate);
+    const embed = vi.fn(async (texts: readonly string[]) => texts.map(() => [1]));
+    try {
+      await expect(evaluateRetrieval({ caseSetPath: fixture.caseSetPath, provider: { model: { id: "fake", revision: "1", dimensions: 1 }, embed } })).rejects.toThrow(expected);
+      expect(embed).not.toHaveBeenCalled();
+    } finally { await rm(fixture.root, { recursive: true, force: true }); }
+  });
+
+  it("checks case byte hashes before parsing scored inputs", async () => {
+    const fixture = await readinessFixture();
+    const embed = vi.fn(async (texts: readonly string[]) => texts.map(() => [1]));
+    try {
+      await writeFile(join(fixture.root, "development.json"), "invalid json");
+      await expect(evaluateRetrieval({ caseSetPath: fixture.caseSetPath, provider: { model: { id: "fake", revision: "1", dimensions: 1 }, embed } })).rejects.toThrow(/development.*hash/i);
+      expect(embed).not.toHaveBeenCalled();
+    } finally { await rm(fixture.root, { recursive: true, force: true }); }
+  });
+
+  it("scores only development through shared retrieval with section denominators and distinct source identities", async () => {
+    const fixture = await readinessFixture((manifest) => { manifest.sourceRevision = "frozen-content-revision"; });
+    const embedded: string[] = [];
+    try {
+      const report = await evaluateRetrieval({ caseSetPath: fixture.caseSetPath, semanticQueryFormat: QWEN3_RETRIEVAL_QUERY_FORMAT, provider: { model: { id: "fake", revision: "1", dimensions: 1 }, embed: async (texts) => { embedded.push(...texts); return texts.map(() => [1]); } } });
+      expect(report).toMatchObject({ evaluatedSplit: "development", holdoutExecuted: false, contentSourceRevision: "frozen-content-revision", sourceCommit: expect.stringMatching(/^[0-9a-f]{40}$/), scenarioCount: fixture.development.length, sectionSummary: { lexical: { judged: expect.any(Number), excluded: expect.any(Object), supportingBestMatch: expect.any(Number), lowerSupportingMatch: expect.any(Number) }, semantic: expect.any(Object) }, developmentDisagreements: expect.any(Array), articleSizes: expect.any(Array), perTopicMetrics: expect.any(Object) });
+      const pools = report.candidatePools as any[];
+      expect(pools.map((pool) => pool.ticketId)).toEqual(fixture.development.map((entry) => entry.id));
+      expect(pools[0]).toMatchObject({ sectionDiagnostics: expect.any(Array), labelsComplete: expect.any(Boolean) });
+      expect(embedded.some((text) => text.startsWith("Instruct:"))).toBe(true);
+      expect(embedded.join("\n")).not.toContain("DO-NOT-PRINT");
+      const markdown = markdownReport(report);
+      expect(markdown).toContain(String(report.contentSourceRevision));
+      expect(markdown).toContain(String(report.corpusHash));
+      expect(markdown).toContain("## Section evidence");
+      expect(markdown).toContain(JSON.stringify(report.sectionSummary));
+      expect(markdown).not.toContain("DO-NOT-PRINT");
+      expect(JSON.stringify(report)).not.toContain(fixture.development[0]!.ticket.subject);
+    } finally { await rm(fixture.root, { recursive: true, force: true }); }
+  });
+});
 
 describe("retrieval maintenance CLI", () => {
   it.each(["learned-known-cause", "resolved-ticket"] as const)("retains cached %s rows when static-only CLI rebuild refuses their unavailable source", async (family) => {

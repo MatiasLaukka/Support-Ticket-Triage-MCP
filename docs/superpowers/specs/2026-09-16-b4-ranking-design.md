@@ -1,7 +1,7 @@
 # B4 Resource Ranking — Design Record
 
 Date: 2026-09-16
-Status: Conversational direction approved; written specification awaiting review
+Status: Approved; implementation planning authorized
 Repository: MatiasLaukka/Support-Ticket-Triage-MCP
 Verified program baseline: `b34e0c4c703836e912e11efc1113b12bb3d1feb3` (merged PR #25)
 
@@ -234,4 +234,4 @@ Do not claim the later gates merely because the earlier gate passes. There is no
 
 ## 14. Next gate
 
-Review this written design before writing the implementation plan. Any later change to corpus, provider, limits, ranking candidates, or holdout-use rules requires an explicit experiment/design amendment rather than silent implementation discretion. The richer evidence-guided diagnostic demonstration remains a separate design using the existing diagnosis provider.
+Execute the approved implementation plan only after the current knowledge-readiness slice closes with internally consistent evidence documentation. Any later change to corpus, provider, limits, ranking candidates, or holdout-use rules requires an explicit experiment/design amendment rather than silent implementation discretion. The richer evidence-guided diagnostic demonstration remains a separate design using the existing diagnosis provider.

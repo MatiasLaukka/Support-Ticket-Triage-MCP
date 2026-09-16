@@ -1,9 +1,9 @@
 # B4 Resource Ranking — Design Record
 
 Date: 2026-09-16
-Status: Approved; implementation planning authorized
+Status: Approved design and implementation plan; B4 implementation is gated on this documentation PR merging
 Repository: MatiasLaukka/Support-Ticket-Triage-MCP
-Verified program baseline: `b34e0c4c703836e912e11efc1113b12bb3d1feb3` (merged PR #25)
+Verified program baseline: `95f603360bd98791582883aacf8ff9fc943a3932` (merged PR #26; Knowledge Readiness and its README/parity follow-up corrections)
 
 ## 1. Purpose and program boundary
 
@@ -234,4 +234,4 @@ Do not claim the later gates merely because the earlier gate passes. There is no
 
 ## 14. Next gate
 
-Execute the approved implementation plan only after the current knowledge-readiness slice closes with internally consistent evidence documentation. Any later change to corpus, provider, limits, ranking candidates, or holdout-use rules requires an explicit experiment/design amendment rather than silent implementation discretion. The richer evidence-guided diagnostic demonstration remains a separate design using the existing diagnosis provider.
+Knowledge Readiness is complete, including the merged README evidence-chronology and fixture-parity corrections. This B4 design and its implementation plan are complete. Begin B4 implementation only after this documentation PR is merged, from an isolated implementation worktree descended from that merged-main documentation commit. Any later change to corpus, provider, limits, ranking candidates, or holdout-use rules requires an explicit experiment/design amendment rather than silent implementation discretion. The richer evidence-guided diagnostic demonstration remains a separate design using the existing diagnosis provider.

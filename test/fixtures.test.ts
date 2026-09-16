@@ -49,6 +49,12 @@ const generatedArtifactPaths = [
   "data/knowledge/support-operations-playbook.md",
   "data/knowledge/webhook-signature-validation.md",
 ] as const;
+const enrichedKnowledgeFixturePaths = [
+  "data/knowledge/performance-troubleshooting.md",
+  "data/knowledge/webhook-signature-validation.md",
+  "data/knowledge/flow-trigger-troubleshooting.md",
+  "data/knowledge/event-tracking-debugging.md",
+] as const;
 
 function readJson<T>(path: string): T {
   expect(existsSync(path), `Expected generated fixture ${path}`).toBe(true);
@@ -480,6 +486,40 @@ describe("generated support fixtures", () => {
         const generatedPath = resolve(isolatedOutputRoot, artifactPath);
         expect(readCanonicalText(generatedPath)).toBe(
           readCanonicalText(resolve(root, artifactPath)),
+        );
+      }
+    } finally {
+      rmSync(temporaryRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps enriched knowledge fixture articles aligned with authoritative sources", () => {
+    const temporaryRoot = mkdtempSync(join(tmpdir(), "support-fixtures-"));
+    const copiedDistRoot = resolve(temporaryRoot, "dist");
+    const isolatedOutputRoot = resolve(temporaryRoot, "generated");
+
+    try {
+      cpSync(resolve(root, "dist"), copiedDistRoot, { recursive: true });
+      const copiedNodeModulesRoot = resolve(temporaryRoot, "node_modules");
+      mkdirSync(copiedNodeModulesRoot);
+      cpSync(
+        resolve(root, "node_modules/zod"),
+        resolve(copiedNodeModulesRoot, "zod"),
+        { recursive: true },
+      );
+      const result = spawnSync(
+        process.execPath,
+        [
+          resolve(copiedDistRoot, "scripts/generate-fixtures.js"),
+          isolatedOutputRoot,
+        ],
+        { encoding: "utf8" },
+      );
+
+      expect(result.status, result.stderr).toBe(0);
+      for (const articlePath of enrichedKnowledgeFixturePaths) {
+        expect(readCanonicalText(resolve(isolatedOutputRoot, articlePath))).toBe(
+          readCanonicalText(resolve(root, articlePath)),
         );
       }
     } finally {

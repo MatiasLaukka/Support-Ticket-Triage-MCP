@@ -58,7 +58,7 @@ const retrieval: RetrievalResult = {
 };
 
 function queryBasis(caseId: string): RankingInput["queryBasis"] {
-  return { queryHash: `query-${caseId}`, ticketId: caseId, ticketRevision: 1, customerReplyWatermark: "none" };
+  return { queryHash: "a".repeat(64), ticketId: caseId, ticketRevision: 1, customerReplyWatermark: "none" };
 }
 
 function captureCase(caseId: string): RankingCaptureCase {
@@ -177,6 +177,16 @@ describe("B4 ranking captures", () => {
     (capture.cases[0]!.retrieval.candidates[0]!.lexical!.matches[0] as any).score = 0.9;
 
     expect(() => validateRankingCapture(capture)).toThrow(/capture hash/i);
+  });
+
+  it("rejects rehashed raw customer text used as a query hash", () => {
+    const capture = structuredClone(validCapture());
+    capture.cases[0]!.queryBasis.queryHash = "Customer reports an editor failure after chunk loading.";
+
+    for (const captureCase of capture.cases) refreshCaseInputHash(captureCase);
+    rehashCapture(capture);
+
+    expect(() => validateRankingCapture(capture)).toThrow(/queryHash.*SHA-256 hash/i);
   });
 
   it("rejects an unknown raw-text field even when the capture hash is recomputed", () => {

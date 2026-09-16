@@ -219,7 +219,7 @@ function assertRetrievalIdentity(value: unknown, field: string): asserts value i
 
 function assertQueryBasis(value: unknown, field: string): asserts value is RankingInput["queryBasis"] {
   assertExactKeys(value, field, ["queryHash", "ticketId", "ticketRevision", "customerReplyWatermark"]);
-  assertNonBlank(value.queryHash, `${field}.queryHash`);
+  assertHash(value.queryHash, `${field}.queryHash`);
   assertNonBlank(value.ticketId, `${field}.ticketId`);
   if (typeof value.ticketRevision !== "number" || !Number.isSafeInteger(value.ticketRevision) || value.ticketRevision < 0) fail(`${field}.ticketRevision is invalid.`);
   if (value.customerReplyWatermark !== null && typeof value.customerReplyWatermark !== "string") fail(`${field}.customerReplyWatermark is invalid.`);

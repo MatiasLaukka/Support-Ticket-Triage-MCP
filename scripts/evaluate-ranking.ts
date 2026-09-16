@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, relative, resolve, join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -148,14 +148,16 @@ function same(left: unknown, right: unknown): boolean {
 
 function isWithin(directory: string, candidate: string): boolean {
   const child = relative(directory, candidate);
-  return child === "" || (child !== ".." && !child.startsWith(`..${candidate.includes("\\") ? "\\" : "/"}`) && !isAbsolute(child));
+  return child === "" || (child !== ".." && !child.startsWith("../") && !child.startsWith("..\\") && !isAbsolute(child));
 }
 
 function developmentCasePath(directory: string, path: string): string {
   if (isAbsolute(path)) fail("development case paths must remain relative to the manifest directory.");
   const candidate = resolve(directory, path);
   if (!isWithin(directory, candidate)) fail("development case paths must remain inside the case-set directory.");
-  return candidate;
+  const canonical = realpathSync(candidate);
+  if (!isWithin(directory, canonical)) fail("development case paths must remain inside the case-set directory.");
+  return canonical;
 }
 
 async function loadDevelopmentCaseSet(caseSetPath: string): Promise<LoadedDevelopment> {

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -149,5 +149,38 @@ describe("B4 development ranking comparison", () => {
     try {
       await expect(runRankingEvaluation(["compare-development", "--capture", fixture.capturePath, "--case-set", fixture.caseSetPath, "--output-dir", join(dirname(fixture.caseSetPath), "nested-output")])).rejects.toThrow(/readiness|case-set|experiment/i);
     } finally { await rm(fixture.root, { recursive: true, force: true }); }
+  });
+
+  it("rejects a development case file whose symlink target escapes the case-set directory", async () => {
+    const fixture = await rankingFixture();
+    const externalRoot = await mkdtemp(join(tmpdir(), "b4-ranking-external-"));
+    const outputParent = await mkdtemp(join(tmpdir(), "b4-ranking-symlink-output-"));
+    const linkPath = join(fixture.root, "linked-development.json");
+    const externalPath = join(externalRoot, "development.json");
+    try {
+      const developmentBytes = await readFile(join(fixture.root, "development.json"));
+      await writeFile(externalPath, developmentBytes);
+      await rm(join(fixture.root, "development.json"));
+      await symlink(externalPath, linkPath, "file");
+      const manifest = JSON.parse(await readFile(fixture.caseSetPath, "utf8")) as ReadinessManifest;
+      manifest.development.path = "linked-development.json";
+      const manifestBytes = JSON.stringify(manifest);
+      await writeFile(fixture.caseSetPath, manifestBytes);
+      const capture = JSON.parse(await readFile(fixture.capturePath, "utf8")) as any;
+      const manifestHash = createHash("sha256").update(manifestBytes).digest("hex");
+      capture.identity.manifestHash = manifestHash;
+      for (const captureCase of capture.cases) captureCase.manifestHash = manifestHash;
+      capture.captureHash = hashCanonicalRankingCapture({ ...capture, captureHash: undefined });
+      await writeFile(fixture.capturePath, `${JSON.stringify(capture)}\n`);
+
+      await expect(runRankingEvaluation([
+        "compare-development", "--capture", fixture.capturePath, "--case-set", fixture.caseSetPath,
+        "--output-dir", join(outputParent, "comparison"),
+      ])).rejects.toThrow(/case-set|inside|boundary|canonical/i);
+    } finally {
+      await rm(fixture.root, { recursive: true, force: true });
+      await rm(externalRoot, { recursive: true, force: true });
+      await rm(outputParent, { recursive: true, force: true });
+    }
   });
 });

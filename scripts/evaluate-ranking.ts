@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { existsSync, realpathSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { dirname, isAbsolute, relative, resolve, join } from "node:path";
+import { basename, dirname, isAbsolute, relative, resolve, join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { evaluateSectionEvidence, type SectionEvidenceResult } from "../src/retrieval/section-evidence.js";
@@ -32,6 +32,7 @@ const POLICY_OUTPUT_LIMITS = { top1: 1, top5: 5 } as const;
 type ComparisonOptions = {
   capturePath: string;
   caseSetPath: string;
+  caseSetDirectory: string;
 };
 
 export type RankingTypeMetrics = {
@@ -160,9 +161,21 @@ function developmentCasePath(directory: string, path: string): string {
   return canonical;
 }
 
-async function loadDevelopmentCaseSet(caseSetPath: string): Promise<LoadedDevelopment> {
+function canonicalDestinationPath(path: string): string {
+  const resolved = resolve(path);
+  const missing: string[] = [];
+  let existing = resolved;
+  while (!existsSync(existing)) {
+    const parent = dirname(existing);
+    if (parent === existing) fail("comparison output path cannot be resolved.");
+    missing.unshift(basename(existing));
+    existing = parent;
+  }
+  return missing.reduce((current, component) => join(current, component), realpathSync(existing));
+}
+
+async function loadDevelopmentCaseSet(caseSetPath: string, caseSetDirectory: string): Promise<LoadedDevelopment> {
   const manifestPath = resolve(caseSetPath);
-  const caseSetDirectory = dirname(manifestPath);
   const manifestBytes = await readFile(manifestPath);
   let rawManifest: unknown;
   try { rawManifest = JSON.parse(manifestBytes.toString("utf8")); } catch { fail("case-set manifest is not valid JSON."); }
@@ -386,7 +399,7 @@ export async function compareDevelopment(options: ComparisonOptions): Promise<Ra
   const captureRaw = JSON.parse(await readFile(resolve(options.capturePath), "utf8")) as unknown;
   validateRankingCapture(captureRaw);
   const capture = captureRaw;
-  const loaded = await loadDevelopmentCaseSet(options.caseSetPath);
+  const loaded = await loadDevelopmentCaseSet(options.caseSetPath, options.caseSetDirectory);
   assertFrozenInputs(capture, loaded);
   for (const resourceType of RESOURCE_TYPES) if (capture.identity.outputLimits[resourceType] < 5) fail(`capture output limit for ${resourceType} must be at least five for top-N comparison.`);
   const casesById = new Map(loaded.development.map((readinessCase) => [readinessCase.id, readinessCase]));
@@ -479,11 +492,15 @@ function parseOptions(args: readonly string[]): ComparisonOptions & { outputDir:
     else fail(`unknown option ${option}.`);
   }
   if (!capturePath || !caseSetPath || !outputDir) fail("compare-development requires --capture, --case-set, and --output-dir.");
-  const caseSetDirectory = dirname(resolve(caseSetPath));
-  const resolvedOutputDir = resolve(outputDir);
-  if (isWithin(caseSetDirectory, resolvedOutputDir)) fail("comparison output must not be written below the readiness case-set directory.");
-  if (existsSync(resolvedOutputDir)) fail("comparison output must use a new directory; existing evidence cannot be overwritten.");
-  return { capturePath, caseSetPath, outputDir: resolvedOutputDir };
+  const requestedManifestPath = resolve(caseSetPath);
+  if (!existsSync(requestedManifestPath)) fail("case-set manifest does not exist.");
+  const canonicalManifestPath = realpathSync(requestedManifestPath);
+  const caseSetDirectory = dirname(canonicalManifestPath);
+  const requestedOutputDir = resolve(outputDir);
+  const canonicalOutputDir = canonicalDestinationPath(requestedOutputDir);
+  if (isWithin(caseSetDirectory, canonicalOutputDir)) fail("comparison output must not be written below the readiness case-set directory.");
+  if (existsSync(requestedOutputDir)) fail("comparison output must use a new directory; existing evidence cannot be overwritten.");
+  return { capturePath, caseSetPath: canonicalManifestPath, caseSetDirectory, outputDir: canonicalOutputDir };
 }
 
 export async function runRankingEvaluation(args: readonly string[]): Promise<RankingComparisonReport> {

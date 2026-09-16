@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createHash } from "node:crypto";
+import { existsSync } from "node:fs";
 import { mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -149,6 +150,44 @@ describe("B4 development ranking comparison", () => {
     try {
       await expect(runRankingEvaluation(["compare-development", "--capture", fixture.capturePath, "--case-set", fixture.caseSetPath, "--output-dir", join(dirname(fixture.caseSetPath), "nested-output")])).rejects.toThrow(/readiness|case-set|experiment/i);
     } finally { await rm(fixture.root, { recursive: true, force: true }); }
+  });
+
+  it("accepts a valid development file through a symlinked case-set root", async () => {
+    const fixture = await rankingFixture();
+    const aliasParent = await mkdtemp(join(tmpdir(), "b4-ranking-case-set-alias-"));
+    const outputParent = await mkdtemp(join(tmpdir(), "b4-ranking-case-set-output-"));
+    const symlinkedRoot = join(aliasParent, "case-set");
+    try {
+      await symlink(fixture.root, symlinkedRoot, "junction");
+      await expect(runRankingEvaluation([
+        "compare-development", "--capture", fixture.capturePath,
+        "--case-set", join(symlinkedRoot, "manifest.json"),
+        "--output-dir", join(outputParent, "comparison"),
+      ])).resolves.toMatchObject({ evaluatedSplit: "development" });
+    } finally {
+      await rm(aliasParent, { recursive: true, force: true });
+      await rm(fixture.root, { recursive: true, force: true });
+      await rm(outputParent, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects an output directory under a symlinked case-set root by physical containment", async () => {
+    const fixture = await rankingFixture();
+    const aliasParent = await mkdtemp(join(tmpdir(), "b4-ranking-output-alias-"));
+    const symlinkedRoot = join(aliasParent, "case-set");
+    const outputDir = join(symlinkedRoot, "comparison-output");
+    try {
+      await symlink(fixture.root, symlinkedRoot, "junction");
+      await expect(runRankingEvaluation([
+        "compare-development", "--capture", fixture.capturePath,
+        "--case-set", join(symlinkedRoot, "manifest.json"),
+        "--output-dir", outputDir,
+      ])).rejects.toThrow(/readiness|case-set|inside|boundary/i);
+      expect(existsSync(outputDir)).toBe(false);
+    } finally {
+      await rm(aliasParent, { recursive: true, force: true });
+      await rm(fixture.root, { recursive: true, force: true });
+    }
   });
 
   it("rejects a development case file whose symlink target escapes the case-set directory", async () => {

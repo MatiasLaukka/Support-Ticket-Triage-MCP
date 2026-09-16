@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { Candidate, ChannelState, Match, ResourceType } from "./types.js";
+import type { Candidate, ChannelState, Match, Reference, ResourceType } from "./types.js";
 import type {
   DerivedChannelResourceRank,
   RankedMembership,
@@ -87,6 +87,54 @@ export function validateRankingInput(input: RankingInput): void {
 
 function ordinalCompare(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
+}
+
+function compareMatches(left: Match, right: Match): number {
+  return left.rank - right.rank
+    || ordinalCompare(left.representationId, right.representationId)
+    || ordinalCompare(left.resourceKey, right.resourceKey)
+    || left.score - right.score;
+}
+
+function compareReferences(left: Reference, right: Reference): number {
+  return ordinalCompare(left.channel, right.channel)
+    || ordinalCompare(left.sourceId, right.sourceId)
+    || ordinalCompare(left.sourceVersion ?? "", right.sourceVersion ?? "")
+    || ordinalCompare(left.reason, right.reason)
+    || ordinalCompare(left.resourceKey, right.resourceKey);
+}
+
+function canonicalReferences(references: readonly Reference[]): readonly Reference[] {
+  return references.map((reference) => ({ ...reference })).sort(compareReferences);
+}
+
+function canonicalCandidateProjection(candidates: readonly Candidate[]): readonly Candidate[] {
+  return candidates.map((candidate) => ({
+    resourceKey: candidate.resourceKey,
+    resourceType: candidate.resourceType,
+    ...(candidate.lexical === undefined ? {} : {
+      lexical: {
+        bestRank: candidate.lexical.bestRank,
+        bestBm25Score: candidate.lexical.bestBm25Score,
+        matches: candidate.lexical.matches.map((match) => ({ ...match })).sort(compareMatches),
+      },
+    }),
+    ...(candidate.semantic === undefined ? {} : {
+      semantic: {
+        bestRank: candidate.semantic.bestRank,
+        bestCosineSimilarity: candidate.semantic.bestCosineSimilarity,
+        matches: candidate.semantic.matches.map((match) => ({ ...match })).sort(compareMatches),
+      },
+    }),
+    deterministicReferences: canonicalReferences(candidate.deterministicReferences),
+    knownCauseReferences: canonicalReferences(candidate.knownCauseReferences),
+    ...(candidate.taxonomy === undefined ? {} : {
+      taxonomy: {
+        productSurfaces: [...candidate.taxonomy.productSurfaces].sort(ordinalCompare),
+        problemClasses: [...candidate.taxonomy.problemClasses].sort(ordinalCompare),
+      },
+    }),
+  })).sort((left, right) => ordinalCompare(left.resourceKey, right.resourceKey));
 }
 
 function deriveChannelRanks(
@@ -187,7 +235,7 @@ function referenceProjection(input: RankingInput): readonly ReferenceMembership[
     .map(([resourceKey, value]) => ({
       resourceKey,
       resourceType: value.resourceType,
-      provenance: [...value.provenance.values()].sort((left, right) => ordinalCompare(left.channel, right.channel) || ordinalCompare(left.sourceId, right.sourceId) || ordinalCompare(left.sourceVersion ?? "", right.sourceVersion ?? "") || ordinalCompare(left.reason, right.reason) || ordinalCompare(left.resourceKey, right.resourceKey)),
+      provenance: canonicalReferences([...value.provenance.values()]),
     }));
 }
 
@@ -268,8 +316,8 @@ export function rankRetrieval(input: RankingInput, policy: RankingPolicy): Ranki
     channelSummary: channelSummary(input, ranks, policy),
     byType: Object.fromEntries(RESOURCE_TYPES.map((resourceType) => [resourceType, rankedTypeResult(input, resourceType, ranks[resourceType], policy)])) as Readonly<Record<ResourceType, RankedTypeResult>>,
     references: referenceProjection(input),
-    referenceDiagnostics: input.retrieval.referenceDiagnostics,
-    candidates: input.retrieval.candidates,
+    referenceDiagnostics: input.retrieval.referenceDiagnostics.map((diagnostic) => ({ ...diagnostic })).sort((left, right) => ordinalCompare(left.resourceKey, right.resourceKey) || ordinalCompare(left.channel, right.channel) || ordinalCompare(left.reason, right.reason)),
+    candidates: canonicalCandidateProjection(input.retrieval.candidates),
   };
 }
 

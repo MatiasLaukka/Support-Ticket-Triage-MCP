@@ -362,18 +362,36 @@ describe("B4 ranking policies", () => {
     expect(result.byType["knowledge-article"].memberships.map(({ rrfScore }) => rrfScore)).toEqual([1 / 11, 1 / 11]);
   });
 
-  it("hashes equivalent input permutations identically while preserving retrieval identity", () => {
-    const input = baseInput();
+  it("returns an identical fresh canonical result for equivalent candidate and evidence permutations", () => {
+    const input = structuredClone(baseInput());
+    const first = input.retrieval.candidates[0]!;
+    first.deterministicReferences = [
+      reference(first.resourceKey, "deterministic-reference", "classifier:z", "classifier-association"),
+      reference(first.resourceKey, "deterministic-reference", "classifier:a", "safety-inclusion"),
+    ];
+    first.knownCauseReferences = [
+      reference(first.resourceKey, "known-cause-reference", "cause:z", "known-cause-link", "v2"),
+      reference(first.resourceKey, "known-cause-reference", "cause:a", "known-cause-link", "v1"),
+    ];
+    first.taxonomy = { productSurfaces: ["webhooks", "editor"], problemClasses: ["latency", "configuration"] };
+    const before = structuredClone(input);
     const reorderedCandidates = [...input.retrieval.candidates].map((candidate) => ({
       ...candidate,
       ...(candidate.lexical ? { lexical: { ...candidate.lexical, matches: [...candidate.lexical.matches].reverse() } } : {}),
       ...(candidate.semantic ? { semantic: { ...candidate.semantic, matches: [...candidate.semantic.matches].reverse() } } : {}),
+      deterministicReferences: [...candidate.deterministicReferences].reverse(),
+      knownCauseReferences: [...candidate.knownCauseReferences].reverse(),
+      ...(candidate.taxonomy ? { taxonomy: { productSurfaces: [...candidate.taxonomy.productSurfaces].reverse(), problemClasses: [...candidate.taxonomy.problemClasses].reverse() } } : {}),
     })).reverse();
     const policy = { id: "rrf-equal-v1", kind: "rrf-equal", constant: 10 } as const;
     const original = rankRetrieval(input, policy);
     const reordered = rankRetrieval({ ...input, retrieval: { ...input.retrieval, candidates: reorderedCandidates } }, policy);
 
     expect(reordered.inputHash).toBe(original.inputHash);
+    expect(reordered).toEqual(original);
+    expect(input).toEqual(before);
+    expect(original.candidates).not.toBe(input.retrieval.candidates);
+    expect(original.candidates[0]).not.toBe(input.retrieval.candidates[0]);
     expect(original).toMatchObject({
       tieBreak: "ordinal-resource-key",
       retrievalIdentity: {
@@ -431,6 +449,13 @@ describe("B4 ranking policies", () => {
       { resourceKey: referenceOnly, resourceType: "knowledge-article", provenance: [reference(referenceOnly, "deterministic-reference", "classifier", "safety-inclusion")] },
     ]);
     expect(result.referenceDiagnostics).toEqual([{ resourceKey: "known-cause:missing", channel: "known-cause-reference", reason: "missing-resource" }]);
-    expect(result.candidates).toEqual(input.retrieval.candidates);
+    expect(result.candidates.map(({ resourceKey }) => resourceKey)).toEqual([
+      "knowledge-article:a",
+      "knowledge-article:b",
+      "knowledge-article:c",
+      "knowledge-article:reference-only",
+      "known-cause:z",
+      "resolved-ticket:r",
+    ]);
   });
 });

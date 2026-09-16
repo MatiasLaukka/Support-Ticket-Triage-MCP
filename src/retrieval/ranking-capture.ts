@@ -145,6 +145,17 @@ function same(left: unknown, right: unknown): boolean {
   return canonicalRankingCaptureJson(left) === canonicalRankingCaptureJson(right);
 }
 
+function hasOwn(value: Record<string, unknown>, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(value, key);
+}
+
+function assertExactKeys(value: unknown, field: string, allowed: readonly string[], required: readonly string[] = allowed): asserts value is Record<string, unknown> {
+  if (!isRecord(value)) fail(`${field} must be an object.`);
+  const allowedKeys = new Set(allowed);
+  for (const key of Object.keys(value)) if (!allowedKeys.has(key)) fail(`${field}.${key} is not an allowed field.`);
+  for (const key of required) if (!hasOwn(value, key)) fail(`${field}.${key} is required.`);
+}
+
 function assertNoUnsafeFields(value: unknown, path = "capture"): void {
   if (Array.isArray(value)) {
     value.forEach((nested, index) => assertNoUnsafeFields(nested, `${path}[${index}]`));
@@ -159,31 +170,37 @@ function assertNoUnsafeFields(value: unknown, path = "capture"): void {
 
 function assertModel(value: unknown, field: string): asserts value is RankingCaptureModel {
   if (value === null) return;
-  if (!isRecord(value)) fail(`${field} must be null or a model identity.`);
+  assertExactKeys(value, field, ["tag", "digest", "dimensions"]);
   assertNonBlank(value.tag, `${field}.tag`);
   assertNonBlank(value.digest, `${field}.digest`);
   if (typeof value.dimensions !== "number" || !Number.isSafeInteger(value.dimensions) || value.dimensions < 1) fail(`${field}.dimensions must be a positive safe integer.`);
 }
 
+function assertIndexModel(value: unknown, field: string): asserts value is ModelIdentity {
+  assertExactKeys(value, field, ["id", "revision", "dimensions"]);
+  assertNonBlank(value.id, `${field}.id`);
+  assertNonBlank(value.revision, `${field}.revision`);
+  if (typeof value.dimensions !== "number" || !Number.isSafeInteger(value.dimensions) || value.dimensions < 1) fail(`${field}.dimensions must be a positive safe integer.`);
+}
+
 function assertQueryFormat(value: unknown, field: string): asserts value is RankingCaptureQueryFormat {
-  if (!isRecord(value)) fail(`${field} must be a query-format identity.`);
+  assertExactKeys(value, field, ["kind", "template"]);
   assertNonBlank(value.kind, `${field}.kind`);
   assertNonBlank(value.template, `${field}.template`);
   if (UNSAFE_FIELD.test(value.template)) fail(`${field}.template contains an unsafe raw-query marker.`);
 }
 
 function assertLimits(value: unknown, field: string): asserts value is Limits {
-  if (!isRecord(value)) fail(`${field} must contain per-type retrieval limits.`);
+  assertExactKeys(value, field, RESOURCE_TYPES);
   for (const type of RESOURCE_TYPES) {
     const limit = value[type];
-    if (!isRecord(limit) || typeof limit.lexical !== "number" || !Number.isSafeInteger(limit.lexical) || limit.lexical < 0 || typeof limit.semantic !== "number" || !Number.isSafeInteger(limit.semantic) || limit.semantic < 0) {
-      fail(`${field}.${type} must contain non-negative lexical and semantic limits.`);
-    }
+    assertExactKeys(limit, `${field}.${type}`, ["lexical", "semantic"]);
+    if (typeof limit.lexical !== "number" || !Number.isSafeInteger(limit.lexical) || limit.lexical < 0 || typeof limit.semantic !== "number" || !Number.isSafeInteger(limit.semantic) || limit.semantic < 0) fail(`${field}.${type} must contain non-negative lexical and semantic limits.`);
   }
 }
 
 function assertOutputLimits(value: unknown, field: string): asserts value is RankingOutputLimits {
-  if (!isRecord(value)) fail(`${field} must contain per-type output limits.`);
+  assertExactKeys(value, field, RESOURCE_TYPES);
   for (const type of RESOURCE_TYPES) {
     const limit = value[type];
     if (!Number.isSafeInteger(limit) || (limit as number) < 0) fail(`${field}.${type} must be a non-negative safe integer.`);
@@ -191,22 +208,17 @@ function assertOutputLimits(value: unknown, field: string): asserts value is Ran
 }
 
 function assertRetrievalIdentity(value: unknown, field: string): asserts value is RetrievalIdentity {
-  if (!isRecord(value)) fail(`${field} must contain an index identity.`);
+  assertExactKeys(value, field, ["schemaVersion", "representationVersion", "generation", "lexicalGeneration", "semanticGeneration", "corpusHash", "model", "state"]);
   for (const key of ["schemaVersion", "representationVersion", "generation", "lexicalGeneration", "semanticGeneration"] as const) {
     if (!Number.isSafeInteger(value[key]) || (value[key] as number) < 0) fail(`${field}.${key} must be a non-negative safe integer.`);
   }
   assertHash(value.corpusHash, `${field}.corpusHash`);
   if (!["ready", "degraded", "rebuilding", "stale", "unavailable"].includes(value.state as string)) fail(`${field}.state is invalid.`);
-  if (value.model !== null) {
-    if (!isRecord(value.model)) fail(`${field}.model is invalid.`);
-    assertNonBlank(value.model.id, `${field}.model.id`);
-    assertNonBlank(value.model.revision, `${field}.model.revision`);
-    if (typeof value.model.dimensions !== "number" || !Number.isSafeInteger(value.model.dimensions) || value.model.dimensions < 1) fail(`${field}.model.dimensions is invalid.`);
-  }
+  if (value.model !== null) assertIndexModel(value.model, `${field}.model`);
 }
 
 function assertQueryBasis(value: unknown, field: string): asserts value is RankingInput["queryBasis"] {
-  if (!isRecord(value)) fail(`${field} is invalid.`);
+  assertExactKeys(value, field, ["queryHash", "ticketId", "ticketRevision", "customerReplyWatermark"]);
   assertNonBlank(value.queryHash, `${field}.queryHash`);
   assertNonBlank(value.ticketId, `${field}.ticketId`);
   if (typeof value.ticketRevision !== "number" || !Number.isSafeInteger(value.ticketRevision) || value.ticketRevision < 0) fail(`${field}.ticketRevision is invalid.`);
@@ -214,7 +226,114 @@ function assertQueryBasis(value: unknown, field: string): asserts value is Ranki
 }
 
 function assertTimings(value: unknown, field: string): asserts value is RankingCaptureCase["timingsMs"] {
-  if (!isRecord(value) || !Number.isFinite(value.retrieval) || (value.retrieval as number) < 0 || !Number.isFinite(value.provider) || (value.provider as number) < 0 || (value.ranking !== null && (!Number.isFinite(value.ranking) || (value.ranking as number) < 0))) fail(`${field} contains invalid durations.`);
+  assertExactKeys(value, field, ["retrieval", "provider", "ranking"]);
+  if (!Number.isFinite(value.retrieval) || (value.retrieval as number) < 0 || !Number.isFinite(value.provider) || (value.provider as number) < 0 || (value.ranking !== null && (!Number.isFinite(value.ranking) || (value.ranking as number) < 0))) fail(`${field} contains invalid durations.`);
+}
+
+const CHANNEL_REASONS = [
+  "provider-not-configured",
+  "provider-timeout",
+  "provider-http-error",
+  "provider-unreachable",
+  "provider-invalid-response",
+  "cancelled",
+  "model-version-changed",
+  "pending-vectors",
+  "source-unavailable",
+  "fts-query-error",
+  "index-integrity-error",
+  "index-unavailable",
+  "index-upgrade-required",
+] as const;
+
+function assertChannelState(value: unknown, field: string): void {
+  assertExactKeys(value, field, ["status", "reason"], ["status"]);
+  if (!["used", "unavailable", "stale", "failed"].includes(value.status as string)) fail(`${field}.status is invalid.`);
+  if (hasOwn(value, "reason") && !CHANNEL_REASONS.includes(value.reason as (typeof CHANNEL_REASONS)[number])) fail(`${field}.reason is invalid.`);
+}
+
+function assertMatch(value: unknown, field: string): void {
+  assertExactKeys(value, field, ["representationId", "resourceKey", "score", "rank"]);
+  assertNonBlank(value.representationId, `${field}.representationId`);
+  assertNonBlank(value.resourceKey, `${field}.resourceKey`);
+  if (typeof value.score !== "number" || !Number.isFinite(value.score)) fail(`${field}.score must be finite.`);
+  if (typeof value.rank !== "number" || !Number.isSafeInteger(value.rank) || value.rank < 1) fail(`${field}.rank must be a positive safe integer.`);
+}
+
+function assertMatches(value: unknown, field: string): void {
+  if (!Array.isArray(value)) fail(`${field} must be an array.`);
+  value.forEach((match, index) => assertMatch(match, `${field}[${index}]`));
+}
+
+function assertEvidence(value: unknown, field: string, channel: "lexical" | "semantic"): void {
+  assertExactKeys(value, field, channel === "lexical" ? ["bestRank", "bestBm25Score", "matches"] : ["bestRank", "bestCosineSimilarity", "matches"]);
+  if (typeof value.bestRank !== "number" || !Number.isSafeInteger(value.bestRank) || value.bestRank < 1) fail(`${field}.bestRank must be a positive safe integer.`);
+  const score = channel === "lexical" ? value.bestBm25Score : value.bestCosineSimilarity;
+  if (typeof score !== "number" || !Number.isFinite(score)) fail(`${field}.${channel === "lexical" ? "bestBm25Score" : "bestCosineSimilarity"} must be finite.`);
+  assertMatches(value.matches, `${field}.matches`);
+}
+
+const REFERENCE_CHANNELS = ["deterministic-reference", "known-cause-reference"] as const;
+const REFERENCE_REASONS = ["classifier-association", "known-cause-link", "safety-inclusion"] as const;
+
+function assertReference(value: unknown, field: string): void {
+  assertExactKeys(value, field, ["resourceKey", "channel", "sourceId", "sourceVersion", "reason"], ["resourceKey", "channel", "sourceId", "reason"]);
+  assertNonBlank(value.resourceKey, `${field}.resourceKey`);
+  if (!REFERENCE_CHANNELS.includes(value.channel as (typeof REFERENCE_CHANNELS)[number])) fail(`${field}.channel is invalid.`);
+  assertNonBlank(value.sourceId, `${field}.sourceId`);
+  if (hasOwn(value, "sourceVersion")) assertNonBlank(value.sourceVersion, `${field}.sourceVersion`);
+  if (!REFERENCE_REASONS.includes(value.reason as (typeof REFERENCE_REASONS)[number])) fail(`${field}.reason is invalid.`);
+}
+
+function assertReferences(value: unknown, field: string): void {
+  if (!Array.isArray(value)) fail(`${field} must be an array.`);
+  value.forEach((reference, index) => assertReference(reference, `${field}[${index}]`));
+}
+
+function assertTaxonomy(value: unknown, field: string): void {
+  assertExactKeys(value, field, ["productSurfaces", "problemClasses"]);
+  for (const key of ["productSurfaces", "problemClasses"] as const) {
+    if (!Array.isArray(value[key]) || value[key].some((item) => typeof item !== "string")) fail(`${field}.${key} must contain strings.`);
+  }
+}
+
+function assertCandidate(value: unknown, field: string): void {
+  assertExactKeys(value, field, ["resourceKey", "resourceType", "lexical", "semantic", "deterministicReferences", "knownCauseReferences", "taxonomy"], ["resourceKey", "resourceType", "deterministicReferences", "knownCauseReferences"]);
+  assertNonBlank(value.resourceKey, `${field}.resourceKey`);
+  if (!RESOURCE_TYPES.includes(value.resourceType as ResourceType)) fail(`${field}.resourceType is invalid.`);
+  if (hasOwn(value, "lexical")) assertEvidence(value.lexical, `${field}.lexical`, "lexical");
+  if (hasOwn(value, "semantic")) assertEvidence(value.semantic, `${field}.semantic`, "semantic");
+  assertReferences(value.deterministicReferences, `${field}.deterministicReferences`);
+  assertReferences(value.knownCauseReferences, `${field}.knownCauseReferences`);
+  if (hasOwn(value, "taxonomy")) assertTaxonomy(value.taxonomy, `${field}.taxonomy`);
+}
+
+function assertReferenceDiagnostic(value: unknown, field: string): void {
+  assertExactKeys(value, field, ["resourceKey", "channel", "reason"]);
+  assertNonBlank(value.resourceKey, `${field}.resourceKey`);
+  if (!REFERENCE_CHANNELS.includes(value.channel as (typeof REFERENCE_CHANNELS)[number])) fail(`${field}.channel is invalid.`);
+  if (value.reason !== "missing-resource") fail(`${field}.reason is invalid.`);
+}
+
+function assertRetrievalMetadata(value: unknown, field: string): void {
+  assertExactKeys(value, field, ["schemaVersion", "representationVersion", "generation", "lexicalGeneration", "semanticGeneration", "corpusHash", "model", "state"], ["schemaVersion", "representationVersion", "generation", "lexicalGeneration", "semanticGeneration", "corpusHash", "state"]);
+  for (const key of ["schemaVersion", "representationVersion", "generation", "lexicalGeneration", "semanticGeneration"] as const) {
+    if (typeof value[key] !== "number" || !Number.isSafeInteger(value[key]) || (value[key] as number) < 0) fail(`${field}.${key} must be a non-negative safe integer.`);
+  }
+  assertHash(value.corpusHash, `${field}.corpusHash`);
+  if (!["ready", "degraded", "rebuilding", "stale", "unavailable"].includes(value.state as string)) fail(`${field}.state is invalid.`);
+  if (hasOwn(value, "model")) assertIndexModel(value.model, `${field}.model`);
+}
+
+function assertRetrieval(value: unknown, field: string): asserts value is RetrievalResult {
+  assertExactKeys(value, field, ["metadata", "lexical", "semantic", "candidates", "referenceDiagnostics"]);
+  assertRetrievalMetadata(value.metadata, `${field}.metadata`);
+  assertChannelState(value.lexical, `${field}.lexical`);
+  assertChannelState(value.semantic, `${field}.semantic`);
+  if (!Array.isArray(value.candidates)) fail(`${field}.candidates must be an array.`);
+  value.candidates.forEach((candidate, index) => assertCandidate(candidate, `${field}.candidates[${index}]`));
+  if (!Array.isArray(value.referenceDiagnostics)) fail(`${field}.referenceDiagnostics must be an array.`);
+  value.referenceDiagnostics.forEach((diagnostic, index) => assertReferenceDiagnostic(diagnostic, `${field}.referenceDiagnostics[${index}]`));
 }
 
 function assertRetrievalMatchesIdentity(retrieval: RetrievalResult, identity: RetrievalIdentity, field: string): void {
@@ -231,9 +350,18 @@ function assertRetrievalMatchesIdentity(retrieval: RetrievalResult, identity: Re
   if (!same(metadataIdentity, identity)) fail(`${field} does not match the retrieval metadata identity.`);
 }
 
+function assertCaptureModelMatchesRetrieval(model: RankingCaptureModel, retrieval: RetrievalResult, field: string): void {
+  const retrievalModel = retrieval.metadata.model;
+  if (model === null) {
+    if (retrievalModel !== undefined) fail(`${field}.model does not match the retrieval metadata model.`);
+    return;
+  }
+  if (retrievalModel === undefined || model.tag !== retrievalModel.id || model.digest !== retrievalModel.revision || model.dimensions !== retrievalModel.dimensions) fail(`${field}.model does not match the retrieval metadata model.`);
+}
+
 function assertCase(captureCase: unknown, identity: RankingCaptureIdentity, index: number): asserts captureCase is RankingCaptureCase {
   const field = `cases[${index}]`;
-  if (!isRecord(captureCase)) fail(`${field} must be an object.`);
+  assertExactKeys(captureCase, field, ["caseId", "split", "caseSetHash", "labelHash", "manifestHash", "corpusHash", "contentSourceRevision", "queryFormatIdentity", "providerKind", "model", "representationVersion", "retrievalLimits", "indexIdentity", "queryBasis", "retrieval", "rankingProvenance", "timingsMs", "traceTruncated"]);
   assertNonBlank(captureCase.caseId, `${field}.caseId`);
   if (captureCase.split !== "development") fail(`${field} must belong to the development split.`);
   for (const key of ["caseSetHash", "labelHash", "manifestHash", "corpusHash"] as const) assertHash(captureCase[key], `${field}.${key}`);
@@ -243,13 +371,14 @@ function assertCase(captureCase: unknown, identity: RankingCaptureIdentity, inde
   assertModel(captureCase.model, `${field}.model`);
   assertQueryFormat(captureCase.queryFormatIdentity, `${field}.queryFormatIdentity`);
   assertLimits(captureCase.retrievalLimits, `${field}.retrievalLimits`);
-  if (!isRecord(captureCase.rankingProvenance)) fail(`${field}.rankingProvenance is missing or invalid.`);
+  assertExactKeys(captureCase.rankingProvenance, `${field}.rankingProvenance`, ["contractVersion", "inputHash", "retrievalIdentity", "outputLimits", "tieBreak"]);
   const provenance = captureCase.rankingProvenance as RankingCaptureCase["rankingProvenance"];
   assertOutputLimits(provenance.outputLimits, `${field}.rankingProvenance.outputLimits`);
   if (!same(provenance.outputLimits, identity.outputLimits)) fail(`${field}.rankingProvenance.outputLimits does not match the frozen capture identity.`);
   assertRetrievalIdentity(captureCase.indexIdentity, `${field}.indexIdentity`);
   assertQueryBasis(captureCase.queryBasis, `${field}.queryBasis`);
-  if (!isRecord(captureCase.retrieval) || !Array.isArray(captureCase.retrieval.candidates) || !Array.isArray(captureCase.retrieval.referenceDiagnostics)) fail(`${field}.retrieval is incomplete.`);
+  assertRetrieval(captureCase.retrieval, `${field}.retrieval`);
+  assertCaptureModelMatchesRetrieval(captureCase.model, captureCase.retrieval, field);
   assertRetrievalMatchesIdentity(captureCase.retrieval as RetrievalResult, captureCase.indexIdentity, `${field}.retrieval`);
   if (provenance.contractVersion !== 1 || provenance.tieBreak !== "ordinal-resource-key") fail(`${field}.rankingProvenance is missing or invalid.`);
   assertHash(provenance.inputHash, `${field}.rankingProvenance.inputHash`);
@@ -269,12 +398,12 @@ function assertCase(captureCase: unknown, identity: RankingCaptureIdentity, inde
 
 export function validateRankingCapture(value: unknown): asserts value is RankingCapture {
   assertNoUnsafeFields(value);
-  if (!isRecord(value)) fail("capture must be an object.");
+  assertExactKeys(value, "capture", ["formatVersion", "captureHash", "evaluatorSourceRevision", "identity", "cases"]);
   if (value.formatVersion !== RANKING_CAPTURE_FORMAT_VERSION) fail("unsupported format version.");
   assertHash(value.captureHash, "captureHash");
   if (hashCanonicalRankingCapture(withoutCaptureHash(value as RankingCapture)) !== value.captureHash) fail("capture hash does not match the canonical capture content.");
   assertNonBlank(value.evaluatorSourceRevision, "evaluatorSourceRevision");
-  if (!isRecord(value.identity)) fail("identity is missing.");
+  assertExactKeys(value.identity, "identity", ["split", "caseSetHash", "labelHash", "manifestHash", "caseIds", "reviewStatus", "sourceCutoff", "contentSourceRevision", "corpusHash", "queryFormatIdentity", "providerKind", "model", "representationVersion", "retrievalLimits", "outputLimits", "indexIdentity"]);
   const identity = value.identity as RankingCaptureIdentity;
   if (identity.split !== "development" || identity.reviewStatus !== "approved") fail("only an approved development split is valid.");
   for (const key of ["caseSetHash", "labelHash", "manifestHash", "corpusHash"] as const) assertHash(identity[key], `identity.${key}`);

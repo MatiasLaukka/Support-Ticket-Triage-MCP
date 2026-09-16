@@ -5,6 +5,7 @@ import { join } from "node:path";
 
 import {
   createRankingCapture,
+  hashCanonicalRankingCapture,
   validateRankingCapture,
   writeRankingCaptureExclusive,
 } from "../src/retrieval/ranking-capture.js";
@@ -50,7 +51,7 @@ const retrieval: RetrievalResult = {
       bestBm25Score: 0.2,
       matches: [{ representationId: "one-representation", resourceKey: "knowledge-article:one", score: 0.2, rank: 4 }],
     },
-    deterministicReferences: [],
+    deterministicReferences: [{ resourceKey: "knowledge-article:one", channel: "deterministic-reference", sourceId: "fixture-source", reason: "classifier-association" }],
     knownCauseReferences: [],
   }],
   referenceDiagnostics: [],
@@ -116,6 +117,32 @@ function validCapture(): RankingCapture {
   });
 }
 
+function rehashCapture(capture: RankingCapture): RankingCapture {
+  capture.captureHash = hashCanonicalRankingCapture({ ...capture, captureHash: undefined });
+  return capture;
+}
+
+function refreshCaseInputHash(captureCase: RankingCaptureCase): void {
+  const ranking = rankRetrieval({ contractVersion: 1, queryBasis: captureCase.queryBasis, retrieval: captureCase.retrieval, outputLimits }, { id: "lexical-only-v1", kind: "lexical-only" });
+  captureCase.rankingProvenance.inputHash = ranking.inputHash;
+}
+
+function modelledCapture(): RankingCapture {
+  const capture = structuredClone(validCapture());
+  const model = { tag: "qwen3-embedding", digest: "qwen-revision", dimensions: 1024 };
+  const indexModel = { id: model.tag, revision: model.digest, dimensions: model.dimensions };
+  capture.identity.model = model;
+  capture.identity.indexIdentity.model = indexModel;
+  for (const captureCase of capture.cases) {
+    captureCase.model = { ...model };
+    captureCase.indexIdentity.model = { ...indexModel };
+    captureCase.retrieval.metadata.model = { ...indexModel };
+    captureCase.rankingProvenance.retrievalIdentity.model = { ...indexModel };
+    refreshCaseInputHash(captureCase);
+  }
+  return rehashCapture(capture);
+}
+
 describe("B4 ranking captures", () => {
   it("accepts a complete sanitized immutable development capture", () => {
     const capture = validCapture();
@@ -150,6 +177,49 @@ describe("B4 ranking captures", () => {
     (capture.cases[0]!.retrieval.candidates[0]!.lexical!.matches[0] as any).score = 0.9;
 
     expect(() => validateRankingCapture(capture)).toThrow(/capture hash/i);
+  });
+
+  it("rejects an unknown raw-text field even when the capture hash is recomputed", () => {
+    const capture = rehashCapture(structuredClone(validCapture()));
+    (capture.cases[0]!.retrieval.candidates[0] as any).note = "Customer says the editor fails after chunk loading";
+
+    for (const captureCase of capture.cases) refreshCaseInputHash(captureCase);
+    rehashCapture(capture);
+    expect(() => validateRankingCapture(capture)).toThrow(/cases\[0\]\.retrieval\.candidates\[0\]\.note/i);
+  });
+
+  it.each(["sourceId", "reason"] as const)("rejects a reference missing %s provenance", (field) => {
+    const capture = structuredClone(validCapture());
+    delete (capture.cases[0]!.retrieval.candidates[0]!.deterministicReferences[0] as any)[field];
+
+    for (const captureCase of capture.cases) refreshCaseInputHash(captureCase);
+    rehashCapture(capture);
+    expect(() => validateRankingCapture(capture)).toThrow(new RegExp(`cases\\[0\\]\\.retrieval\\.candidates\\[0\\]\\.deterministicReferences\\[0\\]\\.${field}`));
+  });
+
+  it("accepts a capture model that is correctly bound to every B3 retrieval model", () => {
+    expect(() => validateRankingCapture(modelledCapture())).not.toThrow();
+  });
+
+  it.each(["tag", "digest", "dimensions"] as const)("rejects a capture model %s mismatch against unchanged retrieval metadata", (field) => {
+    const capture = modelledCapture();
+    for (const model of [capture.identity.model, ...capture.cases.map((captureCase) => captureCase.model)]) {
+      if (field === "dimensions") model!.dimensions = 2048;
+      else model![field] = field === "tag" ? "other-model" : "other-revision";
+    }
+
+    rehashCapture(capture);
+    expect(() => validateRankingCapture(capture)).toThrow(/model/i);
+  });
+
+  it("rejects a non-null capture model when the B3 retrieval metadata has no model", () => {
+    const capture = structuredClone(validCapture());
+    const model = { tag: "qwen3-embedding", digest: "qwen-revision", dimensions: 1024 };
+    capture.identity.model = model;
+    for (const captureCase of capture.cases) captureCase.model = { ...model };
+
+    rehashCapture(capture);
+    expect(() => validateRankingCapture(capture)).toThrow(/model/i);
   });
 
   it("writes once with exclusive creation and refuses overwrite", async () => {

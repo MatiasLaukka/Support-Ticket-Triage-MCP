@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -111,13 +111,33 @@ async function rankingFixture() {
 }
 
 describe("B4 development ranking comparison", () => {
+  it("rejects comparison outputs outside or physically escaping an injected B4 artifact root", async () => {
+    const fixture = await rankingFixture();
+    const artifactRootParent = await mkdtemp(join(tmpdir(), "b4-ranking-artifact-root-"));
+    const artifactRoot = join(artifactRootParent, "approved");
+    const outsideRoot = await mkdtemp(join(tmpdir(), "b4-ranking-artifact-outside-"));
+    const escaped = join(artifactRoot, "escape");
+    try {
+      await mkdir(artifactRoot);
+      await symlink(outsideRoot, escaped, "junction");
+      const baseArgs = ["compare-development", "--capture", fixture.capturePath, "--case-set", fixture.caseSetPath, "--output-dir"];
+
+      await expect(runRankingEvaluation([...baseArgs, join(artifactRootParent, "outside")], { artifactRoot })).rejects.toThrow(/B4 artifact root/i);
+      await expect(runRankingEvaluation([...baseArgs, join(escaped, "comparison")], { artifactRoot })).rejects.toThrow(/B4 artifact root/i);
+    } finally {
+      await rm(fixture.root, { recursive: true, force: true });
+      await rm(artifactRootParent, { recursive: true, force: true });
+      await rm(outsideRoot, { recursive: true, force: true });
+    }
+  });
+
   it("replays five policies from one capture without reaching retrieval or providers", async () => {
     const fixture = await rankingFixture();
     const outputParent = await mkdtemp(join(tmpdir(), "b4-ranking-output-"));
     const outputDir = join(outputParent, "comparison");
     const retrieve = vi.spyOn(retrievalSearch, "retrieve");
     try {
-      const report = await runRankingEvaluation(["compare-development", "--capture", fixture.capturePath, "--case-set", fixture.caseSetPath, "--output-dir", outputDir]);
+      const report = await runRankingEvaluation(["compare-development", "--capture", fixture.capturePath, "--case-set", fixture.caseSetPath, "--output-dir", outputDir], { artifactRoot: outputParent });
       expect(retrieve).not.toHaveBeenCalled();
       expect(report.policies).toHaveLength(5);
       expect(report.policies.map((policy: any) => policy.policyKey)).toEqual([
@@ -137,7 +157,7 @@ describe("B4 development ranking comparison", () => {
       expect(json).toEqual(report);
       expect(markdown).toContain(report.captureHash);
       expect(markdown).toContain("rrf-equal-v1:10");
-      await expect(runRankingEvaluation(["compare-development", "--capture", fixture.capturePath, "--case-set", fixture.caseSetPath, "--output-dir", outputDir])).rejects.toThrow(/existing|overwrite/i);
+      await expect(runRankingEvaluation(["compare-development", "--capture", fixture.capturePath, "--case-set", fixture.caseSetPath, "--output-dir", outputDir], { artifactRoot: outputParent })).rejects.toThrow(/existing|overwrite/i);
     } finally {
       retrieve.mockRestore();
       await rm(fixture.root, { recursive: true, force: true });
@@ -148,7 +168,7 @@ describe("B4 development ranking comparison", () => {
   it("refuses to write a comparison below the readiness case-set directory", async () => {
     const fixture = await rankingFixture();
     try {
-      await expect(runRankingEvaluation(["compare-development", "--capture", fixture.capturePath, "--case-set", fixture.caseSetPath, "--output-dir", join(dirname(fixture.caseSetPath), "nested-output")])).rejects.toThrow(/readiness|case-set|experiment/i);
+      await expect(runRankingEvaluation(["compare-development", "--capture", fixture.capturePath, "--case-set", fixture.caseSetPath, "--output-dir", join(dirname(fixture.caseSetPath), "nested-output")], { artifactRoot: fixture.root })).rejects.toThrow(/readiness|case-set|experiment/i);
     } finally { await rm(fixture.root, { recursive: true, force: true }); }
   });
 
@@ -163,7 +183,7 @@ describe("B4 development ranking comparison", () => {
         "compare-development", "--capture", fixture.capturePath,
         "--case-set", join(symlinkedRoot, "manifest.json"),
         "--output-dir", join(outputParent, "comparison"),
-      ])).resolves.toMatchObject({ evaluatedSplit: "development" });
+      ], { artifactRoot: outputParent })).resolves.toMatchObject({ evaluatedSplit: "development" });
     } finally {
       await rm(aliasParent, { recursive: true, force: true });
       await rm(fixture.root, { recursive: true, force: true });
@@ -182,7 +202,7 @@ describe("B4 development ranking comparison", () => {
         "compare-development", "--capture", fixture.capturePath,
         "--case-set", join(symlinkedRoot, "manifest.json"),
         "--output-dir", outputDir,
-      ])).rejects.toThrow(/readiness|case-set|inside|boundary/i);
+      ], { artifactRoot: symlinkedRoot })).rejects.toThrow(/readiness|case-set|inside|boundary/i);
       expect(existsSync(outputDir)).toBe(false);
     } finally {
       await rm(aliasParent, { recursive: true, force: true });
@@ -215,7 +235,7 @@ describe("B4 development ranking comparison", () => {
       await expect(runRankingEvaluation([
         "compare-development", "--capture", fixture.capturePath, "--case-set", fixture.caseSetPath,
         "--output-dir", join(outputParent, "comparison"),
-      ])).rejects.toThrow(/case-set|inside|boundary|canonical/i);
+      ], { artifactRoot: outputParent })).rejects.toThrow(/case-set|inside|boundary|canonical/i);
     } finally {
       await rm(fixture.root, { recursive: true, force: true });
       await rm(externalRoot, { recursive: true, force: true });

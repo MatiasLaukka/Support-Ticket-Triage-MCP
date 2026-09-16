@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { mkdtemp, rm, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, readFile, symlink, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -69,7 +69,7 @@ describe("readiness evaluation CLI", () => {
         "--case-set", fixture.caseSetPath,
         "--output-dir", outputDir,
         "--ranking-capture-output", capturePath,
-      ], {});
+      ], {}, { rankingArtifactRoot: fixture.root });
       const capture = JSON.parse(await readFile(capturePath, "utf8")) as any;
       expect(capture).toMatchObject({
         formatVersion: 1,
@@ -95,6 +95,7 @@ describe("readiness evaluation CLI", () => {
         caseSetPath: fixture.caseSetPath,
         provider: { model: { id: "fake", revision: "1", dimensions: 1 }, embed },
         rankingCaptureOutput: capturePath,
+        rankingArtifactRoot: fixture.root,
       } as any)).rejects.toThrow(/PROVIDER_TIMEOUT/i);
       await expect(readFile(capturePath, "utf8")).rejects.toThrow();
     } finally { await rm(fixture.root, { recursive: true, force: true }); }
@@ -151,6 +152,38 @@ describe("readiness evaluation CLI", () => {
         "--output-dir", join(fixture.root, "validation"),
       ], {})).toThrow(/capture|validation-only/i);
     } finally { await rm(fixture.root, { recursive: true, force: true }); }
+  });
+
+  it("confines paired B4 capture and evaluation outputs to an injected artifact root", async () => {
+    const fixture = await readinessFixture();
+    const artifactRoot = join(fixture.root, "b4-artifacts");
+    const outsideRoot = await mkdtemp(join(tmpdir(), "b4-capture-outside-"));
+    const escaped = join(artifactRoot, "escape");
+    try {
+      await mkdir(artifactRoot);
+      await symlink(outsideRoot, escaped, "junction");
+      const insideOutput = join(artifactRoot, "run");
+      const insideCapture = join(insideOutput, "capture.json");
+      expect(() => evaluationOptionsFor([
+        "--case-set", fixture.caseSetPath,
+        "--output-dir", insideOutput,
+        "--ranking-capture-output", insideCapture,
+      ], {}, { rankingArtifactRoot: artifactRoot })).not.toThrow();
+
+      expect(() => evaluationOptionsFor([
+        "--case-set", fixture.caseSetPath,
+        "--output-dir", join(fixture.root, "outside-output"),
+        "--ranking-capture-output", insideCapture,
+      ], {}, { rankingArtifactRoot: artifactRoot })).toThrow(/B4 artifact root/i);
+      expect(() => evaluationOptionsFor([
+        "--case-set", fixture.caseSetPath,
+        "--output-dir", insideOutput,
+        "--ranking-capture-output", join(escaped, "capture.json"),
+      ], {}, { rankingArtifactRoot: artifactRoot })).toThrow(/B4 artifact root/i);
+    } finally {
+      await rm(fixture.root, { recursive: true, force: true });
+      await rm(outsideRoot, { recursive: true, force: true });
+    }
   });
 
   it("validates both files without retrieval, provider construction, query output, or holdout labels", async () => {

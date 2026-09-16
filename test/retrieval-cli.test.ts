@@ -59,6 +59,47 @@ describe("readiness evaluation CLI", () => {
     } finally { await rm(fixture.root, { recursive: true, force: true }); }
   });
 
+  it("captures each development retrieval once into a complete sanitized B4 input", async () => {
+    const fixture = await readinessFixture((_manifest, development) => { development.splice(1); });
+    const outputDir = join(fixture.root, "offline-run");
+    const capturePath = join(fixture.root, "ranking-capture.json");
+    const retrieve = vi.spyOn(retrievalSearch, "retrieve");
+    try {
+      await retrievalEvaluation.runRetrievalEvaluation([
+        "--case-set", fixture.caseSetPath,
+        "--output-dir", outputDir,
+        "--ranking-capture-output", capturePath,
+      ], {});
+      const capture = JSON.parse(await readFile(capturePath, "utf8")) as any;
+      expect(capture).toMatchObject({
+        formatVersion: 1,
+        captureHash: expect.stringMatching(/^[0-9a-f]{64}$/),
+        identity: { split: "development", reviewStatus: "approved", caseIds: [fixture.development[0]!.id] },
+        cases: [expect.objectContaining({ caseId: fixture.development[0]!.id, split: "development", traceTruncated: false })],
+      });
+      expect(capture.cases).toHaveLength(1);
+      expect(retrieve).toHaveBeenCalledTimes(1);
+      expect(JSON.stringify(capture)).not.toContain("queryText");
+    } finally {
+      retrieve.mockRestore();
+      await rm(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not advertise a capture when development evaluation fails partway", async () => {
+    const fixture = await readinessFixture((_manifest, development) => { development.splice(1); });
+    const capturePath = join(fixture.root, "ranking-capture.json");
+    const embed = vi.fn(async () => { throw new embeddingProviders.EmbeddingProviderError("PROVIDER_TIMEOUT", "private provider detail"); });
+    try {
+      await expect(retrievalEvaluation.evaluateRetrieval({
+        caseSetPath: fixture.caseSetPath,
+        provider: { model: { id: "fake", revision: "1", dimensions: 1 }, embed },
+        rankingCaptureOutput: capturePath,
+      } as any)).rejects.toThrow(/PROVIDER_TIMEOUT/i);
+      await expect(readFile(capturePath, "utf8")).rejects.toThrow();
+    } finally { await rm(fixture.root, { recursive: true, force: true }); }
+  });
+
   it("keeps any supporting match out of the best-section numerator and scores family/topic R@1 and R@5", async () => {
     const fixture = await readinessFixture((_m, development) => { development.splice(1); });
     const first = fixture.development[0]!;
@@ -95,8 +136,21 @@ describe("readiness evaluation CLI", () => {
     [["--live-embeddings", "--live-embeddings"], /duplicate/i],
     [["--split", "development", "--split", "holdout"], /duplicate|holdout/i],
     [["--case-set", "missing.json", "--validate-cases-only", "--live-embeddings", "--output-dir", "new-readiness-run"], /conflict|validation-only/i],
+    [["--ranking-capture-output", "capture.json"], /case-set/i],
   ] as const)("rejects invalid readiness options %j", (args, expected) => {
     expect(() => evaluationOptionsFor(args, {})).toThrow(expected);
+  });
+
+  it("rejects ranking capture output in validation-only mode", async () => {
+    const fixture = await readinessFixture();
+    try {
+      expect(() => evaluationOptionsFor([
+        "--case-set", fixture.caseSetPath,
+        "--validate-cases-only",
+        "--ranking-capture-output", join(fixture.root, "capture.json"),
+        "--output-dir", join(fixture.root, "validation"),
+      ], {})).toThrow(/capture|validation-only/i);
+    } finally { await rm(fixture.root, { recursive: true, force: true }); }
   });
 
   it("validates both files without retrieval, provider construction, query output, or holdout labels", async () => {

@@ -23,10 +23,14 @@ import type { Candidate, EmbeddingProvider, Reference, ResourceKey } from "../sr
 import { hashText, REPRESENTATION_VERSION } from "../src/retrieval/representations.js";
 import { ReadinessCaseSchema, ReadinessManifestSchema, selectReadinessDevelopment, validateReadinessCases, validateReadinessSplits, type ReadinessCase } from "../src/retrieval/readiness-cases.js";
 import { evaluateSectionEvidence, type SectionEvidenceResult } from "../src/retrieval/section-evidence.js";
+import { createRankingCapture, hashCanonicalRankingCapture, modelForCapture, writeRankingCaptureExclusive, type RankingCaptureCase, type RankingCaptureQueryFormat } from "../src/retrieval/ranking-capture.js";
+import { rankRetrieval } from "../src/retrieval/ranking.js";
+import type { RankingOutputLimits } from "../src/retrieval/ranking-types.js";
+import type { Limits } from "../src/retrieval/types.js";
 
 type ScoringOracle = Pick<EvaluationOracle, "ticketId" | "retrieval" | "family" | "contrastGroup">;
 type SectionDiagnostic = SectionEvidenceResult & { resourceKey: string; channel: "lexical" | "semantic" };
-type EvaluationInput = { provider?: EmbeddingProvider; completedSnapshots?: readonly CompletedDiagnosisReadSnapshot[]; semanticQueryFormat?: SemanticQueryFormat; caseSetPath?: string; split?: "development"; validateCasesOnly?: boolean };
+type EvaluationInput = { provider?: EmbeddingProvider; completedSnapshots?: readonly CompletedDiagnosisReadSnapshot[]; semanticQueryFormat?: SemanticQueryFormat; caseSetPath?: string; split?: "development"; validateCasesOnly?: boolean; rankingCaptureOutput?: string };
 
 function caseFilePath(directory: string, path: string): string {
   const outside = (candidate: string) => { const rel = relative(directory, candidate); return rel === ".." || rel.startsWith("../") || rel.startsWith("..\\") || isAbsolute(rel); };
@@ -73,6 +77,26 @@ const K_BUDGET = {
   "diagnostic-playbook": { lexical: 5, semantic: 5 },
   "resolved-ticket": { lexical: 5, semantic: 5 },
 } as const;
+const B4_OUTPUT_LIMITS: RankingOutputLimits = {
+  "knowledge-article": 5,
+  "known-cause": 5,
+  "diagnostic-playbook": 5,
+  "resolved-ticket": 5,
+};
+
+function captureRetrievalLimits(): Limits {
+  return Object.fromEntries(Object.entries(K_BUDGET).map(([type, limits]) => [type, { ...limits }])) as Limits;
+}
+
+function rankingCaptureQueryFormat(format: SemanticQueryFormat | undefined): RankingCaptureQueryFormat {
+  return format === undefined
+    ? { kind: "plain-query-v1", template: "query-text-v1" }
+    : { kind: format.kind, template: format.template };
+}
+
+export function readinessLabelHash(cases: readonly ReadinessCase[]): string {
+  return hashCanonicalRankingCapture(cases.map(({ id, expectation, supportingSections }) => ({ id, expectation, supportingSections })));
+}
 const SCENARIO_CUTOFF = "2026-09-12T23:59:59.999Z";
 const CONTRAST_FAMILIES = [
   "webhook rotation/latency",
@@ -148,6 +172,8 @@ export function snapshotsAtOrBeforeCutoff<T extends { ticket: { updatedAt: strin
 export async function evaluateRetrieval(input: EvaluationInput = {}): Promise<Record<string, unknown>> {
   if (input.split !== undefined && input.split !== "development") throw new Error("Holdout execution is forbidden; only development scoring is supported.");
   if ((input.split !== undefined || input.validateCasesOnly) && input.caseSetPath === undefined) throw new Error("Readiness split or validation-only mode requires --case-set.");
+  if (input.rankingCaptureOutput !== undefined && input.caseSetPath === undefined) throw new Error("Ranking capture output requires --case-set.");
+  if (input.rankingCaptureOutput !== undefined && input.validateCasesOnly) throw new Error("Ranking capture output conflicts with validation-only mode.");
   const readiness = input.caseSetPath === undefined ? undefined : loadReadiness(input.caseSetPath, input.validateCasesOnly === true);
   const sourceRoot = mkdtempSync(join(tmpdir(), "triage-retrieval-eval-"));
   const tickets = new TicketRepository(sourceRoot, resolve("data/seed/tickets.json"));
@@ -159,6 +185,8 @@ export async function evaluateRetrieval(input: EvaluationInput = {}): Promise<Re
   let embeddingInputs = 0;
   let embeddingMs = 0;
   let semanticFailure: string | undefined;
+  let activeCaptureProviderTiming: { provider: number } | undefined;
+  const rankingCaptureCases: RankingCaptureCase[] = [];
   let manager: IndexManager | undefined;
   const provider = input.provider === undefined ? undefined : {
     model: input.provider.model,
@@ -168,7 +196,11 @@ export async function evaluateRetrieval(input: EvaluationInput = {}): Promise<Re
       embeddingInputs += texts.length;
       try { return await input.provider!.embed(texts, signal); }
       catch (error) { semanticFailure = error instanceof EmbeddingProviderError ? error.code : "PROVIDER_ERROR"; throw error; }
-      finally { embeddingMs += performance.now() - startedAt; }
+      finally {
+        const duration = performance.now() - startedAt;
+        embeddingMs += duration;
+        if (activeCaptureProviderTiming !== undefined) activeCaptureProviderTiming.provider += duration;
+      }
     },
   };
   try {
@@ -218,9 +250,43 @@ export async function evaluateRetrieval(input: EvaluationInput = {}): Promise<Re
       const references = deterministicReferences(ticket);
       const query = buildRetrievalQuery({ ticket, customerReplies: [], customerReplyWatermark: "seed", references });
       const retrievalStartedAt = performance.now();
-      const result = await retrieve({ query, ...(input.semanticQueryFormat === undefined ? {} : { semanticQueryText: formatQwen3RetrievalQuery(query.queryText, input.semanticQueryFormat) }), store, limits: K_BUDGET, ...(provider === undefined ? {} : { provider }), signal: new AbortController().signal });
+      const captureTiming = { provider: 0 };
+      activeCaptureProviderTiming = captureTiming;
+      let result;
+      try {
+        result = await retrieve({ query, ...(input.semanticQueryFormat === undefined ? {} : { semanticQueryText: formatQwen3RetrievalQuery(query.queryText, input.semanticQueryFormat) }), store, limits: K_BUDGET, ...(provider === undefined ? {} : { provider }), signal: new AbortController().signal });
+      } finally {
+        activeCaptureProviderTiming = undefined;
+      }
       if (readiness && provider && result.semantic.status !== "used") throw new Error(`Readiness semantic evaluation failed: ${semanticFailure ?? result.semantic.reason ?? result.semantic.status}.`);
-      retrievalMs += performance.now() - retrievalStartedAt;
+      const retrievalDuration = performance.now() - retrievalStartedAt;
+      retrievalMs += retrievalDuration;
+      if (readiness !== undefined && input.rankingCaptureOutput !== undefined) {
+        const basis = { queryHash: query.queryHash, ticketId: query.ticketId, ticketRevision: query.sourceRevision, customerReplyWatermark: query.customerReplyWatermark };
+        const ranking = rankRetrieval({ contractVersion: 1, queryBasis: basis, retrieval: result, outputLimits: B4_OUTPUT_LIMITS }, { id: "lexical-only-v1", kind: "lexical-only" });
+        const readinessCase = readiness.development.find(({ id }) => id === oracle.ticketId);
+        if (readinessCase === undefined) throw new Error(`Readiness capture case ${oracle.ticketId} is missing from the development set.`);
+        rankingCaptureCases.push({
+          caseId: readinessCase.id,
+          split: "development",
+          caseSetHash: readiness.manifest.development.sha256,
+          labelHash: readinessLabelHash(readiness.development),
+          manifestHash: readiness.manifestHash,
+          corpusHash: result.metadata.corpusHash,
+          contentSourceRevision: readiness.manifest.sourceRevision,
+          queryFormatIdentity: rankingCaptureQueryFormat(input.semanticQueryFormat),
+          providerKind: input.provider === undefined ? "none" : "configured-embedding-provider",
+          model: modelForCapture(input.provider?.model),
+          representationVersion: result.metadata.representationVersion,
+          retrievalLimits: captureRetrievalLimits(),
+          indexIdentity: ranking.retrievalIdentity,
+          queryBasis: basis,
+          retrieval: result,
+          rankingProvenance: { contractVersion: 1, inputHash: ranking.inputHash, retrievalIdentity: ranking.retrievalIdentity, outputLimits: B4_OUTPUT_LIMITS, tieBreak: "ordinal-resource-key" },
+          timingsMs: { retrieval: retrievalDuration, provider: captureTiming.provider, ranking: null },
+          traceTruncated: false,
+        });
+      }
       const lexicalKeys = rankedCandidateKeys(result.candidates, "lexical");
       const semanticKeys = rankedCandidateKeys(result.candidates, "semantic");
       const deterministicReferenceKeys = result.candidates.filter((candidate) => candidate.deterministicReferences.length > 0).map((candidate) => candidate.resourceKey);
@@ -275,7 +341,7 @@ export async function evaluateRetrieval(input: EvaluationInput = {}): Promise<Re
         (oracle?.requiredResourceKeys ?? []) as ResourceKey[],
       );
     }).filter((value): value is number => value !== null);
-    return {
+    const report = {
       mode: input.provider === undefined ? "offline-lexical-only" : "live-embeddings",
       semanticEvidence: input.provider === undefined ? "outstanding" : "measured",
       sourceCommit: sourceCommit(),
@@ -341,6 +407,36 @@ export async function evaluateRetrieval(input: EvaluationInput = {}): Promise<Re
         corpusLimitations: { unavailableFamilies: snapshot.unavailableFamilies, syntheticCasesOnly: true, historicalMetricComparison: "invalid: corpus and case set changed together", sectionOrderingEvidence: "supporting best match and lower supporting match are separate; any match alone does not establish useful ordering" },
       }),
     };
+    if (input.rankingCaptureOutput !== undefined) {
+      if (readiness === undefined) throw new Error("Ranking capture output requires readiness development evaluation.");
+      if (rankingCaptureCases.length !== readiness.development.length) throw new Error("Ranking capture is incomplete; every development case must be retrieved exactly once.");
+      const first = rankingCaptureCases[0];
+      if (first === undefined) throw new Error("Ranking capture is empty.");
+      const capture = createRankingCapture({
+        evaluatorSourceRevision: sourceCommit(),
+        identity: {
+          split: "development",
+          caseSetHash: readiness.manifest.development.sha256,
+          labelHash: readinessLabelHash(readiness.development),
+          manifestHash: readiness.manifestHash,
+          caseIds: readiness.development.map(({ id }) => id),
+          reviewStatus: "approved",
+          sourceCutoff: readiness.manifest.cutoff,
+          contentSourceRevision: readiness.manifest.sourceRevision,
+          corpusHash: first.corpusHash,
+          queryFormatIdentity: rankingCaptureQueryFormat(input.semanticQueryFormat),
+          providerKind: input.provider === undefined ? "none" : "configured-embedding-provider",
+          model: modelForCapture(input.provider?.model),
+          representationVersion: first.representationVersion,
+          retrievalLimits: captureRetrievalLimits(),
+          outputLimits: B4_OUTPUT_LIMITS,
+          indexIdentity: first.indexIdentity,
+        },
+        cases: rankingCaptureCases,
+      });
+      await writeRankingCaptureExclusive(resolve(input.rankingCaptureOutput), capture);
+    }
+    return report;
   } finally {
     await manager?.close();
     store.close();
@@ -695,6 +791,7 @@ export function evaluationOptionsFor(args: readonly string[], env: NodeJS.Proces
   let caseSetPath: string | undefined;
   let split: "development" | undefined;
   let validateCasesOnly = false;
+  let rankingCaptureOutput: string | undefined;
   const seen = new Set<string>();
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
@@ -703,6 +800,12 @@ export function evaluationOptionsFor(args: readonly string[], env: NodeJS.Proces
     if (arg === "--live-embeddings") { liveEmbeddings = true; continue; }
     if (arg === "--qwen3-retrieval-instruction") { useQwen3Instruction = true; continue; }
     if (arg === "--validate-cases-only") { validateCasesOnly = true; continue; }
+    if (arg === "--ranking-capture-output") {
+      const value = args[++index];
+      if (!value || value.startsWith("--")) throw new Error("--ranking-capture-output requires a file.");
+      rankingCaptureOutput = value;
+      continue;
+    }
     if (arg === "--case-set" || arg === "--split") {
       const value = args[++index];
       if (!value || value.startsWith("--")) throw new Error(`${arg} requires ${arg === "--case-set" ? "a manifest path" : "development"}.`);
@@ -723,13 +826,16 @@ export function evaluationOptionsFor(args: readonly string[], env: NodeJS.Proces
     throw new Error(`Unknown retrieval evaluation option: ${arg}.`);
   }
   if (caseSetPath === undefined && (split !== undefined || validateCasesOnly)) throw new Error("Readiness split or validation-only mode requires --case-set.");
+  if (rankingCaptureOutput !== undefined && caseSetPath === undefined) throw new Error("--ranking-capture-output requires --case-set.");
+  if (rankingCaptureOutput !== undefined && validateCasesOnly) throw new Error("Ranking capture output conflicts with validation-only mode.");
   if (validateCasesOnly && (liveEmbeddings || useQwen3Instruction)) throw new Error("Validation-only mode conflicts with live embedding options.");
   if (caseSetPath !== undefined) {
     if (!seen.has("--output-dir")) throw new Error("Readiness runs require an explicit --output-dir.");
     if (existsSync(resolve(outputDir))) throw new Error("Readiness output must use a new directory; historical/existing evidence cannot be overwritten.");
+    if (rankingCaptureOutput !== undefined && existsSync(resolve(rankingCaptureOutput))) throw new Error("Ranking capture output must use a new file; existing evidence cannot be overwritten.");
     loadReadiness(caseSetPath, validateCasesOnly);
   }
-  const readinessOptions = caseSetPath === undefined ? {} : { caseSetPath, split: split ?? "development" as const, validateCasesOnly };
+  const readinessOptions = caseSetPath === undefined ? {} : { caseSetPath, split: split ?? "development" as const, validateCasesOnly, ...(rankingCaptureOutput === undefined ? {} : { rankingCaptureOutput }) };
   if (useQwen3Instruction && !liveEmbeddings) throw new Error("--qwen3-retrieval-instruction requires --live-embeddings.");
   if (!liveEmbeddings) return { outputDir, ...readinessOptions };
   let provider: EmbeddingProvider | undefined;

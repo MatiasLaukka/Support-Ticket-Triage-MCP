@@ -8,6 +8,8 @@ import {
   createKnowledgeCandidateDraftProviderFromEnv,
   environmentPath,
   minutesSaved,
+  parseRankingOutputLimit,
+  parseRankingPolicy,
 } from "../src/runtime.js";
 import { TriageRecommendationSchema } from "../src/domain.js";
 import { diagnosisContextForTicket } from "../src/approval-desk/diagnostic-workflow.js";
@@ -30,6 +32,11 @@ afterEach(async () => {
 });
 
 describe("runtime configuration", () => {
+  it("keeps B4 ranking configuration unavailable unless explicitly selected", () => {
+    expect(parseRankingPolicy({})).toBeUndefined();
+    expect(parseRankingOutputLimit({})).toBeUndefined();
+  });
+
   it("selects the explicit knowledge candidate provider", () => {
     expect(createKnowledgeCandidateDraftProviderFromEnv({})).toBeUndefined();
     expect(createKnowledgeCandidateDraftProviderFromEnv({ TRIAGE_KNOWLEDGE_CANDIDATE_PROVIDER: "controlled" })).toMatchObject({ enabled: true });

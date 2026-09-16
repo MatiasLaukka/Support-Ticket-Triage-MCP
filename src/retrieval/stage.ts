@@ -6,6 +6,9 @@ import type { IndexManager } from "./index-manager.js";
 import type { EmbeddingProvider, IndexMetadata, Limits, Query, Reference, RetrievalTrace } from "./types.js";
 import { RETRIEVAL_SCHEMA_VERSION, RetrievalIntegrityError, RetrievalRepresentationVersionError, type RetrievalStore } from "./sqlite-store.js";
 import { REPRESENTATION_VERSION } from "./representations.js";
+import { rankRetrieval, RESOURCE_TYPES } from "./ranking.js";
+import type { RankingOutputLimits, RankingPolicy, RankingResult } from "./ranking-types.js";
+import type { RankingTraceProjection } from "./types.js";
 
 export const RETRIEVAL_QUERY_MAX_CHARS = 12_000;
 const TRACE_LIMIT = 100;
@@ -34,7 +37,12 @@ export function buildRetrievalQuery(input: {
 
 export interface RetrievalObserver { observe(query: Query, commandId: string): Promise<void>; reportFailure?(commandId: string): void; recent(): readonly RetrievalTrace[]; close(): Promise<void> }
 
-export function createRetrievalObserver(input: { manager: IndexManager; store: RetrievalStore; limits: Limits; provider?: EmbeddingProvider; report?: (diagnostic: { code: string; commandId: string }) => void }): RetrievalObserver {
+export interface RetrievalRankingConfig {
+  policy: RankingPolicy;
+  outputLimit: number;
+}
+
+export function createRetrievalObserver(input: { manager: IndexManager; store: RetrievalStore; limits: Limits; provider?: EmbeddingProvider; ranking?: RetrievalRankingConfig; report?: (diagnostic: { code: string; commandId: string }) => void }): RetrievalObserver {
   const traces: RetrievalTrace[] = [];
   const report = input.report ?? (() => undefined);
   const controller = new AbortController();
@@ -46,10 +54,26 @@ export function createRetrievalObserver(input: { manager: IndexManager; store: R
       try {
         await input.manager.refresh(controller.signal);
         const result = await retrieve({ query, store: input.store, provider: input.provider, limits: input.limits, signal: controller.signal });
-        const trace: RetrievalTrace = { commandId, queryHash: query.queryHash, ticketId: query.ticketId, sourceRevision: query.sourceRevision, customerReplyWatermark: query.customerReplyWatermark, queryTruncated: query.queryTruncated, result, candidateCount: result.candidates.length, truncated: query.queryTruncated, truncatedCount: query.queryTruncated ? 1 : 0 };
+        let ranking: RankingTraceProjection | undefined;
+        if (input.ranking !== undefined) {
+          const rankingStarted = performance.now();
+          try {
+            const outputLimits = Object.fromEntries(RESOURCE_TYPES.map((resourceType) => [resourceType, input.ranking!.outputLimit])) as RankingOutputLimits;
+            ranking = compactRankingTrace(rankRetrieval({
+              contractVersion: 1,
+              queryBasis: { queryHash: query.queryHash, ticketId: query.ticketId, ticketRevision: query.sourceRevision, customerReplyWatermark: query.customerReplyWatermark },
+              retrieval: result,
+              outputLimits,
+            }, input.ranking.policy), performance.now() - rankingStarted);
+          } catch (error) {
+            ranking = failedRankingTrace(input.ranking.policy, performance.now() - rankingStarted, error);
+            reportRetrievalFailure(commandId, report, "B4_RANKING_FAILED");
+          }
+        }
+        const trace: RetrievalTrace = { commandId, queryHash: query.queryHash, ticketId: query.ticketId, sourceRevision: query.sourceRevision, customerReplyWatermark: query.customerReplyWatermark, queryTruncated: query.queryTruncated, result, candidateCount: result.candidates.length, truncated: query.queryTruncated, truncatedCount: query.queryTruncated ? 1 : 0, ...(ranking === undefined ? {} : { ranking }) };
         const serialized = JSON.stringify(trace);
         if (Buffer.byteLength(serialized, "utf8") > TRACE_MAX_BYTES) {
-          traces.push({ ...trace, result: { ...result, candidates: [] }, truncated: true, truncatedCount: trace.truncatedCount + Math.max(1, trace.candidateCount) });
+          traces.push({ ...trace, result: { ...result, candidates: [] }, ...(ranking === undefined ? {} : { ranking: truncateRankingTrace(ranking) }), truncated: true, truncatedCount: trace.truncatedCount + Math.max(1, trace.candidateCount) });
         } else {
           traces.push(trace);
         }
@@ -72,6 +96,46 @@ export function createRetrievalObserver(input: { manager: IndexManager; store: R
     recent() { return traces.map((trace) => structuredClone(trace)); },
     async close() { if (closed) return; closed = true; controller.abort(); await Promise.allSettled([...active]); await input.manager.close(); input.store.close(); },
   };
+}
+
+function emptyRankedTypes(): RankingTraceProjection["byType"] {
+  return Object.fromEntries(RESOURCE_TYPES.map((resourceType) => [resourceType, { poolCount: 0, returnedCount: 0, omittedCount: 0, memberships: [] }])) as unknown as RankingTraceProjection["byType"];
+}
+
+function compactRankingTrace(result: RankingResult, durationMs: number): RankingTraceProjection {
+  return {
+    contractVersion: result.contractVersion,
+    policy: result.policy,
+    inputHash: result.inputHash,
+    channelSummary: result.channelSummary,
+    byType: Object.fromEntries(RESOURCE_TYPES.map((resourceType) => {
+      const byType = result.byType[resourceType];
+      return [resourceType, { poolCount: byType.poolCount, returnedCount: byType.returnedCount, omittedCount: byType.omittedCount, memberships: byType.memberships.map(({ resourceKey, position }) => ({ resourceKey, position })) }];
+    })) as unknown as RankingTraceProjection["byType"],
+    references: result.references,
+    durationMs,
+    status: "used",
+    truncated: false,
+  };
+}
+
+function failedRankingTrace(policy: RankingPolicy, durationMs: number, error: unknown): RankingTraceProjection {
+  return {
+    contractVersion: 1,
+    policy,
+    inputHash: null,
+    channelSummary: null,
+    byType: emptyRankedTypes(),
+    references: [],
+    durationMs,
+    status: "failed",
+    failureCode: error instanceof Error && "code" in error && error.code === "INVALID_RANKING_INPUT" ? "INVALID_RANKING_INPUT" : "B4_RANKING_FAILED",
+    truncated: false,
+  };
+}
+
+function truncateRankingTrace(ranking: RankingTraceProjection): RankingTraceProjection {
+  return { ...ranking, byType: emptyRankedTypes(), references: [], truncated: true };
 }
 
 function recordIndexFailure(query: Query, commandId: string, store: RetrievalStore, traces: RetrievalTrace[], failureCode: "INDEX_INTEGRITY_ERROR" | "INDEX_UPGRADE_REQUIRED"): void {

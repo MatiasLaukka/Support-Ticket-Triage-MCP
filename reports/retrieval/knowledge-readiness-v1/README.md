@@ -66,13 +66,11 @@ For the measured Qwen development run, lexical retrieval put the supporting repr
 
 Concrete recorded gaps include lexical `performance-troubleshooting:section:1` for `readiness-editor-exact-chunkload-001`, lexical `webhook-signature-validation:section:0` for `readiness-webhook-exact-rotation-001`, semantic `performance-troubleshooting:section:3` for `readiness-editor-exact-no-code-001`, and semantic `event-tracking-debugging:section:3` for `readiness-flow-disagreement-001`. These are report diagnostics, not grounds for tuning the frozen labels, corpus, or ranking.
 
-In the offline lexical run, lexical retrieval returned the supporting representation first in 37 of 47 cases (0.787); 10 had a different best representation and a supporting match lower down. These totals include known-cause and playbook representations.
+The earlier offline lexical diagnostic returned the supporting representation first in 37 of 47 cross-resource pairs (0.787); 10 had a different best representation and a supporting match lower down. **Its article-only subset is distinct: 14 of 24 judged article/channel pairs (0.583) had the supporting section first, while the remaining 10 had support lower down.** This 14/24 article-only diagnostic is not directly comparable to the later cross-resource Qwen experiment. In both records, a supporting match lower down is an ordering gap, not a success for supporting-best ordering.
 
-**For articles alone, the supporting section is first in 14 of 24 judged article/channel pairs (0.583).** The remaining 10 have the supporting section lower down. Thus any-supporting-match coverage of 24/24 does not demonstrate useful section ordering. The detailed report lists the safe development case ID, resource, best representation ID, status, and supporting-match presence for each pair. Article section gaps occur across editor, webhook, and flow/event cases; they were recorded without tuning labels, corpus, or ranking.
+The offline lexical aggregate excludes 68 `resource-missing` and 247 `unjudged-section` rows; its article-only subset excludes 68 `resource-missing` and 81 `unjudged-section` rows. Those rows are channel/resource observations over relevant plus returned resources, not distinct case counts. The unavailable offline semantic channel excludes all 362 rows from section denominators, so its section rate is null rather than zero.
 
-The lexical aggregate excludes 68 resource-missing and 247 unjudged-section rows. The article-only subset excludes 68 resource-missing and 81 unjudged-section rows. These rows are channel/resource observations over relevant plus returned resources, not distinct case counts. The unavailable semantic channel excludes all 362 rows from section denominators. Its section rate is null, not zero.
-
-There are zero cases with two measured channels, so `developmentDisagreements` is empty and `disagreementComparableCases` is zero. This means disagreement evidence is unavailable; it does not mean the channels agree.
+The separately measured Qwen development artifacts contain 21 comparable development cases and 21 recorded lexical-versus-semantic ranking differences. Their persisted supporting-best totals are lexical 37/47 and semantic 40/47; each channel excludes 116 `resource-missing` and 247 `unjudged-section` rows. Excluded or unjudged pairs are visible diagnostics, not successes. These development-only differences do not justify tuning frozen labels, corpus, or ranking.
 
 ## Article source and prompt sizes
 
@@ -97,7 +95,7 @@ npm run typecheck
 npx vitest run test/retrieval-cli.test.ts test/retrieval-evaluation.test.ts test/retrieval-readiness-cases.test.ts test/retrieval-section-evidence.test.ts --maxWorkers=1
 ```
 
-The corresponding commands that produced the committed evidence used suffixes `validation-offline-2026-09-15` and `development-lexical-offline-2026-09-15`. The implementation build, typecheck, and 67 focused tests passed. The known hanging full suite was not run. JSON/Markdown rendering is tested for exact identity, and a second run into an existing output directory is rejected without changing its previous bytes.
+The corresponding commands that produced the committed offline evidence used suffixes `validation-offline-2026-09-15` and `development-lexical-offline-2026-09-15`. The implementation build, typecheck, and 67 focused tests are recorded for that implementation work. This retrieval-evidence record does not establish a full-suite result. JSON/Markdown rendering is tested for exact identity, and a second run into an existing output directory is rejected without changing its previous bytes.
 
 The committed Qwen record was a separately authorized local experiment. Before any new Qwen run, verify the installed model's fresh full digest, do not download a missing model, and choose a new output directory. Its query-only format is exactly `Instruct: {instruction}\n Query:{query}` with instruction `Given a support ticket, retrieve relevant support resources.`; documents remain unprefixed. Readiness semantic provider failures abort rather than produce a successful degraded experiment.
 

@@ -146,6 +146,13 @@ describe("B5 applicability contracts", () => {
     expect(() => validateApplicabilityInput(input)).toThrow(/unknown|unrecognized/i);
   });
 
+  it("keeps frozen resource and representation hashes independently bound", () => {
+    const input = validApplicabilityInput("evidence-only");
+    input.evidenceRegistry[0]!.contentHash = hash("9");
+
+    expect(() => validateApplicabilityInput(input)).not.toThrow();
+  });
+
   it("accepts a taxonomy-informed canonical taxonomy context", () => {
     const input = validApplicabilityInput("taxonomy-informed");
     if (input.lane !== "taxonomy-informed") throw new Error("Expected taxonomy-informed input.");

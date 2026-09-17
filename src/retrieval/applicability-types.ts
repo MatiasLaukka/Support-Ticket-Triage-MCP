@@ -314,7 +314,7 @@ export function validateApplicabilityInput(value: unknown): asserts value is App
     assertUnique(candidate.evidence.matchedRepresentationIds, "input");
     for (const representationId of candidate.evidence.representationIds) {
       const representation = representations.get(representationId);
-      if (representation === undefined || representation.resourceKey !== candidate.resourceKey || representation.contentHash !== candidate.contentHash) {
+      if (representation === undefined || representation.resourceKey !== candidate.resourceKey) {
         throw new InvalidApplicabilitySchemaError("input", ["candidate-evidence"]);
       }
     }

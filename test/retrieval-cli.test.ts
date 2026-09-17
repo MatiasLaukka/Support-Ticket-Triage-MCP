@@ -1,8 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { mkdir, mkdtemp, rm, readFile, symlink, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { mkdtemp, rm, readFile, symlink, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { runRetrievalIndex } from "../scripts/retrieval-index.js";
 import * as retrievalEvaluation from "../scripts/evaluate-retrieval.js";
 import { evaluateRetrieval, evaluationOptionsFor, formatQwen3RetrievalQuery, markdownReport, providerForEvaluation, QWEN3_RETRIEVAL_QUERY_FORMAT, QWEN3_RETRIEVAL_QUERY_INSTRUCTION } from "../scripts/evaluate-retrieval.js";
@@ -13,6 +14,8 @@ import { RetrievalStore, RetrievalUpgradeSourceUnavailableError } from "../src/r
 import * as embeddingProviders from "../src/retrieval/embedding-provider.js";
 import type { ReadinessCase, ReadinessManifest } from "../src/retrieval/readiness-cases.js";
 import * as retrievalSearch from "../src/retrieval/search.js";
+
+const B4_ARTIFACT_ROOT = resolve("reports/retrieval/b4-ranking");
 
 async function readinessFixture(mutate?: (manifest: ReadinessManifest, development: ReadinessCase[], holdout: ReadinessCase[]) => void) {
   const root = await mkdtemp(join(tmpdir(), "readiness-cli-"));
@@ -61,15 +64,16 @@ describe("readiness evaluation CLI", () => {
 
   it("captures each development retrieval once into a complete sanitized B4 input", async () => {
     const fixture = await readinessFixture((_manifest, development) => { development.splice(1); });
-    const outputDir = join(fixture.root, "offline-run");
-    const capturePath = join(fixture.root, "ranking-capture.json");
+    const artifactRoot = await mkdtemp(join(B4_ARTIFACT_ROOT, "b4-capture-test-"));
+    const outputDir = join(artifactRoot, "offline-run");
+    const capturePath = join(artifactRoot, "ranking-capture.json");
     const retrieve = vi.spyOn(retrievalSearch, "retrieve");
     try {
       await retrievalEvaluation.runRetrievalEvaluation([
         "--case-set", fixture.caseSetPath,
         "--output-dir", outputDir,
         "--ranking-capture-output", capturePath,
-      ], {}, { rankingArtifactRoot: fixture.root });
+      ], {});
       const capture = JSON.parse(await readFile(capturePath, "utf8")) as any;
       expect(capture).toMatchObject({
         formatVersion: 1,
@@ -83,22 +87,45 @@ describe("readiness evaluation CLI", () => {
     } finally {
       retrieve.mockRestore();
       await rm(fixture.root, { recursive: true, force: true });
+      await rm(artifactRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a legacy caller-controlled capture root before creating output", async () => {
+    const fixture = await readinessFixture((_manifest, development) => { development.splice(1); });
+    const legacyRoot = await mkdtemp(join(tmpdir(), "b4-legacy-capture-root-"));
+    const outputDir = join(legacyRoot, "offline-run");
+    const capturePath = join(legacyRoot, "ranking-capture.json");
+    try {
+      await expect((retrievalEvaluation.runRetrievalEvaluation as any)([
+        "--case-set", fixture.caseSetPath,
+        "--output-dir", outputDir,
+        "--ranking-capture-output", capturePath,
+      ], {}, { rankingArtifactRoot: legacyRoot })).rejects.toThrow(/B4 artifact root/i);
+      expect(existsSync(outputDir)).toBe(false);
+      expect(existsSync(capturePath)).toBe(false);
+    } finally {
+      await rm(fixture.root, { recursive: true, force: true });
+      await rm(legacyRoot, { recursive: true, force: true });
     }
   });
 
   it("does not advertise a capture when development evaluation fails partway", async () => {
     const fixture = await readinessFixture((_manifest, development) => { development.splice(1); });
-    const capturePath = join(fixture.root, "ranking-capture.json");
+    const artifactRoot = await mkdtemp(join(B4_ARTIFACT_ROOT, "b4-capture-failure-test-"));
+    const capturePath = join(artifactRoot, "ranking-capture.json");
     const embed = vi.fn(async () => { throw new embeddingProviders.EmbeddingProviderError("PROVIDER_TIMEOUT", "private provider detail"); });
     try {
       await expect(retrievalEvaluation.evaluateRetrieval({
         caseSetPath: fixture.caseSetPath,
         provider: { model: { id: "fake", revision: "1", dimensions: 1 }, embed },
         rankingCaptureOutput: capturePath,
-        rankingArtifactRoot: fixture.root,
       } as any)).rejects.toThrow(/PROVIDER_TIMEOUT/i);
       await expect(readFile(capturePath, "utf8")).rejects.toThrow();
-    } finally { await rm(fixture.root, { recursive: true, force: true }); }
+    } finally {
+      await rm(fixture.root, { recursive: true, force: true });
+      await rm(artifactRoot, { recursive: true, force: true });
+    }
   });
 
   it("keeps any supporting match out of the best-section numerator and scores family/topic R@1 and R@5", async () => {
@@ -154,13 +181,12 @@ describe("readiness evaluation CLI", () => {
     } finally { await rm(fixture.root, { recursive: true, force: true }); }
   });
 
-  it("confines paired B4 capture and evaluation outputs to an injected artifact root", async () => {
+  it("confines paired B4 capture and evaluation outputs to the fixed artifact root", async () => {
     const fixture = await readinessFixture();
-    const artifactRoot = join(fixture.root, "b4-artifacts");
+    const artifactRoot = await mkdtemp(join(B4_ARTIFACT_ROOT, "b4-capture-boundary-test-"));
     const outsideRoot = await mkdtemp(join(tmpdir(), "b4-capture-outside-"));
     const escaped = join(artifactRoot, "escape");
     try {
-      await mkdir(artifactRoot);
       await symlink(outsideRoot, escaped, "junction");
       const insideOutput = join(artifactRoot, "run");
       const insideCapture = join(insideOutput, "capture.json");
@@ -168,20 +194,21 @@ describe("readiness evaluation CLI", () => {
         "--case-set", fixture.caseSetPath,
         "--output-dir", insideOutput,
         "--ranking-capture-output", insideCapture,
-      ], {}, { rankingArtifactRoot: artifactRoot })).not.toThrow();
+      ], {})).not.toThrow();
 
       expect(() => evaluationOptionsFor([
         "--case-set", fixture.caseSetPath,
         "--output-dir", join(fixture.root, "outside-output"),
         "--ranking-capture-output", insideCapture,
-      ], {}, { rankingArtifactRoot: artifactRoot })).toThrow(/B4 artifact root/i);
+      ], {})).toThrow(/B4 artifact root/i);
       expect(() => evaluationOptionsFor([
         "--case-set", fixture.caseSetPath,
         "--output-dir", insideOutput,
         "--ranking-capture-output", join(escaped, "capture.json"),
-      ], {}, { rankingArtifactRoot: artifactRoot })).toThrow(/B4 artifact root/i);
+      ], {})).toThrow(/B4 artifact root/i);
     } finally {
       await rm(fixture.root, { recursive: true, force: true });
+      await rm(artifactRoot, { recursive: true, force: true });
       await rm(outsideRoot, { recursive: true, force: true });
     }
   });

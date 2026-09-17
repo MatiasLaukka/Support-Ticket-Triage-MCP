@@ -463,7 +463,7 @@ export function markdownReport(report: RankingComparisonReport): string {
   ].join("\n");
 }
 
-function parseOptions(args: readonly string[], artifactRoot: string): ComparisonOptions & { outputDir: string } {
+function parseOptions(args: readonly string[]): ComparisonOptions & { outputDir: string } {
   if (args[0] !== "compare-development") fail("only compare-development is available; holdout comparison is not implemented or authorized.");
   let capturePath: string | undefined;
   let caseSetPath: string | undefined;
@@ -486,14 +486,14 @@ function parseOptions(args: readonly string[], artifactRoot: string): Comparison
   const canonicalManifestPath = realpathSync(requestedManifestPath);
   const caseSetDirectory = dirname(canonicalManifestPath);
   const requestedOutputDir = resolve(outputDir);
-  const canonicalOutputDir = canonicalNewB4ArtifactPath(artifactRoot, requestedOutputDir);
+  const canonicalOutputDir = canonicalNewB4ArtifactPath(DEFAULT_B4_ARTIFACT_ROOT, requestedOutputDir);
   if (isWithin(caseSetDirectory, canonicalOutputDir)) fail("comparison output must not be written below the readiness case-set directory.");
   if (existsSync(requestedOutputDir)) fail("comparison output must use a new directory; existing evidence cannot be overwritten.");
   return { capturePath, caseSetPath: canonicalManifestPath, caseSetDirectory, outputDir: canonicalOutputDir };
 }
 
-export async function runRankingEvaluation(args: readonly string[], settings: { artifactRoot?: string } = {}): Promise<RankingComparisonReport> {
-  const options = parseOptions(args, settings.artifactRoot ?? DEFAULT_B4_ARTIFACT_ROOT);
+export async function runRankingEvaluation(args: readonly string[]): Promise<RankingComparisonReport> {
+  const options = parseOptions(args);
   const report = await compareDevelopment(options);
   await mkdir(options.outputDir, { recursive: true });
   await writeFile(join(options.outputDir, "evaluation.json"), `${JSON.stringify(report, null, 2)}\n`, { encoding: "utf8", flag: "wx" });

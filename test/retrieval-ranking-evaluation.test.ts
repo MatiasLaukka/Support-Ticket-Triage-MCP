@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 
 import { runRankingEvaluation } from "../scripts/evaluate-ranking.js";
 import { createRankingCapture, hashCanonicalRankingCapture } from "../src/retrieval/ranking-capture.js";
@@ -14,6 +14,8 @@ import type { RankingInput, RankingOutputLimits } from "../src/retrieval/ranking
 import type { ReadinessCase, ReadinessManifest } from "../src/retrieval/readiness-cases.js";
 import type { RetrievalResult } from "../src/retrieval/types.js";
 import * as retrievalSearch from "../src/retrieval/search.js";
+
+const B4_ARTIFACT_ROOT = resolve("reports/retrieval/b4-ranking");
 
 const outputLimits: RankingOutputLimits = {
   "knowledge-article": 5,
@@ -28,8 +30,8 @@ const retrievalLimits = {
   "resolved-ticket": { lexical: 5, semantic: 5 },
 } as const;
 
-async function rankingFixture() {
-  const root = await mkdtemp(join(tmpdir(), "b4-ranking-evaluation-"));
+async function rankingFixture(parent = tmpdir()) {
+  const root = await mkdtemp(join(parent, "b4-ranking-evaluation-"));
   const manifest = JSON.parse(await readFile("data/evaluation/knowledge-readiness/manifest.json", "utf8")) as ReadinessManifest;
   const development = [structuredClone(JSON.parse(await readFile("data/evaluation/knowledge-readiness/development.json", "utf8"))[0]) as ReadinessCase];
   development[0]!.expectation.labelsComplete = false;
@@ -111,33 +113,46 @@ async function rankingFixture() {
 }
 
 describe("B4 development ranking comparison", () => {
-  it("rejects comparison outputs outside or physically escaping an injected B4 artifact root", async () => {
+  it("rejects comparison outputs outside or physically escaping the fixed B4 artifact root", async () => {
     const fixture = await rankingFixture();
-    const artifactRootParent = await mkdtemp(join(tmpdir(), "b4-ranking-artifact-root-"));
-    const artifactRoot = join(artifactRootParent, "approved");
     const outsideRoot = await mkdtemp(join(tmpdir(), "b4-ranking-artifact-outside-"));
+    const artifactRoot = await mkdtemp(join(B4_ARTIFACT_ROOT, "b4-ranking-escape-test-"));
     const escaped = join(artifactRoot, "escape");
     try {
-      await mkdir(artifactRoot);
       await symlink(outsideRoot, escaped, "junction");
       const baseArgs = ["compare-development", "--capture", fixture.capturePath, "--case-set", fixture.caseSetPath, "--output-dir"];
 
-      await expect(runRankingEvaluation([...baseArgs, join(artifactRootParent, "outside")], { artifactRoot })).rejects.toThrow(/B4 artifact root/i);
-      await expect(runRankingEvaluation([...baseArgs, join(escaped, "comparison")], { artifactRoot })).rejects.toThrow(/B4 artifact root/i);
+      await expect(runRankingEvaluation([...baseArgs, join(outsideRoot, "comparison")])).rejects.toThrow(/B4 artifact root/i);
+      await expect(runRankingEvaluation([...baseArgs, join(escaped, "comparison")])).rejects.toThrow(/B4 artifact root/i);
     } finally {
       await rm(fixture.root, { recursive: true, force: true });
-      await rm(artifactRootParent, { recursive: true, force: true });
+      await rm(artifactRoot, { recursive: true, force: true });
       await rm(outsideRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a legacy caller-controlled comparison root before creating output", async () => {
+    const fixture = await rankingFixture();
+    const legacyRoot = await mkdtemp(join(tmpdir(), "b4-legacy-ranking-root-"));
+    const outputDir = join(legacyRoot, "comparison");
+    try {
+      await expect((runRankingEvaluation as any)([
+        "compare-development", "--capture", fixture.capturePath, "--case-set", fixture.caseSetPath, "--output-dir", outputDir,
+      ], { artifactRoot: legacyRoot })).rejects.toThrow(/B4 artifact root/i);
+      expect(existsSync(outputDir)).toBe(false);
+    } finally {
+      await rm(fixture.root, { recursive: true, force: true });
+      await rm(legacyRoot, { recursive: true, force: true });
     }
   });
 
   it("replays five policies from one capture without reaching retrieval or providers", async () => {
     const fixture = await rankingFixture();
-    const outputParent = await mkdtemp(join(tmpdir(), "b4-ranking-output-"));
+    const outputParent = await mkdtemp(join(B4_ARTIFACT_ROOT, "b4-ranking-output-"));
     const outputDir = join(outputParent, "comparison");
     const retrieve = vi.spyOn(retrievalSearch, "retrieve");
     try {
-      const report = await runRankingEvaluation(["compare-development", "--capture", fixture.capturePath, "--case-set", fixture.caseSetPath, "--output-dir", outputDir], { artifactRoot: outputParent });
+      const report = await runRankingEvaluation(["compare-development", "--capture", fixture.capturePath, "--case-set", fixture.caseSetPath, "--output-dir", outputDir]);
       expect(retrieve).not.toHaveBeenCalled();
       expect(report.policies).toHaveLength(5);
       expect(report.policies.map((policy: any) => policy.policyKey)).toEqual([
@@ -157,7 +172,7 @@ describe("B4 development ranking comparison", () => {
       expect(json).toEqual(report);
       expect(markdown).toContain(report.captureHash);
       expect(markdown).toContain("rrf-equal-v1:10");
-      await expect(runRankingEvaluation(["compare-development", "--capture", fixture.capturePath, "--case-set", fixture.caseSetPath, "--output-dir", outputDir], { artifactRoot: outputParent })).rejects.toThrow(/existing|overwrite/i);
+      await expect(runRankingEvaluation(["compare-development", "--capture", fixture.capturePath, "--case-set", fixture.caseSetPath, "--output-dir", outputDir])).rejects.toThrow(/existing|overwrite/i);
     } finally {
       retrieve.mockRestore();
       await rm(fixture.root, { recursive: true, force: true });
@@ -166,16 +181,16 @@ describe("B4 development ranking comparison", () => {
   });
 
   it("refuses to write a comparison below the readiness case-set directory", async () => {
-    const fixture = await rankingFixture();
+    const fixture = await rankingFixture(B4_ARTIFACT_ROOT);
     try {
-      await expect(runRankingEvaluation(["compare-development", "--capture", fixture.capturePath, "--case-set", fixture.caseSetPath, "--output-dir", join(dirname(fixture.caseSetPath), "nested-output")], { artifactRoot: fixture.root })).rejects.toThrow(/readiness|case-set|experiment/i);
+      await expect(runRankingEvaluation(["compare-development", "--capture", fixture.capturePath, "--case-set", fixture.caseSetPath, "--output-dir", join(dirname(fixture.caseSetPath), "nested-output")])).rejects.toThrow(/readiness|case-set|experiment/i);
     } finally { await rm(fixture.root, { recursive: true, force: true }); }
   });
 
   it("accepts a valid development file through a symlinked case-set root", async () => {
     const fixture = await rankingFixture();
     const aliasParent = await mkdtemp(join(tmpdir(), "b4-ranking-case-set-alias-"));
-    const outputParent = await mkdtemp(join(tmpdir(), "b4-ranking-case-set-output-"));
+    const outputParent = await mkdtemp(join(B4_ARTIFACT_ROOT, "b4-ranking-case-set-output-"));
     const symlinkedRoot = join(aliasParent, "case-set");
     try {
       await symlink(fixture.root, symlinkedRoot, "junction");
@@ -183,7 +198,7 @@ describe("B4 development ranking comparison", () => {
         "compare-development", "--capture", fixture.capturePath,
         "--case-set", join(symlinkedRoot, "manifest.json"),
         "--output-dir", join(outputParent, "comparison"),
-      ], { artifactRoot: outputParent })).resolves.toMatchObject({ evaluatedSplit: "development" });
+      ])).resolves.toMatchObject({ evaluatedSplit: "development" });
     } finally {
       await rm(aliasParent, { recursive: true, force: true });
       await rm(fixture.root, { recursive: true, force: true });
@@ -192,7 +207,7 @@ describe("B4 development ranking comparison", () => {
   });
 
   it("rejects an output directory under a symlinked case-set root by physical containment", async () => {
-    const fixture = await rankingFixture();
+    const fixture = await rankingFixture(B4_ARTIFACT_ROOT);
     const aliasParent = await mkdtemp(join(tmpdir(), "b4-ranking-output-alias-"));
     const symlinkedRoot = join(aliasParent, "case-set");
     const outputDir = join(symlinkedRoot, "comparison-output");
@@ -202,7 +217,7 @@ describe("B4 development ranking comparison", () => {
         "compare-development", "--capture", fixture.capturePath,
         "--case-set", join(symlinkedRoot, "manifest.json"),
         "--output-dir", outputDir,
-      ], { artifactRoot: symlinkedRoot })).rejects.toThrow(/readiness|case-set|inside|boundary/i);
+      ])).rejects.toThrow(/readiness|case-set|inside|boundary/i);
       expect(existsSync(outputDir)).toBe(false);
     } finally {
       await rm(aliasParent, { recursive: true, force: true });
@@ -213,7 +228,7 @@ describe("B4 development ranking comparison", () => {
   it("rejects a development case file whose symlink target escapes the case-set directory", async () => {
     const fixture = await rankingFixture();
     const externalRoot = await mkdtemp(join(tmpdir(), "b4-ranking-external-"));
-    const outputParent = await mkdtemp(join(tmpdir(), "b4-ranking-symlink-output-"));
+    const outputParent = await mkdtemp(join(B4_ARTIFACT_ROOT, "b4-ranking-symlink-output-"));
     const linkPath = join(fixture.root, "linked-development.json");
     const externalPath = join(externalRoot, "development.json");
     try {
@@ -235,7 +250,7 @@ describe("B4 development ranking comparison", () => {
       await expect(runRankingEvaluation([
         "compare-development", "--capture", fixture.capturePath, "--case-set", fixture.caseSetPath,
         "--output-dir", join(outputParent, "comparison"),
-      ], { artifactRoot: outputParent })).rejects.toThrow(/case-set|inside|boundary|canonical/i);
+      ])).rejects.toThrow(/case-set|inside|boundary|canonical/i);
     } finally {
       await rm(fixture.root, { recursive: true, force: true });
       await rm(externalRoot, { recursive: true, force: true });

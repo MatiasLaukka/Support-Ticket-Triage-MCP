@@ -31,7 +31,7 @@ import type { Limits } from "../src/retrieval/types.js";
 
 type ScoringOracle = Pick<EvaluationOracle, "ticketId" | "retrieval" | "family" | "contrastGroup">;
 type SectionDiagnostic = SectionEvidenceResult & { resourceKey: string; channel: "lexical" | "semantic" };
-type EvaluationInput = { provider?: EmbeddingProvider; completedSnapshots?: readonly CompletedDiagnosisReadSnapshot[]; semanticQueryFormat?: SemanticQueryFormat; caseSetPath?: string; split?: "development"; validateCasesOnly?: boolean; rankingCaptureOutput?: string; rankingArtifactRoot?: string };
+type EvaluationInput = { provider?: EmbeddingProvider; completedSnapshots?: readonly CompletedDiagnosisReadSnapshot[]; semanticQueryFormat?: SemanticQueryFormat; caseSetPath?: string; split?: "development"; validateCasesOnly?: boolean; rankingCaptureOutput?: string };
 const DEFAULT_B4_ARTIFACT_ROOT = resolve("reports/retrieval/b4-ranking");
 
 function caseFilePath(directory: string, path: string): string {
@@ -175,10 +175,7 @@ export async function evaluateRetrieval(input: EvaluationInput = {}): Promise<Re
   if (input.rankingCaptureOutput !== undefined) {
     input = {
       ...input,
-      rankingCaptureOutput: canonicalNewB4ArtifactPath(
-        input.rankingArtifactRoot ?? DEFAULT_B4_ARTIFACT_ROOT,
-        input.rankingCaptureOutput,
-      ),
+      rankingCaptureOutput: canonicalNewB4ArtifactPath(DEFAULT_B4_ARTIFACT_ROOT, input.rankingCaptureOutput),
     };
   }
   if (input.split !== undefined && input.split !== "development") throw new Error("Holdout execution is forbidden; only development scoring is supported.");
@@ -771,8 +768,8 @@ export function markdownReport(report: Record<string, unknown>): string {
   ].join("\n");
 }
 
-export async function runRetrievalEvaluation(args: readonly string[], env: NodeJS.ProcessEnv, settings: { rankingArtifactRoot?: string } = {}): Promise<Record<string, unknown>> {
-  const options = evaluationOptionsFor(args, env, settings);
+export async function runRetrievalEvaluation(args: readonly string[], env: NodeJS.ProcessEnv): Promise<Record<string, unknown>> {
+  const options = evaluationOptionsFor(args, env);
   const report = await evaluateRetrieval(options);
   const outputDir = resolve(options.outputDir);
   if (options.caseSetPath) {
@@ -795,7 +792,7 @@ export function providerForEvaluation(args: readonly string[], env: NodeJS.Proce
   return evaluationOptionsFor(args, env).provider;
 }
 
-export function evaluationOptionsFor(args: readonly string[], env: NodeJS.ProcessEnv, settings: { rankingArtifactRoot?: string } = {}): EvaluationInput & { outputDir: string } {
+export function evaluationOptionsFor(args: readonly string[], env: NodeJS.ProcessEnv): EvaluationInput & { outputDir: string } {
   let liveEmbeddings = false;
   let useQwen3Instruction = false;
   let outputDir = "reports/retrieval";
@@ -840,10 +837,9 @@ export function evaluationOptionsFor(args: readonly string[], env: NodeJS.Proces
   if (rankingCaptureOutput !== undefined && caseSetPath === undefined) throw new Error("--ranking-capture-output requires --case-set.");
   if (rankingCaptureOutput !== undefined && validateCasesOnly) throw new Error("Ranking capture output conflicts with validation-only mode.");
   if (validateCasesOnly && (liveEmbeddings || useQwen3Instruction)) throw new Error("Validation-only mode conflicts with live embedding options.");
-  const rankingArtifactRoot = settings.rankingArtifactRoot ?? DEFAULT_B4_ARTIFACT_ROOT;
   if (rankingCaptureOutput !== undefined) {
-    outputDir = canonicalNewB4ArtifactPath(rankingArtifactRoot, outputDir);
-    rankingCaptureOutput = canonicalNewB4ArtifactPath(rankingArtifactRoot, rankingCaptureOutput);
+    outputDir = canonicalNewB4ArtifactPath(DEFAULT_B4_ARTIFACT_ROOT, outputDir);
+    rankingCaptureOutput = canonicalNewB4ArtifactPath(DEFAULT_B4_ARTIFACT_ROOT, rankingCaptureOutput);
   }
   if (caseSetPath !== undefined) {
     if (!seen.has("--output-dir")) throw new Error("Readiness runs require an explicit --output-dir.");
@@ -851,7 +847,7 @@ export function evaluationOptionsFor(args: readonly string[], env: NodeJS.Proces
     if (rankingCaptureOutput !== undefined && existsSync(resolve(rankingCaptureOutput))) throw new Error("Ranking capture output must use a new file; existing evidence cannot be overwritten.");
     loadReadiness(caseSetPath, validateCasesOnly);
   }
-  const readinessOptions = caseSetPath === undefined ? {} : { caseSetPath, split: split ?? "development" as const, validateCasesOnly, ...(rankingCaptureOutput === undefined ? {} : { rankingCaptureOutput, rankingArtifactRoot }) };
+  const readinessOptions = caseSetPath === undefined ? {} : { caseSetPath, split: split ?? "development" as const, validateCasesOnly, ...(rankingCaptureOutput === undefined ? {} : { rankingCaptureOutput }) };
   if (useQwen3Instruction && !liveEmbeddings) throw new Error("--qwen3-retrieval-instruction requires --live-embeddings.");
   if (!liveEmbeddings) return { outputDir, ...readinessOptions };
   let provider: EmbeddingProvider | undefined;

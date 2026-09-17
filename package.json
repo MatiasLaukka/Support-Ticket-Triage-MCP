@@ -40,6 +40,7 @@
     "evaluate:taxonomy-inference": "npm run build && node dist/scripts/evaluate-taxonomy-inference.js"
     ,"retrieval:index": "npm run build && node dist/scripts/retrieval-index.js"
     ,"evaluate:retrieval": "npm run build && node dist/scripts/evaluate-retrieval.js"
+    ,"evaluate:ranking": "npm run build && node dist/scripts/evaluate-ranking.js"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",

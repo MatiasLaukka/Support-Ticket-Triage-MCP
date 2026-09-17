@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
-import { createRuntimeDependencies, parseRetrievalMode } from "../src/runtime.js";
+import { createRuntimeDependencies, parseRankingOutputLimit, parseRankingPolicy, parseRetrievalMode } from "../src/runtime.js";
 import { RetrievalStore } from "../src/retrieval/sqlite-store.js";
 import { TicketSchema } from "../src/domain.js";
 import { evaluateTicketCommand } from "../src/evaluation-command.js";
@@ -81,6 +81,53 @@ describe("retrieval runtime configuration", () => {
     expect(() => parseRetrievalMode({ TRIAGE_RETRIEVAL_MODE: "live" })).toThrow(
       "TRIAGE_RETRIEVAL_MODE must be off or shadow.",
     );
+  });
+
+  it("accepts exactly the five documented B4 policies and validates the output limit", () => {
+    expect(parseRankingPolicy({ TRIAGE_RANKING_POLICY: "lexical-only-v1" })).toEqual({ id: "lexical-only-v1", kind: "lexical-only" });
+    expect(parseRankingPolicy({ TRIAGE_RANKING_POLICY: "semantic-only-v1" })).toEqual({ id: "semantic-only-v1", kind: "semantic-only" });
+    expect(parseRankingPolicy({ TRIAGE_RANKING_POLICY: "rrf-equal-v1:10" })).toEqual({ id: "rrf-equal-v1", kind: "rrf-equal", constant: 10 });
+    expect(parseRankingPolicy({ TRIAGE_RANKING_POLICY: "rrf-equal-v1:30" })).toEqual({ id: "rrf-equal-v1", kind: "rrf-equal", constant: 30 });
+    expect(parseRankingPolicy({ TRIAGE_RANKING_POLICY: "rrf-equal-v1:60" })).toEqual({ id: "rrf-equal-v1", kind: "rrf-equal", constant: 60 });
+    expect(parseRankingPolicy({})).toBeUndefined();
+    expect(parseRankingOutputLimit({})).toBeUndefined();
+    expect(parseRankingOutputLimit({ TRIAGE_RANKING_OUTPUT_LIMIT: "0" })).toBe(0);
+    expect(parseRankingOutputLimit({ TRIAGE_RANKING_OUTPUT_LIMIT: "5" })).toBe(5);
+    expect(() => parseRankingPolicy({ TRIAGE_RANKING_POLICY: "rrf-equal-v1:20" })).toThrow("TRIAGE_RANKING_POLICY must be lexical-only-v1, semantic-only-v1, or rrf-equal-v1:10|30|60.");
+    expect(() => parseRankingPolicy({ TRIAGE_RANKING_POLICY: "rrf-equal-v1:10:extra" })).toThrow("TRIAGE_RANKING_POLICY must be lexical-only-v1, semantic-only-v1, or rrf-equal-v1:10|30|60.");
+    expect(() => parseRankingOutputLimit({ TRIAGE_RANKING_OUTPUT_LIMIT: "1.5" })).toThrow("TRIAGE_RANKING_OUTPUT_LIMIT must be a non-negative safe integer.");
+  });
+
+  it("rejects explicit B4 ranking configuration when retrieval observation is off", async () => {
+    const root = mkdtempSync(join(tmpdir(), "triage-b4-runtime-off-"));
+
+    await expect(createRuntimeDependencies({ env: {
+      TRIAGE_DATA_ROOT: root,
+      TRIAGE_SEED_FILE: resolve("data/seed/tickets.json"),
+      TRIAGE_KNOWLEDGE_ROOT: resolve("data/knowledge"),
+      TRIAGE_RETRIEVAL_MODE: "off",
+      TRIAGE_RANKING_POLICY: "lexical-only-v1",
+    } })).rejects.toThrow("TRIAGE_RANKING_POLICY requires TRIAGE_RETRIEVAL_MODE=shadow.");
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("wires the selected B4 policy into the detached shadow trace", async () => {
+    const root = mkdtempSync(join(tmpdir(), "triage-b4-runtime-shadow-"));
+    const runtime = await createRuntimeDependencies({ env: {
+      TRIAGE_DATA_ROOT: root,
+      TRIAGE_SEED_FILE: resolve("data/seed/tickets.json"),
+      TRIAGE_KNOWLEDGE_ROOT: resolve("data/knowledge"),
+      TRIAGE_RETRIEVAL_MODE: "shadow",
+      TRIAGE_RANKING_POLICY: "rrf-equal-v1:30",
+      TRIAGE_RANKING_OUTPUT_LIMIT: "2",
+    } });
+    try {
+      await runtime.retrievalObserver!.observe({ queryText: "webhook", queryHash: "query", ticketId: "TKT-0001", sourceRevision: 1, customerReplyWatermark: "none", queryTruncated: false, references: [] }, "cmd-b4-runtime");
+      expect(runtime.retrievalObserver!.recent()[0]!.ranking).toMatchObject({ status: "used", policy: { id: "rrf-equal-v1", kind: "rrf-equal", constant: 30 } });
+    } finally {
+      await runtime.close();
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("constructs the observer in shadow mode and leaves it absent when off", async () => {

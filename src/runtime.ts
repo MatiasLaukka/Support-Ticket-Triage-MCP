@@ -52,8 +52,10 @@ import { loadRetrievalSources } from "./retrieval/sources.js";
 import {
   createRetrievalObserver,
   createUnavailableRetrievalObserver,
+  type RetrievalRankingConfig,
   type RetrievalObserver,
 } from "./retrieval/stage.js";
+import type { RankingPolicy } from "./retrieval/ranking-types.js";
 import { unavailableReusableKnowledge } from "./knowledge-evolution/reusable-context.js";
 
 const STARTUP_PATH_MESSAGES = {
@@ -133,6 +135,30 @@ export function parseRetrievalMode(env: RuntimeEnvironment): RetrievalMode {
   if (configured === undefined || configured === "") return "shadow";
   if (configured === "off" || configured === "shadow") return configured;
   throw new StartupConfigError("TRIAGE_RETRIEVAL_MODE must be off or shadow.");
+}
+
+const RANKING_POLICY_MESSAGE = "TRIAGE_RANKING_POLICY must be lexical-only-v1, semantic-only-v1, or rrf-equal-v1:10|30|60.";
+
+export function parseRankingPolicy(env: RuntimeEnvironment): RankingPolicy | undefined {
+  const configured = env.TRIAGE_RANKING_POLICY;
+  if (configured === undefined) return undefined;
+  const value = configured.trim();
+  if (value === "lexical-only-v1") return { id: "lexical-only-v1", kind: "lexical-only" };
+  if (value === "semantic-only-v1") return { id: "semantic-only-v1", kind: "semantic-only" };
+  const parts = value.split(":");
+  const id = parts[0];
+  const constant = parts[1];
+  if (parts.length === 2 && id === "rrf-equal-v1" && (constant === "10" || constant === "30" || constant === "60")) return { id: "rrf-equal-v1", kind: "rrf-equal", constant: Number(constant) as 10 | 30 | 60 };
+  throw new StartupConfigError(RANKING_POLICY_MESSAGE);
+}
+
+export function parseRankingOutputLimit(env: RuntimeEnvironment): number | undefined {
+  const configured = env.TRIAGE_RANKING_OUTPUT_LIMIT;
+  if (configured === undefined) return undefined;
+  const value = configured.trim();
+  const parsed = Number(value);
+  if (value === "" || !Number.isSafeInteger(parsed) || parsed < 0) throw new StartupConfigError("TRIAGE_RANKING_OUTPUT_LIMIT must be a non-negative safe integer.");
+  return parsed;
 }
 
 const LEARNING_UNAVAILABLE_MESSAGE =
@@ -241,6 +267,11 @@ export async function createRuntimeDependencies(
   const minutesPerAcceptedRecommendation = minutesSaved(env);
   const approvers = knowledgeApprovers(env);
   const retrievalMode = parseRetrievalMode(env);
+  const rankingPolicy = parseRankingPolicy(env);
+  const rankingOutputLimit = parseRankingOutputLimit(env);
+  if (rankingOutputLimit !== undefined && rankingPolicy === undefined) throw new StartupConfigError("TRIAGE_RANKING_OUTPUT_LIMIT requires TRIAGE_RANKING_POLICY.");
+  if (rankingPolicy !== undefined && retrievalMode === "off") throw new StartupConfigError("TRIAGE_RANKING_POLICY requires TRIAGE_RETRIEVAL_MODE=shadow.");
+  const rankingConfig: RetrievalRankingConfig | undefined = rankingPolicy === undefined ? undefined : { policy: rankingPolicy, outputLimit: rankingOutputLimit ?? 5 };
   const now = options.now ?? (() => new Date());
   const knowledgeCandidateDraftProvider = options.knowledgeCandidateDraftProvider ??
     createKnowledgeCandidateDraftProviderFromEnv(env);
@@ -392,6 +423,7 @@ export async function createRuntimeDependencies(
         store: retrievalStore,
         limits: DEFAULT_RETRIEVAL_LIMITS,
         ...(provider === undefined ? {} : { provider }),
+        ...(rankingConfig === undefined ? {} : { ranking: rankingConfig }),
         report: reportRetrievalDiagnostic,
       });
     } catch (error) {

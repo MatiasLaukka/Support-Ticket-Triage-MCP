@@ -83,6 +83,91 @@ describe("retrieval stage", () => {
     await observer.close();
   });
 
+  it("projects B4 ranking from the completed B3 result without another retrieval or provider call", async () => {
+    let refreshes = 0;
+    let snapshots = 0;
+    let providerCalls = 0;
+    const resourceKey = "knowledge-article:shadow" as const;
+    const model = { id: "shadow-model", revision: "1", dimensions: 2 };
+    const observer = createRetrievalObserver({
+      manager: { refresh: async () => { refreshes += 1; }, close: async () => undefined } as any,
+      store: {
+        readSnapshot: () => {
+          snapshots += 1;
+          return {
+            metadata: { schemaVersion: 2, representationVersion: REPRESENTATION_VERSION, generation: 1, lexicalGeneration: 1, semanticGeneration: 0, corpusHash: "hash", model, state: "degraded" },
+            resources: [{ key: resourceKey, type: "knowledge-article", sourceId: "shadow", contentHash: "content", family: "article", linkedResourceKeys: [] }],
+            lexical: { status: "used" },
+            lexicalMatches: [{ representationId: "shadow-representation", resourceKey, score: 0.1, rank: 7 }],
+            vectors: [],
+          };
+        },
+        close: () => undefined,
+      } as any,
+      limits: { "knowledge-article": { lexical: 5, semantic: 5 }, "known-cause": { lexical: 5, semantic: 5 }, "diagnostic-playbook": { lexical: 5, semantic: 5 }, "resolved-ticket": { lexical: 5, semantic: 5 } },
+      provider: { model, embed: async () => { providerCalls += 1; return [[1, 0]]; } },
+      ranking: { policy: { id: "lexical-only-v1", kind: "lexical-only" }, outputLimit: 1 },
+    });
+
+    await observer.observe({ queryText: "shadow", queryHash: "query", ticketId: "TKT-0001", sourceRevision: 1, customerReplyWatermark: "none", queryTruncated: false, references: [] }, "cmd-ranking");
+    const trace = observer.recent()[0]!;
+    expect(refreshes).toBe(1);
+    expect(snapshots).toBe(1);
+    expect(providerCalls).toBe(1);
+    expect(trace.ranking).toMatchObject({
+      status: "used",
+      policy: { id: "lexical-only-v1", kind: "lexical-only" },
+      truncated: false,
+      byType: { "knowledge-article": { poolCount: 1, returnedCount: 1, memberships: [{ resourceKey, position: 1 }] } },
+    });
+    await observer.close();
+  });
+
+  it("records a ranking failure separately while retaining the valid B3 trace", async () => {
+    const observer = createRetrievalObserver({
+      manager: { refresh: async () => undefined, close: async () => undefined } as any,
+      store: {
+        readSnapshot: () => ({
+          metadata: { schemaVersion: 2, representationVersion: REPRESENTATION_VERSION, generation: 1, lexicalGeneration: 1, semanticGeneration: 0, corpusHash: "hash", state: "degraded" },
+          resources: [{ key: "knowledge-article:failure" as const, type: "knowledge-article", sourceId: "failure", contentHash: "content", family: "article", linkedResourceKeys: [] }],
+          lexical: { status: "used" },
+          lexicalMatches: [{ representationId: "failure-representation", resourceKey: "knowledge-article:failure" as const, score: 0.1, rank: 1 }],
+          vectors: [],
+        }),
+        close: () => undefined,
+      } as any,
+      limits: { "knowledge-article": { lexical: 5, semantic: 5 }, "known-cause": { lexical: 5, semantic: 5 }, "diagnostic-playbook": { lexical: 5, semantic: 5 }, "resolved-ticket": { lexical: 5, semantic: 5 } },
+      ranking: { policy: { id: "invalid-policy", kind: "invalid" } as any, outputLimit: 1 },
+    });
+
+    await observer.observe({ queryText: "failure", queryHash: "query", ticketId: "TKT-0001", sourceRevision: 1, customerReplyWatermark: "none", queryTruncated: false, references: [] }, "cmd-ranking-failure");
+    expect(observer.recent()[0]).toMatchObject({ result: { candidates: [{ resourceKey: "knowledge-article:failure" }] }, ranking: { status: "failed", truncated: false } });
+    await observer.close();
+  });
+
+  it("marks omitted B4 detail as truncated when the combined trace exceeds the byte budget", async () => {
+    const resourceKey = `knowledge-article:${"é".repeat(40_000)}` as any;
+    const observer = createRetrievalObserver({
+      manager: { refresh: async () => undefined, close: async () => undefined } as any,
+      store: {
+        readSnapshot: () => ({
+          metadata: { schemaVersion: 2, representationVersion: REPRESENTATION_VERSION, generation: 1, lexicalGeneration: 1, semanticGeneration: 0, corpusHash: "hash", state: "degraded" },
+          resources: [{ key: resourceKey, type: "knowledge-article", sourceId: "large", contentHash: "content", family: "article", linkedResourceKeys: [] }],
+          lexical: { status: "used" },
+          lexicalMatches: [{ representationId: "large-representation", resourceKey, score: 0.1, rank: 1 }],
+          vectors: [],
+        }),
+        close: () => undefined,
+      } as any,
+      limits: { "knowledge-article": { lexical: 5, semantic: 5 }, "known-cause": { lexical: 5, semantic: 5 }, "diagnostic-playbook": { lexical: 5, semantic: 5 }, "resolved-ticket": { lexical: 5, semantic: 5 } },
+      ranking: { policy: { id: "lexical-only-v1", kind: "lexical-only" }, outputLimit: 5 },
+    });
+
+    await observer.observe({ queryText: "large", queryHash: "query", ticketId: "TKT-0001", sourceRevision: 1, customerReplyWatermark: "none", queryTruncated: false, references: [] }, "cmd-ranking-truncated");
+    expect(observer.recent()[0]).toMatchObject({ truncated: true, result: { candidates: [] }, ranking: { status: "used", truncated: true, byType: { "knowledge-article": { memberships: [] } } } });
+    await observer.close();
+  });
+
   it("cancels active observation before closing retrieval resources", async () => {
     let aborted = false;
     let closed = false;

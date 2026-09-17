@@ -1,10 +1,10 @@
-# Support Ticket Triage MCP
+# Knotty
 
 A local Model Context Protocol (MCP) server and repository-local Codex Skill
 for governed support-ticket triage. The system reads synthetic tickets and
 knowledge articles, prepares evidence-backed recommendations, and records
 local audit events. The Skill directs Codex to present each recommendation and
-wait for a human decision before a finalizing action.
+wait for a human decision before finalizing action.
 
 The current demo also includes a browser-based **Approval Desk**. It lets a
 reviewer type customer replies into a conversation workspace, generate an
@@ -136,7 +136,7 @@ Open the printed local URL. A good portfolio walkthrough is:
    ticket-specific customer reply automatically after the response is marked
    sent.
 4. Evaluate the ticket again and point out that the system reclassifies it
-   from generic support to a
+   from generic Knotty to a
    product performance issue, recalculates the evidence checklist, avoids
    asking for a screenshot of a blank page, and drafts a response that matches
    the new lifecycle state.
@@ -158,7 +158,7 @@ The **Workflow Bar** owns evaluation, recommendation approval, diagnosis, Fix,
 verification, and close actions. The separate **Pattern Bar** appears only when
 knowledge discovery has an active candidate or is still running. An actionable
 diagnosis or pattern review is a hard workflow gate: **Done** changes to
-**Review**, focuses the relevant bar, and downstream support actions remain
+**Review**, focuses the relevant bar, and downstream Knotty actions remain
 hidden until the operator completes the required review.
 
 The alternate incident walkthrough still works well with `TKT-1001`, which
@@ -236,7 +236,7 @@ customer reply, diagnosis and fix audits, and ends at `resolved`.
 The replay writes a sanitized report with the exact workflow-read and action
 counts for that run, plus the separate context-aware diagnostic scenario
 matrix. The matrix's bounded-ambiguity/escalation scenario remains a second
-supporting example: it routes unresolved ambiguity toward specialist review
+Knottying example: it routes unresolved ambiguity toward specialist review
 rather than pretending that an unresolved hypothesis is a fix. Treat report
 counts as run evidence, not a versioned README constant.
 
@@ -383,7 +383,7 @@ The stdio entry point is `dist/src/index.js`. Its defaults are:
 | `TRIAGE_SEED_FILE` | `data/seed/tickets.json` |
 | `TRIAGE_KNOWLEDGE_ROOT` | `data/knowledge` |
 | `TRIAGE_MINUTES_SAVED` | `8` |
-| `TRIAGE_KNOWLEDGE_APPROVERS` | `support-lead,reviewer,approval-desk` |
+| `TRIAGE_KNOWLEDGE_APPROVERS` | `Knotty-lead,reviewer,approval-desk` |
 | `TRIAGE_KNOWLEDGE_CANDIDATE_PROVIDER` | unset (deterministic discovery only); use `controlled` for the local advisory demo |
 | `TRIAGE_KNOWLEDGE_CANDIDATE_MODEL` | unset (inherits `OPENAI_MODEL`, then `gpt-5.6-luna`) |
 | `TRIAGE_KNOWLEDGE_CANDIDATE_TIMEOUT_MS` | `20000` |
@@ -485,7 +485,7 @@ The current workflow surface is:
 | `record_fix_ineffective` / `invalidate_diagnosis` | Record failed verification or explicitly invalidate diagnosis authority. |
 | `close_ticket` | Close only after the customer-safe response and confirmation gates are complete. |
 
-The repository-local Skill at `.agents/skills/triaging-support-tickets` teaches
+The repository-local Skill at `.agents/skills/triaging-Knotty-tickets` teaches
 Codex to use the operator tools, present evidence and drafts, wait for explicit
 human approval of named fields, and verify the resulting audit trail.
 
@@ -651,15 +651,15 @@ No separate `codex` command is required for this repository.
 5. Trigger the repository Skill explicitly in the prompt:
 
 ```text
-Use $triaging-support-tickets to triage TKT-1005 using the local MCP server.
+Use $triaging-Knotty-tickets to triage TKT-1005 using the local MCP server.
 Present the recommendation and wait for my explicit approval of named fields.
 ```
 
 The Skill lives at
-`.agents/skills/triaging-support-tickets/SKILL.md`. Its UI metadata is at
-`.agents/skills/triaging-support-tickets/agents/openai.yaml`, and its detailed
+`.agents/skills/triaging-Knotty-tickets/SKILL.md`. Its UI metadata is at
+`.agents/skills/triaging-Knotty-tickets/agents/openai.yaml`, and its detailed
 classification and escalation tables are in
-`.agents/skills/triaging-support-tickets/references/policy.md`.
+`.agents/skills/triaging-Knotty-tickets/references/policy.md`.
 
 ## Use The Local Approval Desk
 
@@ -700,7 +700,7 @@ actor, check the explicit confirmation box, and approve. The UI then reads back
 the updated ticket revision and audit event.
 
 The app is local-only. It does not send customer responses, connect to external
-support systems, or authenticate multiple users.
+Knotty systems, or authenticate multiple users.
 
 ### GPT Drafting And Advisory Classification
 

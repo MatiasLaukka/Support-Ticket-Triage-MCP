@@ -197,6 +197,16 @@ describe("B5 applicability contracts", () => {
     expect(() => validateApplicabilityProviderOutput(input, alternative)).toThrow(/qualified/i);
   });
 
+  it("requires every insufficient-evidence assessment to appear as a qualified alternative", () => {
+    const input = validApplicabilityInput("evidence-only");
+    const output = validProviderOutput(input);
+    output.candidateAssessments[0]!.verdict = "insufficient-evidence";
+    output.candidateAssessments[0]!.missingEvidence = [{ item: "A browser console trace is required.", evidence: [] }];
+    output.synthesis = { disposition: "abstain", summary: "No candidate is yet supported as a next step.", coverageGaps: ["A browser console trace is required."], alternatives: [], discriminatingQuestions: [] };
+
+    expect(() => validateApplicabilityProviderOutput(input, output)).toThrow(/insufficient-evidence.*alternative/i);
+  });
+
   it("requires taxonomyRelation only in the taxonomy-informed lane", () => {
     const evidenceOnly = validApplicabilityInput("evidence-only");
     const evidenceOnlyOutput = validProviderOutput(evidenceOnly);
@@ -215,5 +225,42 @@ describe("B5 applicability contracts", () => {
     second.candidates.reverse();
     second.evidenceRegistry.reverse();
     expect(hashCanonicalApplicabilityValue(first)).toBe(hashCanonicalApplicabilityValue(second));
+  });
+
+  it("canonicalizes every semantic taxonomy set and matched channel order", () => {
+    const canonical = validApplicabilityInput("taxonomy-informed");
+    if (canonical.lane !== "taxonomy-informed") throw new Error("Expected taxonomy-informed input.");
+    canonical.evidenceRegistry[0]!.matchedChannels = ["lexical", "semantic"];
+    canonical.taxonomy.case.secondaryProductSurfaces = [
+      { domain: "automation", area: "flows" },
+      { domain: "messaging", area: "email" },
+    ];
+    canonical.taxonomy.case.problemClasses = ["defect", "security"];
+    canonical.taxonomy.case.basis.evidenceIds = ["fact:chunkload", "state:waiting"];
+    canonical.taxonomy.case.basis.knowledgeArticleIds = ["knowledge-b", "knowledge-a"];
+    canonical.taxonomy.case.basis.playbookIds = ["playbook-b", "playbook-a"];
+    canonical.taxonomy.case.basis.knownCauseIds = ["cause-b", "cause-a"];
+    canonical.taxonomy.candidateMetadata = [
+      { resourceKey: "knowledge-article:performance-troubleshooting", taxonomy: { productSurfaces: ["messaging/campaigns", "automation/flows"], problemClasses: ["defect", "security"] } },
+      { resourceKey: "known-cause:reference-only", taxonomy: { productSurfaces: ["security/audit-log", "messaging/campaigns"], problemClasses: ["security", "defect"] } },
+    ];
+
+    const permuted = structuredClone(canonical);
+    if (permuted.lane !== "taxonomy-informed") throw new Error("Expected taxonomy-informed input.");
+    permuted.evidenceRegistry[0]!.matchedChannels.reverse();
+    permuted.taxonomy.case.secondaryProductSurfaces.reverse();
+    permuted.taxonomy.case.problemClasses.reverse();
+    permuted.taxonomy.case.basis.evidenceIds.reverse();
+    permuted.taxonomy.case.basis.knowledgeArticleIds.reverse();
+    permuted.taxonomy.case.basis.playbookIds.reverse();
+    permuted.taxonomy.case.basis.knownCauseIds.reverse();
+    permuted.taxonomy.candidateMetadata.reverse();
+    for (const metadata of permuted.taxonomy.candidateMetadata) {
+      metadata.taxonomy?.productSurfaces.reverse();
+      metadata.taxonomy?.problemClasses.reverse();
+    }
+
+    expect(() => validateApplicabilityInput(permuted)).not.toThrow();
+    expect(hashCanonicalApplicabilityValue(permuted)).toBe(hashCanonicalApplicabilityValue(canonical));
   });
 });

@@ -41,6 +41,7 @@ const stableIdPattern = /^[A-Za-z0-9][A-Za-z0-9._:/-]*$/;
 const sha256Pattern = /^[0-9a-f]{64}$/;
 const resourceTypes = ["knowledge-article", "known-cause", "diagnostic-playbook", "resolved-ticket"] as const;
 const resourceTypeOrder = new Map<ResourceType, number>(resourceTypes.map((resourceType, index) => [resourceType, index]));
+const matchedChannelOrder = new Map(["lexical", "semantic"].map((channel, index) => [channel, index]));
 
 const StableIdSchema = z.string().min(1).max(256).regex(stableIdPattern);
 const Sha256Schema = z.string().regex(sha256Pattern);
@@ -254,7 +255,7 @@ export type ApplicabilityCaseResult =
 
 type InvalidApplicabilityStage = "input" | "provider-output" | "candidate-coverage" | "evidence-reference" | "synthesis" | "taxonomy-output";
 const boundedErrorFields = new Set([
-  "unknown-field", "unique-identities", "candidate-order", "evidence-registry-order", "candidate-evidence", "matched-representation", "matched-representation-origin", "candidate-taxonomy-order", "candidate-taxonomy", "evidence-reference", "abstain", "applicable-next-step", "hypothesis-candidate", "alternative-candidate", "qualified", "missing-evidence", "taxonomyRelation",
+  "unknown-field", "unique-identities", "candidate-order", "evidence-registry-order", "candidate-evidence", "matched-representation", "matched-representation-origin", "candidate-taxonomy-order", "candidate-taxonomy", "taxonomy-semantic-set", "evidence-reference", "abstain", "applicable-next-step", "hypothesis-candidate", "alternative-candidate", "qualified", "missing-evidence", "insufficient-evidence-alternative", "taxonomyRelation",
 ]);
 export class InvalidApplicabilitySchemaError extends Error {
   readonly stage: InvalidApplicabilityStage;
@@ -295,7 +296,7 @@ function isCanonical<T>(values: readonly T[], compare: (left: T, right: T) => nu
 export function validateApplicabilityInput(value: unknown): asserts value is ApplicabilityReasoningInput {
   let input: ApplicabilityReasoningInput;
   try {
-    input = ApplicabilityReasoningInputSchema.parse(value);
+    input = ApplicabilityReasoningInputSchema.parse(normalizeApplicabilitySemanticSets(value));
   } catch {
     throw new InvalidApplicabilitySchemaError("input", ["unknown-field"]);
   }
@@ -325,6 +326,15 @@ export function validateApplicabilityInput(value: unknown): asserts value is App
   if (input.lane === "taxonomy-informed") {
     assertUnique(input.taxonomy.candidateMetadata.map((metadata) => metadata.resourceKey), "input");
     if (!isCanonical(input.taxonomy.candidateMetadata, (left, right) => compareOrdinal(left.resourceKey, right.resourceKey))) throw new InvalidApplicabilitySchemaError("input", ["candidate-taxonomy-order"]);
+    for (const semanticSet of [
+      input.taxonomy.case.basis.evidenceIds,
+      input.taxonomy.case.basis.knowledgeArticleIds,
+      input.taxonomy.case.basis.playbookIds,
+      input.taxonomy.case.basis.knownCauseIds,
+      ...input.taxonomy.candidateMetadata.flatMap((metadata) => metadata.taxonomy === null ? [] : [metadata.taxonomy.productSurfaces, metadata.taxonomy.problemClasses]),
+    ]) {
+      assertUnique(semanticSet, "input");
+    }
     for (const metadata of input.taxonomy.candidateMetadata) {
       if (!input.candidates.some((candidate) => candidate.resourceKey === metadata.resourceKey)) throw new InvalidApplicabilitySchemaError("input", ["candidate-taxonomy"]);
     }
@@ -369,6 +379,9 @@ function assertSynthesisConsistent(output: ApplicabilityProviderOutput): void {
   }
   for (const assessment of output.candidateAssessments) {
     if (assessment.verdict === "insufficient-evidence" && assessment.missingEvidence.length === 0) throw new InvalidApplicabilitySchemaError("synthesis", ["missing-evidence"]);
+    if (assessment.verdict === "insufficient-evidence" && !output.synthesis.alternatives.some((alternative) => alternative.qualified && alternative.candidateKeys.includes(assessment.resourceKey))) {
+      throw new InvalidApplicabilitySchemaError("synthesis", ["insufficient-evidence-alternative"]);
+    }
   }
 }
 function assertTaxonomyOutputMatchesLane(lane: ApplicabilityLane, output: ApplicabilityProviderOutput): void {
@@ -393,12 +406,27 @@ export function validateApplicabilityProviderOutput(input: ApplicabilityReasonin
   assertTaxonomyOutputMatchesLane(input.lane, output);
 }
 
+function normalizeSemanticSetArray(values: unknown[], parentKey?: string): unknown[] {
+  if (parentKey === "candidateMetadata") return values.sort((left, right) => compareOrdinal((left as { resourceKey: string }).resourceKey, (right as { resourceKey: string }).resourceKey));
+  if (parentKey === "secondaryProductSurfaces") return values.sort((left, right) => compareOrdinal(`${(left as { domain: string; area: string }).domain}/${(left as { domain: string; area: string }).area}`, `${(right as { domain: string; area: string }).domain}/${(right as { domain: string; area: string }).area}`));
+  if (parentKey === "matchedChannels") return values.sort((left, right) => matchedChannelOrder.get(String(left))! - matchedChannelOrder.get(String(right))!);
+  if (parentKey === "problemClasses" || parentKey === "productSurfaces" || parentKey === "evidenceIds" || parentKey === "knowledgeArticleIds" || parentKey === "playbookIds" || parentKey === "knownCauseIds") return values.sort((left, right) => compareOrdinal(String(left), String(right)));
+  return values;
+}
+function normalizeApplicabilitySemanticSets(value: unknown, parentKey?: string): unknown {
+  if (Array.isArray(value)) return normalizeSemanticSetArray(value.map((entry) => normalizeApplicabilitySemanticSets(entry)), parentKey);
+  if (value !== null && typeof value === "object") {
+    return Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([key, entry]) => [key, normalizeApplicabilitySemanticSets(entry, key)]));
+  }
+  return value;
+}
 function normalizeApplicabilityValue(value: unknown, parentKey?: string): unknown {
   if (Array.isArray(value)) {
     const normalized = value.map((entry) => normalizeApplicabilityValue(entry));
     if (parentKey === "candidates") return normalized.sort((left, right) => compareCandidates(left as ApplicabilityCandidateInput, right as ApplicabilityCandidateInput));
     if (parentKey === "evidenceRegistry") return normalized.sort((left, right) => compareOrdinal((left as { id: string }).id, (right as { id: string }).id));
     if (parentKey === "candidateMetadata") return normalized.sort((left, right) => compareOrdinal((left as { resourceKey: string }).resourceKey, (right as { resourceKey: string }).resourceKey));
+    if (parentKey === "secondaryProductSurfaces" || parentKey === "matchedChannels" || parentKey === "problemClasses" || parentKey === "productSurfaces" || parentKey === "evidenceIds" || parentKey === "knowledgeArticleIds" || parentKey === "playbookIds" || parentKey === "knownCauseIds") return normalizeSemanticSetArray(normalized, parentKey);
     if (parentKey === "representationIds" || parentKey === "matchedRepresentationIds" || parentKey === "reasons") return normalized.sort((left, right) => compareOrdinal(String(left), String(right)));
     if (parentKey === "references") return normalized.sort((left, right) => compareOrdinal(JSON.stringify(left), JSON.stringify(right)));
     return normalized;

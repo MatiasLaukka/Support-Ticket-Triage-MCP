@@ -1,13 +1,21 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   APPLICABILITY_CONTRACT_VERSION,
   APPLICABILITY_PROMPT_VERSION,
+  ApplicabilityProviderUnavailableError,
   hashCanonicalApplicabilityValue,
   validateApplicabilityInput,
   validateApplicabilityProviderOutput,
 } from "../src/retrieval/applicability-types.js";
-import type { ApplicabilityProviderOutput, ApplicabilityReasoningInput } from "../src/retrieval/applicability-types.js";
+import type {
+  ApplicabilityProviderFailureReason,
+  ApplicabilityProviderOutput,
+  ApplicabilityReasoningInput,
+  ApplicabilityReasoningProvider,
+} from "../src/retrieval/applicability-types.js";
+import type { ApplicabilityInputMeasurement } from "../src/retrieval/applicability-evidence.js";
+import { assessApplicabilityCase } from "../src/retrieval/applicability.js";
 
 const hash = (character: string): string => character.repeat(64);
 
@@ -269,5 +277,261 @@ describe("B5 applicability contracts", () => {
 
     expect(() => validateApplicabilityInput(permuted)).not.toThrow();
     expect(hashCanonicalApplicabilityValue(permuted)).toBe(hashCanonicalApplicabilityValue(canonical));
+  });
+});
+
+describe("B5 applicability orchestration", () => {
+  function validMeasurement(
+    fits: boolean | null = true,
+  ): ApplicabilityInputMeasurement {
+    return {
+      serializedBytes: 1_000,
+      estimatedInputTokens: 500,
+      outputReserveTokens: 4_096,
+      minimumContextTokens: 4_596,
+      contextLimitTokens: fits === null ? null : fits ? 8_192 : 4_000,
+      fits,
+    };
+  }
+
+  function providerReturning(
+    input: ApplicabilityReasoningInput,
+  ): ApplicabilityReasoningProvider {
+    return {
+      assess: vi.fn(async () => ({
+        output: validProviderOutput(input),
+        telemetry: {
+          providerKind: "controlled-test" as const,
+          model: "controlled-test",
+          latencyMs: 1,
+        },
+      })),
+    };
+  }
+
+  it("calls the provider exactly once for a complete assessment", async () => {
+    const input = validApplicabilityInput("evidence-only");
+    input.candidates = [input.candidates[0]!];
+
+    const provider = providerReturning(input);
+
+    const result = await assessApplicabilityCase({
+      input,
+      provider,
+      measurement: validMeasurement(),
+      promptInjectionDetected: false,
+    });
+
+    expect(provider.assess).toHaveBeenCalledTimes(1);
+    expect(result.status).toBe("complete");
+  });
+
+  it("returns partial-assessment when unavailable candidates coexist with valid assessments", async () => {
+    const input = validApplicabilityInput("evidence-only");
+    const provider = providerReturning(input);
+
+    const result = await assessApplicabilityCase({
+      input,
+      provider,
+      measurement: validMeasurement(),
+      promptInjectionDetected: false,
+    });
+
+    expect(provider.assess).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({
+      status: "partial-assessment",
+      unavailableCandidates: [{
+        resourceKey: "known-cause:reference-only",
+        reasons: ["representation-unavailable"],
+      }],
+    });
+
+    if (result.status !== "partial-assessment") {
+      throw new Error("Expected a partial assessment.");
+    }
+
+    expect(
+      result.assessments.some(
+        ({ resourceKey }) => resourceKey === "known-cause:reference-only",
+      ),
+    ).toBe(false);
+  });
+
+  it("skips without a provider call when no candidate is assessable", async () => {
+    const input = validApplicabilityInput("evidence-only");
+
+    input.candidates[0]!.evidence = {
+      status: "unavailable",
+      reasons: ["representation-unavailable"],
+      references: input.candidates[0]!.evidence.references,
+    };
+
+    const provider = providerReturning(input);
+
+    const result = await assessApplicabilityCase({
+      input,
+      provider,
+      measurement: validMeasurement(),
+      promptInjectionDetected: false,
+    });
+
+    expect(provider.assess).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      status: "assessment-skipped",
+      reason: "no-assessable-candidates",
+    });
+  });
+
+  it("skips prompt injection without a provider call", async () => {
+    const input = validApplicabilityInput("evidence-only");
+    const provider = providerReturning(input);
+
+    const result = await assessApplicabilityCase({
+      input,
+      provider,
+      measurement: validMeasurement(),
+      promptInjectionDetected: true,
+    });
+
+    expect(provider.assess).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      status: "assessment-skipped",
+      reason: "prompt-injection-detected",
+    });
+  });
+
+  it("does not call a provider when complete input exceeds the declared budget", async () => {
+    const input = validApplicabilityInput("evidence-only");
+    const provider = providerReturning(input);
+
+    const result = await assessApplicabilityCase({
+      input,
+      provider,
+      measurement: validMeasurement(false),
+      promptInjectionDetected: false,
+    });
+
+    expect(provider.assess).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      status: "assessment-skipped",
+      reason: "input-too-large",
+    });
+  });
+
+  it.each([
+    "not-configured",
+    "transport",
+    "http",
+    "response-body",
+    "timeout",
+    "context-exhausted",
+  ] satisfies ApplicabilityProviderFailureReason[])(
+    "maps provider failure %s to a bounded assessment-failed result",
+    async (reason) => {
+      const input = validApplicabilityInput("evidence-only");
+
+      const provider: ApplicabilityReasoningProvider = {
+        assess: vi.fn(async () => {
+          throw new ApplicabilityProviderUnavailableError(reason);
+        }),
+      };
+
+      const result = await assessApplicabilityCase({
+        input,
+        provider,
+        measurement: validMeasurement(),
+        promptInjectionDetected: false,
+      });
+
+      expect(provider.assess).toHaveBeenCalledTimes(1);
+      expect(result).toEqual({
+        status: "assessment-failed",
+        reason,
+      });
+    },
+  );
+
+  it("maps invalid provider output to invalid-provider-output without retry", async () => {
+    const input = validApplicabilityInput("evidence-only");
+
+    const invalid = validProviderOutput(input);
+    invalid.candidateAssessments = [];
+
+    const provider: ApplicabilityReasoningProvider = {
+      assess: vi.fn(async () => ({
+        output: invalid,
+        telemetry: {
+          providerKind: "controlled-test" as const,
+          model: "controlled-test",
+          latencyMs: 1,
+        },
+      })),
+    };
+
+    const result = await assessApplicabilityCase({
+      input,
+      provider,
+      measurement: validMeasurement(),
+      promptInjectionDetected: false,
+    });
+
+    expect(provider.assess).toHaveBeenCalledTimes(1);
+    expect(result).toEqual({
+      status: "assessment-failed",
+      reason: "invalid-provider-output",
+    });
+  });
+
+  it("enforces synthesis consistency after provider output", async () => {
+    const input = validApplicabilityInput("evidence-only");
+
+    const invalid = validProviderOutput(input);
+    invalid.candidateAssessments[0]!.verdict = "irrelevant";
+
+    const provider: ApplicabilityReasoningProvider = {
+      assess: vi.fn(async () => ({
+        output: invalid,
+        telemetry: {
+          providerKind: "controlled-test" as const,
+          model: "controlled-test",
+          latencyMs: 1,
+        },
+      })),
+    };
+
+    const result = await assessApplicabilityCase({
+      input,
+      provider,
+      measurement: validMeasurement(),
+      promptInjectionDetected: false,
+    });
+
+    expect(provider.assess).toHaveBeenCalledTimes(1);
+    expect(result).toEqual({
+      status: "assessment-failed",
+      reason: "invalid-provider-output",
+    });
+  });
+
+  it("propagates unexpected programming errors and does not retry", async () => {
+    const input = validApplicabilityInput("evidence-only");
+    const unexpected = new Error("programming failure");
+
+    const provider: ApplicabilityReasoningProvider = {
+      assess: vi.fn(async () => {
+        throw unexpected;
+      }),
+    };
+
+    await expect(
+      assessApplicabilityCase({
+        input,
+        provider,
+        measurement: validMeasurement(),
+        promptInjectionDetected: false,
+      }),
+    ).rejects.toBe(unexpected);
+
+    expect(provider.assess).toHaveBeenCalledTimes(1);
   });
 });

@@ -250,7 +250,7 @@ export interface ApplicabilityReasoningProvider {
 export type ApplicabilityCaseResult =
   | { status: "complete"; assessments: readonly CandidateAssessment[]; synthesis: ApplicabilityProviderOutput["synthesis"]; telemetry: ApplicabilityReasoningExecution["telemetry"] }
   | { status: "partial-assessment"; assessments: readonly CandidateAssessment[]; synthesis: ApplicabilityProviderOutput["synthesis"]; unavailableCandidates: readonly { resourceKey: ResourceKey; reasons: readonly EvidenceUnavailableReason[] }[]; telemetry: ApplicabilityReasoningExecution["telemetry"] }
-  | { status: "assessment-skipped"; reason: "no-assessable-candidates" | "input-too-large" }
+  | { status: "assessment-skipped"; reason: "no-assessable-candidates" | "input-too-large" | "prompt-injection-detected" }
   | { status: "assessment-failed"; reason: "invalid-provider-output" | ApplicabilityProviderFailureReason };
 
 type InvalidApplicabilityStage = "input" | "provider-output" | "candidate-coverage" | "evidence-reference" | "synthesis" | "taxonomy-output";

@@ -8,10 +8,12 @@ import { DiagnosticTaxonomyContextSchema } from "../diagnostic-taxonomy.js";
 import { IsoTimestampSchema } from "../domain.js";
 import type { RankingCapture } from "./ranking-capture.js";
 import type { ReadinessCase } from "./readiness-cases.js";
-import type {
-  ApplicabilityVerdict,
-  EvidenceReference,
-  SafeCaseProjection,
+import {
+  APPLICABILITY_CONTRACT_VERSION,
+  APPLICABILITY_PROMPT_VERSION,
+  type ApplicabilityVerdict,
+  type EvidenceReference,
+  type SafeCaseProjection,
 } from "./applicability-types.js";
 import type { ResourceKey, SourceSnapshot } from "./types.js";
 
@@ -47,9 +49,22 @@ const ApplicabilityOracleJudgmentSchema = z.object({
   missingEvidence: z.array(MissingEvidenceSchema).max(16),
   rationale: z.string().min(1).max(600),
 }).strict();
-const DiscriminatorIntentSchema = z.object({
+const HypothesisOracleSpecSchema = z.object({
   id: StableIdSchema,
-  separatesCandidateKeys: UniqueResourceKeysSchema.min(1),
+  candidateKeyPool: UniqueResourceKeysSchema.min(1).max(8),
+  minimumCandidateMatches: z.number().int().min(1).max(8),
+  requiredConcepts: z.array(z.string().min(1).max(160)).min(1).max(16),
+}).strict().superRefine((value, context) => {
+  if (value.minimumCandidateMatches > value.candidateKeyPool.length) {
+    context.addIssue({ code: "custom", path: ["minimumCandidateMatches"], message: "Minimum matches cannot exceed the candidate pool." });
+  }
+});
+const EvidenceActionIntentSchema = z.object({
+  id: StableIdSchema,
+  targetRanks: z.array(z.number().int().min(0).max(8)).max(9)
+    .refine((values) => new Set(values).size === values.length, "Target ranks must be unique."),
+  allowedActionTypes: z.array(z.enum(["inspect-internal", "run-check", "request-customer-evidence"])).min(1).max(3)
+    .refine((values) => new Set(values).size === values.length, "Allowed action types must be unique."),
   requiredConcepts: z.array(z.string().min(1).max(160)).min(1).max(16),
 }).strict();
 const ReviewSchema = z.discriminatedUnion("status", [
@@ -72,9 +87,10 @@ export const ApplicabilityDevelopmentCaseSchema = z.object({
   unjudgedCandidateKeys: UniqueResourceKeysSchema.max(64),
   synthesisOracle: z.object({
     disposition: z.enum(["hypothesis", "abstain"]),
-    acceptableLeadingCandidateSets: z.array(UniqueResourceKeysSchema.min(1)).max(16),
-    acceptableAlternativeCandidateKeys: UniqueResourceKeysSchema.max(64),
-    discriminatorIntents: z.array(DiscriminatorIntentSchema).max(16),
+    acceptableLeadingHypotheses: z.array(HypothesisOracleSpecSchema).max(16),
+    orderedAlternativeHypotheses: z.array(HypothesisOracleSpecSchema).max(8),
+    evidenceActionIntents: z.array(EvidenceActionIntentSchema).min(1).max(16),
+    novelHypothesisPolicy: z.literal("allowed-requires-review"),
     forbiddenClaims: z.array(z.string().min(1).max(300)).max(32),
   }).strict(),
   review: ReviewSchema,
@@ -86,7 +102,9 @@ const ManifestFileSchema = z.object({
 }).strict();
 
 export const ApplicabilityManifestSchema = z.object({
-  version: z.literal(1),
+  version: z.literal(2),
+  applicabilityContractVersion: z.literal(APPLICABILITY_CONTRACT_VERSION),
+  promptVersion: z.literal(APPLICABILITY_PROMPT_VERSION),
   development: ManifestFileSchema,
   b4CaptureHash: Sha256Schema,
   sourceReadinessDevelopmentHash: Sha256Schema,
@@ -286,7 +304,24 @@ export function validateApplicabilityDevelopment(
     }
 
     const factIds = new Set([...entry.safeCase.observedFacts, ...entry.safeCase.conversationState].map(({ id }) => id));
+    const judgmentByKey = new Map(entry.judgments.map((judgment) => [judgment.resourceKey, judgment]));
     for (const judgment of entry.judgments) {
+      const supporting = new Set(judgment.supportingEvidence.map((reference) => `${reference.kind}:${reference.id}`));
+      if (judgment.contradictingEvidence.some((reference) => supporting.has(`${reference.kind}:${reference.id}`))) {
+        throw new Error(`B5 case ${entry.id} judgment ${judgment.resourceKey} reuses evidence on both sides.`);
+      }
+      if (judgment.verdict === "applicable-next-step" && judgment.supportingEvidence.length === 0) {
+        throw new Error(`B5 case ${entry.id} applicable judgment ${judgment.resourceKey} requires supporting evidence.`);
+      }
+      if (judgment.verdict === "insufficient-evidence" && (judgment.supportingEvidence.length === 0 || judgment.missingEvidence.length === 0)) {
+        throw new Error(`B5 case ${entry.id} insufficient-evidence judgment ${judgment.resourceKey} requires support and missing evidence.`);
+      }
+      if (judgment.verdict === "contradicted" && judgment.contradictingEvidence.length === 0) {
+        throw new Error(`B5 case ${entry.id} contradicted judgment ${judgment.resourceKey} requires contradicting evidence.`);
+      }
+      if (judgment.verdict === "irrelevant" && judgment.supportingEvidence.length !== 0) {
+        throw new Error(`B5 case ${entry.id} irrelevant judgment ${judgment.resourceKey} cannot claim supporting evidence.`);
+      }
       for (const reference of referenceIds(judgment)) {
         if (reference.kind === "case-fact") {
           if (!factIds.has(reference.id)) throw new Error(`B5 case ${entry.id} cites unknown fact ${reference.id}.`);
@@ -298,16 +333,39 @@ export function validateApplicabilityDevelopment(
       }
     }
 
-    const leadingKeys = entry.synthesisOracle.acceptableLeadingCandidateSets.flat();
-    const alternatives = entry.synthesisOracle.acceptableAlternativeCandidateKeys;
-    for (const key of [...leadingKeys, ...alternatives]) {
-      if (!judgedKeys.includes(key)) throw new Error(`B5 case ${entry.id} synthesis names an unjudged candidate ${key}.`);
+    const hypothesisSpecs = [
+      ...entry.synthesisOracle.acceptableLeadingHypotheses,
+      ...entry.synthesisOracle.orderedAlternativeHypotheses,
+    ];
+    for (const hypothesis of hypothesisSpecs) {
+      for (const key of hypothesis.candidateKeyPool) {
+        const judgment = judgmentByKey.get(key);
+        if (judgment === undefined) throw new Error(`B5 case ${entry.id} synthesis names unjudged candidate ${key}.`);
+        if (judgment.verdict === "contradicted" || judgment.verdict === "irrelevant") {
+          throw new Error(`B5 case ${entry.id} synthesis cannot ground a hypothesis in ${judgment.verdict} candidate ${key}.`);
+        }
+      }
     }
-    if (entry.synthesisOracle.disposition === "abstain" && entry.synthesisOracle.acceptableLeadingCandidateSets.length !== 0) {
-      throw new Error(`B5 case ${entry.id} abstention cannot name a leading candidate set.`);
+    const maximumRank = entry.synthesisOracle.orderedAlternativeHypotheses.length;
+    for (const intent of entry.synthesisOracle.evidenceActionIntents) {
+      if (intent.targetRanks.some((rank) => rank > maximumRank)) {
+        throw new Error(`B5 case ${entry.id} evidence-action intent names an unavailable hypothesis rank.`);
+      }
     }
-    if (entry.synthesisOracle.disposition === "hypothesis" && entry.synthesisOracle.acceptableLeadingCandidateSets.length === 0) {
-      throw new Error(`B5 case ${entry.id} hypothesis requires an acceptable leading candidate set.`);
+    if (entry.synthesisOracle.disposition === "abstain") {
+      if (entry.synthesisOracle.acceptableLeadingHypotheses.length !== 0 || entry.synthesisOracle.orderedAlternativeHypotheses.length !== 0) {
+        throw new Error(`B5 case ${entry.id} abstention cannot predeclare ranked hypotheses.`);
+      }
+      if (entry.synthesisOracle.evidenceActionIntents.some(({ targetRanks }) => targetRanks.length !== 0)) {
+        throw new Error(`B5 case ${entry.id} abstention evidence actions cannot target a hypothesis rank.`);
+      }
+    } else {
+      if (entry.synthesisOracle.acceptableLeadingHypotheses.length === 0) {
+        throw new Error(`B5 case ${entry.id} hypothesis requires an acceptable leading hypothesis.`);
+      }
+      if (!entry.synthesisOracle.evidenceActionIntents.some(({ targetRanks }) => targetRanks.includes(0))) {
+        throw new Error(`B5 case ${entry.id} requires a concrete evidence action for the leading hypothesis.`);
+      }
     }
   }
 }

@@ -131,11 +131,20 @@ function validOutput(input: ApplicabilityReasoningInput): ApplicabilityProviderO
     }],
     synthesis: {
       disposition: "hypothesis",
-      summary: "The editor investigation path is supported by the observed chunk loading error.",
-      supportingCandidateKeys: ["knowledge-article:performance-troubleshooting"],
-      supportingEvidence: [{ kind: "case-fact", id: "fact:chunkload" }],
+      leadingHypothesis: {
+        kind: "candidate-grounded",
+        summary: "A campaign-editor loading path is the leading investigation hypothesis.",
+        candidateKeys: ["knowledge-article:performance-troubleshooting"],
+        evidence: [{ kind: "case-fact", id: "fact:chunkload" }],
+        missingEvidence: [],
+      },
       alternatives: [],
-      discriminatingQuestions: [],
+      nextEvidenceActions: [{
+        actionType: "inspect-internal",
+        action: "Inspect the first loading error and compare the affected session with an isolated session.",
+        expectedEvidence: "An aligned loading trace and isolation comparison for the same campaign.",
+        hypothesisRanks: [0],
+      }],
     },
   };
 }
@@ -226,6 +235,12 @@ describe("OpenAiApplicabilityReasoningProvider", () => {
       "knowledge-article:performance-troubleshooting",
     ]);
     expect(assessment.items.properties).not.toHaveProperty("taxonomyRelation");
+    const synthesis = request.text.format.schema.properties.synthesis;
+    const hypothesis = synthesis.anyOf.find((item: { properties?: { disposition?: { enum?: string[] } } }) => item.properties?.disposition?.enum?.includes("hypothesis"));
+    expect(hypothesis.properties).toHaveProperty("leadingHypothesis");
+    expect(hypothesis.properties).toHaveProperty("alternatives");
+    expect(hypothesis.properties).toHaveProperty("nextEvidenceActions");
+    expect(hypothesis.properties).not.toHaveProperty("discriminatingQuestions");
   });
 
   it("uses only the blind evidence projection and explicit untrusted-data delimiters", async () => {
@@ -372,6 +387,10 @@ describe("OpenAiApplicabilityReasoningProvider", () => {
     expect(APPLICABILITY_REASONING_INSTRUCTIONS).toMatch(/untrusted evidence data/i);
     expect(APPLICABILITY_REASONING_INSTRUCTIONS).toMatch(/not a confirmed cause/i);
     expect(APPLICABILITY_REASONING_INSTRUCTIONS).toMatch(/taxonomy is advisory/i);
-    expect(APPLICABILITY_REASONING_INSTRUCTIONS).toMatch(/do not infer lifecycle, recommendation, routing, execution/i);
+    expect(APPLICABILITY_REASONING_INSTRUCTIONS).toMatch(/leading diagnostic hypothesis/i);
+    expect(APPLICABILITY_REASONING_INSTRUCTIONS).toMatch(/novel hypothesis/i);
+    expect(APPLICABILITY_REASONING_INSTRUCTIONS).toMatch(/concrete next evidence actions/i);
+    expect(APPLICABILITY_REASONING_INSTRUCTIONS).toMatch(/do not ask the requester to restate the problem/i);
+    expect(APPLICABILITY_REASONING_INSTRUCTIONS).toMatch(/do not infer lifecycle, recommendation, routing, remediation execution/i);
   });
 });

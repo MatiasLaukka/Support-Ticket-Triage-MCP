@@ -6,8 +6,8 @@ import { DiagnosticTaxonomyContextSchema, type DiagnosticTaxonomyContext } from 
 import type { AiUsage } from "../domain.js";
 import type { Reference, ResourceKey, ResourceType, TaxonomyMetadata } from "./types.js";
 
-export const APPLICABILITY_CONTRACT_VERSION = 1 as const;
-export const APPLICABILITY_PROMPT_VERSION = "b5-applicability-v1" as const;
+export const APPLICABILITY_CONTRACT_VERSION = 2 as const;
+export const APPLICABILITY_PROMPT_VERSION = "b5-applicability-v2" as const;
 export const APPLICABILITY_OUTPUT_RESERVE_TOKENS = 4_096 as const;
 
 export type ApplicabilityLane = "evidence-only" | "taxonomy-informed";
@@ -184,27 +184,43 @@ const CandidateAssessmentSchema = z.object({
   explanation: z.string().min(1).max(600),
   taxonomyRelation: z.enum(["supports", "conflicts", "neutral", "unavailable"]).optional(),
 }).strict();
-const AlternativeSchema = z.object({
+const CandidateGroundedHypothesisSchema = z.object({
+  kind: z.literal("candidate-grounded"),
   summary: z.string().min(1).max(600),
-  candidateKeys: z.array(ResourceKeySchema).min(1).max(64),
-  evidence: z.array(EvidenceReferenceSchema).max(32),
-  qualified: z.boolean(),
+  candidateKeys: z.array(ResourceKeySchema).min(1).max(8),
+  evidence: z.array(EvidenceReferenceSchema).min(1).max(32),
+  missingEvidence: z.array(MissingEvidenceItemSchema).max(16),
 }).strict();
-const DiscriminatingQuestionSchema = z.object({ question: z.string().min(1).max(400), candidateKeys: z.array(ResourceKeySchema).min(1).max(64) }).strict();
+const NovelHypothesisSchema = z.object({
+  kind: z.literal("novel"),
+  summary: z.string().min(1).max(600),
+  evidence: z.array(EvidenceReferenceSchema).min(1).max(32),
+  whyCandidateSetIsInsufficient: z.string().min(1).max(600),
+  missingEvidence: z.array(MissingEvidenceItemSchema).max(16),
+}).strict();
+const RankedHypothesisSchema = z.discriminatedUnion("kind", [CandidateGroundedHypothesisSchema, NovelHypothesisSchema]);
+const EvidenceActionBaseShape = {
+  actionType: z.enum(["inspect-internal", "run-check", "request-customer-evidence"]),
+  action: z.string().min(1).max(400),
+  expectedEvidence: z.string().min(1).max(300),
+};
+const RankedEvidenceActionSchema = z.object({
+  ...EvidenceActionBaseShape,
+  hypothesisRanks: z.array(z.number().int().min(0).max(8)).min(1).max(9)
+    .refine((values) => new Set(values).size === values.length, "Hypothesis ranks must be unique."),
+}).strict();
+const GapEvidenceActionSchema = z.object(EvidenceActionBaseShape).strict();
 const HypothesisSynthesisSchema = z.object({
   disposition: z.literal("hypothesis"),
-  summary: z.string().min(1).max(600),
-  supportingCandidateKeys: z.array(ResourceKeySchema).min(1).max(64),
-  supportingEvidence: z.array(EvidenceReferenceSchema).min(1).max(32),
-  alternatives: z.array(AlternativeSchema).max(8),
-  discriminatingQuestions: z.array(DiscriminatingQuestionSchema).max(8),
+  leadingHypothesis: RankedHypothesisSchema,
+  alternatives: z.array(RankedHypothesisSchema).max(8),
+  nextEvidenceActions: z.array(RankedEvidenceActionSchema).min(1).max(8),
 }).strict();
 const AbstainSynthesisSchema = z.object({
   disposition: z.literal("abstain"),
   summary: z.string().min(1).max(600),
-  coverageGaps: z.array(z.string().min(1).max(300)).max(16),
-  alternatives: z.array(AlternativeSchema).max(8),
-  discriminatingQuestions: z.array(DiscriminatingQuestionSchema).max(8),
+  coverageGaps: z.array(z.string().min(1).max(300)).min(1).max(16),
+  nextEvidenceActions: z.array(GapEvidenceActionSchema).min(1).max(8),
 }).strict();
 const ApplicabilityProviderOutputSchema = z.object({
   candidateAssessments: z.array(CandidateAssessmentSchema).max(64),
@@ -233,6 +249,9 @@ export type ApplicabilityInputIdentity = z.infer<typeof ApplicabilityInputIdenti
 export type ApplicabilityReasoningInput = z.infer<typeof ApplicabilityReasoningInputSchema>;
 export type ApplicabilityProviderOutput = z.infer<typeof ApplicabilityProviderOutputSchema>;
 export type CandidateAssessment = z.infer<typeof CandidateAssessmentSchema>;
+export type DiagnosticHypothesis = z.infer<typeof RankedHypothesisSchema>;
+export type RankedDiagnosticEvidenceAction = z.infer<typeof RankedEvidenceActionSchema>;
+export type GapDiagnosticEvidenceAction = z.infer<typeof GapEvidenceActionSchema>;
 
 export interface ApplicabilityReasoningExecution {
   output: ApplicabilityProviderOutput;
@@ -250,12 +269,12 @@ export interface ApplicabilityReasoningProvider {
 export type ApplicabilityCaseResult =
   | { status: "complete"; assessments: readonly CandidateAssessment[]; synthesis: ApplicabilityProviderOutput["synthesis"]; telemetry: ApplicabilityReasoningExecution["telemetry"] }
   | { status: "partial-assessment"; assessments: readonly CandidateAssessment[]; synthesis: ApplicabilityProviderOutput["synthesis"]; unavailableCandidates: readonly { resourceKey: ResourceKey; reasons: readonly EvidenceUnavailableReason[] }[]; telemetry: ApplicabilityReasoningExecution["telemetry"] }
-  | { status: "assessment-skipped"; reason: "no-assessable-candidates" | "input-too-large" | "prompt-injection-detected" }
+  | { status: "assessment-skipped"; reason: "no-assessable-candidates" | "prompt-injection-detected" | "input-too-large" }
   | { status: "assessment-failed"; reason: "invalid-provider-output" | ApplicabilityProviderFailureReason };
 
 type InvalidApplicabilityStage = "input" | "provider-output" | "candidate-coverage" | "evidence-reference" | "synthesis" | "taxonomy-output";
 const boundedErrorFields = new Set([
-  "unknown-field", "unique-identities", "candidate-order", "evidence-registry-order", "candidate-evidence", "matched-representation", "matched-representation-origin", "candidate-taxonomy-order", "candidate-taxonomy", "taxonomy-semantic-set", "evidence-reference", "abstain", "applicable-next-step", "hypothesis-candidate", "alternative-candidate", "qualified", "missing-evidence", "insufficient-evidence-alternative", "taxonomyRelation",
+  "unknown-field", "unique-identities", "candidate-order", "evidence-registry-order", "candidate-evidence", "matched-representation", "matched-representation-origin", "candidate-taxonomy-order", "candidate-taxonomy", "taxonomy-semantic-set", "evidence-reference", "evidence-polarity", "abstain", "hypothesis-candidate", "novel-hypothesis", "missing-evidence", "hypothesis-rank", "leading-evidence-action", "taxonomyRelation",
 ]);
 export class InvalidApplicabilitySchemaError extends Error {
   readonly stage: InvalidApplicabilityStage;
@@ -347,41 +366,71 @@ function sameOrdinalSet(left: readonly string[], right: readonly string[]): bool
   const sortedRight = [...right].sort(compareOrdinal);
   return sortedLeft.every((value, index) => value === sortedRight[index]);
 }
+function evidenceReferenceKey(reference: EvidenceReference): string {
+  return `${reference.kind}:${reference.id}`;
+}
 function assertEvidenceReferencesResolve(input: ApplicabilityReasoningInput, output: ApplicabilityProviderOutput): void {
   const factIds = new Set([...input.case.observedFacts, ...input.case.conversationState].map((fact) => fact.id));
-  const representationIds = new Set(input.evidenceRegistry.map((representation) => representation.id));
-  const references: EvidenceReference[] = [];
-  for (const assessment of output.candidateAssessments) {
-    references.push(...assessment.supportingEvidence, ...assessment.contradictingEvidence, ...assessment.missingEvidence.flatMap((item) => item.evidence));
-  }
-  references.push(...output.synthesis.alternatives.flatMap((alternative) => alternative.evidence));
-  if (output.synthesis.disposition === "hypothesis") references.push(...output.synthesis.supportingEvidence);
-  for (const reference of references) {
-    if ((reference.kind === "case-fact" && !factIds.has(reference.id)) || (reference.kind === "resource-representation" && !representationIds.has(reference.id))) {
+  const representationOwners = new Map(input.evidenceRegistry.map((representation) => [representation.id, representation.resourceKey]));
+  const assertReference = (reference: EvidenceReference, candidateKey?: string) => {
+    if (reference.kind === "case-fact") {
+      if (!factIds.has(reference.id)) throw new InvalidApplicabilitySchemaError("evidence-reference", ["evidence-reference"]);
+      return;
+    }
+    const owner = representationOwners.get(reference.id);
+    if (owner === undefined || (candidateKey !== undefined && owner !== candidateKey)) {
       throw new InvalidApplicabilitySchemaError("evidence-reference", ["evidence-reference"]);
+    }
+  };
+  for (const assessment of output.candidateAssessments) {
+    const supporting = new Set(assessment.supportingEvidence.map(evidenceReferenceKey));
+    if (assessment.contradictingEvidence.some((reference) => supporting.has(evidenceReferenceKey(reference)))) {
+      throw new InvalidApplicabilitySchemaError("provider-output", ["evidence-polarity"]);
+    }
+    for (const reference of [...assessment.supportingEvidence, ...assessment.contradictingEvidence]) assertReference(reference, assessment.resourceKey);
+    for (const reference of assessment.missingEvidence.flatMap((item) => item.evidence)) assertReference(reference);
+    if (assessment.verdict === "applicable-next-step" && assessment.supportingEvidence.length === 0) throw new InvalidApplicabilitySchemaError("provider-output", ["evidence-reference"]);
+    if (assessment.verdict === "insufficient-evidence" && (assessment.supportingEvidence.length === 0 || assessment.missingEvidence.length === 0)) throw new InvalidApplicabilitySchemaError("synthesis", ["missing-evidence"]);
+    if (assessment.verdict === "contradicted" && assessment.contradictingEvidence.length === 0) throw new InvalidApplicabilitySchemaError("provider-output", ["evidence-reference"]);
+    if (assessment.verdict === "irrelevant" && assessment.supportingEvidence.length !== 0) throw new InvalidApplicabilitySchemaError("provider-output", ["evidence-polarity"]);
+  }
+  if (output.synthesis.disposition === "hypothesis") {
+    const hypotheses = [output.synthesis.leadingHypothesis, ...output.synthesis.alternatives];
+    for (const hypothesis of hypotheses) {
+      for (const reference of hypothesis.evidence) assertReference(reference);
+      for (const reference of hypothesis.missingEvidence.flatMap((item) => item.evidence)) assertReference(reference);
     }
   }
 }
-function assertSynthesisConsistent(output: ApplicabilityProviderOutput): void {
+function assertSynthesisConsistent(input: ApplicabilityReasoningInput, output: ApplicabilityProviderOutput): void {
   const assessments = new Map(output.candidateAssessments.map((assessment) => [assessment.resourceKey, assessment]));
-  const applicable = new Set(output.candidateAssessments.filter((assessment) => assessment.verdict === "applicable-next-step").map((assessment) => assessment.resourceKey));
-  if (applicable.size === 0 && output.synthesis.disposition !== "abstain") throw new InvalidApplicabilitySchemaError("synthesis", ["abstain"]);
-  if (output.synthesis.disposition === "hypothesis") {
-    if (!output.synthesis.supportingCandidateKeys.some((key) => applicable.has(key))) throw new InvalidApplicabilitySchemaError("synthesis", ["applicable-next-step"]);
-    if (!output.synthesis.supportingCandidateKeys.every((key) => applicable.has(key))) throw new InvalidApplicabilitySchemaError("synthesis", ["hypothesis-candidate"]);
-  }
-  for (const alternative of output.synthesis.alternatives) {
-    for (const key of alternative.candidateKeys) {
+  const assertHypothesis = (hypothesis: DiagnosticHypothesis) => {
+    if (hypothesis.kind === "novel") {
+      if (!hypothesis.evidence.some((reference) => reference.kind === "case-fact")) throw new InvalidApplicabilitySchemaError("synthesis", ["novel-hypothesis"]);
+      return;
+    }
+    if (new Set(hypothesis.candidateKeys).size !== hypothesis.candidateKeys.length) throw new InvalidApplicabilitySchemaError("synthesis", ["hypothesis-candidate"]);
+    for (const key of hypothesis.candidateKeys) {
       const assessment = assessments.get(key);
-      if (assessment === undefined || assessment.verdict === "contradicted" || assessment.verdict === "irrelevant") throw new InvalidApplicabilitySchemaError("synthesis", ["alternative-candidate"]);
-      if (assessment.verdict === "insufficient-evidence" && (!alternative.qualified || assessment.missingEvidence.length === 0)) throw new InvalidApplicabilitySchemaError("synthesis", ["qualified"]);
+      if (assessment === undefined || assessment.verdict === "contradicted" || assessment.verdict === "irrelevant") throw new InvalidApplicabilitySchemaError("synthesis", ["hypothesis-candidate"]);
+      if (assessment.verdict === "insufficient-evidence") {
+        const preserved = new Set(hypothesis.missingEvidence.map(({ item }) => item));
+        if (assessment.missingEvidence.some(({ item }) => !preserved.has(item))) throw new InvalidApplicabilitySchemaError("synthesis", ["missing-evidence"]);
+      }
     }
+  };
+  if (output.synthesis.disposition === "abstain") return;
+  assertHypothesis(output.synthesis.leadingHypothesis);
+  for (const alternative of output.synthesis.alternatives) assertHypothesis(alternative);
+  const maxRank = output.synthesis.alternatives.length;
+  if (!output.synthesis.nextEvidenceActions.some(({ hypothesisRanks }) => hypothesisRanks.includes(0))) {
+    throw new InvalidApplicabilitySchemaError("synthesis", ["leading-evidence-action"]);
   }
-  for (const assessment of output.candidateAssessments) {
-    if (assessment.verdict === "insufficient-evidence" && assessment.missingEvidence.length === 0) throw new InvalidApplicabilitySchemaError("synthesis", ["missing-evidence"]);
-    if (assessment.verdict === "insufficient-evidence" && !output.synthesis.alternatives.some((alternative) => alternative.qualified && alternative.candidateKeys.includes(assessment.resourceKey))) {
-      throw new InvalidApplicabilitySchemaError("synthesis", ["insufficient-evidence-alternative"]);
-    }
+  for (const action of output.synthesis.nextEvidenceActions) {
+    if (action.hypothesisRanks.some((rank) => rank > maxRank)) throw new InvalidApplicabilitySchemaError("synthesis", ["hypothesis-rank"]);
+  }
+  if (output.synthesis.leadingHypothesis.kind === "novel" && input.candidates.length === 0) {
+    throw new InvalidApplicabilitySchemaError("synthesis", ["novel-hypothesis"]);
   }
 }
 function assertTaxonomyOutputMatchesLane(lane: ApplicabilityLane, output: ApplicabilityProviderOutput): void {
@@ -402,7 +451,7 @@ export function validateApplicabilityProviderOutput(input: ApplicabilityReasonin
   const returned = output.candidateAssessments.map((assessment) => assessment.resourceKey);
   if (!sameOrdinalSet(returned, available)) throw new InvalidApplicabilitySchemaError("candidate-coverage");
   assertEvidenceReferencesResolve(input, output);
-  assertSynthesisConsistent(output);
+  assertSynthesisConsistent(input, output);
   assertTaxonomyOutputMatchesLane(input.lane, output);
 }
 

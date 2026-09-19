@@ -39,12 +39,7 @@
       {
         "resourceKey": "diagnostic-playbook:article-backed",
         "verdict": "irrelevant",
-        "supportingEvidence": [
-          {
-            "kind": "resource-representation",
-            "id": "diagnostic-playbook:article-backed:canonical:0"
-          }
-        ],
+        "supportingEvidence": [],
         "contradictingEvidence": [],
         "missingEvidence": [],
         "rationale": "This high-ranked cross-domain playbook does not address the observed issue family and is deliberately judged as a non-applicable near match."
@@ -86,12 +81,7 @@
       {
         "resourceKey": "knowledge-article:shopify-integration-sync",
         "verdict": "irrelevant",
-        "supportingEvidence": [
-          {
-            "kind": "case-fact",
-            "id": "fact:cross-session"
-          }
-        ],
+        "supportingEvidence": [],
         "contradictingEvidence": [],
         "missingEvidence": [],
         "rationale": "The candidate is visible only through cross-resource reference provenance and addresses a different issue family than the observed case."
@@ -99,12 +89,7 @@
       {
         "resourceKey": "knowledge-article:sms-compliance",
         "verdict": "irrelevant",
-        "supportingEvidence": [
-          {
-            "kind": "case-fact",
-            "id": "fact:cross-session"
-          }
-        ],
+        "supportingEvidence": [],
         "contradictingEvidence": [],
         "missingEvidence": [],
         "rationale": "The candidate is visible only through cross-resource reference provenance and addresses a different issue family than the observed case."
@@ -112,12 +97,7 @@
       {
         "resourceKey": "knowledge-article:webhook-signature-validation",
         "verdict": "irrelevant",
-        "supportingEvidence": [
-          {
-            "kind": "case-fact",
-            "id": "fact:cross-session"
-          }
-        ],
+        "supportingEvidence": [],
         "contradictingEvidence": [],
         "missingEvidence": [],
         "rationale": "The candidate is visible only through cross-resource reference provenance and addresses a different issue family than the observed case."
@@ -141,21 +121,31 @@
     ],
     "synthesisOracle": {
       "disposition": "hypothesis",
-      "acceptableLeadingCandidateSets": [
-        [
-          "diagnostic-playbook:campaign-editor"
-        ],
-        [
-          "knowledge-article:performance-troubleshooting"
-        ]
-      ],
-      "acceptableAlternativeCandidateKeys": [],
-      "discriminatorIntents": [
+      "acceptableLeadingHypotheses": [
         {
-          "id": "intent:primary-discriminator",
-          "separatesCandidateKeys": [
+          "id": "hypothesis:leading-path",
+          "candidateKeyPool": [
             "diagnostic-playbook:campaign-editor",
             "knowledge-article:performance-troubleshooting"
+          ],
+          "minimumCandidateMatches": 1,
+          "requiredConcepts": [
+            "campaign editor",
+            "chunk loading",
+            "cross-session"
+          ]
+        }
+      ],
+      "orderedAlternativeHypotheses": [],
+      "evidenceActionIntents": [
+        {
+          "id": "intent:leading-evidence",
+          "targetRanks": [
+            0
+          ],
+          "allowedActionTypes": [
+            "inspect-internal",
+            "run-check"
           ],
           "requiredConcepts": [
             "aligned campaign identity",
@@ -164,6 +154,7 @@
           ]
         }
       ],
+      "novelHypothesisPolicy": "allowed-requires-review",
       "forbiddenClaims": [
         "Do not claim a confirmed root cause from applicability evidence alone.",
         "Do not claim that B5 authorizes remediation, routing, lifecycle transition, or customer-facing action.",
@@ -238,12 +229,7 @@
       {
         "resourceKey": "diagnostic-playbook:campaign-editor",
         "verdict": "irrelevant",
-        "supportingEvidence": [
-          {
-            "kind": "resource-representation",
-            "id": "diagnostic-playbook:campaign-editor:canonical:0"
-          }
-        ],
+        "supportingEvidence": [],
         "contradictingEvidence": [],
         "missingEvidence": [],
         "rationale": "This high-ranked cross-domain playbook does not address the observed issue family and is deliberately judged as a non-applicable near match."
@@ -251,12 +237,7 @@
       {
         "resourceKey": "knowledge-article:profile-sync-issues",
         "verdict": "irrelevant",
-        "supportingEvidence": [
-          {
-            "kind": "case-fact",
-            "id": "fact:rotation"
-          }
-        ],
+        "supportingEvidence": [],
         "contradictingEvidence": [],
         "missingEvidence": [],
         "rationale": "The candidate is visible only through cross-resource reference provenance and addresses a different issue family than the observed case."
@@ -264,12 +245,7 @@
       {
         "resourceKey": "knowledge-article:shopify-integration-sync",
         "verdict": "irrelevant",
-        "supportingEvidence": [
-          {
-            "kind": "case-fact",
-            "id": "fact:rotation"
-          }
-        ],
+        "supportingEvidence": [],
         "contradictingEvidence": [],
         "missingEvidence": [],
         "rationale": "The candidate is visible only through cross-resource reference provenance and addresses a different issue family than the observed case."
@@ -332,24 +308,46 @@
     ],
     "synthesisOracle": {
       "disposition": "hypothesis",
-      "acceptableLeadingCandidateSets": [
-        [
-          "diagnostic-playbook:article-backed"
-        ],
-        [
-          "knowledge-article:webhook-signature-validation"
-        ]
-      ],
-      "acceptableAlternativeCandidateKeys": [
-        "known-cause:webhook-secret-rotation"
-      ],
-      "discriminatorIntents": [
+      "acceptableLeadingHypotheses": [
         {
-          "id": "intent:primary-discriminator",
-          "separatesCandidateKeys": [
+          "id": "hypothesis:leading-path",
+          "candidateKeyPool": [
             "diagnostic-playbook:article-backed",
-            "knowledge-article:webhook-signature-validation",
+            "knowledge-article:webhook-signature-validation"
+          ],
+          "minimumCandidateMatches": 1,
+          "requiredConcepts": [
+            "signature verification",
+            "rotation",
+            "raw body"
+          ]
+        }
+      ],
+      "orderedAlternativeHypotheses": [
+        {
+          "id": "hypothesis:alternative-1",
+          "candidateKeyPool": [
             "known-cause:webhook-secret-rotation"
+          ],
+          "minimumCandidateMatches": 1,
+          "requiredConcepts": [
+            "raw signed body",
+            "signed headers",
+            "verifier input",
+            "rotation"
+          ]
+        }
+      ],
+      "evidenceActionIntents": [
+        {
+          "id": "intent:leading-evidence",
+          "targetRanks": [
+            0,
+            1
+          ],
+          "allowedActionTypes": [
+            "inspect-internal",
+            "run-check"
           ],
           "requiredConcepts": [
             "raw signed body",
@@ -359,6 +357,7 @@
           ]
         }
       ],
+      "novelHypothesisPolicy": "allowed-requires-review",
       "forbiddenClaims": [
         "Do not claim a confirmed root cause from applicability evidence alone.",
         "Do not claim that B5 authorizes remediation, routing, lifecycle transition, or customer-facing action.",
@@ -413,12 +412,7 @@
       {
         "resourceKey": "diagnostic-playbook:campaign-editor",
         "verdict": "irrelevant",
-        "supportingEvidence": [
-          {
-            "kind": "resource-representation",
-            "id": "diagnostic-playbook:campaign-editor:canonical:0"
-          }
-        ],
+        "supportingEvidence": [],
         "contradictingEvidence": [],
         "missingEvidence": [],
         "rationale": "This high-ranked cross-domain playbook does not address the observed issue family and is deliberately judged as a non-applicable near match."
@@ -460,12 +454,7 @@
       {
         "resourceKey": "knowledge-article:profile-sync-issues",
         "verdict": "irrelevant",
-        "supportingEvidence": [
-          {
-            "kind": "case-fact",
-            "id": "fact:observed-event"
-          }
-        ],
+        "supportingEvidence": [],
         "contradictingEvidence": [],
         "missingEvidence": [],
         "rationale": "The candidate is visible only through cross-resource reference provenance and addresses a different issue family than the observed case."
@@ -473,12 +462,7 @@
       {
         "resourceKey": "knowledge-article:sms-compliance",
         "verdict": "irrelevant",
-        "supportingEvidence": [
-          {
-            "kind": "case-fact",
-            "id": "fact:observed-event"
-          }
-        ],
+        "supportingEvidence": [],
         "contradictingEvidence": [],
         "missingEvidence": [],
         "rationale": "The candidate is visible only through cross-resource reference provenance and addresses a different issue family than the observed case."
@@ -486,12 +470,7 @@
       {
         "resourceKey": "knowledge-article:webhook-signature-validation",
         "verdict": "irrelevant",
-        "supportingEvidence": [
-          {
-            "kind": "case-fact",
-            "id": "fact:observed-event"
-          }
-        ],
+        "supportingEvidence": [],
         "contradictingEvidence": [],
         "missingEvidence": [],
         "rationale": "The candidate is visible only through cross-resource reference provenance and addresses a different issue family than the observed case."
@@ -514,21 +493,30 @@
     ],
     "synthesisOracle": {
       "disposition": "hypothesis",
-      "acceptableLeadingCandidateSets": [
-        [
-          "diagnostic-playbook:flow-trigger"
-        ],
-        [
-          "knowledge-article:flow-trigger-troubleshooting"
-        ]
-      ],
-      "acceptableAlternativeCandidateKeys": [],
-      "discriminatorIntents": [
+      "acceptableLeadingHypotheses": [
         {
-          "id": "intent:primary-discriminator",
-          "separatesCandidateKeys": [
+          "id": "hypothesis:leading-path",
+          "candidateKeyPool": [
             "diagnostic-playbook:flow-trigger",
             "knowledge-article:flow-trigger-troubleshooting"
+          ],
+          "minimumCandidateMatches": 1,
+          "requiredConcepts": [
+            "configured trigger",
+            "Added to Cart",
+            "Viewed Product"
+          ]
+        }
+      ],
+      "orderedAlternativeHypotheses": [],
+      "evidenceActionIntents": [
+        {
+          "id": "intent:leading-evidence",
+          "targetRanks": [
+            0
+          ],
+          "allowedActionTypes": [
+            "inspect-internal"
           ],
           "requiredConcepts": [
             "configured trigger",
@@ -537,6 +525,7 @@
           ]
         }
       ],
+      "novelHypothesisPolicy": "allowed-requires-review",
       "forbiddenClaims": [
         "Do not claim a confirmed root cause from applicability evidence alone.",
         "Do not claim that B5 authorizes remediation, routing, lifecycle transition, or customer-facing action.",
@@ -587,12 +576,7 @@
       {
         "resourceKey": "diagnostic-playbook:article-backed",
         "verdict": "irrelevant",
-        "supportingEvidence": [
-          {
-            "kind": "resource-representation",
-            "id": "diagnostic-playbook:article-backed:canonical:0"
-          }
-        ],
+        "supportingEvidence": [],
         "contradictingEvidence": [],
         "missingEvidence": [],
         "rationale": "This high-ranked cross-domain playbook does not address the observed issue family and is deliberately judged as a non-applicable near match."
@@ -634,12 +618,7 @@
       {
         "resourceKey": "knowledge-article:profile-sync-issues",
         "verdict": "irrelevant",
-        "supportingEvidence": [
-          {
-            "kind": "case-fact",
-            "id": "fact:screen-not-open"
-          }
-        ],
+        "supportingEvidence": [],
         "contradictingEvidence": [],
         "missingEvidence": [],
         "rationale": "The candidate is visible only through cross-resource reference provenance and addresses a different issue family than the observed case."
@@ -647,12 +626,7 @@
       {
         "resourceKey": "knowledge-article:shopify-integration-sync",
         "verdict": "irrelevant",
-        "supportingEvidence": [
-          {
-            "kind": "case-fact",
-            "id": "fact:screen-not-open"
-          }
-        ],
+        "supportingEvidence": [],
         "contradictingEvidence": [],
         "missingEvidence": [],
         "rationale": "The candidate is visible only through cross-resource reference provenance and addresses a different issue family than the observed case."
@@ -660,12 +634,7 @@
       {
         "resourceKey": "knowledge-article:sms-compliance",
         "verdict": "irrelevant",
-        "supportingEvidence": [
-          {
-            "kind": "case-fact",
-            "id": "fact:screen-not-open"
-          }
-        ],
+        "supportingEvidence": [],
         "contradictingEvidence": [],
         "missingEvidence": [],
         "rationale": "The candidate is visible only through cross-resource reference provenance and addresses a different issue family than the observed case."
@@ -688,21 +657,32 @@
     ],
     "synthesisOracle": {
       "disposition": "hypothesis",
-      "acceptableLeadingCandidateSets": [
-        [
-          "diagnostic-playbook:campaign-editor"
-        ],
-        [
-          "knowledge-article:performance-troubleshooting"
-        ]
-      ],
-      "acceptableAlternativeCandidateKeys": [],
-      "discriminatorIntents": [
+      "acceptableLeadingHypotheses": [
         {
-          "id": "intent:primary-discriminator",
-          "separatesCandidateKeys": [
+          "id": "hypothesis:leading-path",
+          "candidateKeyPool": [
             "diagnostic-playbook:campaign-editor",
             "knowledge-article:performance-troubleshooting"
+          ],
+          "minimumCandidateMatches": 1,
+          "requiredConcepts": [
+            "campaign editor",
+            "loading",
+            "session isolation"
+          ]
+        }
+      ],
+      "orderedAlternativeHypotheses": [],
+      "evidenceActionIntents": [
+        {
+          "id": "intent:leading-evidence",
+          "targetRanks": [
+            0
+          ],
+          "allowedActionTypes": [
+            "inspect-internal",
+            "run-check",
+            "request-customer-evidence"
           ],
           "requiredConcepts": [
             "affected campaign",
@@ -712,6 +692,7 @@
           ]
         }
       ],
+      "novelHypothesisPolicy": "allowed-requires-review",
       "forbiddenClaims": [
         "Do not claim a confirmed root cause from applicability evidence alone.",
         "Do not claim that B5 authorizes remediation, routing, lifecycle transition, or customer-facing action.",
@@ -784,12 +765,7 @@
       {
         "resourceKey": "diagnostic-playbook:campaign-editor",
         "verdict": "irrelevant",
-        "supportingEvidence": [
-          {
-            "kind": "resource-representation",
-            "id": "diagnostic-playbook:campaign-editor:canonical:0"
-          }
-        ],
+        "supportingEvidence": [],
         "contradictingEvidence": [],
         "missingEvidence": [],
         "rationale": "This high-ranked cross-domain playbook does not address the observed issue family and is deliberately judged as a non-applicable near match."
@@ -797,12 +773,7 @@
       {
         "resourceKey": "knowledge-article:profile-sync-issues",
         "verdict": "irrelevant",
-        "supportingEvidence": [
-          {
-            "kind": "case-fact",
-            "id": "fact:eventual-arrival"
-          }
-        ],
+        "supportingEvidence": [],
         "contradictingEvidence": [],
         "missingEvidence": [],
         "rationale": "The candidate is visible only through cross-resource reference provenance and addresses a different issue family than the observed case."
@@ -863,24 +834,45 @@
     ],
     "synthesisOracle": {
       "disposition": "hypothesis",
-      "acceptableLeadingCandidateSets": [
-        [
-          "diagnostic-playbook:article-backed"
-        ],
-        [
-          "knowledge-article:webhook-signature-validation"
-        ]
-      ],
-      "acceptableAlternativeCandidateKeys": [
-        "known-cause:webhook-delivery-latency"
-      ],
-      "discriminatorIntents": [
+      "acceptableLeadingHypotheses": [
         {
-          "id": "intent:primary-discriminator",
-          "separatesCandidateKeys": [
+          "id": "hypothesis:leading-path",
+          "candidateKeyPool": [
             "diagnostic-playbook:article-backed",
-            "knowledge-article:webhook-signature-validation",
+            "knowledge-article:webhook-signature-validation"
+          ],
+          "minimumCandidateMatches": 1,
+          "requiredConcepts": [
+            "webhook delivery",
+            "latency",
+            "timing"
+          ]
+        }
+      ],
+      "orderedAlternativeHypotheses": [
+        {
+          "id": "hypothesis:alternative-1",
+          "candidateKeyPool": [
             "known-cause:webhook-delivery-latency"
+          ],
+          "minimumCandidateMatches": 1,
+          "requiredConcepts": [
+            "event creation",
+            "dispatch",
+            "endpoint-response",
+            "retry"
+          ]
+        }
+      ],
+      "evidenceActionIntents": [
+        {
+          "id": "intent:leading-evidence",
+          "targetRanks": [
+            0,
+            1
+          ],
+          "allowedActionTypes": [
+            "inspect-internal"
           ],
           "requiredConcepts": [
             "event creation time",
@@ -890,6 +882,7 @@
           ]
         }
       ],
+      "novelHypothesisPolicy": "allowed-requires-review",
       "forbiddenClaims": [
         "Do not claim a confirmed root cause from applicability evidence alone.",
         "Do not claim that B5 authorizes remediation, routing, lifecycle transition, or customer-facing action.",
@@ -940,12 +933,7 @@
       {
         "resourceKey": "diagnostic-playbook:campaign-editor",
         "verdict": "irrelevant",
-        "supportingEvidence": [
-          {
-            "kind": "resource-representation",
-            "id": "diagnostic-playbook:campaign-editor:canonical:0"
-          }
-        ],
+        "supportingEvidence": [],
         "contradictingEvidence": [],
         "missingEvidence": [],
         "rationale": "This high-ranked cross-domain playbook does not address the observed issue family and is deliberately judged as a non-applicable near match."
@@ -987,12 +975,7 @@
       {
         "resourceKey": "knowledge-article:profile-sync-issues",
         "verdict": "irrelevant",
-        "supportingEvidence": [
-          {
-            "kind": "case-fact",
-            "id": "fact:no-entry"
-          }
-        ],
+        "supportingEvidence": [],
         "contradictingEvidence": [],
         "missingEvidence": [],
         "rationale": "The candidate is visible only through cross-resource reference provenance and addresses a different issue family than the observed case."
@@ -1000,12 +983,7 @@
       {
         "resourceKey": "knowledge-article:sms-compliance",
         "verdict": "irrelevant",
-        "supportingEvidence": [
-          {
-            "kind": "case-fact",
-            "id": "fact:no-entry"
-          }
-        ],
+        "supportingEvidence": [],
         "contradictingEvidence": [],
         "missingEvidence": [],
         "rationale": "The candidate is visible only through cross-resource reference provenance and addresses a different issue family than the observed case."
@@ -1029,21 +1007,31 @@
     ],
     "synthesisOracle": {
       "disposition": "hypothesis",
-      "acceptableLeadingCandidateSets": [
-        [
-          "diagnostic-playbook:flow-trigger"
-        ],
-        [
-          "knowledge-article:flow-trigger-troubleshooting"
-        ]
-      ],
-      "acceptableAlternativeCandidateKeys": [],
-      "discriminatorIntents": [
+      "acceptableLeadingHypotheses": [
         {
-          "id": "intent:primary-discriminator",
-          "separatesCandidateKeys": [
+          "id": "hypothesis:leading-path",
+          "candidateKeyPool": [
             "diagnostic-playbook:flow-trigger",
             "knowledge-article:flow-trigger-troubleshooting"
+          ],
+          "minimumCandidateMatches": 1,
+          "requiredConcepts": [
+            "flow entry",
+            "event presence",
+            "eligibility"
+          ]
+        }
+      ],
+      "orderedAlternativeHypotheses": [],
+      "evidenceActionIntents": [
+        {
+          "id": "intent:leading-evidence",
+          "targetRanks": [
+            0
+          ],
+          "allowedActionTypes": [
+            "inspect-internal",
+            "request-customer-evidence"
           ],
           "requiredConcepts": [
             "event presence",
@@ -1053,6 +1041,7 @@
           ]
         }
       ],
+      "novelHypothesisPolicy": "allowed-requires-review",
       "forbiddenClaims": [
         "Do not claim a confirmed root cause from applicability evidence alone.",
         "Do not claim that B5 authorizes remediation, routing, lifecycle transition, or customer-facing action.",
@@ -1107,12 +1096,7 @@
       {
         "resourceKey": "diagnostic-playbook:article-backed",
         "verdict": "irrelevant",
-        "supportingEvidence": [
-          {
-            "kind": "resource-representation",
-            "id": "diagnostic-playbook:article-backed:canonical:0"
-          }
-        ],
+        "supportingEvidence": [],
         "contradictingEvidence": [],
         "missingEvidence": [],
         "rationale": "This high-ranked cross-domain playbook does not address the observed issue family and is deliberately judged as a non-applicable near match."
@@ -1154,12 +1138,7 @@
       {
         "resourceKey": "knowledge-article:profile-sync-issues",
         "verdict": "irrelevant",
-        "supportingEvidence": [
-          {
-            "kind": "case-fact",
-            "id": "fact:original-blank"
-          }
-        ],
+        "supportingEvidence": [],
         "contradictingEvidence": [],
         "missingEvidence": [],
         "rationale": "The candidate is visible only through cross-resource reference provenance and addresses a different issue family than the observed case."
@@ -1167,12 +1146,7 @@
       {
         "resourceKey": "knowledge-article:shopify-integration-sync",
         "verdict": "irrelevant",
-        "supportingEvidence": [
-          {
-            "kind": "case-fact",
-            "id": "fact:original-blank"
-          }
-        ],
+        "supportingEvidence": [],
         "contradictingEvidence": [],
         "missingEvidence": [],
         "rationale": "The candidate is visible only through cross-resource reference provenance and addresses a different issue family than the observed case."
@@ -1180,12 +1154,7 @@
       {
         "resourceKey": "knowledge-article:sms-compliance",
         "verdict": "irrelevant",
-        "supportingEvidence": [
-          {
-            "kind": "case-fact",
-            "id": "fact:original-blank"
-          }
-        ],
+        "supportingEvidence": [],
         "contradictingEvidence": [],
         "missingEvidence": [],
         "rationale": "The candidate is visible only through cross-resource reference provenance and addresses a different issue family than the observed case."
@@ -1193,12 +1162,7 @@
       {
         "resourceKey": "knowledge-article:webhook-signature-validation",
         "verdict": "irrelevant",
-        "supportingEvidence": [
-          {
-            "kind": "case-fact",
-            "id": "fact:original-blank"
-          }
-        ],
+        "supportingEvidence": [],
         "contradictingEvidence": [],
         "missingEvidence": [],
         "rationale": "The candidate is visible only through cross-resource reference provenance and addresses a different issue family than the observed case."
@@ -1222,21 +1186,31 @@
     ],
     "synthesisOracle": {
       "disposition": "hypothesis",
-      "acceptableLeadingCandidateSets": [
-        [
-          "diagnostic-playbook:campaign-editor"
-        ],
-        [
-          "knowledge-article:performance-troubleshooting"
-        ]
-      ],
-      "acceptableAlternativeCandidateKeys": [],
-      "discriminatorIntents": [
+      "acceptableLeadingHypotheses": [
         {
-          "id": "intent:primary-discriminator",
-          "separatesCandidateKeys": [
+          "id": "hypothesis:leading-path",
+          "candidateKeyPool": [
             "diagnostic-playbook:campaign-editor",
             "knowledge-article:performance-troubleshooting"
+          ],
+          "minimumCandidateMatches": 1,
+          "requiredConcepts": [
+            "session-local",
+            "browser profile",
+            "campaign editor"
+          ]
+        }
+      ],
+      "orderedAlternativeHypotheses": [],
+      "evidenceActionIntents": [
+        {
+          "id": "intent:leading-evidence",
+          "targetRanks": [
+            0
+          ],
+          "allowedActionTypes": [
+            "inspect-internal",
+            "run-check"
           ],
           "requiredConcepts": [
             "same-campaign comparison",
@@ -1245,6 +1219,7 @@
           ]
         }
       ],
+      "novelHypothesisPolicy": "allowed-requires-review",
       "forbiddenClaims": [
         "Do not claim a confirmed root cause from applicability evidence alone.",
         "Do not claim that B5 authorizes remediation, routing, lifecycle transition, or customer-facing action.",
@@ -1319,12 +1294,7 @@
       {
         "resourceKey": "diagnostic-playbook:campaign-editor",
         "verdict": "irrelevant",
-        "supportingEvidence": [
-          {
-            "kind": "resource-representation",
-            "id": "diagnostic-playbook:campaign-editor:canonical:0"
-          }
-        ],
+        "supportingEvidence": [],
         "contradictingEvidence": [],
         "missingEvidence": [],
         "rationale": "This high-ranked cross-domain playbook does not address the observed issue family and is deliberately judged as a non-applicable near match."
@@ -1332,12 +1302,7 @@
       {
         "resourceKey": "knowledge-article:profile-sync-issues",
         "verdict": "irrelevant",
-        "supportingEvidence": [
-          {
-            "kind": "case-fact",
-            "id": "fact:no-rotation"
-          }
-        ],
+        "supportingEvidence": [],
         "contradictingEvidence": [],
         "missingEvidence": [],
         "rationale": "The candidate is visible only through cross-resource reference provenance and addresses a different issue family than the observed case."
@@ -1345,12 +1310,7 @@
       {
         "resourceKey": "knowledge-article:shopify-integration-sync",
         "verdict": "irrelevant",
-        "supportingEvidence": [
-          {
-            "kind": "case-fact",
-            "id": "fact:no-rotation"
-          }
-        ],
+        "supportingEvidence": [],
         "contradictingEvidence": [],
         "missingEvidence": [],
         "rationale": "The candidate is visible only through cross-resource reference provenance and addresses a different issue family than the observed case."
@@ -1358,12 +1318,7 @@
       {
         "resourceKey": "knowledge-article:sms-compliance",
         "verdict": "irrelevant",
-        "supportingEvidence": [
-          {
-            "kind": "case-fact",
-            "id": "fact:no-rotation"
-          }
-        ],
+        "supportingEvidence": [],
         "contradictingEvidence": [],
         "missingEvidence": [],
         "rationale": "The candidate is visible only through cross-resource reference provenance and addresses a different issue family than the observed case."
@@ -1389,10 +1344,6 @@
         "resourceKey": "known-cause:webhook-secret-rotation",
         "verdict": "contradicted",
         "supportingEvidence": [
-          {
-            "kind": "case-fact",
-            "id": "fact:no-rotation"
-          },
           {
             "kind": "resource-representation",
             "id": "known-cause:webhook-secret-rotation:canonical:0"
@@ -1425,22 +1376,31 @@
     ],
     "synthesisOracle": {
       "disposition": "hypothesis",
-      "acceptableLeadingCandidateSets": [
-        [
-          "diagnostic-playbook:article-backed"
-        ],
-        [
-          "knowledge-article:webhook-signature-validation"
-        ]
-      ],
-      "acceptableAlternativeCandidateKeys": [],
-      "discriminatorIntents": [
+      "acceptableLeadingHypotheses": [
         {
-          "id": "intent:primary-discriminator",
-          "separatesCandidateKeys": [
+          "id": "hypothesis:leading-path",
+          "candidateKeyPool": [
             "diagnostic-playbook:article-backed",
-            "knowledge-article:webhook-signature-validation",
-            "known-cause:webhook-secret-rotation"
+            "knowledge-article:webhook-signature-validation"
+          ],
+          "minimumCandidateMatches": 1,
+          "requiredConcepts": [
+            "raw body",
+            "verification",
+            "receiver transformation"
+          ]
+        }
+      ],
+      "orderedAlternativeHypotheses": [],
+      "evidenceActionIntents": [
+        {
+          "id": "intent:leading-evidence",
+          "targetRanks": [
+            0
+          ],
+          "allowedActionTypes": [
+            "inspect-internal",
+            "run-check"
           ],
           "requiredConcepts": [
             "raw body bytes",
@@ -1449,6 +1409,7 @@
           ]
         }
       ],
+      "novelHypothesisPolicy": "allowed-requires-review",
       "forbiddenClaims": [
         "Do not claim a confirmed root cause from applicability evidence alone.",
         "Do not claim that B5 authorizes remediation, routing, lifecycle transition, or customer-facing action.",
@@ -1506,12 +1467,7 @@
       {
         "resourceKey": "diagnostic-playbook:campaign-editor",
         "verdict": "irrelevant",
-        "supportingEvidence": [
-          {
-            "kind": "resource-representation",
-            "id": "diagnostic-playbook:campaign-editor:canonical:0"
-          }
-        ],
+        "supportingEvidence": [],
         "contradictingEvidence": [],
         "missingEvidence": [],
         "rationale": "This high-ranked cross-domain playbook does not address the observed issue family and is deliberately judged as a non-applicable near match."
@@ -1535,20 +1491,11 @@
       },
       {
         "resourceKey": "knowledge-article:event-tracking-debugging",
-        "verdict": "applicable-next-step",
-        "supportingEvidence": [
-          {
-            "kind": "case-fact",
-            "id": "fact:event-present"
-          },
-          {
-            "kind": "resource-representation",
-            "id": "knowledge-article:event-tracking-debugging:section:2"
-          }
-        ],
+        "verdict": "irrelevant",
+        "supportingEvidence": [],
         "contradictingEvidence": [],
         "missingEvidence": [],
-        "rationale": "The candidate supplies a bounded investigation path that directly addresses the observed case evidence without asserting a confirmed cause. This article is relevant only for its rule-out that a present matched event points away from event absence; it is not necessary for the eligibility investigation."
+        "rationale": "The matched event is already established, so this event-ingestion resource does not provide the next diagnostic step; the remaining investigation is downstream eligibility and exclusion."
       },
       {
         "resourceKey": "knowledge-article:flow-trigger-troubleshooting",
@@ -1570,12 +1517,7 @@
       {
         "resourceKey": "knowledge-article:shopify-integration-sync",
         "verdict": "irrelevant",
-        "supportingEvidence": [
-          {
-            "kind": "case-fact",
-            "id": "fact:event-present"
-          }
-        ],
+        "supportingEvidence": [],
         "contradictingEvidence": [],
         "missingEvidence": [],
         "rationale": "The candidate is visible only through cross-resource reference provenance and addresses a different issue family than the observed case."
@@ -1583,12 +1525,7 @@
       {
         "resourceKey": "knowledge-article:sms-compliance",
         "verdict": "irrelevant",
-        "supportingEvidence": [
-          {
-            "kind": "case-fact",
-            "id": "fact:event-present"
-          }
-        ],
+        "supportingEvidence": [],
         "contradictingEvidence": [],
         "missingEvidence": [],
         "rationale": "The candidate is visible only through cross-resource reference provenance and addresses a different issue family than the observed case."
@@ -1596,12 +1533,7 @@
       {
         "resourceKey": "knowledge-article:webhook-signature-validation",
         "verdict": "irrelevant",
-        "supportingEvidence": [
-          {
-            "kind": "case-fact",
-            "id": "fact:event-present"
-          }
-        ],
+        "supportingEvidence": [],
         "contradictingEvidence": [],
         "missingEvidence": [],
         "rationale": "The candidate is visible only through cross-resource reference provenance and addresses a different issue family than the observed case."
@@ -1621,25 +1553,30 @@
     ],
     "synthesisOracle": {
       "disposition": "hypothesis",
-      "acceptableLeadingCandidateSets": [
-        [
-          "diagnostic-playbook:flow-trigger"
-        ],
-        [
-          "knowledge-article:event-tracking-debugging"
-        ],
-        [
-          "knowledge-article:flow-trigger-troubleshooting"
-        ]
-      ],
-      "acceptableAlternativeCandidateKeys": [],
-      "discriminatorIntents": [
+      "acceptableLeadingHypotheses": [
         {
-          "id": "intent:primary-discriminator",
-          "separatesCandidateKeys": [
+          "id": "hypothesis:leading-path",
+          "candidateKeyPool": [
             "diagnostic-playbook:flow-trigger",
-            "knowledge-article:event-tracking-debugging",
             "knowledge-article:flow-trigger-troubleshooting"
+          ],
+          "minimumCandidateMatches": 1,
+          "requiredConcepts": [
+            "profile filter",
+            "eligibility",
+            "event present"
+          ]
+        }
+      ],
+      "orderedAlternativeHypotheses": [],
+      "evidenceActionIntents": [
+        {
+          "id": "intent:leading-evidence",
+          "targetRanks": [
+            0
+          ],
+          "allowedActionTypes": [
+            "inspect-internal"
           ],
           "requiredConcepts": [
             "filter exclusion",
@@ -1648,6 +1585,7 @@
           ]
         }
       ],
+      "novelHypothesisPolicy": "allowed-requires-review",
       "forbiddenClaims": [
         "Do not claim a confirmed root cause from applicability evidence alone.",
         "Do not claim that B5 authorizes remediation, routing, lifecycle transition, or customer-facing action.",
@@ -1706,12 +1644,7 @@
       {
         "resourceKey": "diagnostic-playbook:article-backed",
         "verdict": "irrelevant",
-        "supportingEvidence": [
-          {
-            "kind": "resource-representation",
-            "id": "diagnostic-playbook:article-backed:canonical:0"
-          }
-        ],
+        "supportingEvidence": [],
         "contradictingEvidence": [],
         "missingEvidence": [],
         "rationale": "This high-ranked cross-domain playbook does not address the observed issue family and is deliberately judged as a non-applicable near match."
@@ -1753,12 +1686,7 @@
       {
         "resourceKey": "knowledge-article:profile-sync-issues",
         "verdict": "irrelevant",
-        "supportingEvidence": [
-          {
-            "kind": "case-fact",
-            "id": "fact:slowness"
-          }
-        ],
+        "supportingEvidence": [],
         "contradictingEvidence": [],
         "missingEvidence": [],
         "rationale": "The candidate is visible only through cross-resource reference provenance and addresses a different issue family than the observed case."
@@ -1766,12 +1694,7 @@
       {
         "resourceKey": "knowledge-article:shopify-integration-sync",
         "verdict": "irrelevant",
-        "supportingEvidence": [
-          {
-            "kind": "case-fact",
-            "id": "fact:slowness"
-          }
-        ],
+        "supportingEvidence": [],
         "contradictingEvidence": [],
         "missingEvidence": [],
         "rationale": "The candidate is visible only through cross-resource reference provenance and addresses a different issue family than the observed case."
@@ -1779,12 +1702,7 @@
       {
         "resourceKey": "knowledge-article:sms-compliance",
         "verdict": "irrelevant",
-        "supportingEvidence": [
-          {
-            "kind": "case-fact",
-            "id": "fact:slowness"
-          }
-        ],
+        "supportingEvidence": [],
         "contradictingEvidence": [],
         "missingEvidence": [],
         "rationale": "The candidate is visible only through cross-resource reference provenance and addresses a different issue family than the observed case."
@@ -1792,12 +1710,7 @@
       {
         "resourceKey": "knowledge-article:webhook-signature-validation",
         "verdict": "irrelevant",
-        "supportingEvidence": [
-          {
-            "kind": "case-fact",
-            "id": "fact:slowness"
-          }
-        ],
+        "supportingEvidence": [],
         "contradictingEvidence": [],
         "missingEvidence": [],
         "rationale": "The candidate is visible only through cross-resource reference provenance and addresses a different issue family than the observed case."
@@ -1821,21 +1734,31 @@
     ],
     "synthesisOracle": {
       "disposition": "hypothesis",
-      "acceptableLeadingCandidateSets": [
-        [
-          "diagnostic-playbook:campaign-editor"
-        ],
-        [
-          "knowledge-article:performance-troubleshooting"
-        ]
-      ],
-      "acceptableAlternativeCandidateKeys": [],
-      "discriminatorIntents": [
+      "acceptableLeadingHypotheses": [
         {
-          "id": "intent:primary-discriminator",
-          "separatesCandidateKeys": [
+          "id": "hypothesis:leading-path",
+          "candidateKeyPool": [
             "diagnostic-playbook:campaign-editor",
             "knowledge-article:performance-troubleshooting"
+          ],
+          "minimumCandidateMatches": 1,
+          "requiredConcepts": [
+            "unaligned observations",
+            "campaign identity",
+            "session comparison"
+          ]
+        }
+      ],
+      "orderedAlternativeHypotheses": [],
+      "evidenceActionIntents": [
+        {
+          "id": "intent:leading-evidence",
+          "targetRanks": [
+            0
+          ],
+          "allowedActionTypes": [
+            "inspect-internal",
+            "request-customer-evidence"
           ],
           "requiredConcepts": [
             "same campaign",
@@ -1844,6 +1767,7 @@
           ]
         }
       ],
+      "novelHypothesisPolicy": "allowed-requires-review",
       "forbiddenClaims": [
         "Do not claim a confirmed root cause from applicability evidence alone.",
         "Do not claim that B5 authorizes remediation, routing, lifecycle transition, or customer-facing action.",
@@ -1920,12 +1844,7 @@
       {
         "resourceKey": "diagnostic-playbook:campaign-editor",
         "verdict": "irrelevant",
-        "supportingEvidence": [
-          {
-            "kind": "resource-representation",
-            "id": "diagnostic-playbook:campaign-editor:canonical:0"
-          }
-        ],
+        "supportingEvidence": [],
         "contradictingEvidence": [],
         "missingEvidence": [],
         "rationale": "This high-ranked cross-domain playbook does not address the observed issue family and is deliberately judged as a non-applicable near match."
@@ -1933,12 +1852,7 @@
       {
         "resourceKey": "knowledge-article:profile-sync-issues",
         "verdict": "irrelevant",
-        "supportingEvidence": [
-          {
-            "kind": "case-fact",
-            "id": "fact:retry-success"
-          }
-        ],
+        "supportingEvidence": [],
         "contradictingEvidence": [],
         "missingEvidence": [],
         "rationale": "The candidate is visible only through cross-resource reference provenance and addresses a different issue family than the observed case."
@@ -1946,12 +1860,7 @@
       {
         "resourceKey": "knowledge-article:shopify-integration-sync",
         "verdict": "irrelevant",
-        "supportingEvidence": [
-          {
-            "kind": "case-fact",
-            "id": "fact:retry-success"
-          }
-        ],
+        "supportingEvidence": [],
         "contradictingEvidence": [],
         "missingEvidence": [],
         "rationale": "The candidate is visible only through cross-resource reference provenance and addresses a different issue family than the observed case."
@@ -2013,24 +1922,45 @@
     ],
     "synthesisOracle": {
       "disposition": "hypothesis",
-      "acceptableLeadingCandidateSets": [
-        [
-          "diagnostic-playbook:article-backed"
-        ],
-        [
-          "knowledge-article:webhook-signature-validation"
-        ]
-      ],
-      "acceptableAlternativeCandidateKeys": [
-        "known-cause:webhook-delivery-latency"
-      ],
-      "discriminatorIntents": [
+      "acceptableLeadingHypotheses": [
         {
-          "id": "intent:primary-discriminator",
-          "separatesCandidateKeys": [
+          "id": "hypothesis:leading-path",
+          "candidateKeyPool": [
             "diagnostic-playbook:article-backed",
-            "knowledge-article:webhook-signature-validation",
+            "knowledge-article:webhook-signature-validation"
+          ],
+          "minimumCandidateMatches": 1,
+          "requiredConcepts": [
+            "delivery identity",
+            "retry timing",
+            "signature verification"
+          ]
+        }
+      ],
+      "orderedAlternativeHypotheses": [
+        {
+          "id": "hypothesis:alternative-1",
+          "candidateKeyPool": [
             "known-cause:webhook-delivery-latency"
+          ],
+          "minimumCandidateMatches": 1,
+          "requiredConcepts": [
+            "dispatch",
+            "endpoint-response",
+            "retry",
+            "timing"
+          ]
+        }
+      ],
+      "evidenceActionIntents": [
+        {
+          "id": "intent:leading-evidence",
+          "targetRanks": [
+            0,
+            1
+          ],
+          "allowedActionTypes": [
+            "inspect-internal"
           ],
           "requiredConcepts": [
             "delivery identity",
@@ -2040,6 +1970,7 @@
           ]
         }
       ],
+      "novelHypothesisPolicy": "allowed-requires-review",
       "forbiddenClaims": [
         "Do not claim a confirmed root cause from applicability evidence alone.",
         "Do not claim that B5 authorizes remediation, routing, lifecycle transition, or customer-facing action.",
@@ -2098,12 +2029,7 @@
       {
         "resourceKey": "diagnostic-playbook:campaign-editor",
         "verdict": "irrelevant",
-        "supportingEvidence": [
-          {
-            "kind": "resource-representation",
-            "id": "diagnostic-playbook:campaign-editor:canonical:0"
-          }
-        ],
+        "supportingEvidence": [],
         "contradictingEvidence": [],
         "missingEvidence": [],
         "rationale": "This high-ranked cross-domain playbook does not address the observed issue family and is deliberately judged as a non-applicable near match."
@@ -2162,12 +2088,7 @@
       {
         "resourceKey": "knowledge-article:sms-compliance",
         "verdict": "irrelevant",
-        "supportingEvidence": [
-          {
-            "kind": "case-fact",
-            "id": "fact:accepted-log"
-          }
-        ],
+        "supportingEvidence": [],
         "contradictingEvidence": [],
         "missingEvidence": [],
         "rationale": "The candidate is visible only through cross-resource reference provenance and addresses a different issue family than the observed case."
@@ -2191,25 +2112,31 @@
     ],
     "synthesisOracle": {
       "disposition": "hypothesis",
-      "acceptableLeadingCandidateSets": [
-        [
-          "diagnostic-playbook:flow-trigger"
-        ],
-        [
-          "knowledge-article:event-tracking-debugging"
-        ],
-        [
-          "knowledge-article:flow-trigger-troubleshooting"
-        ]
-      ],
-      "acceptableAlternativeCandidateKeys": [],
-      "discriminatorIntents": [
+      "acceptableLeadingHypotheses": [
         {
-          "id": "intent:primary-discriminator",
-          "separatesCandidateKeys": [
+          "id": "hypothesis:leading-path",
+          "candidateKeyPool": [
             "diagnostic-playbook:flow-trigger",
             "knowledge-article:event-tracking-debugging",
             "knowledge-article:flow-trigger-troubleshooting"
+          ],
+          "minimumCandidateMatches": 1,
+          "requiredConcepts": [
+            "profile identity",
+            "event timeline",
+            "qualification"
+          ]
+        }
+      ],
+      "orderedAlternativeHypotheses": [],
+      "evidenceActionIntents": [
+        {
+          "id": "intent:leading-evidence",
+          "targetRanks": [
+            0
+          ],
+          "allowedActionTypes": [
+            "inspect-internal"
           ],
           "requiredConcepts": [
             "profile identity",
@@ -2219,6 +2146,7 @@
           ]
         }
       ],
+      "novelHypothesisPolicy": "allowed-requires-review",
       "forbiddenClaims": [
         "Do not claim a confirmed root cause from applicability evidence alone.",
         "Do not claim that B5 authorizes remediation, routing, lifecycle transition, or customer-facing action.",
@@ -2269,12 +2197,7 @@
       {
         "resourceKey": "diagnostic-playbook:article-backed",
         "verdict": "irrelevant",
-        "supportingEvidence": [
-          {
-            "kind": "resource-representation",
-            "id": "diagnostic-playbook:article-backed:canonical:0"
-          }
-        ],
+        "supportingEvidence": [],
         "contradictingEvidence": [],
         "missingEvidence": [],
         "rationale": "This high-ranked cross-domain playbook does not address the observed issue family and is deliberately judged as a non-applicable near match."
@@ -2299,12 +2222,7 @@
       {
         "resourceKey": "knowledge-article:event-tracking-debugging",
         "verdict": "irrelevant",
-        "supportingEvidence": [
-          {
-            "kind": "case-fact",
-            "id": "fact:blank-screenshot"
-          }
-        ],
+        "supportingEvidence": [],
         "contradictingEvidence": [],
         "missingEvidence": [],
         "rationale": "The candidate is visible only through cross-resource reference provenance and addresses a different issue family than the observed case."
@@ -2329,12 +2247,7 @@
       {
         "resourceKey": "knowledge-article:profile-sync-issues",
         "verdict": "irrelevant",
-        "supportingEvidence": [
-          {
-            "kind": "case-fact",
-            "id": "fact:blank-screenshot"
-          }
-        ],
+        "supportingEvidence": [],
         "contradictingEvidence": [],
         "missingEvidence": [],
         "rationale": "The candidate is visible only through cross-resource reference provenance and addresses a different issue family than the observed case."
@@ -2342,12 +2255,7 @@
       {
         "resourceKey": "knowledge-article:shopify-integration-sync",
         "verdict": "irrelevant",
-        "supportingEvidence": [
-          {
-            "kind": "case-fact",
-            "id": "fact:blank-screenshot"
-          }
-        ],
+        "supportingEvidence": [],
         "contradictingEvidence": [],
         "missingEvidence": [],
         "rationale": "The candidate is visible only through cross-resource reference provenance and addresses a different issue family than the observed case."
@@ -2355,12 +2263,7 @@
       {
         "resourceKey": "knowledge-article:sms-compliance",
         "verdict": "irrelevant",
-        "supportingEvidence": [
-          {
-            "kind": "case-fact",
-            "id": "fact:blank-screenshot"
-          }
-        ],
+        "supportingEvidence": [],
         "contradictingEvidence": [],
         "missingEvidence": [],
         "rationale": "The candidate is visible only through cross-resource reference provenance and addresses a different issue family than the observed case."
@@ -2368,12 +2271,7 @@
       {
         "resourceKey": "knowledge-article:webhook-signature-validation",
         "verdict": "irrelevant",
-        "supportingEvidence": [
-          {
-            "kind": "case-fact",
-            "id": "fact:blank-screenshot"
-          }
-        ],
+        "supportingEvidence": [],
         "contradictingEvidence": [],
         "missingEvidence": [],
         "rationale": "The candidate is visible only through cross-resource reference provenance and addresses a different issue family than the observed case."
@@ -2397,21 +2295,32 @@
     ],
     "synthesisOracle": {
       "disposition": "hypothesis",
-      "acceptableLeadingCandidateSets": [
-        [
-          "diagnostic-playbook:campaign-editor"
-        ],
-        [
-          "knowledge-article:performance-troubleshooting"
-        ]
-      ],
-      "acceptableAlternativeCandidateKeys": [],
-      "discriminatorIntents": [
+      "acceptableLeadingHypotheses": [
         {
-          "id": "intent:primary-discriminator",
-          "separatesCandidateKeys": [
+          "id": "hypothesis:leading-path",
+          "candidateKeyPool": [
             "diagnostic-playbook:campaign-editor",
             "knowledge-article:performance-troubleshooting"
+          ],
+          "minimumCandidateMatches": 1,
+          "requiredConcepts": [
+            "campaign editor",
+            "loading",
+            "isolation"
+          ]
+        }
+      ],
+      "orderedAlternativeHypotheses": [],
+      "evidenceActionIntents": [
+        {
+          "id": "intent:leading-evidence",
+          "targetRanks": [
+            0
+          ],
+          "allowedActionTypes": [
+            "inspect-internal",
+            "run-check",
+            "request-customer-evidence"
           ],
           "requiredConcepts": [
             "campaign identity",
@@ -2421,6 +2330,7 @@
           ]
         }
       ],
+      "novelHypothesisPolicy": "allowed-requires-review",
       "forbiddenClaims": [
         "Do not claim a confirmed root cause from applicability evidence alone.",
         "Do not claim that B5 authorizes remediation, routing, lifecycle transition, or customer-facing action.",
@@ -2491,12 +2401,7 @@
       {
         "resourceKey": "diagnostic-playbook:campaign-editor",
         "verdict": "irrelevant",
-        "supportingEvidence": [
-          {
-            "kind": "resource-representation",
-            "id": "diagnostic-playbook:campaign-editor:canonical:0"
-          }
-        ],
+        "supportingEvidence": [],
         "contradictingEvidence": [],
         "missingEvidence": [],
         "rationale": "This high-ranked cross-domain playbook does not address the observed issue family and is deliberately judged as a non-applicable near match."
@@ -2504,12 +2409,7 @@
       {
         "resourceKey": "knowledge-article:profile-sync-issues",
         "verdict": "irrelevant",
-        "supportingEvidence": [
-          {
-            "kind": "case-fact",
-            "id": "fact:signature-failure"
-          }
-        ],
+        "supportingEvidence": [],
         "contradictingEvidence": [],
         "missingEvidence": [],
         "rationale": "The candidate is visible only through cross-resource reference provenance and addresses a different issue family than the observed case."
@@ -2517,12 +2417,7 @@
       {
         "resourceKey": "knowledge-article:sms-compliance",
         "verdict": "irrelevant",
-        "supportingEvidence": [
-          {
-            "kind": "case-fact",
-            "id": "fact:signature-failure"
-          }
-        ],
+        "supportingEvidence": [],
         "contradictingEvidence": [],
         "missingEvidence": [],
         "rationale": "The candidate is visible only through cross-resource reference provenance and addresses a different issue family than the observed case."
@@ -2563,21 +2458,31 @@
     ],
     "synthesisOracle": {
       "disposition": "hypothesis",
-      "acceptableLeadingCandidateSets": [
-        [
-          "diagnostic-playbook:article-backed"
-        ],
-        [
-          "knowledge-article:webhook-signature-validation"
-        ]
-      ],
-      "acceptableAlternativeCandidateKeys": [],
-      "discriminatorIntents": [
+      "acceptableLeadingHypotheses": [
         {
-          "id": "intent:primary-discriminator",
-          "separatesCandidateKeys": [
+          "id": "hypothesis:leading-path",
+          "candidateKeyPool": [
             "diagnostic-playbook:article-backed",
             "knowledge-article:webhook-signature-validation"
+          ],
+          "minimumCandidateMatches": 1,
+          "requiredConcepts": [
+            "signature verification",
+            "raw body",
+            "delivery identity"
+          ]
+        }
+      ],
+      "orderedAlternativeHypotheses": [],
+      "evidenceActionIntents": [
+        {
+          "id": "intent:leading-evidence",
+          "targetRanks": [
+            0
+          ],
+          "allowedActionTypes": [
+            "inspect-internal",
+            "request-customer-evidence"
           ],
           "requiredConcepts": [
             "delivery identity",
@@ -2587,6 +2492,7 @@
           ]
         }
       ],
+      "novelHypothesisPolicy": "allowed-requires-review",
       "forbiddenClaims": [
         "Do not claim a confirmed root cause from applicability evidence alone.",
         "Do not claim that B5 authorizes remediation, routing, lifecycle transition, or customer-facing action.",
@@ -2637,12 +2543,7 @@
       {
         "resourceKey": "diagnostic-playbook:campaign-editor",
         "verdict": "irrelevant",
-        "supportingEvidence": [
-          {
-            "kind": "resource-representation",
-            "id": "diagnostic-playbook:campaign-editor:canonical:0"
-          }
-        ],
+        "supportingEvidence": [],
         "contradictingEvidence": [],
         "missingEvidence": [],
         "rationale": "This high-ranked cross-domain playbook does not address the observed issue family and is deliberately judged as a non-applicable near match."
@@ -2701,12 +2602,7 @@
       {
         "resourceKey": "knowledge-article:shopify-integration-sync",
         "verdict": "irrelevant",
-        "supportingEvidence": [
-          {
-            "kind": "case-fact",
-            "id": "fact:no-flow-entry"
-          }
-        ],
+        "supportingEvidence": [],
         "contradictingEvidence": [],
         "missingEvidence": [],
         "rationale": "The candidate is visible only through cross-resource reference provenance and addresses a different issue family than the observed case."
@@ -2714,12 +2610,7 @@
       {
         "resourceKey": "knowledge-article:webhook-signature-validation",
         "verdict": "irrelevant",
-        "supportingEvidence": [
-          {
-            "kind": "case-fact",
-            "id": "fact:no-flow-entry"
-          }
-        ],
+        "supportingEvidence": [],
         "contradictingEvidence": [],
         "missingEvidence": [],
         "rationale": "The candidate is visible only through cross-resource reference provenance and addresses a different issue family than the observed case."
@@ -2742,25 +2633,32 @@
     ],
     "synthesisOracle": {
       "disposition": "hypothesis",
-      "acceptableLeadingCandidateSets": [
-        [
-          "diagnostic-playbook:flow-trigger"
-        ],
-        [
-          "knowledge-article:event-tracking-debugging"
-        ],
-        [
-          "knowledge-article:flow-trigger-troubleshooting"
-        ]
-      ],
-      "acceptableAlternativeCandidateKeys": [],
-      "discriminatorIntents": [
+      "acceptableLeadingHypotheses": [
         {
-          "id": "intent:primary-discriminator",
-          "separatesCandidateKeys": [
+          "id": "hypothesis:leading-path",
+          "candidateKeyPool": [
             "diagnostic-playbook:flow-trigger",
             "knowledge-article:event-tracking-debugging",
             "knowledge-article:flow-trigger-troubleshooting"
+          ],
+          "minimumCandidateMatches": 1,
+          "requiredConcepts": [
+            "flow entry",
+            "event presence",
+            "eligibility"
+          ]
+        }
+      ],
+      "orderedAlternativeHypotheses": [],
+      "evidenceActionIntents": [
+        {
+          "id": "intent:leading-evidence",
+          "targetRanks": [
+            0
+          ],
+          "allowedActionTypes": [
+            "inspect-internal",
+            "request-customer-evidence"
           ],
           "requiredConcepts": [
             "event name",
@@ -2771,6 +2669,7 @@
           ]
         }
       ],
+      "novelHypothesisPolicy": "allowed-requires-review",
       "forbiddenClaims": [
         "Do not claim a confirmed root cause from applicability evidence alone.",
         "Do not claim that B5 authorizes remediation, routing, lifecycle transition, or customer-facing action.",
@@ -2825,12 +2724,7 @@
       {
         "resourceKey": "diagnostic-playbook:article-backed",
         "verdict": "irrelevant",
-        "supportingEvidence": [
-          {
-            "kind": "resource-representation",
-            "id": "diagnostic-playbook:article-backed:canonical:0"
-          }
-        ],
+        "supportingEvidence": [],
         "contradictingEvidence": [],
         "missingEvidence": [],
         "rationale": "This high-ranked cross-domain playbook does not address the observed issue family and is deliberately judged as a non-applicable near match."
@@ -2872,12 +2766,7 @@
       {
         "resourceKey": "knowledge-article:profile-sync-issues",
         "verdict": "irrelevant",
-        "supportingEvidence": [
-          {
-            "kind": "case-fact",
-            "id": "fact:private-opens"
-          }
-        ],
+        "supportingEvidence": [],
         "contradictingEvidence": [],
         "missingEvidence": [],
         "rationale": "The candidate is visible only through cross-resource reference provenance and addresses a different issue family than the observed case."
@@ -2885,12 +2774,7 @@
       {
         "resourceKey": "knowledge-article:shopify-integration-sync",
         "verdict": "irrelevant",
-        "supportingEvidence": [
-          {
-            "kind": "case-fact",
-            "id": "fact:private-opens"
-          }
-        ],
+        "supportingEvidence": [],
         "contradictingEvidence": [],
         "missingEvidence": [],
         "rationale": "The candidate is visible only through cross-resource reference provenance and addresses a different issue family than the observed case."
@@ -2898,12 +2782,7 @@
       {
         "resourceKey": "knowledge-article:sms-compliance",
         "verdict": "irrelevant",
-        "supportingEvidence": [
-          {
-            "kind": "case-fact",
-            "id": "fact:private-opens"
-          }
-        ],
+        "supportingEvidence": [],
         "contradictingEvidence": [],
         "missingEvidence": [],
         "rationale": "The candidate is visible only through cross-resource reference provenance and addresses a different issue family than the observed case."
@@ -2911,12 +2790,7 @@
       {
         "resourceKey": "knowledge-article:webhook-signature-validation",
         "verdict": "irrelevant",
-        "supportingEvidence": [
-          {
-            "kind": "case-fact",
-            "id": "fact:private-opens"
-          }
-        ],
+        "supportingEvidence": [],
         "contradictingEvidence": [],
         "missingEvidence": [],
         "rationale": "The candidate is visible only through cross-resource reference provenance and addresses a different issue family than the observed case."
@@ -2941,21 +2815,31 @@
     ],
     "synthesisOracle": {
       "disposition": "hypothesis",
-      "acceptableLeadingCandidateSets": [
-        [
-          "diagnostic-playbook:campaign-editor"
-        ],
-        [
-          "knowledge-article:performance-troubleshooting"
-        ]
-      ],
-      "acceptableAlternativeCandidateKeys": [],
-      "discriminatorIntents": [
+      "acceptableLeadingHypotheses": [
         {
-          "id": "intent:primary-discriminator",
-          "separatesCandidateKeys": [
+          "id": "hypothesis:leading-path",
+          "candidateKeyPool": [
             "diagnostic-playbook:campaign-editor",
             "knowledge-article:performance-troubleshooting"
+          ],
+          "minimumCandidateMatches": 1,
+          "requiredConcepts": [
+            "session-local",
+            "browser profile",
+            "campaign editor"
+          ]
+        }
+      ],
+      "orderedAlternativeHypotheses": [],
+      "evidenceActionIntents": [
+        {
+          "id": "intent:leading-evidence",
+          "targetRanks": [
+            0
+          ],
+          "allowedActionTypes": [
+            "inspect-internal",
+            "run-check"
           ],
           "requiredConcepts": [
             "session-local reproduction",
@@ -2964,6 +2848,7 @@
           ]
         }
       ],
+      "novelHypothesisPolicy": "allowed-requires-review",
       "forbiddenClaims": [
         "Do not claim a confirmed root cause from applicability evidence alone.",
         "Do not claim that B5 authorizes remediation, routing, lifecycle transition, or customer-facing action.",
@@ -3038,12 +2923,7 @@
       {
         "resourceKey": "diagnostic-playbook:campaign-editor",
         "verdict": "irrelevant",
-        "supportingEvidence": [
-          {
-            "kind": "resource-representation",
-            "id": "diagnostic-playbook:campaign-editor:canonical:0"
-          }
-        ],
+        "supportingEvidence": [],
         "contradictingEvidence": [],
         "missingEvidence": [],
         "rationale": "This high-ranked cross-domain playbook does not address the observed issue family and is deliberately judged as a non-applicable near match."
@@ -3051,12 +2931,7 @@
       {
         "resourceKey": "knowledge-article:profile-sync-issues",
         "verdict": "irrelevant",
-        "supportingEvidence": [
-          {
-            "kind": "case-fact",
-            "id": "fact:rotation-request"
-          }
-        ],
+        "supportingEvidence": [],
         "contradictingEvidence": [],
         "missingEvidence": [],
         "rationale": "The candidate is visible only through cross-resource reference provenance and addresses a different issue family than the observed case."
@@ -3064,12 +2939,7 @@
       {
         "resourceKey": "knowledge-article:shopify-integration-sync",
         "verdict": "irrelevant",
-        "supportingEvidence": [
-          {
-            "kind": "case-fact",
-            "id": "fact:rotation-request"
-          }
-        ],
+        "supportingEvidence": [],
         "contradictingEvidence": [],
         "missingEvidence": [],
         "rationale": "The candidate is visible only through cross-resource reference provenance and addresses a different issue family than the observed case."
@@ -3077,12 +2947,7 @@
       {
         "resourceKey": "knowledge-article:sms-compliance",
         "verdict": "irrelevant",
-        "supportingEvidence": [
-          {
-            "kind": "case-fact",
-            "id": "fact:rotation-request"
-          }
-        ],
+        "supportingEvidence": [],
         "contradictingEvidence": [],
         "missingEvidence": [],
         "rationale": "The candidate is visible only through cross-resource reference provenance and addresses a different issue family than the observed case."
@@ -3108,10 +2973,6 @@
         "resourceKey": "known-cause:webhook-secret-rotation",
         "verdict": "contradicted",
         "supportingEvidence": [
-          {
-            "kind": "case-fact",
-            "id": "fact:rotation-request"
-          },
           {
             "kind": "resource-representation",
             "id": "known-cause:webhook-secret-rotation:canonical:0"
@@ -3143,22 +3004,31 @@
     ],
     "synthesisOracle": {
       "disposition": "hypothesis",
-      "acceptableLeadingCandidateSets": [
-        [
-          "diagnostic-playbook:article-backed"
-        ],
-        [
-          "knowledge-article:webhook-signature-validation"
-        ]
-      ],
-      "acceptableAlternativeCandidateKeys": [],
-      "discriminatorIntents": [
+      "acceptableLeadingHypotheses": [
         {
-          "id": "intent:primary-discriminator",
-          "separatesCandidateKeys": [
+          "id": "hypothesis:leading-path",
+          "candidateKeyPool": [
             "diagnostic-playbook:article-backed",
-            "knowledge-article:webhook-signature-validation",
-            "known-cause:webhook-secret-rotation"
+            "knowledge-article:webhook-signature-validation"
+          ],
+          "minimumCandidateMatches": 1,
+          "requiredConcepts": [
+            "raw body",
+            "receiver parsing",
+            "no rotation"
+          ]
+        }
+      ],
+      "orderedAlternativeHypotheses": [],
+      "evidenceActionIntents": [
+        {
+          "id": "intent:leading-evidence",
+          "targetRanks": [
+            0
+          ],
+          "allowedActionTypes": [
+            "inspect-internal",
+            "run-check"
           ],
           "requiredConcepts": [
             "raw-body comparison",
@@ -3167,6 +3037,7 @@
           ]
         }
       ],
+      "novelHypothesisPolicy": "allowed-requires-review",
       "forbiddenClaims": [
         "Do not claim a confirmed root cause from applicability evidence alone.",
         "Do not claim that B5 authorizes remediation, routing, lifecycle transition, or customer-facing action.",
@@ -3228,12 +3099,7 @@
       {
         "resourceKey": "diagnostic-playbook:campaign-editor",
         "verdict": "irrelevant",
-        "supportingEvidence": [
-          {
-            "kind": "resource-representation",
-            "id": "diagnostic-playbook:campaign-editor:canonical:0"
-          }
-        ],
+        "supportingEvidence": [],
         "contradictingEvidence": [],
         "missingEvidence": [],
         "rationale": "This high-ranked cross-domain playbook does not address the observed issue family and is deliberately judged as a non-applicable near match."
@@ -3257,20 +3123,11 @@
       },
       {
         "resourceKey": "knowledge-article:event-tracking-debugging",
-        "verdict": "applicable-next-step",
-        "supportingEvidence": [
-          {
-            "kind": "case-fact",
-            "id": "fact:event-present"
-          },
-          {
-            "kind": "resource-representation",
-            "id": "knowledge-article:event-tracking-debugging:section:2"
-          }
-        ],
+        "verdict": "irrelevant",
+        "supportingEvidence": [],
         "contradictingEvidence": [],
         "missingEvidence": [],
-        "rationale": "The candidate supplies a bounded investigation path that directly addresses the observed case evidence without asserting a confirmed cause. A present event points away from an ingestion claim."
+        "rationale": "The matched event is already established, so this event-ingestion resource does not provide the next diagnostic step; the remaining investigation is downstream eligibility and exclusion."
       },
       {
         "resourceKey": "knowledge-article:flow-trigger-troubleshooting",
@@ -3292,12 +3149,7 @@
       {
         "resourceKey": "knowledge-article:profile-sync-issues",
         "verdict": "irrelevant",
-        "supportingEvidence": [
-          {
-            "kind": "case-fact",
-            "id": "fact:event-present"
-          }
-        ],
+        "supportingEvidence": [],
         "contradictingEvidence": [],
         "missingEvidence": [],
         "rationale": "The candidate is visible only through cross-resource reference provenance and addresses a different issue family than the observed case."
@@ -3305,12 +3157,7 @@
       {
         "resourceKey": "knowledge-article:shopify-integration-sync",
         "verdict": "irrelevant",
-        "supportingEvidence": [
-          {
-            "kind": "case-fact",
-            "id": "fact:event-present"
-          }
-        ],
+        "supportingEvidence": [],
         "contradictingEvidence": [],
         "missingEvidence": [],
         "rationale": "The candidate is visible only through cross-resource reference provenance and addresses a different issue family than the observed case."
@@ -3318,12 +3165,7 @@
       {
         "resourceKey": "knowledge-article:webhook-signature-validation",
         "verdict": "irrelevant",
-        "supportingEvidence": [
-          {
-            "kind": "case-fact",
-            "id": "fact:event-present"
-          }
-        ],
+        "supportingEvidence": [],
         "contradictingEvidence": [],
         "missingEvidence": [],
         "rationale": "The candidate is visible only through cross-resource reference provenance and addresses a different issue family than the observed case."
@@ -3346,25 +3188,30 @@
     ],
     "synthesisOracle": {
       "disposition": "hypothesis",
-      "acceptableLeadingCandidateSets": [
-        [
-          "diagnostic-playbook:flow-trigger"
-        ],
-        [
-          "knowledge-article:event-tracking-debugging"
-        ],
-        [
-          "knowledge-article:flow-trigger-troubleshooting"
-        ]
-      ],
-      "acceptableAlternativeCandidateKeys": [],
-      "discriminatorIntents": [
+      "acceptableLeadingHypotheses": [
         {
-          "id": "intent:primary-discriminator",
-          "separatesCandidateKeys": [
+          "id": "hypothesis:leading-path",
+          "candidateKeyPool": [
             "diagnostic-playbook:flow-trigger",
-            "knowledge-article:event-tracking-debugging",
             "knowledge-article:flow-trigger-troubleshooting"
+          ],
+          "minimumCandidateMatches": 1,
+          "requiredConcepts": [
+            "eligibility",
+            "filter exclusion",
+            "event present"
+          ]
+        }
+      ],
+      "orderedAlternativeHypotheses": [],
+      "evidenceActionIntents": [
+        {
+          "id": "intent:leading-evidence",
+          "targetRanks": [
+            0
+          ],
+          "allowedActionTypes": [
+            "inspect-internal"
           ],
           "requiredConcepts": [
             "filter exclusion",
@@ -3373,6 +3220,7 @@
           ]
         }
       ],
+      "novelHypothesisPolicy": "allowed-requires-review",
       "forbiddenClaims": [
         "Do not claim a confirmed root cause from applicability evidence alone.",
         "Do not claim that B5 authorizes remediation, routing, lifecycle transition, or customer-facing action.",
@@ -3427,12 +3275,7 @@
       {
         "resourceKey": "diagnostic-playbook:article-backed",
         "verdict": "irrelevant",
-        "supportingEvidence": [
-          {
-            "kind": "resource-representation",
-            "id": "diagnostic-playbook:article-backed:canonical:0"
-          }
-        ],
+        "supportingEvidence": [],
         "contradictingEvidence": [],
         "missingEvidence": [],
         "rationale": "This high-ranked cross-domain playbook does not address the observed issue family and is deliberately judged as a non-applicable near match."
@@ -3474,12 +3317,7 @@
       {
         "resourceKey": "knowledge-article:profile-sync-issues",
         "verdict": "irrelevant",
-        "supportingEvidence": [
-          {
-            "kind": "case-fact",
-            "id": "fact:one-session-blank"
-          }
-        ],
+        "supportingEvidence": [],
         "contradictingEvidence": [],
         "missingEvidence": [],
         "rationale": "The candidate is visible only through cross-resource reference provenance and addresses a different issue family than the observed case."
@@ -3487,12 +3325,7 @@
       {
         "resourceKey": "knowledge-article:sms-compliance",
         "verdict": "irrelevant",
-        "supportingEvidence": [
-          {
-            "kind": "case-fact",
-            "id": "fact:one-session-blank"
-          }
-        ],
+        "supportingEvidence": [],
         "contradictingEvidence": [],
         "missingEvidence": [],
         "rationale": "The candidate is visible only through cross-resource reference provenance and addresses a different issue family than the observed case."
@@ -3500,12 +3333,7 @@
       {
         "resourceKey": "knowledge-article:webhook-signature-validation",
         "verdict": "irrelevant",
-        "supportingEvidence": [
-          {
-            "kind": "case-fact",
-            "id": "fact:one-session-blank"
-          }
-        ],
+        "supportingEvidence": [],
         "contradictingEvidence": [],
         "missingEvidence": [],
         "rationale": "The candidate is visible only through cross-resource reference provenance and addresses a different issue family than the observed case."
@@ -3531,21 +3359,32 @@
     ],
     "synthesisOracle": {
       "disposition": "hypothesis",
-      "acceptableLeadingCandidateSets": [
-        [
-          "diagnostic-playbook:campaign-editor"
-        ],
-        [
-          "knowledge-article:performance-troubleshooting"
-        ]
-      ],
-      "acceptableAlternativeCandidateKeys": [],
-      "discriminatorIntents": [
+      "acceptableLeadingHypotheses": [
         {
-          "id": "intent:primary-discriminator",
-          "separatesCandidateKeys": [
+          "id": "hypothesis:leading-path",
+          "candidateKeyPool": [
             "diagnostic-playbook:campaign-editor",
             "knowledge-article:performance-troubleshooting"
+          ],
+          "minimumCandidateMatches": 1,
+          "requiredConcepts": [
+            "campaign editor",
+            "isolation",
+            "console evidence"
+          ]
+        }
+      ],
+      "orderedAlternativeHypotheses": [],
+      "evidenceActionIntents": [
+        {
+          "id": "intent:leading-evidence",
+          "targetRanks": [
+            0
+          ],
+          "allowedActionTypes": [
+            "inspect-internal",
+            "run-check",
+            "request-customer-evidence"
           ],
           "requiredConcepts": [
             "session isolation",
@@ -3554,6 +3393,7 @@
           ]
         }
       ],
+      "novelHypothesisPolicy": "allowed-requires-review",
       "forbiddenClaims": [
         "Do not claim a confirmed root cause from applicability evidence alone.",
         "Do not claim that B5 authorizes remediation, routing, lifecycle transition, or customer-facing action.",
@@ -3611,104 +3451,104 @@
       {
         "resourceKey": "diagnostic-playbook:article-backed",
         "verdict": "irrelevant",
-        "supportingEvidence": [
+        "supportingEvidence": [],
+        "contradictingEvidence": [
           {
-            "kind": "resource-representation",
-            "id": "diagnostic-playbook:article-backed:canonical:0"
+            "kind": "case-fact",
+            "id": "fact:no-troubleshooting-symptom"
           }
         ],
-        "contradictingEvidence": [],
         "missingEvidence": [],
         "rationale": "The case lacks the symptom family this candidate addresses, so the candidate is not a meaningful investigation path for this request."
       },
       {
         "resourceKey": "diagnostic-playbook:campaign-editor",
         "verdict": "irrelevant",
-        "supportingEvidence": [
+        "supportingEvidence": [],
+        "contradictingEvidence": [
           {
-            "kind": "resource-representation",
-            "id": "diagnostic-playbook:campaign-editor:canonical:0"
+            "kind": "case-fact",
+            "id": "fact:no-troubleshooting-symptom"
           }
         ],
-        "contradictingEvidence": [],
         "missingEvidence": [],
         "rationale": "This high-ranked cross-domain playbook does not address the observed issue family and is deliberately judged as a non-applicable near match."
       },
       {
         "resourceKey": "knowledge-article:profile-sync-issues",
         "verdict": "irrelevant",
-        "supportingEvidence": [
+        "supportingEvidence": [],
+        "contradictingEvidence": [
           {
             "kind": "case-fact",
-            "id": "fact:opaque-only"
+            "id": "fact:no-troubleshooting-symptom"
           }
         ],
-        "contradictingEvidence": [],
         "missingEvidence": [],
         "rationale": "The candidate is visible only through cross-resource reference provenance and addresses a different issue family than the observed case."
       },
       {
         "resourceKey": "knowledge-article:shopify-integration-sync",
         "verdict": "irrelevant",
-        "supportingEvidence": [
+        "supportingEvidence": [],
+        "contradictingEvidence": [
           {
             "kind": "case-fact",
-            "id": "fact:opaque-only"
+            "id": "fact:no-troubleshooting-symptom"
           }
         ],
-        "contradictingEvidence": [],
         "missingEvidence": [],
         "rationale": "The candidate is visible only through cross-resource reference provenance and addresses a different issue family than the observed case."
       },
       {
         "resourceKey": "knowledge-article:sms-compliance",
         "verdict": "irrelevant",
-        "supportingEvidence": [
+        "supportingEvidence": [],
+        "contradictingEvidence": [
           {
             "kind": "case-fact",
-            "id": "fact:opaque-only"
+            "id": "fact:no-troubleshooting-symptom"
           }
         ],
-        "contradictingEvidence": [],
         "missingEvidence": [],
         "rationale": "The candidate is visible only through cross-resource reference provenance and addresses a different issue family than the observed case."
       },
       {
         "resourceKey": "knowledge-article:webhook-signature-validation",
         "verdict": "irrelevant",
-        "supportingEvidence": [
+        "supportingEvidence": [],
+        "contradictingEvidence": [
           {
-            "kind": "resource-representation",
-            "id": "knowledge-article:webhook-signature-validation:section:0"
+            "kind": "case-fact",
+            "id": "fact:no-troubleshooting-symptom"
           }
         ],
-        "contradictingEvidence": [],
         "missingEvidence": [],
         "rationale": "The case lacks the symptom family this candidate addresses, so the candidate is not a meaningful investigation path for this request."
       },
       {
         "resourceKey": "known-cause:webhook-delivery-latency",
         "verdict": "irrelevant",
-        "supportingEvidence": [
+        "supportingEvidence": [],
+        "contradictingEvidence": [
           {
-            "kind": "resource-representation",
-            "id": "known-cause:webhook-delivery-latency:canonical:0"
+            "kind": "case-fact",
+            "id": "fact:no-troubleshooting-symptom"
           }
         ],
-        "contradictingEvidence": [],
         "missingEvidence": [],
         "rationale": "The case lacks the symptom family this candidate addresses, so the candidate is not a meaningful investigation path for this request."
       },
       {
         "resourceKey": "known-cause:webhook-secret-rotation",
         "verdict": "irrelevant",
-        "supportingEvidence": [
+        "supportingEvidence": [],
+        "contradictingEvidence": [
           {
-            "kind": "resource-representation",
-            "id": "known-cause:webhook-secret-rotation:canonical:0"
+            "kind": "case-fact",
+            "id": "fact:no-troubleshooting-symptom"
           }
         ],
-        "contradictingEvidence": [],
         "missingEvidence": [],
         "rationale": "The case lacks the symptom family this candidate addresses, so the candidate is not a meaningful investigation path for this request."
       }
@@ -3727,9 +3567,23 @@
     ],
     "synthesisOracle": {
       "disposition": "abstain",
-      "acceptableLeadingCandidateSets": [],
-      "acceptableAlternativeCandidateKeys": [],
-      "discriminatorIntents": [],
+      "acceptableLeadingHypotheses": [],
+      "orderedAlternativeHypotheses": [],
+      "evidenceActionIntents": [
+        {
+          "id": "intent:case-gap-evidence",
+          "targetRanks": [],
+          "allowedActionTypes": [
+            "request-customer-evidence"
+          ],
+          "requiredConcepts": [
+            "troubleshooting symptom",
+            "investigation goal",
+            "delivery record context"
+          ]
+        }
+      ],
+      "novelHypothesisPolicy": "allowed-requires-review",
       "forbiddenClaims": [
         "Do not claim a confirmed root cause from applicability evidence alone.",
         "Do not claim that B5 authorizes remediation, routing, lifecycle transition, or customer-facing action.",
@@ -3787,12 +3641,7 @@
       {
         "resourceKey": "diagnostic-playbook:campaign-editor",
         "verdict": "irrelevant",
-        "supportingEvidence": [
-          {
-            "kind": "resource-representation",
-            "id": "diagnostic-playbook:campaign-editor:canonical:0"
-          }
-        ],
+        "supportingEvidence": [],
         "contradictingEvidence": [],
         "missingEvidence": [],
         "rationale": "This high-ranked cross-domain playbook does not address the observed issue family and is deliberately judged as a non-applicable near match."
@@ -3834,12 +3683,7 @@
       {
         "resourceKey": "knowledge-article:sms-compliance",
         "verdict": "irrelevant",
-        "supportingEvidence": [
-          {
-            "kind": "case-fact",
-            "id": "fact:accepted-multiple"
-          }
-        ],
+        "supportingEvidence": [],
         "contradictingEvidence": [],
         "missingEvidence": [],
         "rationale": "The candidate is visible only through cross-resource reference provenance and addresses a different issue family than the observed case."
@@ -3847,12 +3691,7 @@
       {
         "resourceKey": "knowledge-article:webhook-signature-validation",
         "verdict": "irrelevant",
-        "supportingEvidence": [
-          {
-            "kind": "case-fact",
-            "id": "fact:accepted-multiple"
-          }
-        ],
+        "supportingEvidence": [],
         "contradictingEvidence": [],
         "missingEvidence": [],
         "rationale": "The candidate is visible only through cross-resource reference provenance and addresses a different issue family than the observed case."
@@ -3875,21 +3714,31 @@
     ],
     "synthesisOracle": {
       "disposition": "hypothesis",
-      "acceptableLeadingCandidateSets": [
-        [
-          "diagnostic-playbook:event-processing-delay"
-        ],
-        [
-          "knowledge-article:event-tracking-debugging"
-        ]
-      ],
-      "acceptableAlternativeCandidateKeys": [],
-      "discriminatorIntents": [
+      "acceptableLeadingHypotheses": [
         {
-          "id": "intent:primary-discriminator",
-          "separatesCandidateKeys": [
+          "id": "hypothesis:leading-path",
+          "candidateKeyPool": [
             "diagnostic-playbook:event-processing-delay",
             "knowledge-article:event-tracking-debugging"
+          ],
+          "minimumCandidateMatches": 1,
+          "requiredConcepts": [
+            "accepted event",
+            "timeline absence",
+            "event processing"
+          ]
+        }
+      ],
+      "orderedAlternativeHypotheses": [],
+      "evidenceActionIntents": [
+        {
+          "id": "intent:leading-evidence",
+          "targetRanks": [
+            0
+          ],
+          "allowedActionTypes": [
+            "inspect-internal",
+            "run-check"
           ],
           "requiredConcepts": [
             "accepted response",
@@ -3899,6 +3748,7 @@
           ]
         }
       ],
+      "novelHypothesisPolicy": "allowed-requires-review",
       "forbiddenClaims": [
         "Do not claim a confirmed root cause from applicability evidence alone.",
         "Do not claim that B5 authorizes remediation, routing, lifecycle transition, or customer-facing action.",

@@ -55,7 +55,9 @@ async function validationFixture() {
 describe("B5 applicability development oracle", () => {
   it("loads an LF-hashed manifest with exactly the frozen 21 ordered development cases", () => {
     const loaded = loadApplicabilityDevelopment(CASE_ROOT);
-    expect(loaded.manifest.version).toBe(1);
+    expect(loaded.manifest.version).toBe(2);
+    expect(loaded.manifest.applicabilityContractVersion).toBe(2);
+    expect(loaded.manifest.promptVersion).toBe("b5-applicability-v2");
     expect(loaded.cases).toHaveLength(21);
     expect(loaded.manifest.caseIds).toHaveLength(21);
     expect(loaded.cases.map(({ id }) => id)).toEqual(loaded.manifest.caseIds);
@@ -153,11 +155,52 @@ describe("B5 applicability development oracle", () => {
     }
   });
 
-  it("requires the opaque-ID negative control to abstain", () => {
+  it("requires the opaque-ID negative control to abstain with only a specific evidence request", () => {
     const { cases } = loadApplicabilityDevelopment(CASE_ROOT);
     const opaque = cases.find(({ id }) => id === "readiness-webhook-opaque-id-negative-001");
     expect(opaque?.synthesisOracle.disposition).toBe("abstain");
-    expect(opaque?.synthesisOracle.acceptableLeadingCandidateSets).toEqual([]);
+    expect(opaque?.synthesisOracle.acceptableLeadingHypotheses).toEqual([]);
+    expect(opaque?.synthesisOracle.orderedAlternativeHypotheses).toEqual([]);
+    expect(opaque?.synthesisOracle.evidenceActionIntents).toEqual([expect.objectContaining({
+      targetRanks: [],
+      allowedActionTypes: ["request-customer-evidence"],
+    })]);
+  });
+
+  it("normalizes evidence polarity so irrelevant candidates never claim support", () => {
+    const { cases } = loadApplicabilityDevelopment(CASE_ROOT);
+    for (const entry of cases) {
+      for (const judgment of entry.judgments) {
+        const supporting = new Set(judgment.supportingEvidence.map((reference) => `${reference.kind}:${reference.id}`));
+        expect(judgment.contradictingEvidence.some((reference) => supporting.has(`${reference.kind}:${reference.id}`))).toBe(false);
+        if (judgment.verdict === "irrelevant") expect(judgment.supportingEvidence).toEqual([]);
+        if (judgment.verdict === "contradicted") expect(judgment.contradictingEvidence.length).toBeGreaterThan(0);
+      }
+    }
+  });
+
+  it("expects one prioritized diagnostic path, ordered alternatives, and concrete evidence actions instead of fake discriminator questions", () => {
+    const { cases } = loadApplicabilityDevelopment(CASE_ROOT);
+    expect(cases.every(({ synthesisOracle }) => synthesisOracle.novelHypothesisPolicy === "allowed-requires-review")).toBe(true);
+    for (const entry of cases) {
+      const oracle = entry.synthesisOracle;
+      expect(oracle).not.toHaveProperty("discriminatorIntents");
+      expect(oracle.evidenceActionIntents.length).toBeGreaterThan(0);
+      if (oracle.disposition === "hypothesis") {
+        expect(oracle.acceptableLeadingHypotheses.length).toBeGreaterThan(0);
+        expect(oracle.evidenceActionIntents.some(({ targetRanks }) => targetRanks.includes(0))).toBe(true);
+      }
+    }
+    const rotation = cases.find(({ id }) => id === "readiness-webhook-exact-rotation-001")!;
+    expect(rotation.synthesisOracle.orderedAlternativeHypotheses[0]?.candidateKeyPool).toEqual(["known-cause:webhook-secret-rotation"]);
+  });
+
+  it("does not keep event-ingestion troubleshooting applicable after aligned event presence is already established", () => {
+    const { cases } = loadApplicabilityDevelopment(CASE_ROOT);
+    for (const id of ["readiness-flow-contrast-excluded-001", "readiness-flow-near-match-001"]) {
+      const entry = cases.find((candidate) => candidate.id === id)!;
+      expect(entry.judgments.find(({ resourceKey }) => resourceKey === "knowledge-article:event-tracking-debugging")?.verdict).toBe("irrelevant");
+    }
   });
 
   it("keeps all 21 draft reviews pending and refuses provider-execution selection", () => {

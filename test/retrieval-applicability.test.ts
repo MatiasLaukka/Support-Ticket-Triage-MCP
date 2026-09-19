@@ -3,17 +3,12 @@ import { describe, expect, it, vi } from "vitest";
 import {
   APPLICABILITY_CONTRACT_VERSION,
   APPLICABILITY_PROMPT_VERSION,
-  ApplicabilityProviderUnavailableError,
   hashCanonicalApplicabilityValue,
   validateApplicabilityInput,
   validateApplicabilityProviderOutput,
 } from "../src/retrieval/applicability-types.js";
-import type {
-  ApplicabilityProviderFailureReason,
-  ApplicabilityProviderOutput,
-  ApplicabilityReasoningInput,
-  ApplicabilityReasoningProvider,
-} from "../src/retrieval/applicability-types.js";
+import type { ApplicabilityProviderOutput, ApplicabilityReasoningInput } from "../src/retrieval/applicability-types.js";
+import { ApplicabilityProviderUnavailableError } from "../src/retrieval/applicability-types.js";
 import type { ApplicabilityInputMeasurement } from "../src/retrieval/applicability-evidence.js";
 import { assessApplicabilityCase } from "../src/retrieval/applicability.js";
 
@@ -113,11 +108,20 @@ function validProviderOutput(input: ApplicabilityReasoningInput): ApplicabilityP
       })),
     synthesis: {
       disposition: "hypothesis" as const,
-      summary: "The editor investigation path is supported by the observed chunk loading error.",
-      supportingCandidateKeys: ["knowledge-article:performance-troubleshooting"],
-      supportingEvidence: [{ kind: "case-fact" as const, id: "fact:chunkload" }],
+      leadingHypothesis: {
+        kind: "candidate-grounded" as const,
+        summary: "A campaign-editor loading path is the leading investigation hypothesis.",
+        candidateKeys: ["knowledge-article:performance-troubleshooting"],
+        evidence: [{ kind: "case-fact" as const, id: "fact:chunkload" }],
+        missingEvidence: [],
+      },
       alternatives: [],
-      discriminatingQuestions: [],
+      nextEvidenceActions: [{
+        actionType: "inspect-internal" as const,
+        action: "Inspect the first loading error and compare the affected session with an isolated session.",
+        expectedEvidence: "An aligned loading trace and isolation comparison for the same campaign.",
+        hypothesisRanks: [0],
+      }],
     },
   } as ApplicabilityProviderOutput;
 }
@@ -191,35 +195,59 @@ describe("B5 applicability contracts", () => {
     expect(() => validateApplicabilityProviderOutput(input, unresolved)).toThrow(/evidence/i);
   });
 
-  it("requires abstention without an applicable-next-step candidate", () => {
+  it("allows an insufficient-evidence candidate to lead when its missing evidence is preserved", () => {
     const input = validApplicabilityInput("evidence-only");
     const output = validProviderOutput(input);
+    const missing = { item: "The browser console trace is still required.", evidence: [] };
     output.candidateAssessments[0]!.verdict = "insufficient-evidence";
-    expect(() => validateApplicabilityProviderOutput(input, output)).toThrow(/abstain/i);
+    output.candidateAssessments[0]!.missingEvidence = [missing];
+    if (output.synthesis.disposition !== "hypothesis" || output.synthesis.leadingHypothesis.kind !== "candidate-grounded") throw new Error("Expected candidate-grounded hypothesis.");
+    output.synthesis.leadingHypothesis.missingEvidence = [missing];
+
+    expect(() => validateApplicabilityProviderOutput(input, output)).not.toThrow();
   });
 
-  it("rejects contradicted or irrelevant hypothesis support and unqualified insufficient evidence", () => {
+  it("rejects contradicted or irrelevant candidates as grounded hypotheses and enforces evidence polarity", () => {
     const input = validApplicabilityInput("evidence-only");
-    const output = validProviderOutput(input);
-    output.candidateAssessments[0]!.verdict = "contradicted";
-    expect(() => validateApplicabilityProviderOutput(input, output)).toThrow(/abstain/i);
+    const contradicted = validProviderOutput(input);
+    contradicted.candidateAssessments[0]!.verdict = "contradicted";
+    contradicted.candidateAssessments[0]!.contradictingEvidence = [{ kind: "case-fact", id: "fact:chunkload" }];
+    contradicted.candidateAssessments[0]!.supportingEvidence = [];
+    expect(() => validateApplicabilityProviderOutput(input, contradicted)).toThrow(/hypothesis-candidate|synthesis/i);
 
-    const alternative = validProviderOutput(input);
-    alternative.candidateAssessments[0]!.verdict = "insufficient-evidence";
-    alternative.candidateAssessments[0]!.missingEvidence = [{ item: "The browser console trace is still required.", evidence: [] }];
-    alternative.synthesis = { disposition: "abstain", summary: "No candidate is yet supported as a next step.", coverageGaps: ["A browser console trace is required."], alternatives: [], discriminatingQuestions: [] };
-    (alternative.synthesis as Extract<ApplicabilityProviderOutput["synthesis"], { disposition: "abstain" }>).alternatives = [{ summary: "A plausible alternative.", candidateKeys: ["knowledge-article:performance-troubleshooting"], evidence: [], qualified: false }];
-    expect(() => validateApplicabilityProviderOutput(input, alternative)).toThrow(/qualified/i);
+    const irrelevant = validProviderOutput(input);
+    irrelevant.candidateAssessments[0]!.verdict = "irrelevant";
+    expect(() => validateApplicabilityProviderOutput(input, irrelevant)).toThrow(/evidence-polarity|provider-output/i);
+
+    const duplicatePolarity = validProviderOutput(input);
+    duplicatePolarity.candidateAssessments[0]!.contradictingEvidence = [{ kind: "case-fact", id: "fact:chunkload" }];
+    expect(() => validateApplicabilityProviderOutput(input, duplicatePolarity)).toThrow(/evidence-polarity|provider-output/i);
   });
 
-  it("requires every insufficient-evidence assessment to appear as a qualified alternative", () => {
+  it("allows a grounded novel hypothesis but requires case-fact grounding and a concrete leading evidence action", () => {
     const input = validApplicabilityInput("evidence-only");
     const output = validProviderOutput(input);
-    output.candidateAssessments[0]!.verdict = "insufficient-evidence";
-    output.candidateAssessments[0]!.missingEvidence = [{ item: "A browser console trace is required.", evidence: [] }];
-    output.synthesis = { disposition: "abstain", summary: "No candidate is yet supported as a next step.", coverageGaps: ["A browser console trace is required."], alternatives: [], discriminatingQuestions: [] };
+    output.synthesis = {
+      disposition: "hypothesis",
+      leadingHypothesis: {
+        kind: "novel",
+        summary: "A deployment-specific asset mismatch may explain the loading failure.",
+        evidence: [{ kind: "case-fact", id: "fact:chunkload" }],
+        whyCandidateSetIsInsufficient: "The retrieved resources describe investigation paths but do not name this deployment-specific explanation.",
+        missingEvidence: [],
+      },
+      alternatives: [],
+      nextEvidenceActions: [{
+        actionType: "run-check",
+        action: "Compare the deployed asset manifest with the asset requested by the failing session.",
+        expectedEvidence: "Whether the requested chunk exists in the deployed manifest.",
+        hypothesisRanks: [0],
+      }],
+    };
+    expect(() => validateApplicabilityProviderOutput(input, output)).not.toThrow();
 
-    expect(() => validateApplicabilityProviderOutput(input, output)).toThrow(/insufficient-evidence.*alternative/i);
+    output.synthesis.leadingHypothesis.evidence = [{ kind: "resource-representation", id: "representation:performance:section:1" }];
+    expect(() => validateApplicabilityProviderOutput(input, output)).toThrow(/novel-hypothesis|synthesis/i);
   });
 
   it("requires taxonomyRelation only in the taxonomy-informed lane", () => {
@@ -281,39 +309,25 @@ describe("B5 applicability contracts", () => {
 });
 
 describe("B5 applicability orchestration", () => {
-  function validMeasurement(
-    fits: boolean | null = true,
-  ): ApplicabilityInputMeasurement {
-    return {
-      serializedBytes: 1_000,
-      estimatedInputTokens: 500,
-      outputReserveTokens: 4_096,
-      minimumContextTokens: 4_596,
-      contextLimitTokens: fits === null ? null : fits ? 8_192 : 4_000,
-      fits,
-    };
-  }
+  const validMeasurement = (fits: boolean | null = true): ApplicabilityInputMeasurement => ({
+    serializedBytes: 1_024,
+    estimatedInputTokens: 512,
+    outputReserveTokens: 4_096,
+    minimumContextTokens: 4_608,
+    contextLimitTokens: fits === null ? null : 32_768,
+    fits,
+  });
 
-  function providerReturning(
-    input: ApplicabilityReasoningInput,
-  ): ApplicabilityReasoningProvider {
-    return {
-      assess: vi.fn(async () => ({
-        output: validProviderOutput(input),
-        telemetry: {
-          providerKind: "controlled-test" as const,
-          model: "controlled-test",
-          latencyMs: 1,
-        },
-      })),
-    };
-  }
+  const telemetry = {
+    providerKind: "controlled-test" as const,
+    model: "controlled-test-model",
+    latencyMs: 3,
+  };
 
   it("calls the provider exactly once for a complete assessment", async () => {
     const input = validApplicabilityInput("evidence-only");
     input.candidates = [input.candidates[0]!];
-
-    const provider = providerReturning(input);
+    const provider = { assess: vi.fn(async () => ({ output: validProviderOutput(input), telemetry })) };
 
     const result = await assessApplicabilityCase({
       input,
@@ -323,12 +337,12 @@ describe("B5 applicability orchestration", () => {
     });
 
     expect(provider.assess).toHaveBeenCalledTimes(1);
-    expect(result.status).toBe("complete");
+    expect(result).toMatchObject({ status: "complete", assessments: [{ resourceKey: "knowledge-article:performance-troubleshooting" }] });
   });
 
-  it("returns partial-assessment when unavailable candidates coexist with valid assessments", async () => {
+  it("returns partial-assessment when system-owned unavailable candidates remain", async () => {
     const input = validApplicabilityInput("evidence-only");
-    const provider = providerReturning(input);
+    const provider = { assess: vi.fn(async () => ({ output: validProviderOutput(input), telemetry })) };
 
     const result = await assessApplicabilityCase({
       input,
@@ -340,198 +354,119 @@ describe("B5 applicability orchestration", () => {
     expect(provider.assess).toHaveBeenCalledTimes(1);
     expect(result).toMatchObject({
       status: "partial-assessment",
-      unavailableCandidates: [{
-        resourceKey: "known-cause:reference-only",
-        reasons: ["representation-unavailable"],
-      }],
-    });
-
-    if (result.status !== "partial-assessment") {
-      throw new Error("Expected a partial assessment.");
-    }
-
-    expect(
-      result.assessments.some(
-        ({ resourceKey }) => resourceKey === "known-cause:reference-only",
-      ),
-    ).toBe(false);
-  });
-
-  it("skips without a provider call when no candidate is assessable", async () => {
-    const input = validApplicabilityInput("evidence-only");
-
-    input.candidates[0]!.evidence = {
-      status: "unavailable",
-      reasons: ["representation-unavailable"],
-      references: input.candidates[0]!.evidence.references,
-    };
-
-    const provider = providerReturning(input);
-
-    const result = await assessApplicabilityCase({
-      input,
-      provider,
-      measurement: validMeasurement(),
-      promptInjectionDetected: false,
-    });
-
-    expect(provider.assess).not.toHaveBeenCalled();
-    expect(result).toEqual({
-      status: "assessment-skipped",
-      reason: "no-assessable-candidates",
+      unavailableCandidates: [{ resourceKey: "known-cause:reference-only", reasons: ["representation-unavailable"] }],
     });
   });
 
-  it("skips prompt injection without a provider call", async () => {
+  it("skips a case with no assessable candidates without a provider call", async () => {
     const input = validApplicabilityInput("evidence-only");
-    const provider = providerReturning(input);
+    input.candidates = [input.candidates[1]!];
+    input.evidenceRegistry = [];
+    const provider = { assess: vi.fn() };
 
-    const result = await assessApplicabilityCase({
-      input,
-      provider,
-      measurement: validMeasurement(),
-      promptInjectionDetected: true,
-    });
+    const result = await assessApplicabilityCase({ input, provider, measurement: validMeasurement(), promptInjectionDetected: false });
 
     expect(provider.assess).not.toHaveBeenCalled();
-    expect(result).toEqual({
-      status: "assessment-skipped",
-      reason: "prompt-injection-detected",
-    });
+    expect(result).toEqual({ status: "assessment-skipped", reason: "no-assessable-candidates" });
+  });
+
+  it("skips prompt injection before any provider call", async () => {
+    const input = validApplicabilityInput("evidence-only");
+    const provider = { assess: vi.fn() };
+
+    const result = await assessApplicabilityCase({ input, provider, measurement: validMeasurement(), promptInjectionDetected: true });
+
+    expect(provider.assess).not.toHaveBeenCalled();
+    expect(result).toEqual({ status: "assessment-skipped", reason: "prompt-injection-detected" });
   });
 
   it("does not call a provider when complete input exceeds the declared budget", async () => {
     const input = validApplicabilityInput("evidence-only");
-    const provider = providerReturning(input);
+    const provider = { assess: vi.fn() };
 
-    const result = await assessApplicabilityCase({
-      input,
-      provider,
-      measurement: validMeasurement(false),
-      promptInjectionDetected: false,
-    });
+    const result = await assessApplicabilityCase({ input, provider, measurement: validMeasurement(false), promptInjectionDetected: false });
 
     expect(provider.assess).not.toHaveBeenCalled();
-    expect(result).toEqual({
-      status: "assessment-skipped",
-      reason: "input-too-large",
-    });
+    expect(result).toEqual({ status: "assessment-skipped", reason: "input-too-large" });
   });
 
-  it.each([
-    "not-configured",
-    "transport",
-    "http",
-    "response-body",
-    "timeout",
-    "context-exhausted",
-  ] satisfies ApplicabilityProviderFailureReason[])(
-    "maps provider failure %s to a bounded assessment-failed result",
-    async (reason) => {
-      const input = validApplicabilityInput("evidence-only");
-
-      const provider: ApplicabilityReasoningProvider = {
-        assess: vi.fn(async () => {
-          throw new ApplicabilityProviderUnavailableError(reason);
-        }),
-      };
-
-      const result = await assessApplicabilityCase({
-        input,
-        provider,
-        measurement: validMeasurement(),
-        promptInjectionDetected: false,
-      });
-
-      expect(provider.assess).toHaveBeenCalledTimes(1);
-      expect(result).toEqual({
-        status: "assessment-failed",
-        reason,
-      });
-    },
-  );
-
-  it("maps invalid provider output to invalid-provider-output without retry", async () => {
+  it("allows an undeclared context limit to proceed", async () => {
     const input = validApplicabilityInput("evidence-only");
+    const provider = { assess: vi.fn(async () => ({ output: validProviderOutput(input), telemetry })) };
 
-    const invalid = validProviderOutput(input);
-    invalid.candidateAssessments = [];
-
-    const provider: ApplicabilityReasoningProvider = {
-      assess: vi.fn(async () => ({
-        output: invalid,
-        telemetry: {
-          providerKind: "controlled-test" as const,
-          model: "controlled-test",
-          latencyMs: 1,
-        },
-      })),
-    };
-
-    const result = await assessApplicabilityCase({
-      input,
-      provider,
-      measurement: validMeasurement(),
-      promptInjectionDetected: false,
-    });
+    await assessApplicabilityCase({ input, provider, measurement: validMeasurement(null), promptInjectionDetected: false });
 
     expect(provider.assess).toHaveBeenCalledTimes(1);
-    expect(result).toEqual({
-      status: "assessment-failed",
-      reason: "invalid-provider-output",
+  });
+
+  it("maps bounded provider failures without retrying", async () => {
+    const reasons = ["not-configured", "transport", "http", "response-body", "timeout", "context-exhausted"] as const;
+    for (const reason of reasons) {
+      const input = validApplicabilityInput("evidence-only");
+      const provider = { assess: vi.fn(async () => { throw new ApplicabilityProviderUnavailableError(reason, reason === "http" ? 503 : null); }) };
+
+      const result = await assessApplicabilityCase({ input, provider, measurement: validMeasurement(), promptInjectionDetected: false });
+
+      expect(provider.assess).toHaveBeenCalledTimes(1);
+      expect(result).toEqual({ status: "assessment-failed", reason });
+    }
+  });
+
+  it("maps missing candidate verdicts to invalid-provider-output", async () => {
+    const input = validApplicabilityInput("evidence-only");
+    const output = validProviderOutput(input);
+    output.candidateAssessments = [];
+    const provider = { assess: vi.fn(async () => ({ output, telemetry })) };
+
+    const result = await assessApplicabilityCase({ input, provider, measurement: validMeasurement(), promptInjectionDetected: false });
+
+    expect(provider.assess).toHaveBeenCalledTimes(1);
+    expect(result).toEqual({ status: "assessment-failed", reason: "invalid-provider-output" });
+  });
+
+  it("rejects a provider verdict for a system-owned unavailable candidate", async () => {
+    const input = validApplicabilityInput("evidence-only");
+    const output = validProviderOutput(input);
+    output.candidateAssessments.push({
+      ...structuredClone(output.candidateAssessments[0]!),
+      resourceKey: "known-cause:reference-only",
     });
+    const provider = { assess: vi.fn(async () => ({ output, telemetry })) };
+
+    const result = await assessApplicabilityCase({ input, provider, measurement: validMeasurement(), promptInjectionDetected: false });
+
+    expect(result).toEqual({ status: "assessment-failed", reason: "invalid-provider-output" });
   });
 
   it("enforces synthesis consistency after provider output", async () => {
     const input = validApplicabilityInput("evidence-only");
+    const output = validProviderOutput(input);
+    output.candidateAssessments[0]!.verdict = "insufficient-evidence";
+    output.candidateAssessments[0]!.missingEvidence = [{ item: "A browser console trace is required.", evidence: [] }];
+    const provider = { assess: vi.fn(async () => ({ output, telemetry })) };
 
-    const invalid = validProviderOutput(input);
-    invalid.candidateAssessments[0]!.verdict = "irrelevant";
+    const result = await assessApplicabilityCase({ input, provider, measurement: validMeasurement(), promptInjectionDetected: false });
 
-    const provider: ApplicabilityReasoningProvider = {
-      assess: vi.fn(async () => ({
-        output: invalid,
-        telemetry: {
-          providerKind: "controlled-test" as const,
-          model: "controlled-test",
-          latencyMs: 1,
-        },
-      })),
-    };
-
-    const result = await assessApplicabilityCase({
-      input,
-      provider,
-      measurement: validMeasurement(),
-      promptInjectionDetected: false,
-    });
-
-    expect(provider.assess).toHaveBeenCalledTimes(1);
-    expect(result).toEqual({
-      status: "assessment-failed",
-      reason: "invalid-provider-output",
-    });
+    expect(result).toEqual({ status: "assessment-failed", reason: "invalid-provider-output" });
   });
 
-  it("propagates unexpected programming errors and does not retry", async () => {
+  it("propagates unexpected programming errors", async () => {
     const input = validApplicabilityInput("evidence-only");
-    const unexpected = new Error("programming failure");
+    const unexpected = new Error("programming bug");
+    const provider = { assess: vi.fn(async () => { throw unexpected; }) };
 
-    const provider: ApplicabilityReasoningProvider = {
-      assess: vi.fn(async () => {
-        throw unexpected;
-      }),
-    };
-
-    await expect(
-      assessApplicabilityCase({
-        input,
-        provider,
-        measurement: validMeasurement(),
-        promptInjectionDetected: false,
-      }),
-    ).rejects.toBe(unexpected);
-
+    await expect(assessApplicabilityCase({ input, provider, measurement: validMeasurement(), promptInjectionDetected: false }))
+      .rejects.toBe(unexpected);
     expect(provider.assess).toHaveBeenCalledTimes(1);
+  });
+
+  it("validates the input before calling the provider", async () => {
+    const input = validApplicabilityInput("evidence-only");
+    input.candidates.reverse();
+    const provider = { assess: vi.fn() };
+
+    await expect(assessApplicabilityCase({ input, provider, measurement: validMeasurement(), promptInjectionDetected: false }))
+      .rejects.toThrow(/candidate-order|invalid applicability schema/i);
+    expect(provider.assess).not.toHaveBeenCalled();
   });
 });

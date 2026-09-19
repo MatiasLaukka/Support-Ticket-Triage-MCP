@@ -1,8 +1,10 @@
 {
-  "version": 1,
+  "version": 2,
+  "applicabilityContractVersion": 2,
+  "promptVersion": "b5-applicability-v2",
   "development": {
     "path": "development.json",
-    "sha256": "4c1de8820b3f1e382d7425383e0594699cdda37b69bb5da97d3a19de3186a652"
+    "sha256": "b76c956354653acfe6c4474ec3d5aa5066bee1b4f9e3355bb2cf24b3f6a14142"
   },
   "b4CaptureHash": "bf6a9fcbf5d9e3f7d5f58b638faa5bc7151d3f1f83c7504091f4b745f3a051d9",
   "sourceReadinessDevelopmentHash": "9a97bda213a3b2b1804464f5d9f343a79e907c257d3031c4c0c3952fd99a2f4a",

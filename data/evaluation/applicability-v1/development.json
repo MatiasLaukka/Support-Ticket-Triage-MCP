@@ -1,0 +1,3912 @@
+[
+  {
+    "id": "readiness-editor-exact-chunkload-001",
+    "sourceReadinessCaseId": "readiness-editor-exact-chunkload-001",
+    "split": "development",
+    "safeCase": {
+      "caseId": "readiness-editor-exact-chunkload-001",
+      "problemStatement": "The campaign editor remains blank across isolated sessions and repeated retries produce a chunk-loading error.",
+      "observedFacts": [
+        {
+          "id": "fact:cross-session",
+          "statement": "The same campaign remains blank in private browsing, another browser, and for another administrator."
+        },
+        {
+          "id": "fact:chunk-loading",
+          "statement": "Repeated retries produce a chunk-loading error."
+        }
+      ],
+      "conversationState": []
+    },
+    "taxonomy": {
+      "primaryProductSurface": null,
+      "secondaryProductSurfaces": [],
+      "problemClasses": [],
+      "support": {
+        "productSurface": "tentative",
+        "problemClass": "tentative"
+      },
+      "basis": {
+        "source": "initial-classification",
+        "evidenceIds": [],
+        "knowledgeArticleIds": [],
+        "playbookIds": [],
+        "knownCauseIds": [],
+        "explanation": "Derived from the ticket and current conversation during evaluation."
+      }
+    },
+    "judgments": [
+      {
+        "resourceKey": "diagnostic-playbook:article-backed",
+        "verdict": "irrelevant",
+        "supportingEvidence": [
+          {
+            "kind": "resource-representation",
+            "id": "diagnostic-playbook:article-backed:canonical:0"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "This high-ranked cross-domain playbook does not address the observed issue family and is deliberately judged as a non-applicable near match."
+      },
+      {
+        "resourceKey": "diagnostic-playbook:campaign-editor",
+        "verdict": "applicable-next-step",
+        "supportingEvidence": [
+          {
+            "kind": "case-fact",
+            "id": "fact:cross-session"
+          },
+          {
+            "kind": "resource-representation",
+            "id": "diagnostic-playbook:campaign-editor:canonical:0"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "The candidate supplies a bounded investigation path that directly addresses the observed case evidence without asserting a confirmed cause. The descriptor is relevant as a next-step checklist because this case supplies aligned cross-session and console evidence; relevance does not confirm its frontend branch or any cause."
+      },
+      {
+        "resourceKey": "knowledge-article:performance-troubleshooting",
+        "verdict": "applicable-next-step",
+        "supportingEvidence": [
+          {
+            "kind": "case-fact",
+            "id": "fact:cross-session"
+          },
+          {
+            "kind": "resource-representation",
+            "id": "knowledge-article:performance-troubleshooting:section:3"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "The candidate supplies a bounded investigation path that directly addresses the observed case evidence without asserting a confirmed cause. This article is required because its aligned cross-session plus console-evidence branch is the necessary bounded investigation path; ChunkLoadError remains non-conclusive."
+      },
+      {
+        "resourceKey": "knowledge-article:shopify-integration-sync",
+        "verdict": "irrelevant",
+        "supportingEvidence": [
+          {
+            "kind": "case-fact",
+            "id": "fact:cross-session"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "The candidate is visible only through cross-resource reference provenance and addresses a different issue family than the observed case."
+      },
+      {
+        "resourceKey": "knowledge-article:sms-compliance",
+        "verdict": "irrelevant",
+        "supportingEvidence": [
+          {
+            "kind": "case-fact",
+            "id": "fact:cross-session"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "The candidate is visible only through cross-resource reference provenance and addresses a different issue family than the observed case."
+      },
+      {
+        "resourceKey": "knowledge-article:webhook-signature-validation",
+        "verdict": "irrelevant",
+        "supportingEvidence": [
+          {
+            "kind": "case-fact",
+            "id": "fact:cross-session"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "The candidate is visible only through cross-resource reference provenance and addresses a different issue family than the observed case."
+      }
+    ],
+    "unjudgedCandidateKeys": [
+      "diagnostic-playbook:event-processing-delay",
+      "diagnostic-playbook:flow-trigger",
+      "knowledge-article:account-access",
+      "knowledge-article:authentication",
+      "knowledge-article:campaign-send-failures",
+      "knowledge-article:coupon-catalog-sync",
+      "knowledge-article:event-tracking-debugging",
+      "knowledge-article:flow-trigger-troubleshooting",
+      "knowledge-article:support-operations-playbook",
+      "known-cause:shopify-custom-field-mapping",
+      "known-cause:sms-quiet-hours",
+      "known-cause:track-api-local-time-timestamp",
+      "known-cause:webhook-delivery-latency",
+      "known-cause:webhook-secret-rotation"
+    ],
+    "synthesisOracle": {
+      "disposition": "hypothesis",
+      "acceptableLeadingCandidateSets": [
+        [
+          "diagnostic-playbook:campaign-editor"
+        ],
+        [
+          "knowledge-article:performance-troubleshooting"
+        ]
+      ],
+      "acceptableAlternativeCandidateKeys": [],
+      "discriminatorIntents": [
+        {
+          "id": "intent:primary-discriminator",
+          "separatesCandidateKeys": [
+            "diagnostic-playbook:campaign-editor",
+            "knowledge-article:performance-troubleshooting"
+          ],
+          "requiredConcepts": [
+            "aligned campaign identity",
+            "first loading error",
+            "cross-session reproducibility"
+          ]
+        }
+      ],
+      "forbiddenClaims": [
+        "Do not claim a confirmed root cause from applicability evidence alone.",
+        "Do not claim that B5 authorizes remediation, routing, lifecycle transition, or customer-facing action.",
+        "Do not claim that the loading error proves a platform root cause."
+      ]
+    },
+    "review": {
+      "status": "pending"
+    }
+  },
+  {
+    "id": "readiness-webhook-exact-rotation-001",
+    "sourceReadinessCaseId": "readiness-webhook-exact-rotation-001",
+    "split": "development",
+    "safeCase": {
+      "caseId": "readiness-webhook-exact-rotation-001",
+      "problemStatement": "Webhook signature validation fails after a signing-key rotation, but verifier-input comparison is incomplete.",
+      "observedFacts": [
+        {
+          "id": "fact:rotation",
+          "statement": "A signing-key rotation occurred before the signature failures."
+        },
+        {
+          "id": "fact:current-key",
+          "statement": "The receiver reports using the current signing key."
+        },
+        {
+          "id": "fact:comparison-missing",
+          "statement": "The raw signed body and signed headers were not compared with the verifier input."
+        }
+      ],
+      "conversationState": []
+    },
+    "taxonomy": {
+      "primaryProductSurface": {
+        "domain": "integrations",
+        "area": "webhooks"
+      },
+      "secondaryProductSurfaces": [],
+      "problemClasses": [],
+      "support": {
+        "productSurface": "supported",
+        "problemClass": "tentative"
+      },
+      "basis": {
+        "source": "initial-classification",
+        "evidenceIds": [],
+        "knowledgeArticleIds": [],
+        "playbookIds": [],
+        "knownCauseIds": [],
+        "explanation": "Derived from the ticket and current conversation during evaluation."
+      }
+    },
+    "judgments": [
+      {
+        "resourceKey": "diagnostic-playbook:article-backed",
+        "verdict": "applicable-next-step",
+        "supportingEvidence": [
+          {
+            "kind": "case-fact",
+            "id": "fact:rotation"
+          },
+          {
+            "kind": "resource-representation",
+            "id": "diagnostic-playbook:article-backed:canonical:0"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "The candidate supplies a bounded investigation path that directly addresses the observed case evidence without asserting a confirmed cause. The descriptor is relevant for the next raw-body, signed-header, current-secret, and delivery-identity checks; relevance does not confirm its webhook branch or a rotation mismatch."
+      },
+      {
+        "resourceKey": "diagnostic-playbook:campaign-editor",
+        "verdict": "irrelevant",
+        "supportingEvidence": [
+          {
+            "kind": "resource-representation",
+            "id": "diagnostic-playbook:campaign-editor:canonical:0"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "This high-ranked cross-domain playbook does not address the observed issue family and is deliberately judged as a non-applicable near match."
+      },
+      {
+        "resourceKey": "knowledge-article:profile-sync-issues",
+        "verdict": "irrelevant",
+        "supportingEvidence": [
+          {
+            "kind": "case-fact",
+            "id": "fact:rotation"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "The candidate is visible only through cross-resource reference provenance and addresses a different issue family than the observed case."
+      },
+      {
+        "resourceKey": "knowledge-article:shopify-integration-sync",
+        "verdict": "irrelevant",
+        "supportingEvidence": [
+          {
+            "kind": "case-fact",
+            "id": "fact:rotation"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "The candidate is visible only through cross-resource reference provenance and addresses a different issue family than the observed case."
+      },
+      {
+        "resourceKey": "knowledge-article:webhook-signature-validation",
+        "verdict": "applicable-next-step",
+        "supportingEvidence": [
+          {
+            "kind": "case-fact",
+            "id": "fact:rotation"
+          },
+          {
+            "kind": "resource-representation",
+            "id": "knowledge-article:webhook-signature-validation:section:2"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "The candidate supplies a bounded investigation path that directly addresses the observed case evidence without asserting a confirmed cause. This article is required because its rotation-versus-raw-body section is necessary to keep the two evidence paths separate before any retry or cause claim."
+      },
+      {
+        "resourceKey": "known-cause:webhook-secret-rotation",
+        "verdict": "insufficient-evidence",
+        "supportingEvidence": [
+          {
+            "kind": "case-fact",
+            "id": "fact:rotation"
+          },
+          {
+            "kind": "resource-representation",
+            "id": "known-cause:webhook-secret-rotation:canonical:0"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [
+          {
+            "item": "Compare the raw signed body and signed headers with the verifier input before supporting a rotation mismatch.",
+            "evidence": []
+          }
+        ],
+        "rationale": "The candidate is plausibly connected to the reported scenario, but its own required evidence is incomplete; it remains a qualified alternative rather than a confirmed cause. The known-cause descriptor is relevant only as a provisional next-investigation checklist because rotation and signature failure are reported; its required evidence remains incomplete and applicability is not confirmed."
+      }
+    ],
+    "unjudgedCandidateKeys": [
+      "diagnostic-playbook:event-processing-delay",
+      "diagnostic-playbook:flow-trigger",
+      "knowledge-article:authentication",
+      "knowledge-article:event-tracking-debugging",
+      "knowledge-article:flow-trigger-troubleshooting",
+      "knowledge-article:product-feedback",
+      "knowledge-article:security-incident-response",
+      "knowledge-article:sms-compliance",
+      "knowledge-article:support-operations-playbook",
+      "known-cause:shopify-custom-field-mapping",
+      "known-cause:sms-quiet-hours",
+      "known-cause:sms-stop-sync-delay",
+      "known-cause:track-api-local-time-timestamp",
+      "known-cause:webhook-delivery-latency"
+    ],
+    "synthesisOracle": {
+      "disposition": "hypothesis",
+      "acceptableLeadingCandidateSets": [
+        [
+          "diagnostic-playbook:article-backed"
+        ],
+        [
+          "knowledge-article:webhook-signature-validation"
+        ]
+      ],
+      "acceptableAlternativeCandidateKeys": [
+        "known-cause:webhook-secret-rotation"
+      ],
+      "discriminatorIntents": [
+        {
+          "id": "intent:primary-discriminator",
+          "separatesCandidateKeys": [
+            "diagnostic-playbook:article-backed",
+            "knowledge-article:webhook-signature-validation",
+            "known-cause:webhook-secret-rotation"
+          ],
+          "requiredConcepts": [
+            "raw signed body",
+            "signed headers",
+            "verifier input",
+            "rotation timing"
+          ]
+        }
+      ],
+      "forbiddenClaims": [
+        "Do not claim a confirmed root cause from applicability evidence alone.",
+        "Do not claim that B5 authorizes remediation, routing, lifecycle transition, or customer-facing action.",
+        "Do not claim a rotation mismatch is confirmed."
+      ]
+    },
+    "review": {
+      "status": "pending"
+    }
+  },
+  {
+    "id": "readiness-flow-exact-viewed-product-001",
+    "sourceReadinessCaseId": "readiness-flow-exact-viewed-product-001",
+    "split": "development",
+    "safeCase": {
+      "caseId": "readiness-flow-exact-viewed-product-001",
+      "problemStatement": "A flow did not start after a different event than the configured trigger was observed.",
+      "observedFacts": [
+        {
+          "id": "fact:observed-event",
+          "statement": "The profile contains a Viewed Product event."
+        },
+        {
+          "id": "fact:configured-trigger",
+          "statement": "The configured flow trigger is Added to Cart."
+        },
+        {
+          "id": "fact:matching-event-missing",
+          "statement": "No matching Added to Cart event was supplied."
+        }
+      ],
+      "conversationState": []
+    },
+    "taxonomy": {
+      "primaryProductSurface": null,
+      "secondaryProductSurfaces": [],
+      "problemClasses": [],
+      "support": {
+        "productSurface": "tentative",
+        "problemClass": "tentative"
+      },
+      "basis": {
+        "source": "initial-classification",
+        "evidenceIds": [],
+        "knowledgeArticleIds": [],
+        "playbookIds": [],
+        "knownCauseIds": [],
+        "explanation": "Derived from the ticket and current conversation during evaluation."
+      }
+    },
+    "judgments": [
+      {
+        "resourceKey": "diagnostic-playbook:campaign-editor",
+        "verdict": "irrelevant",
+        "supportingEvidence": [
+          {
+            "kind": "resource-representation",
+            "id": "diagnostic-playbook:campaign-editor:canonical:0"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "This high-ranked cross-domain playbook does not address the observed issue family and is deliberately judged as a non-applicable near match."
+      },
+      {
+        "resourceKey": "diagnostic-playbook:flow-trigger",
+        "verdict": "applicable-next-step",
+        "supportingEvidence": [
+          {
+            "kind": "case-fact",
+            "id": "fact:observed-event"
+          },
+          {
+            "kind": "resource-representation",
+            "id": "diagnostic-playbook:flow-trigger:canonical:0"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "The candidate supplies a bounded investigation path that directly addresses the observed case evidence without asserting a confirmed cause. The descriptor is relevant for comparing the configured trigger with event history; relevance does not establish that either ingestion or eligibility failed."
+      },
+      {
+        "resourceKey": "knowledge-article:flow-trigger-troubleshooting",
+        "verdict": "applicable-next-step",
+        "supportingEvidence": [
+          {
+            "kind": "case-fact",
+            "id": "fact:observed-event"
+          },
+          {
+            "kind": "resource-representation",
+            "id": "knowledge-article:flow-trigger-troubleshooting:section:1"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "The candidate supplies a bounded investigation path that directly addresses the observed case evidence without asserting a confirmed cause. This article is required because its exact configured-trigger comparison is necessary to reject a near-matching Viewed Product event as proof of Added to Cart."
+      },
+      {
+        "resourceKey": "knowledge-article:profile-sync-issues",
+        "verdict": "irrelevant",
+        "supportingEvidence": [
+          {
+            "kind": "case-fact",
+            "id": "fact:observed-event"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "The candidate is visible only through cross-resource reference provenance and addresses a different issue family than the observed case."
+      },
+      {
+        "resourceKey": "knowledge-article:sms-compliance",
+        "verdict": "irrelevant",
+        "supportingEvidence": [
+          {
+            "kind": "case-fact",
+            "id": "fact:observed-event"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "The candidate is visible only through cross-resource reference provenance and addresses a different issue family than the observed case."
+      },
+      {
+        "resourceKey": "knowledge-article:webhook-signature-validation",
+        "verdict": "irrelevant",
+        "supportingEvidence": [
+          {
+            "kind": "case-fact",
+            "id": "fact:observed-event"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "The candidate is visible only through cross-resource reference provenance and addresses a different issue family than the observed case."
+      }
+    ],
+    "unjudgedCandidateKeys": [
+      "diagnostic-playbook:article-backed",
+      "diagnostic-playbook:event-processing-delay",
+      "knowledge-article:campaign-send-failures",
+      "knowledge-article:coupon-catalog-sync",
+      "knowledge-article:event-tracking-debugging",
+      "knowledge-article:shopify-integration-sync",
+      "knowledge-article:support-operations-playbook",
+      "known-cause:shopify-custom-field-mapping",
+      "known-cause:sms-quiet-hours",
+      "known-cause:sms-stop-sync-delay",
+      "known-cause:track-api-local-time-timestamp",
+      "known-cause:webhook-delivery-latency",
+      "known-cause:webhook-secret-rotation"
+    ],
+    "synthesisOracle": {
+      "disposition": "hypothesis",
+      "acceptableLeadingCandidateSets": [
+        [
+          "diagnostic-playbook:flow-trigger"
+        ],
+        [
+          "knowledge-article:flow-trigger-troubleshooting"
+        ]
+      ],
+      "acceptableAlternativeCandidateKeys": [],
+      "discriminatorIntents": [
+        {
+          "id": "intent:primary-discriminator",
+          "separatesCandidateKeys": [
+            "diagnostic-playbook:flow-trigger",
+            "knowledge-article:flow-trigger-troubleshooting"
+          ],
+          "requiredConcepts": [
+            "configured trigger",
+            "event presence",
+            "profile timeline"
+          ]
+        }
+      ],
+      "forbiddenClaims": [
+        "Do not claim a confirmed root cause from applicability evidence alone.",
+        "Do not claim that B5 authorizes remediation, routing, lifecycle transition, or customer-facing action.",
+        "Do not equate a different event with proof that the configured trigger fired."
+      ]
+    },
+    "review": {
+      "status": "pending"
+    }
+  },
+  {
+    "id": "readiness-editor-paraphrase-screen-001",
+    "sourceReadinessCaseId": "readiness-editor-paraphrase-screen-001",
+    "split": "development",
+    "safeCase": {
+      "caseId": "readiness-editor-paraphrase-screen-001",
+      "problemStatement": "The editing screen never opens, but the report lacks the evidence needed to isolate scope or session behavior.",
+      "observedFacts": [
+        {
+          "id": "fact:screen-not-open",
+          "statement": "The editing screen never opens."
+        },
+        {
+          "id": "fact:scope-missing",
+          "statement": "No campaign identity, browser session, affected-user comparison, or cross-session evidence is supplied."
+        }
+      ],
+      "conversationState": []
+    },
+    "taxonomy": {
+      "primaryProductSurface": null,
+      "secondaryProductSurfaces": [],
+      "problemClasses": [],
+      "support": {
+        "productSurface": "tentative",
+        "problemClass": "tentative"
+      },
+      "basis": {
+        "source": "initial-classification",
+        "evidenceIds": [],
+        "knowledgeArticleIds": [],
+        "playbookIds": [],
+        "knownCauseIds": [],
+        "explanation": "Derived from the ticket and current conversation during evaluation."
+      }
+    },
+    "judgments": [
+      {
+        "resourceKey": "diagnostic-playbook:article-backed",
+        "verdict": "irrelevant",
+        "supportingEvidence": [
+          {
+            "kind": "resource-representation",
+            "id": "diagnostic-playbook:article-backed:canonical:0"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "This high-ranked cross-domain playbook does not address the observed issue family and is deliberately judged as a non-applicable near match."
+      },
+      {
+        "resourceKey": "diagnostic-playbook:campaign-editor",
+        "verdict": "applicable-next-step",
+        "supportingEvidence": [
+          {
+            "kind": "case-fact",
+            "id": "fact:screen-not-open"
+          },
+          {
+            "kind": "resource-representation",
+            "id": "diagnostic-playbook:campaign-editor:canonical:0"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "The candidate supplies a bounded investigation path that directly addresses the observed case evidence without asserting a confirmed cause. The descriptor is relevant for its missing campaign, session, user, and console evidence goals; relevance does not establish a browser-session or frontend branch."
+      },
+      {
+        "resourceKey": "knowledge-article:performance-troubleshooting",
+        "verdict": "applicable-next-step",
+        "supportingEvidence": [
+          {
+            "kind": "case-fact",
+            "id": "fact:screen-not-open"
+          },
+          {
+            "kind": "resource-representation",
+            "id": "knowledge-article:performance-troubleshooting:section:1"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "The candidate supplies a bounded investigation path that directly addresses the observed case evidence without asserting a confirmed cause. It supplies the missing object, session, user, and comparison evidence."
+      },
+      {
+        "resourceKey": "knowledge-article:profile-sync-issues",
+        "verdict": "irrelevant",
+        "supportingEvidence": [
+          {
+            "kind": "case-fact",
+            "id": "fact:screen-not-open"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "The candidate is visible only through cross-resource reference provenance and addresses a different issue family than the observed case."
+      },
+      {
+        "resourceKey": "knowledge-article:shopify-integration-sync",
+        "verdict": "irrelevant",
+        "supportingEvidence": [
+          {
+            "kind": "case-fact",
+            "id": "fact:screen-not-open"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "The candidate is visible only through cross-resource reference provenance and addresses a different issue family than the observed case."
+      },
+      {
+        "resourceKey": "knowledge-article:sms-compliance",
+        "verdict": "irrelevant",
+        "supportingEvidence": [
+          {
+            "kind": "case-fact",
+            "id": "fact:screen-not-open"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "The candidate is visible only through cross-resource reference provenance and addresses a different issue family than the observed case."
+      }
+    ],
+    "unjudgedCandidateKeys": [
+      "diagnostic-playbook:event-processing-delay",
+      "diagnostic-playbook:flow-trigger",
+      "knowledge-article:authentication",
+      "knowledge-article:campaign-send-failures",
+      "knowledge-article:event-tracking-debugging",
+      "knowledge-article:flow-trigger-troubleshooting",
+      "knowledge-article:support-operations-playbook",
+      "knowledge-article:webhook-signature-validation",
+      "known-cause:shopify-custom-field-mapping",
+      "known-cause:sms-quiet-hours",
+      "known-cause:sms-stop-sync-delay",
+      "known-cause:track-api-local-time-timestamp",
+      "known-cause:webhook-delivery-latency"
+    ],
+    "synthesisOracle": {
+      "disposition": "hypothesis",
+      "acceptableLeadingCandidateSets": [
+        [
+          "diagnostic-playbook:campaign-editor"
+        ],
+        [
+          "knowledge-article:performance-troubleshooting"
+        ]
+      ],
+      "acceptableAlternativeCandidateKeys": [],
+      "discriminatorIntents": [
+        {
+          "id": "intent:primary-discriminator",
+          "separatesCandidateKeys": [
+            "diagnostic-playbook:campaign-editor",
+            "knowledge-article:performance-troubleshooting"
+          ],
+          "requiredConcepts": [
+            "affected campaign",
+            "browser session",
+            "affected users",
+            "comparison evidence"
+          ]
+        }
+      ],
+      "forbiddenClaims": [
+        "Do not claim a confirmed root cause from applicability evidence alone.",
+        "Do not claim that B5 authorizes remediation, routing, lifecycle transition, or customer-facing action.",
+        "Do not select a browser-session or frontend root cause from the sparse report."
+      ]
+    },
+    "review": {
+      "status": "pending"
+    }
+  },
+  {
+    "id": "readiness-webhook-paraphrase-late-001",
+    "sourceReadinessCaseId": "readiness-webhook-paraphrase-late-001",
+    "split": "development",
+    "safeCase": {
+      "caseId": "readiness-webhook-paraphrase-late-001",
+      "problemStatement": "Webhook-driven notifications eventually arrive late, but the timing evidence needed to localize the delay is absent.",
+      "observedFacts": [
+        {
+          "id": "fact:eventual-arrival",
+          "statement": "Webhook-driven notifications eventually arrive after the triggering action."
+        },
+        {
+          "id": "fact:timings-missing",
+          "statement": "Event creation, dispatch, endpoint-response, and retry timestamps are not supplied."
+        }
+      ],
+      "conversationState": []
+    },
+    "taxonomy": {
+      "primaryProductSurface": {
+        "domain": "integrations",
+        "area": "webhooks"
+      },
+      "secondaryProductSurfaces": [],
+      "problemClasses": [
+        "degraded-performance"
+      ],
+      "support": {
+        "productSurface": "supported",
+        "problemClass": "supported"
+      },
+      "basis": {
+        "source": "initial-classification",
+        "evidenceIds": [],
+        "knowledgeArticleIds": [],
+        "playbookIds": [],
+        "knownCauseIds": [],
+        "explanation": "Derived from the ticket and current conversation during evaluation."
+      }
+    },
+    "judgments": [
+      {
+        "resourceKey": "diagnostic-playbook:article-backed",
+        "verdict": "applicable-next-step",
+        "supportingEvidence": [
+          {
+            "kind": "case-fact",
+            "id": "fact:eventual-arrival"
+          },
+          {
+            "kind": "resource-representation",
+            "id": "diagnostic-playbook:article-backed:canonical:0"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "The candidate supplies a bounded investigation path that directly addresses the observed case evidence without asserting a confirmed cause. The descriptor is relevant for the next event, dispatch, attempt, response, and retry comparison; relevance does not assign delay to either system."
+      },
+      {
+        "resourceKey": "diagnostic-playbook:campaign-editor",
+        "verdict": "irrelevant",
+        "supportingEvidence": [
+          {
+            "kind": "resource-representation",
+            "id": "diagnostic-playbook:campaign-editor:canonical:0"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "This high-ranked cross-domain playbook does not address the observed issue family and is deliberately judged as a non-applicable near match."
+      },
+      {
+        "resourceKey": "knowledge-article:profile-sync-issues",
+        "verdict": "irrelevant",
+        "supportingEvidence": [
+          {
+            "kind": "case-fact",
+            "id": "fact:eventual-arrival"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "The candidate is visible only through cross-resource reference provenance and addresses a different issue family than the observed case."
+      },
+      {
+        "resourceKey": "knowledge-article:webhook-signature-validation",
+        "verdict": "applicable-next-step",
+        "supportingEvidence": [
+          {
+            "kind": "case-fact",
+            "id": "fact:eventual-arrival"
+          },
+          {
+            "kind": "resource-representation",
+            "id": "knowledge-article:webhook-signature-validation:section:3"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "The candidate supplies a bounded investigation path that directly addresses the observed case evidence without asserting a confirmed cause. It requests timing and retry comparisons without assigning latency to either system."
+      },
+      {
+        "resourceKey": "known-cause:webhook-delivery-latency",
+        "verdict": "insufficient-evidence",
+        "supportingEvidence": [
+          {
+            "kind": "case-fact",
+            "id": "fact:eventual-arrival"
+          },
+          {
+            "kind": "resource-representation",
+            "id": "known-cause:webhook-delivery-latency:canonical:0"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [
+          {
+            "item": "Align event creation, dispatch, endpoint-response, and retry timestamps before localizing delivery latency.",
+            "evidence": []
+          }
+        ],
+        "rationale": "The candidate is plausibly connected to the reported scenario, but its own required evidence is incomplete; it remains a qualified alternative rather than a confirmed cause. The known-cause descriptor is relevant only for its next timing, response, and retry evidence checks; eventual arrival without those records does not confirm delivery latency or its cause."
+      }
+    ],
+    "unjudgedCandidateKeys": [
+      "diagnostic-playbook:event-processing-delay",
+      "diagnostic-playbook:flow-trigger",
+      "knowledge-article:event-tracking-debugging",
+      "knowledge-article:flow-trigger-troubleshooting",
+      "knowledge-article:security-incident-response",
+      "knowledge-article:shopify-integration-sync",
+      "knowledge-article:sms-compliance",
+      "knowledge-article:support-operations-playbook",
+      "known-cause:shopify-custom-field-mapping",
+      "known-cause:sms-stop-sync-delay",
+      "known-cause:track-api-local-time-timestamp",
+      "known-cause:webhook-secret-rotation"
+    ],
+    "synthesisOracle": {
+      "disposition": "hypothesis",
+      "acceptableLeadingCandidateSets": [
+        [
+          "diagnostic-playbook:article-backed"
+        ],
+        [
+          "knowledge-article:webhook-signature-validation"
+        ]
+      ],
+      "acceptableAlternativeCandidateKeys": [
+        "known-cause:webhook-delivery-latency"
+      ],
+      "discriminatorIntents": [
+        {
+          "id": "intent:primary-discriminator",
+          "separatesCandidateKeys": [
+            "diagnostic-playbook:article-backed",
+            "knowledge-article:webhook-signature-validation",
+            "known-cause:webhook-delivery-latency"
+          ],
+          "requiredConcepts": [
+            "event creation time",
+            "dispatch time",
+            "endpoint response time",
+            "retry sequence"
+          ]
+        }
+      ],
+      "forbiddenClaims": [
+        "Do not claim a confirmed root cause from applicability evidence alone.",
+        "Do not claim that B5 authorizes remediation, routing, lifecycle transition, or customer-facing action.",
+        "Do not assign the delay to the platform or receiver without aligned timing evidence."
+      ]
+    },
+    "review": {
+      "status": "pending"
+    }
+  },
+  {
+    "id": "readiness-flow-paraphrase-automation-001",
+    "sourceReadinessCaseId": "readiness-flow-paraphrase-automation-001",
+    "split": "development",
+    "safeCase": {
+      "caseId": "readiness-flow-paraphrase-automation-001",
+      "problemStatement": "Customers reportedly act but do not enter an automation, with no aligned event or qualification evidence.",
+      "observedFacts": [
+        {
+          "id": "fact:no-entry",
+          "statement": "Customers are reported not to enter the automation after acting."
+        },
+        {
+          "id": "fact:evidence-missing",
+          "statement": "Event, profile, flow, time, and qualification observations are absent."
+        }
+      ],
+      "conversationState": []
+    },
+    "taxonomy": {
+      "primaryProductSurface": null,
+      "secondaryProductSurfaces": [],
+      "problemClasses": [],
+      "support": {
+        "productSurface": "tentative",
+        "problemClass": "tentative"
+      },
+      "basis": {
+        "source": "initial-classification",
+        "evidenceIds": [],
+        "knowledgeArticleIds": [],
+        "playbookIds": [],
+        "knownCauseIds": [],
+        "explanation": "Derived from the ticket and current conversation during evaluation."
+      }
+    },
+    "judgments": [
+      {
+        "resourceKey": "diagnostic-playbook:campaign-editor",
+        "verdict": "irrelevant",
+        "supportingEvidence": [
+          {
+            "kind": "resource-representation",
+            "id": "diagnostic-playbook:campaign-editor:canonical:0"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "This high-ranked cross-domain playbook does not address the observed issue family and is deliberately judged as a non-applicable near match."
+      },
+      {
+        "resourceKey": "diagnostic-playbook:flow-trigger",
+        "verdict": "applicable-next-step",
+        "supportingEvidence": [
+          {
+            "kind": "case-fact",
+            "id": "fact:no-entry"
+          },
+          {
+            "kind": "resource-representation",
+            "id": "diagnostic-playbook:flow-trigger:canonical:0"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "The candidate supplies a bounded investigation path that directly addresses the observed case evidence without asserting a confirmed cause. The descriptor is relevant as the next evidence checklist for event presence and eligibility; the sparse report establishes no branch."
+      },
+      {
+        "resourceKey": "knowledge-article:flow-trigger-troubleshooting",
+        "verdict": "applicable-next-step",
+        "supportingEvidence": [
+          {
+            "kind": "case-fact",
+            "id": "fact:no-entry"
+          },
+          {
+            "kind": "resource-representation",
+            "id": "knowledge-article:flow-trigger-troubleshooting:section:3"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "The candidate supplies a bounded investigation path that directly addresses the observed case evidence without asserting a confirmed cause. It keeps presence and eligibility distinct and lists evidence needed to distinguish them."
+      },
+      {
+        "resourceKey": "knowledge-article:profile-sync-issues",
+        "verdict": "irrelevant",
+        "supportingEvidence": [
+          {
+            "kind": "case-fact",
+            "id": "fact:no-entry"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "The candidate is visible only through cross-resource reference provenance and addresses a different issue family than the observed case."
+      },
+      {
+        "resourceKey": "knowledge-article:sms-compliance",
+        "verdict": "irrelevant",
+        "supportingEvidence": [
+          {
+            "kind": "case-fact",
+            "id": "fact:no-entry"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "The candidate is visible only through cross-resource reference provenance and addresses a different issue family than the observed case."
+      }
+    ],
+    "unjudgedCandidateKeys": [
+      "diagnostic-playbook:article-backed",
+      "diagnostic-playbook:event-processing-delay",
+      "knowledge-article:api-reference",
+      "knowledge-article:event-tracking-debugging",
+      "knowledge-article:segmentation-audience-rules",
+      "knowledge-article:shopify-integration-sync",
+      "knowledge-article:support-operations-playbook",
+      "knowledge-article:webhook-signature-validation",
+      "known-cause:shopify-custom-field-mapping",
+      "known-cause:sms-quiet-hours",
+      "known-cause:sms-stop-sync-delay",
+      "known-cause:track-api-local-time-timestamp",
+      "known-cause:webhook-delivery-latency",
+      "known-cause:webhook-secret-rotation"
+    ],
+    "synthesisOracle": {
+      "disposition": "hypothesis",
+      "acceptableLeadingCandidateSets": [
+        [
+          "diagnostic-playbook:flow-trigger"
+        ],
+        [
+          "knowledge-article:flow-trigger-troubleshooting"
+        ]
+      ],
+      "acceptableAlternativeCandidateKeys": [],
+      "discriminatorIntents": [
+        {
+          "id": "intent:primary-discriminator",
+          "separatesCandidateKeys": [
+            "diagnostic-playbook:flow-trigger",
+            "knowledge-article:flow-trigger-troubleshooting"
+          ],
+          "requiredConcepts": [
+            "event presence",
+            "profile identity",
+            "flow identity",
+            "qualification result"
+          ]
+        }
+      ],
+      "forbiddenClaims": [
+        "Do not claim a confirmed root cause from applicability evidence alone.",
+        "Do not claim that B5 authorizes remediation, routing, lifecycle transition, or customer-facing action.",
+        "Do not infer ingestion or eligibility failure from the absence report alone."
+      ]
+    },
+    "review": {
+      "status": "pending"
+    }
+  },
+  {
+    "id": "readiness-editor-contrast-private-001",
+    "sourceReadinessCaseId": "readiness-editor-contrast-private-001",
+    "split": "development",
+    "safeCase": {
+      "caseId": "readiness-editor-contrast-private-001",
+      "problemStatement": "The campaign is blank in one browser profile but opens in isolated sessions, despite a request for a platform repair.",
+      "observedFacts": [
+        {
+          "id": "fact:original-blank",
+          "statement": "The campaign is blank in the original browser profile."
+        },
+        {
+          "id": "fact:isolation-works",
+          "statement": "The same campaign opens in a private window and another browser."
+        },
+        {
+          "id": "fact:repair-request",
+          "statement": "A platform repair is requested despite the working isolated sessions."
+        }
+      ],
+      "conversationState": []
+    },
+    "taxonomy": {
+      "primaryProductSurface": null,
+      "secondaryProductSurfaces": [],
+      "problemClasses": [],
+      "support": {
+        "productSurface": "tentative",
+        "problemClass": "tentative"
+      },
+      "basis": {
+        "source": "initial-classification",
+        "evidenceIds": [],
+        "knowledgeArticleIds": [],
+        "playbookIds": [],
+        "knownCauseIds": [],
+        "explanation": "Derived from the ticket and current conversation during evaluation."
+      }
+    },
+    "judgments": [
+      {
+        "resourceKey": "diagnostic-playbook:article-backed",
+        "verdict": "irrelevant",
+        "supportingEvidence": [
+          {
+            "kind": "resource-representation",
+            "id": "diagnostic-playbook:article-backed:canonical:0"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "This high-ranked cross-domain playbook does not address the observed issue family and is deliberately judged as a non-applicable near match."
+      },
+      {
+        "resourceKey": "diagnostic-playbook:campaign-editor",
+        "verdict": "applicable-next-step",
+        "supportingEvidence": [
+          {
+            "kind": "case-fact",
+            "id": "fact:original-blank"
+          },
+          {
+            "kind": "resource-representation",
+            "id": "diagnostic-playbook:campaign-editor:canonical:0"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "The candidate supplies a bounded investigation path that directly addresses the observed case evidence without asserting a confirmed cause. The descriptor is relevant because its session-isolation comparison is the next investigation step; the working sessions do not authorize a repair or confirm a cause."
+      },
+      {
+        "resourceKey": "knowledge-article:performance-troubleshooting",
+        "verdict": "applicable-next-step",
+        "supportingEvidence": [
+          {
+            "kind": "case-fact",
+            "id": "fact:original-blank"
+          },
+          {
+            "kind": "resource-representation",
+            "id": "knowledge-article:performance-troubleshooting:section:2"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "The candidate supplies a bounded investigation path that directly addresses the observed case evidence without asserting a confirmed cause. This article is required because its session-isolation rule is necessary to interpret the working private-window and Edge controls before considering a platform repair."
+      },
+      {
+        "resourceKey": "knowledge-article:profile-sync-issues",
+        "verdict": "irrelevant",
+        "supportingEvidence": [
+          {
+            "kind": "case-fact",
+            "id": "fact:original-blank"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "The candidate is visible only through cross-resource reference provenance and addresses a different issue family than the observed case."
+      },
+      {
+        "resourceKey": "knowledge-article:shopify-integration-sync",
+        "verdict": "irrelevant",
+        "supportingEvidence": [
+          {
+            "kind": "case-fact",
+            "id": "fact:original-blank"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "The candidate is visible only through cross-resource reference provenance and addresses a different issue family than the observed case."
+      },
+      {
+        "resourceKey": "knowledge-article:sms-compliance",
+        "verdict": "irrelevant",
+        "supportingEvidence": [
+          {
+            "kind": "case-fact",
+            "id": "fact:original-blank"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "The candidate is visible only through cross-resource reference provenance and addresses a different issue family than the observed case."
+      },
+      {
+        "resourceKey": "knowledge-article:webhook-signature-validation",
+        "verdict": "irrelevant",
+        "supportingEvidence": [
+          {
+            "kind": "case-fact",
+            "id": "fact:original-blank"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "The candidate is visible only through cross-resource reference provenance and addresses a different issue family than the observed case."
+      }
+    ],
+    "unjudgedCandidateKeys": [
+      "diagnostic-playbook:event-processing-delay",
+      "diagnostic-playbook:flow-trigger",
+      "knowledge-article:account-access",
+      "knowledge-article:authentication",
+      "knowledge-article:campaign-send-failures",
+      "knowledge-article:event-tracking-debugging",
+      "knowledge-article:flow-trigger-troubleshooting",
+      "knowledge-article:support-operations-playbook",
+      "known-cause:shopify-custom-field-mapping",
+      "known-cause:sms-quiet-hours",
+      "known-cause:sms-stop-sync-delay",
+      "known-cause:track-api-local-time-timestamp",
+      "known-cause:webhook-delivery-latency",
+      "known-cause:webhook-secret-rotation"
+    ],
+    "synthesisOracle": {
+      "disposition": "hypothesis",
+      "acceptableLeadingCandidateSets": [
+        [
+          "diagnostic-playbook:campaign-editor"
+        ],
+        [
+          "knowledge-article:performance-troubleshooting"
+        ]
+      ],
+      "acceptableAlternativeCandidateKeys": [],
+      "discriminatorIntents": [
+        {
+          "id": "intent:primary-discriminator",
+          "separatesCandidateKeys": [
+            "diagnostic-playbook:campaign-editor",
+            "knowledge-article:performance-troubleshooting"
+          ],
+          "requiredConcepts": [
+            "same-campaign comparison",
+            "session-local state",
+            "console evidence"
+          ]
+        }
+      ],
+      "forbiddenClaims": [
+        "Do not claim a confirmed root cause from applicability evidence alone.",
+        "Do not claim that B5 authorizes remediation, routing, lifecycle transition, or customer-facing action.",
+        "Do not treat the repair request as evidence that a platform repair is applicable."
+      ]
+    },
+    "review": {
+      "status": "pending"
+    }
+  },
+  {
+    "id": "readiness-webhook-contrast-raw-body-001",
+    "sourceReadinessCaseId": "readiness-webhook-contrast-raw-body-001",
+    "split": "development",
+    "safeCase": {
+      "caseId": "readiness-webhook-contrast-raw-body-001",
+      "problemStatement": "Signature failures began after receiver-side body transformation, while no signing-key rotation occurred.",
+      "observedFacts": [
+        {
+          "id": "fact:no-rotation",
+          "statement": "No signing-key rotation occurred."
+        },
+        {
+          "id": "fact:body-transform",
+          "statement": "The receiver began parsing and reserializing the body before verification."
+        },
+        {
+          "id": "fact:failure-after-change",
+          "statement": "Signature failures began after the receiver-side transformation change."
+        }
+      ],
+      "conversationState": []
+    },
+    "taxonomy": {
+      "primaryProductSurface": {
+        "domain": "integrations",
+        "area": "webhooks"
+      },
+      "secondaryProductSurfaces": [],
+      "problemClasses": [],
+      "support": {
+        "productSurface": "supported",
+        "problemClass": "tentative"
+      },
+      "basis": {
+        "source": "initial-classification",
+        "evidenceIds": [],
+        "knowledgeArticleIds": [],
+        "playbookIds": [],
+        "knownCauseIds": [],
+        "explanation": "Derived from the ticket and current conversation during evaluation."
+      }
+    },
+    "judgments": [
+      {
+        "resourceKey": "diagnostic-playbook:article-backed",
+        "verdict": "applicable-next-step",
+        "supportingEvidence": [
+          {
+            "kind": "case-fact",
+            "id": "fact:no-rotation"
+          },
+          {
+            "kind": "resource-representation",
+            "id": "diagnostic-playbook:article-backed:canonical:0"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "The candidate supplies a bounded investigation path that directly addresses the observed case evidence without asserting a confirmed cause. The descriptor is relevant for the next exact raw-body and signed-header comparison after rotation is explicitly ruled out; it does not confirm middleware causation."
+      },
+      {
+        "resourceKey": "diagnostic-playbook:campaign-editor",
+        "verdict": "irrelevant",
+        "supportingEvidence": [
+          {
+            "kind": "resource-representation",
+            "id": "diagnostic-playbook:campaign-editor:canonical:0"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "This high-ranked cross-domain playbook does not address the observed issue family and is deliberately judged as a non-applicable near match."
+      },
+      {
+        "resourceKey": "knowledge-article:profile-sync-issues",
+        "verdict": "irrelevant",
+        "supportingEvidence": [
+          {
+            "kind": "case-fact",
+            "id": "fact:no-rotation"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "The candidate is visible only through cross-resource reference provenance and addresses a different issue family than the observed case."
+      },
+      {
+        "resourceKey": "knowledge-article:shopify-integration-sync",
+        "verdict": "irrelevant",
+        "supportingEvidence": [
+          {
+            "kind": "case-fact",
+            "id": "fact:no-rotation"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "The candidate is visible only through cross-resource reference provenance and addresses a different issue family than the observed case."
+      },
+      {
+        "resourceKey": "knowledge-article:sms-compliance",
+        "verdict": "irrelevant",
+        "supportingEvidence": [
+          {
+            "kind": "case-fact",
+            "id": "fact:no-rotation"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "The candidate is visible only through cross-resource reference provenance and addresses a different issue family than the observed case."
+      },
+      {
+        "resourceKey": "knowledge-article:webhook-signature-validation",
+        "verdict": "applicable-next-step",
+        "supportingEvidence": [
+          {
+            "kind": "case-fact",
+            "id": "fact:no-rotation"
+          },
+          {
+            "kind": "resource-representation",
+            "id": "knowledge-article:webhook-signature-validation:section:2"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "The candidate supplies a bounded investigation path that directly addresses the observed case evidence without asserting a confirmed cause. This article is required because its raw-body alternative is the necessary comparison path once rotation is explicitly ruled out."
+      },
+      {
+        "resourceKey": "known-cause:webhook-secret-rotation",
+        "verdict": "contradicted",
+        "supportingEvidence": [
+          {
+            "kind": "case-fact",
+            "id": "fact:no-rotation"
+          },
+          {
+            "kind": "resource-representation",
+            "id": "known-cause:webhook-secret-rotation:canonical:0"
+          }
+        ],
+        "contradictingEvidence": [
+          {
+            "kind": "case-fact",
+            "id": "fact:no-rotation"
+          }
+        ],
+        "missingEvidence": [],
+        "rationale": "A required premise of this candidate conflicts with an explicit observed case fact, so it must not be promoted as an applicable next-step hypothesis."
+      }
+    ],
+    "unjudgedCandidateKeys": [
+      "diagnostic-playbook:event-processing-delay",
+      "diagnostic-playbook:flow-trigger",
+      "knowledge-article:api-reference",
+      "knowledge-article:campaign-send-failures",
+      "knowledge-article:event-tracking-debugging",
+      "knowledge-article:performance-troubleshooting",
+      "knowledge-article:security-incident-response",
+      "knowledge-article:support-operations-playbook",
+      "known-cause:shopify-custom-field-mapping",
+      "known-cause:sms-quiet-hours",
+      "known-cause:sms-stop-sync-delay",
+      "known-cause:track-api-local-time-timestamp",
+      "known-cause:webhook-delivery-latency"
+    ],
+    "synthesisOracle": {
+      "disposition": "hypothesis",
+      "acceptableLeadingCandidateSets": [
+        [
+          "diagnostic-playbook:article-backed"
+        ],
+        [
+          "knowledge-article:webhook-signature-validation"
+        ]
+      ],
+      "acceptableAlternativeCandidateKeys": [],
+      "discriminatorIntents": [
+        {
+          "id": "intent:primary-discriminator",
+          "separatesCandidateKeys": [
+            "diagnostic-playbook:article-backed",
+            "knowledge-article:webhook-signature-validation",
+            "known-cause:webhook-secret-rotation"
+          ],
+          "requiredConcepts": [
+            "raw body bytes",
+            "verification input",
+            "receiver transformation"
+          ]
+        }
+      ],
+      "forbiddenClaims": [
+        "Do not claim a confirmed root cause from applicability evidence alone.",
+        "Do not claim that B5 authorizes remediation, routing, lifecycle transition, or customer-facing action.",
+        "Do not attribute the failure to a signing-key rotation."
+      ]
+    },
+    "review": {
+      "status": "pending"
+    }
+  },
+  {
+    "id": "readiness-flow-contrast-excluded-001",
+    "sourceReadinessCaseId": "readiness-flow-contrast-excluded-001",
+    "split": "development",
+    "safeCase": {
+      "caseId": "readiness-flow-contrast-excluded-001",
+      "problemStatement": "The configured event is present, but an observed profile-filter exclusion provides a downstream explanation path.",
+      "observedFacts": [
+        {
+          "id": "fact:event-present",
+          "statement": "The configured trigger event is present for the relevant flow and time."
+        },
+        {
+          "id": "fact:filter-exclusion",
+          "statement": "Analytics records a profile-filter exclusion."
+        },
+        {
+          "id": "fact:other-eligibility-unknown",
+          "statement": "Consent and smart-sending outcomes remain unknown."
+        }
+      ],
+      "conversationState": []
+    },
+    "taxonomy": {
+      "primaryProductSurface": {
+        "domain": "customer-data",
+        "area": "consent"
+      },
+      "secondaryProductSurfaces": [],
+      "problemClasses": [],
+      "support": {
+        "productSurface": "supported",
+        "problemClass": "tentative"
+      },
+      "basis": {
+        "source": "initial-classification",
+        "evidenceIds": [],
+        "knowledgeArticleIds": [],
+        "playbookIds": [],
+        "knownCauseIds": [],
+        "explanation": "Derived from the ticket and current conversation during evaluation."
+      }
+    },
+    "judgments": [
+      {
+        "resourceKey": "diagnostic-playbook:campaign-editor",
+        "verdict": "irrelevant",
+        "supportingEvidence": [
+          {
+            "kind": "resource-representation",
+            "id": "diagnostic-playbook:campaign-editor:canonical:0"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "This high-ranked cross-domain playbook does not address the observed issue family and is deliberately judged as a non-applicable near match."
+      },
+      {
+        "resourceKey": "diagnostic-playbook:flow-trigger",
+        "verdict": "applicable-next-step",
+        "supportingEvidence": [
+          {
+            "kind": "case-fact",
+            "id": "fact:event-present"
+          },
+          {
+            "kind": "resource-representation",
+            "id": "diagnostic-playbook:flow-trigger:canonical:0"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "The candidate supplies a bounded investigation path that directly addresses the observed case evidence without asserting a confirmed cause. The descriptor is relevant for the next filter and eligibility comparison after event presence is established; relevance does not confirm a configuration cause."
+      },
+      {
+        "resourceKey": "knowledge-article:event-tracking-debugging",
+        "verdict": "applicable-next-step",
+        "supportingEvidence": [
+          {
+            "kind": "case-fact",
+            "id": "fact:event-present"
+          },
+          {
+            "kind": "resource-representation",
+            "id": "knowledge-article:event-tracking-debugging:section:2"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "The candidate supplies a bounded investigation path that directly addresses the observed case evidence without asserting a confirmed cause. This article is relevant only for its rule-out that a present matched event points away from event absence; it is not necessary for the eligibility investigation."
+      },
+      {
+        "resourceKey": "knowledge-article:flow-trigger-troubleshooting",
+        "verdict": "applicable-next-step",
+        "supportingEvidence": [
+          {
+            "kind": "case-fact",
+            "id": "fact:event-present"
+          },
+          {
+            "kind": "resource-representation",
+            "id": "knowledge-article:flow-trigger-troubleshooting:section:2"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "The candidate supplies a bounded investigation path that directly addresses the observed case evidence without asserting a confirmed cause. This article is required because its eligibility-filter section is necessary to interpret the observed profile exclusion after the matching event is present."
+      },
+      {
+        "resourceKey": "knowledge-article:shopify-integration-sync",
+        "verdict": "irrelevant",
+        "supportingEvidence": [
+          {
+            "kind": "case-fact",
+            "id": "fact:event-present"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "The candidate is visible only through cross-resource reference provenance and addresses a different issue family than the observed case."
+      },
+      {
+        "resourceKey": "knowledge-article:sms-compliance",
+        "verdict": "irrelevant",
+        "supportingEvidence": [
+          {
+            "kind": "case-fact",
+            "id": "fact:event-present"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "The candidate is visible only through cross-resource reference provenance and addresses a different issue family than the observed case."
+      },
+      {
+        "resourceKey": "knowledge-article:webhook-signature-validation",
+        "verdict": "irrelevant",
+        "supportingEvidence": [
+          {
+            "kind": "case-fact",
+            "id": "fact:event-present"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "The candidate is visible only through cross-resource reference provenance and addresses a different issue family than the observed case."
+      }
+    ],
+    "unjudgedCandidateKeys": [
+      "diagnostic-playbook:article-backed",
+      "diagnostic-playbook:event-processing-delay",
+      "knowledge-article:profile-sync-issues",
+      "knowledge-article:segmentation-audience-rules",
+      "knowledge-article:support-operations-playbook",
+      "known-cause:shopify-custom-field-mapping",
+      "known-cause:sms-quiet-hours",
+      "known-cause:sms-stop-sync-delay",
+      "known-cause:track-api-local-time-timestamp",
+      "known-cause:webhook-delivery-latency"
+    ],
+    "synthesisOracle": {
+      "disposition": "hypothesis",
+      "acceptableLeadingCandidateSets": [
+        [
+          "diagnostic-playbook:flow-trigger"
+        ],
+        [
+          "knowledge-article:event-tracking-debugging"
+        ],
+        [
+          "knowledge-article:flow-trigger-troubleshooting"
+        ]
+      ],
+      "acceptableAlternativeCandidateKeys": [],
+      "discriminatorIntents": [
+        {
+          "id": "intent:primary-discriminator",
+          "separatesCandidateKeys": [
+            "diagnostic-playbook:flow-trigger",
+            "knowledge-article:event-tracking-debugging",
+            "knowledge-article:flow-trigger-troubleshooting"
+          ],
+          "requiredConcepts": [
+            "filter exclusion",
+            "consent eligibility",
+            "smart-sending outcome"
+          ]
+        }
+      ],
+      "forbiddenClaims": [
+        "Do not claim a confirmed root cause from applicability evidence alone.",
+        "Do not claim that B5 authorizes remediation, routing, lifecycle transition, or customer-facing action.",
+        "Do not describe this as an event-ingestion failure."
+      ]
+    },
+    "review": {
+      "status": "pending"
+    }
+  },
+  {
+    "id": "readiness-editor-disagreement-001",
+    "sourceReadinessCaseId": "readiness-editor-disagreement-001",
+    "split": "development",
+    "safeCase": {
+      "caseId": "readiness-editor-disagreement-001",
+      "problemStatement": "Editor observations conflict across users and sessions and are not aligned to the same campaign and time.",
+      "observedFacts": [
+        {
+          "id": "fact:slowness",
+          "statement": "One administrator reports generic editor slowness."
+        },
+        {
+          "id": "fact:blank-error",
+          "statement": "Another administrator reports a blank editor with a chunk-loading error."
+        },
+        {
+          "id": "fact:session-conflict",
+          "statement": "A private window opens a campaign while another-browser evidence reports a blank editor."
+        },
+        {
+          "id": "fact:not-aligned",
+          "statement": "The campaign identities and observation times are not aligned across reports."
+        }
+      ],
+      "conversationState": []
+    },
+    "taxonomy": {
+      "primaryProductSurface": null,
+      "secondaryProductSurfaces": [],
+      "problemClasses": [],
+      "support": {
+        "productSurface": "tentative",
+        "problemClass": "tentative"
+      },
+      "basis": {
+        "source": "initial-classification",
+        "evidenceIds": [],
+        "knowledgeArticleIds": [],
+        "playbookIds": [],
+        "knownCauseIds": [],
+        "explanation": "Derived from the ticket and current conversation during evaluation."
+      }
+    },
+    "judgments": [
+      {
+        "resourceKey": "diagnostic-playbook:article-backed",
+        "verdict": "irrelevant",
+        "supportingEvidence": [
+          {
+            "kind": "resource-representation",
+            "id": "diagnostic-playbook:article-backed:canonical:0"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "This high-ranked cross-domain playbook does not address the observed issue family and is deliberately judged as a non-applicable near match."
+      },
+      {
+        "resourceKey": "diagnostic-playbook:campaign-editor",
+        "verdict": "applicable-next-step",
+        "supportingEvidence": [
+          {
+            "kind": "case-fact",
+            "id": "fact:slowness"
+          },
+          {
+            "kind": "resource-representation",
+            "id": "diagnostic-playbook:campaign-editor:canonical:0"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "The candidate supplies a bounded investigation path that directly addresses the observed case evidence without asserting a confirmed cause. The descriptor is relevant for reconciling the unaligned campaign, browser, admin, and time observations before any branch is selected."
+      },
+      {
+        "resourceKey": "knowledge-article:performance-troubleshooting",
+        "verdict": "applicable-next-step",
+        "supportingEvidence": [
+          {
+            "kind": "case-fact",
+            "id": "fact:slowness"
+          },
+          {
+            "kind": "resource-representation",
+            "id": "knowledge-article:performance-troubleshooting:section:1"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "The candidate supplies a bounded investigation path that directly addresses the observed case evidence without asserting a confirmed cause. Like-for-like campaign, session, user, and time comparison is needed before treating inconsistent reports as agreement."
+      },
+      {
+        "resourceKey": "knowledge-article:profile-sync-issues",
+        "verdict": "irrelevant",
+        "supportingEvidence": [
+          {
+            "kind": "case-fact",
+            "id": "fact:slowness"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "The candidate is visible only through cross-resource reference provenance and addresses a different issue family than the observed case."
+      },
+      {
+        "resourceKey": "knowledge-article:shopify-integration-sync",
+        "verdict": "irrelevant",
+        "supportingEvidence": [
+          {
+            "kind": "case-fact",
+            "id": "fact:slowness"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "The candidate is visible only through cross-resource reference provenance and addresses a different issue family than the observed case."
+      },
+      {
+        "resourceKey": "knowledge-article:sms-compliance",
+        "verdict": "irrelevant",
+        "supportingEvidence": [
+          {
+            "kind": "case-fact",
+            "id": "fact:slowness"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "The candidate is visible only through cross-resource reference provenance and addresses a different issue family than the observed case."
+      },
+      {
+        "resourceKey": "knowledge-article:webhook-signature-validation",
+        "verdict": "irrelevant",
+        "supportingEvidence": [
+          {
+            "kind": "case-fact",
+            "id": "fact:slowness"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "The candidate is visible only through cross-resource reference provenance and addresses a different issue family than the observed case."
+      }
+    ],
+    "unjudgedCandidateKeys": [
+      "diagnostic-playbook:event-processing-delay",
+      "diagnostic-playbook:flow-trigger",
+      "knowledge-article:authentication",
+      "knowledge-article:campaign-send-failures",
+      "knowledge-article:coupon-catalog-sync",
+      "knowledge-article:event-tracking-debugging",
+      "knowledge-article:flow-trigger-troubleshooting",
+      "knowledge-article:support-operations-playbook",
+      "known-cause:shopify-custom-field-mapping",
+      "known-cause:sms-quiet-hours",
+      "known-cause:sms-stop-sync-delay",
+      "known-cause:track-api-local-time-timestamp",
+      "known-cause:webhook-delivery-latency",
+      "known-cause:webhook-secret-rotation"
+    ],
+    "synthesisOracle": {
+      "disposition": "hypothesis",
+      "acceptableLeadingCandidateSets": [
+        [
+          "diagnostic-playbook:campaign-editor"
+        ],
+        [
+          "knowledge-article:performance-troubleshooting"
+        ]
+      ],
+      "acceptableAlternativeCandidateKeys": [],
+      "discriminatorIntents": [
+        {
+          "id": "intent:primary-discriminator",
+          "separatesCandidateKeys": [
+            "diagnostic-playbook:campaign-editor",
+            "knowledge-article:performance-troubleshooting"
+          ],
+          "requiredConcepts": [
+            "same campaign",
+            "same observation window",
+            "same user/session controls"
+          ]
+        }
+      ],
+      "forbiddenClaims": [
+        "Do not claim a confirmed root cause from applicability evidence alone.",
+        "Do not claim that B5 authorizes remediation, routing, lifecycle transition, or customer-facing action.",
+        "Do not merge unaligned observations into a single confirmed cause."
+      ]
+    },
+    "review": {
+      "status": "pending"
+    }
+  },
+  {
+    "id": "readiness-webhook-disagreement-001",
+    "sourceReadinessCaseId": "readiness-webhook-disagreement-001",
+    "split": "development",
+    "safeCase": {
+      "caseId": "readiness-webhook-disagreement-001",
+      "problemStatement": "Separate webhook deliveries show retry delay and signature uncertainty, but the observations are not aligned enough to support one cause.",
+      "observedFacts": [
+        {
+          "id": "fact:retry-success",
+          "statement": "One delivery succeeds after retries."
+        },
+        {
+          "id": "fact:signature-uncertain",
+          "statement": "A separate delivery lacks a raw-body comparison for its signature failure."
+        },
+        {
+          "id": "fact:no-dispatch-timing",
+          "statement": "No dispatch timing is supplied for the claimed platform delay."
+        }
+      ],
+      "conversationState": []
+    },
+    "taxonomy": {
+      "primaryProductSurface": {
+        "domain": "integrations",
+        "area": "webhooks"
+      },
+      "secondaryProductSurfaces": [],
+      "problemClasses": [
+        "degraded-performance"
+      ],
+      "support": {
+        "productSurface": "supported",
+        "problemClass": "supported"
+      },
+      "basis": {
+        "source": "initial-classification",
+        "evidenceIds": [],
+        "knowledgeArticleIds": [],
+        "playbookIds": [],
+        "knownCauseIds": [],
+        "explanation": "Derived from the ticket and current conversation during evaluation."
+      }
+    },
+    "judgments": [
+      {
+        "resourceKey": "diagnostic-playbook:article-backed",
+        "verdict": "applicable-next-step",
+        "supportingEvidence": [
+          {
+            "kind": "case-fact",
+            "id": "fact:retry-success"
+          },
+          {
+            "kind": "resource-representation",
+            "id": "diagnostic-playbook:article-backed:canonical:0"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "The candidate supplies a bounded investigation path that directly addresses the observed case evidence without asserting a confirmed cause. The descriptor is relevant for keeping signature and latency evidence tied to their separate deliveries before any cause or branch decision."
+      },
+      {
+        "resourceKey": "diagnostic-playbook:campaign-editor",
+        "verdict": "irrelevant",
+        "supportingEvidence": [
+          {
+            "kind": "resource-representation",
+            "id": "diagnostic-playbook:campaign-editor:canonical:0"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "This high-ranked cross-domain playbook does not address the observed issue family and is deliberately judged as a non-applicable near match."
+      },
+      {
+        "resourceKey": "knowledge-article:profile-sync-issues",
+        "verdict": "irrelevant",
+        "supportingEvidence": [
+          {
+            "kind": "case-fact",
+            "id": "fact:retry-success"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "The candidate is visible only through cross-resource reference provenance and addresses a different issue family than the observed case."
+      },
+      {
+        "resourceKey": "knowledge-article:shopify-integration-sync",
+        "verdict": "irrelevant",
+        "supportingEvidence": [
+          {
+            "kind": "case-fact",
+            "id": "fact:retry-success"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "The candidate is visible only through cross-resource reference provenance and addresses a different issue family than the observed case."
+      },
+      {
+        "resourceKey": "knowledge-article:webhook-signature-validation",
+        "verdict": "applicable-next-step",
+        "supportingEvidence": [
+          {
+            "kind": "case-fact",
+            "id": "fact:retry-success"
+          },
+          {
+            "kind": "resource-representation",
+            "id": "knowledge-article:webhook-signature-validation:section:3"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "The candidate supplies a bounded investigation path that directly addresses the observed case evidence without asserting a confirmed cause. Signature and latency can coexist; delivery-specific timing and attempt history are required."
+      },
+      {
+        "resourceKey": "known-cause:webhook-delivery-latency",
+        "verdict": "insufficient-evidence",
+        "supportingEvidence": [
+          {
+            "kind": "case-fact",
+            "id": "fact:retry-success"
+          },
+          {
+            "kind": "resource-representation",
+            "id": "known-cause:webhook-delivery-latency:canonical:0"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [
+          {
+            "item": "Align the delayed delivery's dispatch, endpoint-response, and retry timing before supporting a latency explanation.",
+            "evidence": []
+          }
+        ],
+        "rationale": "The candidate is plausibly connected to the reported scenario, but its own required evidence is incomplete; it remains a qualified alternative rather than a confirmed cause. The known-cause descriptor is relevant only for separating dispatch time from endpoint retries on the late delivery; the simultaneous signature report does not establish applicability."
+      }
+    ],
+    "unjudgedCandidateKeys": [
+      "diagnostic-playbook:event-processing-delay",
+      "diagnostic-playbook:flow-trigger",
+      "knowledge-article:api-reference",
+      "knowledge-article:campaign-send-failures",
+      "knowledge-article:email-deliverability",
+      "knowledge-article:event-tracking-debugging",
+      "knowledge-article:sms-compliance",
+      "knowledge-article:support-operations-playbook",
+      "known-cause:shopify-custom-field-mapping",
+      "known-cause:sms-quiet-hours",
+      "known-cause:sms-stop-sync-delay",
+      "known-cause:track-api-local-time-timestamp",
+      "known-cause:webhook-secret-rotation"
+    ],
+    "synthesisOracle": {
+      "disposition": "hypothesis",
+      "acceptableLeadingCandidateSets": [
+        [
+          "diagnostic-playbook:article-backed"
+        ],
+        [
+          "knowledge-article:webhook-signature-validation"
+        ]
+      ],
+      "acceptableAlternativeCandidateKeys": [
+        "known-cause:webhook-delivery-latency"
+      ],
+      "discriminatorIntents": [
+        {
+          "id": "intent:primary-discriminator",
+          "separatesCandidateKeys": [
+            "diagnostic-playbook:article-backed",
+            "knowledge-article:webhook-signature-validation",
+            "known-cause:webhook-delivery-latency"
+          ],
+          "requiredConcepts": [
+            "delivery identity",
+            "dispatch timing",
+            "retry timing",
+            "raw-body comparison"
+          ]
+        }
+      ],
+      "forbiddenClaims": [
+        "Do not claim a confirmed root cause from applicability evidence alone.",
+        "Do not claim that B5 authorizes remediation, routing, lifecycle transition, or customer-facing action.",
+        "Do not collapse distinct deliveries into one confirmed platform-delay explanation."
+      ]
+    },
+    "review": {
+      "status": "pending"
+    }
+  },
+  {
+    "id": "readiness-flow-disagreement-001",
+    "sourceReadinessCaseId": "readiness-flow-disagreement-001",
+    "split": "development",
+    "safeCase": {
+      "caseId": "readiness-flow-disagreement-001",
+      "problemStatement": "Event and qualification observations conflict across profiles whose identities and times are not aligned.",
+      "observedFacts": [
+        {
+          "id": "fact:accepted-log",
+          "statement": "A storefront log reports an accepted Added to Cart event."
+        },
+        {
+          "id": "fact:timeline-absent",
+          "statement": "One profile report has no corresponding timeline event."
+        },
+        {
+          "id": "fact:excluded-report",
+          "statement": "Another report says an event was present but excluded."
+        },
+        {
+          "id": "fact:not-aligned",
+          "statement": "The profile identities and observation times are not aligned."
+        }
+      ],
+      "conversationState": []
+    },
+    "taxonomy": {
+      "primaryProductSurface": null,
+      "secondaryProductSurfaces": [],
+      "problemClasses": [],
+      "support": {
+        "productSurface": "tentative",
+        "problemClass": "tentative"
+      },
+      "basis": {
+        "source": "initial-classification",
+        "evidenceIds": [],
+        "knowledgeArticleIds": [],
+        "playbookIds": [],
+        "knownCauseIds": [],
+        "explanation": "Derived from the ticket and current conversation during evaluation."
+      }
+    },
+    "judgments": [
+      {
+        "resourceKey": "diagnostic-playbook:campaign-editor",
+        "verdict": "irrelevant",
+        "supportingEvidence": [
+          {
+            "kind": "resource-representation",
+            "id": "diagnostic-playbook:campaign-editor:canonical:0"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "This high-ranked cross-domain playbook does not address the observed issue family and is deliberately judged as a non-applicable near match."
+      },
+      {
+        "resourceKey": "diagnostic-playbook:flow-trigger",
+        "verdict": "applicable-next-step",
+        "supportingEvidence": [
+          {
+            "kind": "case-fact",
+            "id": "fact:accepted-log"
+          },
+          {
+            "kind": "resource-representation",
+            "id": "diagnostic-playbook:flow-trigger:canonical:0"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "The candidate supplies a bounded investigation path that directly addresses the observed case evidence without asserting a confirmed cause. The descriptor is relevant for aligning profile, event, flow, and time observations before separating ingestion from qualification."
+      },
+      {
+        "resourceKey": "knowledge-article:event-tracking-debugging",
+        "verdict": "applicable-next-step",
+        "supportingEvidence": [
+          {
+            "kind": "case-fact",
+            "id": "fact:accepted-log"
+          },
+          {
+            "kind": "resource-representation",
+            "id": "knowledge-article:event-tracking-debugging:section:2"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "The candidate supplies a bounded investigation path that directly addresses the observed case evidence without asserting a confirmed cause. It separates accepted requests, timeline appearance, and qualification."
+      },
+      {
+        "resourceKey": "knowledge-article:flow-trigger-troubleshooting",
+        "verdict": "applicable-next-step",
+        "supportingEvidence": [
+          {
+            "kind": "case-fact",
+            "id": "fact:accepted-log"
+          },
+          {
+            "kind": "resource-representation",
+            "id": "knowledge-article:flow-trigger-troubleshooting:section:3"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "The candidate supplies a bounded investigation path that directly addresses the observed case evidence without asserting a confirmed cause. It requires identity, event, and time alignment before choosing ingestion or eligibility."
+      },
+      {
+        "resourceKey": "knowledge-article:sms-compliance",
+        "verdict": "irrelevant",
+        "supportingEvidence": [
+          {
+            "kind": "case-fact",
+            "id": "fact:accepted-log"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "The candidate is visible only through cross-resource reference provenance and addresses a different issue family than the observed case."
+      }
+    ],
+    "unjudgedCandidateKeys": [
+      "diagnostic-playbook:article-backed",
+      "diagnostic-playbook:event-processing-delay",
+      "knowledge-article:profile-sync-issues",
+      "knowledge-article:security-incident-response",
+      "knowledge-article:segmentation-audience-rules",
+      "knowledge-article:shopify-integration-sync",
+      "knowledge-article:support-operations-playbook",
+      "knowledge-article:webhook-signature-validation",
+      "known-cause:shopify-custom-field-mapping",
+      "known-cause:sms-quiet-hours",
+      "known-cause:sms-stop-sync-delay",
+      "known-cause:track-api-local-time-timestamp",
+      "known-cause:webhook-delivery-latency",
+      "known-cause:webhook-secret-rotation"
+    ],
+    "synthesisOracle": {
+      "disposition": "hypothesis",
+      "acceptableLeadingCandidateSets": [
+        [
+          "diagnostic-playbook:flow-trigger"
+        ],
+        [
+          "knowledge-article:event-tracking-debugging"
+        ],
+        [
+          "knowledge-article:flow-trigger-troubleshooting"
+        ]
+      ],
+      "acceptableAlternativeCandidateKeys": [],
+      "discriminatorIntents": [
+        {
+          "id": "intent:primary-discriminator",
+          "separatesCandidateKeys": [
+            "diagnostic-playbook:flow-trigger",
+            "knowledge-article:event-tracking-debugging",
+            "knowledge-article:flow-trigger-troubleshooting"
+          ],
+          "requiredConcepts": [
+            "profile identity",
+            "event timestamp",
+            "timeline presence",
+            "qualification exclusion"
+          ]
+        }
+      ],
+      "forbiddenClaims": [
+        "Do not claim a confirmed root cause from applicability evidence alone.",
+        "Do not claim that B5 authorizes remediation, routing, lifecycle transition, or customer-facing action.",
+        "Do not infer a single ingestion or eligibility cause from unaligned profiles."
+      ]
+    },
+    "review": {
+      "status": "pending"
+    }
+  },
+  {
+    "id": "readiness-editor-insufficient-001",
+    "sourceReadinessCaseId": "readiness-editor-insufficient-001",
+    "split": "development",
+    "safeCase": {
+      "caseId": "readiness-editor-insufficient-001",
+      "problemStatement": "A blank editor screenshot is available, but object, timing, isolation, comparison, and console evidence are missing.",
+      "observedFacts": [
+        {
+          "id": "fact:blank-screenshot",
+          "statement": "A screenshot shows a blank editor page."
+        },
+        {
+          "id": "fact:editor-evidence-missing",
+          "statement": "Campaign identity, time, isolation results, browser comparison, second-user result, and console output are absent."
+        }
+      ],
+      "conversationState": []
+    },
+    "taxonomy": {
+      "primaryProductSurface": null,
+      "secondaryProductSurfaces": [],
+      "problemClasses": [],
+      "support": {
+        "productSurface": "tentative",
+        "problemClass": "tentative"
+      },
+      "basis": {
+        "source": "initial-classification",
+        "evidenceIds": [],
+        "knowledgeArticleIds": [],
+        "playbookIds": [],
+        "knownCauseIds": [],
+        "explanation": "Derived from the ticket and current conversation during evaluation."
+      }
+    },
+    "judgments": [
+      {
+        "resourceKey": "diagnostic-playbook:article-backed",
+        "verdict": "irrelevant",
+        "supportingEvidence": [
+          {
+            "kind": "resource-representation",
+            "id": "diagnostic-playbook:article-backed:canonical:0"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "This high-ranked cross-domain playbook does not address the observed issue family and is deliberately judged as a non-applicable near match."
+      },
+      {
+        "resourceKey": "diagnostic-playbook:campaign-editor",
+        "verdict": "applicable-next-step",
+        "supportingEvidence": [
+          {
+            "kind": "case-fact",
+            "id": "fact:blank-screenshot"
+          },
+          {
+            "kind": "resource-representation",
+            "id": "diagnostic-playbook:campaign-editor:canonical:0"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "The candidate supplies a bounded investigation path that directly addresses the observed case evidence without asserting a confirmed cause. The descriptor is relevant as the next evidence-collection checklist; a blank-page screenshot alone establishes no diagnostic branch."
+      },
+      {
+        "resourceKey": "knowledge-article:event-tracking-debugging",
+        "verdict": "irrelevant",
+        "supportingEvidence": [
+          {
+            "kind": "case-fact",
+            "id": "fact:blank-screenshot"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "The candidate is visible only through cross-resource reference provenance and addresses a different issue family than the observed case."
+      },
+      {
+        "resourceKey": "knowledge-article:performance-troubleshooting",
+        "verdict": "applicable-next-step",
+        "supportingEvidence": [
+          {
+            "kind": "case-fact",
+            "id": "fact:blank-screenshot"
+          },
+          {
+            "kind": "resource-representation",
+            "id": "knowledge-article:performance-troubleshooting:section:1"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "The candidate supplies a bounded investigation path that directly addresses the observed case evidence without asserting a confirmed cause. It identifies what the screenshot cannot distinguish and what to collect next."
+      },
+      {
+        "resourceKey": "knowledge-article:profile-sync-issues",
+        "verdict": "irrelevant",
+        "supportingEvidence": [
+          {
+            "kind": "case-fact",
+            "id": "fact:blank-screenshot"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "The candidate is visible only through cross-resource reference provenance and addresses a different issue family than the observed case."
+      },
+      {
+        "resourceKey": "knowledge-article:shopify-integration-sync",
+        "verdict": "irrelevant",
+        "supportingEvidence": [
+          {
+            "kind": "case-fact",
+            "id": "fact:blank-screenshot"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "The candidate is visible only through cross-resource reference provenance and addresses a different issue family than the observed case."
+      },
+      {
+        "resourceKey": "knowledge-article:sms-compliance",
+        "verdict": "irrelevant",
+        "supportingEvidence": [
+          {
+            "kind": "case-fact",
+            "id": "fact:blank-screenshot"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "The candidate is visible only through cross-resource reference provenance and addresses a different issue family than the observed case."
+      },
+      {
+        "resourceKey": "knowledge-article:webhook-signature-validation",
+        "verdict": "irrelevant",
+        "supportingEvidence": [
+          {
+            "kind": "case-fact",
+            "id": "fact:blank-screenshot"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "The candidate is visible only through cross-resource reference provenance and addresses a different issue family than the observed case."
+      }
+    ],
+    "unjudgedCandidateKeys": [
+      "diagnostic-playbook:event-processing-delay",
+      "diagnostic-playbook:flow-trigger",
+      "knowledge-article:account-access",
+      "knowledge-article:authentication",
+      "knowledge-article:campaign-send-failures",
+      "knowledge-article:coupon-catalog-sync",
+      "knowledge-article:flow-trigger-troubleshooting",
+      "knowledge-article:support-operations-playbook",
+      "known-cause:shopify-custom-field-mapping",
+      "known-cause:sms-quiet-hours",
+      "known-cause:sms-stop-sync-delay",
+      "known-cause:track-api-local-time-timestamp",
+      "known-cause:webhook-delivery-latency",
+      "known-cause:webhook-secret-rotation"
+    ],
+    "synthesisOracle": {
+      "disposition": "hypothesis",
+      "acceptableLeadingCandidateSets": [
+        [
+          "diagnostic-playbook:campaign-editor"
+        ],
+        [
+          "knowledge-article:performance-troubleshooting"
+        ]
+      ],
+      "acceptableAlternativeCandidateKeys": [],
+      "discriminatorIntents": [
+        {
+          "id": "intent:primary-discriminator",
+          "separatesCandidateKeys": [
+            "diagnostic-playbook:campaign-editor",
+            "knowledge-article:performance-troubleshooting"
+          ],
+          "requiredConcepts": [
+            "campaign identity",
+            "session isolation",
+            "console output",
+            "second-user comparison"
+          ]
+        }
+      ],
+      "forbiddenClaims": [
+        "Do not claim a confirmed root cause from applicability evidence alone.",
+        "Do not claim that B5 authorizes remediation, routing, lifecycle transition, or customer-facing action.",
+        "Do not infer a frontend or platform cause from the screenshot alone."
+      ]
+    },
+    "review": {
+      "status": "pending"
+    }
+  },
+  {
+    "id": "readiness-webhook-insufficient-001",
+    "sourceReadinessCaseId": "readiness-webhook-insufficient-001",
+    "split": "development",
+    "safeCase": {
+      "caseId": "readiness-webhook-insufficient-001",
+      "problemStatement": "A webhook signature failure is reported without the delivery, rotation, endpoint, or raw-body evidence needed to discriminate causes.",
+      "observedFacts": [
+        {
+          "id": "fact:signature-failure",
+          "statement": "A webhook signature failure is reported."
+        },
+        {
+          "id": "fact:webhook-evidence-missing",
+          "statement": "Delivery identity, rotation time, endpoint result, and raw-body-handling result are absent."
+        }
+      ],
+      "conversationState": []
+    },
+    "taxonomy": {
+      "primaryProductSurface": {
+        "domain": "integrations",
+        "area": "webhooks"
+      },
+      "secondaryProductSurfaces": [],
+      "problemClasses": [],
+      "support": {
+        "productSurface": "supported",
+        "problemClass": "tentative"
+      },
+      "basis": {
+        "source": "initial-classification",
+        "evidenceIds": [],
+        "knowledgeArticleIds": [],
+        "playbookIds": [],
+        "knownCauseIds": [],
+        "explanation": "Derived from the ticket and current conversation during evaluation."
+      }
+    },
+    "judgments": [
+      {
+        "resourceKey": "diagnostic-playbook:article-backed",
+        "verdict": "applicable-next-step",
+        "supportingEvidence": [
+          {
+            "kind": "case-fact",
+            "id": "fact:signature-failure"
+          },
+          {
+            "kind": "resource-representation",
+            "id": "diagnostic-playbook:article-backed:canonical:0"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "The candidate supplies a bounded investigation path that directly addresses the observed case evidence without asserting a confirmed cause. The descriptor is relevant as a safe next-step evidence checklist for a substantive signature report; no signature cause or branch applicability follows."
+      },
+      {
+        "resourceKey": "diagnostic-playbook:campaign-editor",
+        "verdict": "irrelevant",
+        "supportingEvidence": [
+          {
+            "kind": "resource-representation",
+            "id": "diagnostic-playbook:campaign-editor:canonical:0"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "This high-ranked cross-domain playbook does not address the observed issue family and is deliberately judged as a non-applicable near match."
+      },
+      {
+        "resourceKey": "knowledge-article:profile-sync-issues",
+        "verdict": "irrelevant",
+        "supportingEvidence": [
+          {
+            "kind": "case-fact",
+            "id": "fact:signature-failure"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "The candidate is visible only through cross-resource reference provenance and addresses a different issue family than the observed case."
+      },
+      {
+        "resourceKey": "knowledge-article:sms-compliance",
+        "verdict": "irrelevant",
+        "supportingEvidence": [
+          {
+            "kind": "case-fact",
+            "id": "fact:signature-failure"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "The candidate is visible only through cross-resource reference provenance and addresses a different issue family than the observed case."
+      },
+      {
+        "resourceKey": "knowledge-article:webhook-signature-validation",
+        "verdict": "applicable-next-step",
+        "supportingEvidence": [
+          {
+            "kind": "case-fact",
+            "id": "fact:signature-failure"
+          },
+          {
+            "kind": "resource-representation",
+            "id": "knowledge-article:webhook-signature-validation:section:1"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "The candidate supplies a bounded investigation path that directly addresses the observed case evidence without asserting a confirmed cause. It lists the redacted delivery evidence needed before verification comparison."
+      }
+    ],
+    "unjudgedCandidateKeys": [
+      "diagnostic-playbook:event-processing-delay",
+      "diagnostic-playbook:flow-trigger",
+      "knowledge-article:api-reference",
+      "knowledge-article:event-tracking-debugging",
+      "knowledge-article:performance-troubleshooting",
+      "knowledge-article:security-incident-response",
+      "knowledge-article:shopify-integration-sync",
+      "knowledge-article:support-operations-playbook",
+      "known-cause:shopify-custom-field-mapping",
+      "known-cause:sms-quiet-hours",
+      "known-cause:sms-stop-sync-delay",
+      "known-cause:track-api-local-time-timestamp",
+      "known-cause:webhook-delivery-latency",
+      "known-cause:webhook-secret-rotation"
+    ],
+    "synthesisOracle": {
+      "disposition": "hypothesis",
+      "acceptableLeadingCandidateSets": [
+        [
+          "diagnostic-playbook:article-backed"
+        ],
+        [
+          "knowledge-article:webhook-signature-validation"
+        ]
+      ],
+      "acceptableAlternativeCandidateKeys": [],
+      "discriminatorIntents": [
+        {
+          "id": "intent:primary-discriminator",
+          "separatesCandidateKeys": [
+            "diagnostic-playbook:article-backed",
+            "knowledge-article:webhook-signature-validation"
+          ],
+          "requiredConcepts": [
+            "delivery identity",
+            "rotation timing",
+            "endpoint result",
+            "raw-body handling"
+          ]
+        }
+      ],
+      "forbiddenClaims": [
+        "Do not claim a confirmed root cause from applicability evidence alone.",
+        "Do not claim that B5 authorizes remediation, routing, lifecycle transition, or customer-facing action.",
+        "Do not claim a rotation or body-handling cause without the missing comparisons."
+      ]
+    },
+    "review": {
+      "status": "pending"
+    }
+  },
+  {
+    "id": "readiness-flow-insufficient-001",
+    "sourceReadinessCaseId": "readiness-flow-insufficient-001",
+    "split": "development",
+    "safeCase": {
+      "caseId": "readiness-flow-insufficient-001",
+      "problemStatement": "A profile is reported missing from a flow, but event, identity, timing, history, and qualification evidence are absent.",
+      "observedFacts": [
+        {
+          "id": "fact:no-flow-entry",
+          "statement": "A profile is reported not to have entered the flow."
+        },
+        {
+          "id": "fact:flow-evidence-missing",
+          "statement": "Event name, profile identity, time, timeline observation, flow history, and qualification result are absent."
+        }
+      ],
+      "conversationState": []
+    },
+    "taxonomy": {
+      "primaryProductSurface": null,
+      "secondaryProductSurfaces": [],
+      "problemClasses": [],
+      "support": {
+        "productSurface": "tentative",
+        "problemClass": "tentative"
+      },
+      "basis": {
+        "source": "initial-classification",
+        "evidenceIds": [],
+        "knowledgeArticleIds": [],
+        "playbookIds": [],
+        "knownCauseIds": [],
+        "explanation": "Derived from the ticket and current conversation during evaluation."
+      }
+    },
+    "judgments": [
+      {
+        "resourceKey": "diagnostic-playbook:campaign-editor",
+        "verdict": "irrelevant",
+        "supportingEvidence": [
+          {
+            "kind": "resource-representation",
+            "id": "diagnostic-playbook:campaign-editor:canonical:0"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "This high-ranked cross-domain playbook does not address the observed issue family and is deliberately judged as a non-applicable near match."
+      },
+      {
+        "resourceKey": "diagnostic-playbook:flow-trigger",
+        "verdict": "applicable-next-step",
+        "supportingEvidence": [
+          {
+            "kind": "case-fact",
+            "id": "fact:no-flow-entry"
+          },
+          {
+            "kind": "resource-representation",
+            "id": "diagnostic-playbook:flow-trigger:canonical:0"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "The candidate supplies a bounded investigation path that directly addresses the observed case evidence without asserting a confirmed cause. The descriptor is relevant as the next flow, trigger, profile, and eligibility evidence checklist; no flow branch is confirmed."
+      },
+      {
+        "resourceKey": "knowledge-article:event-tracking-debugging",
+        "verdict": "applicable-next-step",
+        "supportingEvidence": [
+          {
+            "kind": "case-fact",
+            "id": "fact:no-flow-entry"
+          },
+          {
+            "kind": "resource-representation",
+            "id": "knowledge-article:event-tracking-debugging:section:1"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "The candidate supplies a bounded investigation path that directly addresses the observed case evidence without asserting a confirmed cause. It supports redacted identity and timing checks before interpreting absence."
+      },
+      {
+        "resourceKey": "knowledge-article:flow-trigger-troubleshooting",
+        "verdict": "applicable-next-step",
+        "supportingEvidence": [
+          {
+            "kind": "case-fact",
+            "id": "fact:no-flow-entry"
+          },
+          {
+            "kind": "resource-representation",
+            "id": "knowledge-article:flow-trigger-troubleshooting:section:1"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "The candidate supplies a bounded investigation path that directly addresses the observed case evidence without asserting a confirmed cause. It supplies missing flow, profile, trigger, timestamp, and history comparisons."
+      },
+      {
+        "resourceKey": "knowledge-article:shopify-integration-sync",
+        "verdict": "irrelevant",
+        "supportingEvidence": [
+          {
+            "kind": "case-fact",
+            "id": "fact:no-flow-entry"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "The candidate is visible only through cross-resource reference provenance and addresses a different issue family than the observed case."
+      },
+      {
+        "resourceKey": "knowledge-article:webhook-signature-validation",
+        "verdict": "irrelevant",
+        "supportingEvidence": [
+          {
+            "kind": "case-fact",
+            "id": "fact:no-flow-entry"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "The candidate is visible only through cross-resource reference provenance and addresses a different issue family than the observed case."
+      }
+    ],
+    "unjudgedCandidateKeys": [
+      "diagnostic-playbook:article-backed",
+      "diagnostic-playbook:event-processing-delay",
+      "knowledge-article:api-reference",
+      "knowledge-article:performance-troubleshooting",
+      "knowledge-article:profile-sync-issues",
+      "knowledge-article:segmentation-audience-rules",
+      "knowledge-article:sms-compliance",
+      "knowledge-article:support-operations-playbook",
+      "known-cause:shopify-custom-field-mapping",
+      "known-cause:sms-stop-sync-delay",
+      "known-cause:track-api-local-time-timestamp",
+      "known-cause:webhook-delivery-latency",
+      "known-cause:webhook-secret-rotation"
+    ],
+    "synthesisOracle": {
+      "disposition": "hypothesis",
+      "acceptableLeadingCandidateSets": [
+        [
+          "diagnostic-playbook:flow-trigger"
+        ],
+        [
+          "knowledge-article:event-tracking-debugging"
+        ],
+        [
+          "knowledge-article:flow-trigger-troubleshooting"
+        ]
+      ],
+      "acceptableAlternativeCandidateKeys": [],
+      "discriminatorIntents": [
+        {
+          "id": "intent:primary-discriminator",
+          "separatesCandidateKeys": [
+            "diagnostic-playbook:flow-trigger",
+            "knowledge-article:event-tracking-debugging",
+            "knowledge-article:flow-trigger-troubleshooting"
+          ],
+          "requiredConcepts": [
+            "event name",
+            "profile identity",
+            "event time",
+            "flow history",
+            "qualification result"
+          ]
+        }
+      ],
+      "forbiddenClaims": [
+        "Do not claim a confirmed root cause from applicability evidence alone.",
+        "Do not claim that B5 authorizes remediation, routing, lifecycle transition, or customer-facing action.",
+        "Do not infer an ingestion or qualification failure from the sparse report."
+      ]
+    },
+    "review": {
+      "status": "pending"
+    }
+  },
+  {
+    "id": "readiness-editor-near-match-001",
+    "sourceReadinessCaseId": "readiness-editor-near-match-001",
+    "split": "development",
+    "safeCase": {
+      "caseId": "readiness-editor-near-match-001",
+      "problemStatement": "The campaign opens in a private session, but an immediate platform deployment is requested because an ordinary browser was blank earlier.",
+      "observedFacts": [
+        {
+          "id": "fact:private-opens",
+          "statement": "The campaign opens in a private session."
+        },
+        {
+          "id": "fact:ordinary-was-blank",
+          "statement": "The ordinary browser was blank earlier."
+        },
+        {
+          "id": "fact:deployment-request",
+          "statement": "Immediate platform deployment is requested."
+        }
+      ],
+      "conversationState": []
+    },
+    "taxonomy": {
+      "primaryProductSurface": null,
+      "secondaryProductSurfaces": [],
+      "problemClasses": [],
+      "support": {
+        "productSurface": "tentative",
+        "problemClass": "tentative"
+      },
+      "basis": {
+        "source": "initial-classification",
+        "evidenceIds": [],
+        "knowledgeArticleIds": [],
+        "playbookIds": [],
+        "knownCauseIds": [],
+        "explanation": "Derived from the ticket and current conversation during evaluation."
+      }
+    },
+    "judgments": [
+      {
+        "resourceKey": "diagnostic-playbook:article-backed",
+        "verdict": "irrelevant",
+        "supportingEvidence": [
+          {
+            "kind": "resource-representation",
+            "id": "diagnostic-playbook:article-backed:canonical:0"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "This high-ranked cross-domain playbook does not address the observed issue family and is deliberately judged as a non-applicable near match."
+      },
+      {
+        "resourceKey": "diagnostic-playbook:campaign-editor",
+        "verdict": "applicable-next-step",
+        "supportingEvidence": [
+          {
+            "kind": "case-fact",
+            "id": "fact:private-opens"
+          },
+          {
+            "kind": "resource-representation",
+            "id": "diagnostic-playbook:campaign-editor:canonical:0"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "The candidate supplies a bounded investigation path that directly addresses the observed case evidence without asserting a confirmed cause. The descriptor is relevant for preserving the observed private-session rule-out; it does not make the requested platform fix applicable."
+      },
+      {
+        "resourceKey": "knowledge-article:performance-troubleshooting",
+        "verdict": "applicable-next-step",
+        "supportingEvidence": [
+          {
+            "kind": "case-fact",
+            "id": "fact:private-opens"
+          },
+          {
+            "kind": "resource-representation",
+            "id": "knowledge-article:performance-troubleshooting:section:2"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "The candidate supplies a bounded investigation path that directly addresses the observed case evidence without asserting a confirmed cause. A working session is not evidence that a platform fix was applied."
+      },
+      {
+        "resourceKey": "knowledge-article:profile-sync-issues",
+        "verdict": "irrelevant",
+        "supportingEvidence": [
+          {
+            "kind": "case-fact",
+            "id": "fact:private-opens"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "The candidate is visible only through cross-resource reference provenance and addresses a different issue family than the observed case."
+      },
+      {
+        "resourceKey": "knowledge-article:shopify-integration-sync",
+        "verdict": "irrelevant",
+        "supportingEvidence": [
+          {
+            "kind": "case-fact",
+            "id": "fact:private-opens"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "The candidate is visible only through cross-resource reference provenance and addresses a different issue family than the observed case."
+      },
+      {
+        "resourceKey": "knowledge-article:sms-compliance",
+        "verdict": "irrelevant",
+        "supportingEvidence": [
+          {
+            "kind": "case-fact",
+            "id": "fact:private-opens"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "The candidate is visible only through cross-resource reference provenance and addresses a different issue family than the observed case."
+      },
+      {
+        "resourceKey": "knowledge-article:webhook-signature-validation",
+        "verdict": "irrelevant",
+        "supportingEvidence": [
+          {
+            "kind": "case-fact",
+            "id": "fact:private-opens"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "The candidate is visible only through cross-resource reference provenance and addresses a different issue family than the observed case."
+      }
+    ],
+    "unjudgedCandidateKeys": [
+      "diagnostic-playbook:event-processing-delay",
+      "diagnostic-playbook:flow-trigger",
+      "knowledge-article:account-access",
+      "knowledge-article:authentication",
+      "knowledge-article:campaign-send-failures",
+      "knowledge-article:coupon-catalog-sync",
+      "knowledge-article:event-tracking-debugging",
+      "knowledge-article:security-incident-response",
+      "knowledge-article:support-operations-playbook",
+      "known-cause:shopify-custom-field-mapping",
+      "known-cause:sms-quiet-hours",
+      "known-cause:sms-stop-sync-delay",
+      "known-cause:track-api-local-time-timestamp",
+      "known-cause:webhook-delivery-latency",
+      "known-cause:webhook-secret-rotation"
+    ],
+    "synthesisOracle": {
+      "disposition": "hypothesis",
+      "acceptableLeadingCandidateSets": [
+        [
+          "diagnostic-playbook:campaign-editor"
+        ],
+        [
+          "knowledge-article:performance-troubleshooting"
+        ]
+      ],
+      "acceptableAlternativeCandidateKeys": [],
+      "discriminatorIntents": [
+        {
+          "id": "intent:primary-discriminator",
+          "separatesCandidateKeys": [
+            "diagnostic-playbook:campaign-editor",
+            "knowledge-article:performance-troubleshooting"
+          ],
+          "requiredConcepts": [
+            "session-local reproduction",
+            "console evidence",
+            "same-campaign comparison"
+          ]
+        }
+      ],
+      "forbiddenClaims": [
+        "Do not claim a confirmed root cause from applicability evidence alone.",
+        "Do not claim that B5 authorizes remediation, routing, lifecycle transition, or customer-facing action.",
+        "Do not treat a requested deployment as evidence that platform remediation is justified."
+      ]
+    },
+    "review": {
+      "status": "pending"
+    }
+  },
+  {
+    "id": "readiness-webhook-near-match-001",
+    "sourceReadinessCaseId": "readiness-webhook-near-match-001",
+    "split": "development",
+    "safeCase": {
+      "caseId": "readiness-webhook-near-match-001",
+      "problemStatement": "Rotation steps are requested for a signature failure even though no signing-key rotation occurred.",
+      "observedFacts": [
+        {
+          "id": "fact:rotation-request",
+          "statement": "Rotation steps are requested."
+        },
+        {
+          "id": "fact:no-rotation",
+          "statement": "No signing-key rotation occurred."
+        },
+        {
+          "id": "fact:parsing-change",
+          "statement": "An unverified receiver-side parsing change is the only reported change."
+        }
+      ],
+      "conversationState": []
+    },
+    "taxonomy": {
+      "primaryProductSurface": {
+        "domain": "integrations",
+        "area": "webhooks"
+      },
+      "secondaryProductSurfaces": [],
+      "problemClasses": [],
+      "support": {
+        "productSurface": "supported",
+        "problemClass": "tentative"
+      },
+      "basis": {
+        "source": "initial-classification",
+        "evidenceIds": [],
+        "knowledgeArticleIds": [],
+        "playbookIds": [],
+        "knownCauseIds": [],
+        "explanation": "Derived from the ticket and current conversation during evaluation."
+      }
+    },
+    "judgments": [
+      {
+        "resourceKey": "diagnostic-playbook:article-backed",
+        "verdict": "applicable-next-step",
+        "supportingEvidence": [
+          {
+            "kind": "case-fact",
+            "id": "fact:rotation-request"
+          },
+          {
+            "kind": "resource-representation",
+            "id": "diagnostic-playbook:article-backed:canonical:0"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "The candidate supplies a bounded investigation path that directly addresses the observed case evidence without asserting a confirmed cause. The descriptor is relevant for the next raw-body comparison and for rejecting unsupported rotation steps; it does not make a rotation branch applicable."
+      },
+      {
+        "resourceKey": "diagnostic-playbook:campaign-editor",
+        "verdict": "irrelevant",
+        "supportingEvidence": [
+          {
+            "kind": "resource-representation",
+            "id": "diagnostic-playbook:campaign-editor:canonical:0"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "This high-ranked cross-domain playbook does not address the observed issue family and is deliberately judged as a non-applicable near match."
+      },
+      {
+        "resourceKey": "knowledge-article:profile-sync-issues",
+        "verdict": "irrelevant",
+        "supportingEvidence": [
+          {
+            "kind": "case-fact",
+            "id": "fact:rotation-request"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "The candidate is visible only through cross-resource reference provenance and addresses a different issue family than the observed case."
+      },
+      {
+        "resourceKey": "knowledge-article:shopify-integration-sync",
+        "verdict": "irrelevant",
+        "supportingEvidence": [
+          {
+            "kind": "case-fact",
+            "id": "fact:rotation-request"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "The candidate is visible only through cross-resource reference provenance and addresses a different issue family than the observed case."
+      },
+      {
+        "resourceKey": "knowledge-article:sms-compliance",
+        "verdict": "irrelevant",
+        "supportingEvidence": [
+          {
+            "kind": "case-fact",
+            "id": "fact:rotation-request"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "The candidate is visible only through cross-resource reference provenance and addresses a different issue family than the observed case."
+      },
+      {
+        "resourceKey": "knowledge-article:webhook-signature-validation",
+        "verdict": "applicable-next-step",
+        "supportingEvidence": [
+          {
+            "kind": "case-fact",
+            "id": "fact:rotation-request"
+          },
+          {
+            "kind": "resource-representation",
+            "id": "knowledge-article:webhook-signature-validation:section:2"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "The candidate supplies a bounded investigation path that directly addresses the observed case evidence without asserting a confirmed cause. Unchanged secrets weaken rotation and retain raw-body comparison as the alternative."
+      },
+      {
+        "resourceKey": "known-cause:webhook-secret-rotation",
+        "verdict": "contradicted",
+        "supportingEvidence": [
+          {
+            "kind": "case-fact",
+            "id": "fact:rotation-request"
+          },
+          {
+            "kind": "resource-representation",
+            "id": "known-cause:webhook-secret-rotation:canonical:0"
+          }
+        ],
+        "contradictingEvidence": [
+          {
+            "kind": "case-fact",
+            "id": "fact:no-rotation"
+          }
+        ],
+        "missingEvidence": [],
+        "rationale": "A required premise of this candidate conflicts with an explicit observed case fact, so it must not be promoted as an applicable next-step hypothesis."
+      }
+    ],
+    "unjudgedCandidateKeys": [
+      "diagnostic-playbook:event-processing-delay",
+      "diagnostic-playbook:flow-trigger",
+      "knowledge-article:campaign-send-failures",
+      "knowledge-article:event-tracking-debugging",
+      "knowledge-article:flow-trigger-troubleshooting",
+      "knowledge-article:security-incident-response",
+      "knowledge-article:support-operations-playbook",
+      "known-cause:shopify-custom-field-mapping",
+      "known-cause:sms-quiet-hours",
+      "known-cause:sms-stop-sync-delay",
+      "known-cause:track-api-local-time-timestamp",
+      "known-cause:webhook-delivery-latency"
+    ],
+    "synthesisOracle": {
+      "disposition": "hypothesis",
+      "acceptableLeadingCandidateSets": [
+        [
+          "diagnostic-playbook:article-backed"
+        ],
+        [
+          "knowledge-article:webhook-signature-validation"
+        ]
+      ],
+      "acceptableAlternativeCandidateKeys": [],
+      "discriminatorIntents": [
+        {
+          "id": "intent:primary-discriminator",
+          "separatesCandidateKeys": [
+            "diagnostic-playbook:article-backed",
+            "knowledge-article:webhook-signature-validation",
+            "known-cause:webhook-secret-rotation"
+          ],
+          "requiredConcepts": [
+            "raw-body comparison",
+            "receiver parsing change",
+            "rotation event"
+          ]
+        }
+      ],
+      "forbiddenClaims": [
+        "Do not claim a confirmed root cause from applicability evidence alone.",
+        "Do not claim that B5 authorizes remediation, routing, lifecycle transition, or customer-facing action.",
+        "Do not make the rotation branch applicable merely because rotation vocabulary appears in the request."
+      ]
+    },
+    "review": {
+      "status": "pending"
+    }
+  },
+  {
+    "id": "readiness-flow-near-match-001",
+    "sourceReadinessCaseId": "readiness-flow-near-match-001",
+    "split": "development",
+    "safeCase": {
+      "caseId": "readiness-flow-near-match-001",
+      "problemStatement": "An ingestion investigation is requested even though the exact event is already present and a filter exclusion is observed.",
+      "observedFacts": [
+        {
+          "id": "fact:event-present",
+          "statement": "The exact event is present in the matched profile timeline."
+        },
+        {
+          "id": "fact:filter-exclusion",
+          "statement": "Analytics shows a profile-filter exclusion."
+        },
+        {
+          "id": "fact:eligibility-unknown",
+          "statement": "Other eligibility checks remain unknown."
+        },
+        {
+          "id": "fact:ingestion-request",
+          "statement": "The requested investigation assumes an ingestion problem."
+        }
+      ],
+      "conversationState": []
+    },
+    "taxonomy": {
+      "primaryProductSurface": {
+        "domain": "customer-data",
+        "area": "consent"
+      },
+      "secondaryProductSurfaces": [],
+      "problemClasses": [],
+      "support": {
+        "productSurface": "supported",
+        "problemClass": "tentative"
+      },
+      "basis": {
+        "source": "initial-classification",
+        "evidenceIds": [],
+        "knowledgeArticleIds": [],
+        "playbookIds": [],
+        "knownCauseIds": [],
+        "explanation": "Derived from the ticket and current conversation during evaluation."
+      }
+    },
+    "judgments": [
+      {
+        "resourceKey": "diagnostic-playbook:campaign-editor",
+        "verdict": "irrelevant",
+        "supportingEvidence": [
+          {
+            "kind": "resource-representation",
+            "id": "diagnostic-playbook:campaign-editor:canonical:0"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "This high-ranked cross-domain playbook does not address the observed issue family and is deliberately judged as a non-applicable near match."
+      },
+      {
+        "resourceKey": "diagnostic-playbook:flow-trigger",
+        "verdict": "applicable-next-step",
+        "supportingEvidence": [
+          {
+            "kind": "case-fact",
+            "id": "fact:event-present"
+          },
+          {
+            "kind": "resource-representation",
+            "id": "diagnostic-playbook:flow-trigger:canonical:0"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "The candidate supplies a bounded investigation path that directly addresses the observed case evidence without asserting a confirmed cause. The descriptor is relevant for the observed exclusion and remaining eligibility checks; it does not make the requested ingestion explanation applicable."
+      },
+      {
+        "resourceKey": "knowledge-article:event-tracking-debugging",
+        "verdict": "applicable-next-step",
+        "supportingEvidence": [
+          {
+            "kind": "case-fact",
+            "id": "fact:event-present"
+          },
+          {
+            "kind": "resource-representation",
+            "id": "knowledge-article:event-tracking-debugging:section:2"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "The candidate supplies a bounded investigation path that directly addresses the observed case evidence without asserting a confirmed cause. A present event points away from an ingestion claim."
+      },
+      {
+        "resourceKey": "knowledge-article:flow-trigger-troubleshooting",
+        "verdict": "applicable-next-step",
+        "supportingEvidence": [
+          {
+            "kind": "case-fact",
+            "id": "fact:event-present"
+          },
+          {
+            "kind": "resource-representation",
+            "id": "knowledge-article:flow-trigger-troubleshooting:section:2"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "The candidate supplies a bounded investigation path that directly addresses the observed case evidence without asserting a confirmed cause. It retains the observed exclusion and unknown eligibility checks."
+      },
+      {
+        "resourceKey": "knowledge-article:profile-sync-issues",
+        "verdict": "irrelevant",
+        "supportingEvidence": [
+          {
+            "kind": "case-fact",
+            "id": "fact:event-present"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "The candidate is visible only through cross-resource reference provenance and addresses a different issue family than the observed case."
+      },
+      {
+        "resourceKey": "knowledge-article:shopify-integration-sync",
+        "verdict": "irrelevant",
+        "supportingEvidence": [
+          {
+            "kind": "case-fact",
+            "id": "fact:event-present"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "The candidate is visible only through cross-resource reference provenance and addresses a different issue family than the observed case."
+      },
+      {
+        "resourceKey": "knowledge-article:webhook-signature-validation",
+        "verdict": "irrelevant",
+        "supportingEvidence": [
+          {
+            "kind": "case-fact",
+            "id": "fact:event-present"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "The candidate is visible only through cross-resource reference provenance and addresses a different issue family than the observed case."
+      }
+    ],
+    "unjudgedCandidateKeys": [
+      "diagnostic-playbook:article-backed",
+      "diagnostic-playbook:event-processing-delay",
+      "knowledge-article:campaign-send-failures",
+      "knowledge-article:performance-troubleshooting",
+      "knowledge-article:segmentation-audience-rules",
+      "knowledge-article:sms-compliance",
+      "knowledge-article:support-operations-playbook",
+      "known-cause:shopify-custom-field-mapping",
+      "known-cause:sms-quiet-hours",
+      "known-cause:sms-stop-sync-delay",
+      "known-cause:track-api-local-time-timestamp",
+      "known-cause:webhook-delivery-latency",
+      "known-cause:webhook-secret-rotation"
+    ],
+    "synthesisOracle": {
+      "disposition": "hypothesis",
+      "acceptableLeadingCandidateSets": [
+        [
+          "diagnostic-playbook:flow-trigger"
+        ],
+        [
+          "knowledge-article:event-tracking-debugging"
+        ],
+        [
+          "knowledge-article:flow-trigger-troubleshooting"
+        ]
+      ],
+      "acceptableAlternativeCandidateKeys": [],
+      "discriminatorIntents": [
+        {
+          "id": "intent:primary-discriminator",
+          "separatesCandidateKeys": [
+            "diagnostic-playbook:flow-trigger",
+            "knowledge-article:event-tracking-debugging",
+            "knowledge-article:flow-trigger-troubleshooting"
+          ],
+          "requiredConcepts": [
+            "filter exclusion",
+            "remaining eligibility checks",
+            "event presence"
+          ]
+        }
+      ],
+      "forbiddenClaims": [
+        "Do not claim a confirmed root cause from applicability evidence alone.",
+        "Do not claim that B5 authorizes remediation, routing, lifecycle transition, or customer-facing action.",
+        "Do not make ingestion failure the leading explanation when the event is already present."
+      ]
+    },
+    "review": {
+      "status": "pending"
+    }
+  },
+  {
+    "id": "readiness-editor-exact-no-code-001",
+    "sourceReadinessCaseId": "readiness-editor-exact-no-code-001",
+    "split": "development",
+    "safeCase": {
+      "caseId": "readiness-editor-exact-no-code-001",
+      "problemStatement": "The editor is blank in one session, with no chunk-loading error or isolation comparisons.",
+      "observedFacts": [
+        {
+          "id": "fact:one-session-blank",
+          "statement": "The editor is blank in one browser session."
+        },
+        {
+          "id": "fact:no-loading-code",
+          "statement": "No chunk-loading error is observed."
+        },
+        {
+          "id": "fact:no-isolation",
+          "statement": "No private-window, alternate-browser, or second-user comparison is available."
+        }
+      ],
+      "conversationState": []
+    },
+    "taxonomy": {
+      "primaryProductSurface": null,
+      "secondaryProductSurfaces": [],
+      "problemClasses": [],
+      "support": {
+        "productSurface": "tentative",
+        "problemClass": "tentative"
+      },
+      "basis": {
+        "source": "initial-classification",
+        "evidenceIds": [],
+        "knowledgeArticleIds": [],
+        "playbookIds": [],
+        "knownCauseIds": [],
+        "explanation": "Derived from the ticket and current conversation during evaluation."
+      }
+    },
+    "judgments": [
+      {
+        "resourceKey": "diagnostic-playbook:article-backed",
+        "verdict": "irrelevant",
+        "supportingEvidence": [
+          {
+            "kind": "resource-representation",
+            "id": "diagnostic-playbook:article-backed:canonical:0"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "This high-ranked cross-domain playbook does not address the observed issue family and is deliberately judged as a non-applicable near match."
+      },
+      {
+        "resourceKey": "diagnostic-playbook:campaign-editor",
+        "verdict": "applicable-next-step",
+        "supportingEvidence": [
+          {
+            "kind": "case-fact",
+            "id": "fact:one-session-blank"
+          },
+          {
+            "kind": "resource-representation",
+            "id": "diagnostic-playbook:campaign-editor:canonical:0"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "The candidate supplies a bounded investigation path that directly addresses the observed case evidence without asserting a confirmed cause. The descriptor is relevant for the missing isolation and console comparisons; generic loading words without ChunkLoadError do not confirm the frontend branch."
+      },
+      {
+        "resourceKey": "knowledge-article:performance-troubleshooting",
+        "verdict": "applicable-next-step",
+        "supportingEvidence": [
+          {
+            "kind": "case-fact",
+            "id": "fact:one-session-blank"
+          },
+          {
+            "kind": "resource-representation",
+            "id": "knowledge-article:performance-troubleshooting:section:1"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "The candidate supplies a bounded investigation path that directly addresses the observed case evidence without asserting a confirmed cause. A similar report should retrieve evidence guidance, not the frontend branch solely from generic words."
+      },
+      {
+        "resourceKey": "knowledge-article:profile-sync-issues",
+        "verdict": "irrelevant",
+        "supportingEvidence": [
+          {
+            "kind": "case-fact",
+            "id": "fact:one-session-blank"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "The candidate is visible only through cross-resource reference provenance and addresses a different issue family than the observed case."
+      },
+      {
+        "resourceKey": "knowledge-article:sms-compliance",
+        "verdict": "irrelevant",
+        "supportingEvidence": [
+          {
+            "kind": "case-fact",
+            "id": "fact:one-session-blank"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "The candidate is visible only through cross-resource reference provenance and addresses a different issue family than the observed case."
+      },
+      {
+        "resourceKey": "knowledge-article:webhook-signature-validation",
+        "verdict": "irrelevant",
+        "supportingEvidence": [
+          {
+            "kind": "case-fact",
+            "id": "fact:one-session-blank"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "The candidate is visible only through cross-resource reference provenance and addresses a different issue family than the observed case."
+      }
+    ],
+    "unjudgedCandidateKeys": [
+      "diagnostic-playbook:event-processing-delay",
+      "diagnostic-playbook:flow-trigger",
+      "knowledge-article:account-access",
+      "knowledge-article:authentication",
+      "knowledge-article:campaign-send-failures",
+      "knowledge-article:coupon-catalog-sync",
+      "knowledge-article:event-tracking-debugging",
+      "knowledge-article:security-incident-response",
+      "knowledge-article:shopify-integration-sync",
+      "knowledge-article:support-operations-playbook",
+      "known-cause:shopify-custom-field-mapping",
+      "known-cause:sms-quiet-hours",
+      "known-cause:sms-stop-sync-delay",
+      "known-cause:track-api-local-time-timestamp",
+      "known-cause:webhook-delivery-latency",
+      "known-cause:webhook-secret-rotation"
+    ],
+    "synthesisOracle": {
+      "disposition": "hypothesis",
+      "acceptableLeadingCandidateSets": [
+        [
+          "diagnostic-playbook:campaign-editor"
+        ],
+        [
+          "knowledge-article:performance-troubleshooting"
+        ]
+      ],
+      "acceptableAlternativeCandidateKeys": [],
+      "discriminatorIntents": [
+        {
+          "id": "intent:primary-discriminator",
+          "separatesCandidateKeys": [
+            "diagnostic-playbook:campaign-editor",
+            "knowledge-article:performance-troubleshooting"
+          ],
+          "requiredConcepts": [
+            "session isolation",
+            "console output",
+            "second-user comparison"
+          ]
+        }
+      ],
+      "forbiddenClaims": [
+        "Do not claim a confirmed root cause from applicability evidence alone.",
+        "Do not claim that B5 authorizes remediation, routing, lifecycle transition, or customer-facing action.",
+        "Do not infer the exact chunk-loading branch from generic editor-loading language."
+      ]
+    },
+    "review": {
+      "status": "pending"
+    }
+  },
+  {
+    "id": "readiness-webhook-opaque-id-negative-001",
+    "sourceReadinessCaseId": "readiness-webhook-opaque-id-negative-001",
+    "split": "development",
+    "safeCase": {
+      "caseId": "readiness-webhook-opaque-id-negative-001",
+      "problemStatement": "The request contains only an opaque delivery identifier and asks where to locate the record, without a troubleshooting symptom.",
+      "observedFacts": [
+        {
+          "id": "fact:opaque-only",
+          "statement": "An opaque delivery identifier is the only supplied case-specific reference."
+        },
+        {
+          "id": "fact:lookup-request",
+          "statement": "The request asks where to locate the corresponding record."
+        },
+        {
+          "id": "fact:no-troubleshooting-symptom",
+          "statement": "No signature, rotation, raw-body, endpoint, timing, or retry symptom is supplied."
+        }
+      ],
+      "conversationState": []
+    },
+    "taxonomy": {
+      "primaryProductSurface": {
+        "domain": "integrations",
+        "area": "webhooks"
+      },
+      "secondaryProductSurfaces": [],
+      "problemClasses": [],
+      "support": {
+        "productSurface": "supported",
+        "problemClass": "tentative"
+      },
+      "basis": {
+        "source": "initial-classification",
+        "evidenceIds": [],
+        "knowledgeArticleIds": [],
+        "playbookIds": [],
+        "knownCauseIds": [],
+        "explanation": "Derived from the ticket and current conversation during evaluation."
+      }
+    },
+    "judgments": [
+      {
+        "resourceKey": "diagnostic-playbook:article-backed",
+        "verdict": "irrelevant",
+        "supportingEvidence": [
+          {
+            "kind": "resource-representation",
+            "id": "diagnostic-playbook:article-backed:canonical:0"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "The case lacks the symptom family this candidate addresses, so the candidate is not a meaningful investigation path for this request."
+      },
+      {
+        "resourceKey": "diagnostic-playbook:campaign-editor",
+        "verdict": "irrelevant",
+        "supportingEvidence": [
+          {
+            "kind": "resource-representation",
+            "id": "diagnostic-playbook:campaign-editor:canonical:0"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "This high-ranked cross-domain playbook does not address the observed issue family and is deliberately judged as a non-applicable near match."
+      },
+      {
+        "resourceKey": "knowledge-article:profile-sync-issues",
+        "verdict": "irrelevant",
+        "supportingEvidence": [
+          {
+            "kind": "case-fact",
+            "id": "fact:opaque-only"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "The candidate is visible only through cross-resource reference provenance and addresses a different issue family than the observed case."
+      },
+      {
+        "resourceKey": "knowledge-article:shopify-integration-sync",
+        "verdict": "irrelevant",
+        "supportingEvidence": [
+          {
+            "kind": "case-fact",
+            "id": "fact:opaque-only"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "The candidate is visible only through cross-resource reference provenance and addresses a different issue family than the observed case."
+      },
+      {
+        "resourceKey": "knowledge-article:sms-compliance",
+        "verdict": "irrelevant",
+        "supportingEvidence": [
+          {
+            "kind": "case-fact",
+            "id": "fact:opaque-only"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "The candidate is visible only through cross-resource reference provenance and addresses a different issue family than the observed case."
+      },
+      {
+        "resourceKey": "knowledge-article:webhook-signature-validation",
+        "verdict": "irrelevant",
+        "supportingEvidence": [
+          {
+            "kind": "resource-representation",
+            "id": "knowledge-article:webhook-signature-validation:section:0"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "The case lacks the symptom family this candidate addresses, so the candidate is not a meaningful investigation path for this request."
+      },
+      {
+        "resourceKey": "known-cause:webhook-delivery-latency",
+        "verdict": "irrelevant",
+        "supportingEvidence": [
+          {
+            "kind": "resource-representation",
+            "id": "known-cause:webhook-delivery-latency:canonical:0"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "The case lacks the symptom family this candidate addresses, so the candidate is not a meaningful investigation path for this request."
+      },
+      {
+        "resourceKey": "known-cause:webhook-secret-rotation",
+        "verdict": "irrelevant",
+        "supportingEvidence": [
+          {
+            "kind": "resource-representation",
+            "id": "known-cause:webhook-secret-rotation:canonical:0"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "The case lacks the symptom family this candidate addresses, so the candidate is not a meaningful investigation path for this request."
+      }
+    ],
+    "unjudgedCandidateKeys": [
+      "diagnostic-playbook:event-processing-delay",
+      "diagnostic-playbook:flow-trigger",
+      "knowledge-article:api-reference",
+      "knowledge-article:campaign-send-failures",
+      "knowledge-article:event-tracking-debugging",
+      "knowledge-article:security-incident-response",
+      "knowledge-article:support-operations-playbook",
+      "known-cause:shopify-custom-field-mapping",
+      "known-cause:sms-stop-sync-delay",
+      "known-cause:track-api-local-time-timestamp"
+    ],
+    "synthesisOracle": {
+      "disposition": "abstain",
+      "acceptableLeadingCandidateSets": [],
+      "acceptableAlternativeCandidateKeys": [],
+      "discriminatorIntents": [],
+      "forbiddenClaims": [
+        "Do not claim a confirmed root cause from applicability evidence alone.",
+        "Do not claim that B5 authorizes remediation, routing, lifecycle transition, or customer-facing action.",
+        "Do not turn an opaque identifier into evidence for a signature, rotation, or latency hypothesis."
+      ]
+    },
+    "review": {
+      "status": "pending"
+    }
+  },
+  {
+    "id": "readiness-event-exact-accepted-missing-multi-store-001",
+    "sourceReadinessCaseId": "readiness-event-exact-accepted-missing-multi-store-001",
+    "split": "development",
+    "safeCase": {
+      "caseId": "readiness-event-exact-accepted-missing-multi-store-001",
+      "problemStatement": "Accepted events are absent from aligned profile timelines across multiple stores during the same comparison window.",
+      "observedFacts": [
+        {
+          "id": "fact:accepted-multiple",
+          "statement": "Two different stores report accepted responses for the same event type within a short aligned interval."
+        },
+        {
+          "id": "fact:timelines-missing",
+          "statement": "Neither corresponding profile timeline shows the event in the aligned comparison window."
+        },
+        {
+          "id": "fact:eligibility-not-evaluated",
+          "statement": "Flow eligibility was not evaluated."
+        }
+      ],
+      "conversationState": []
+    },
+    "taxonomy": {
+      "primaryProductSurface": {
+        "domain": "customer-data",
+        "area": "consent"
+      },
+      "secondaryProductSurfaces": [],
+      "problemClasses": [],
+      "support": {
+        "productSurface": "supported",
+        "problemClass": "tentative"
+      },
+      "basis": {
+        "source": "initial-classification",
+        "evidenceIds": [],
+        "knowledgeArticleIds": [],
+        "playbookIds": [],
+        "knownCauseIds": [],
+        "explanation": "Derived from the ticket and current conversation during evaluation."
+      }
+    },
+    "judgments": [
+      {
+        "resourceKey": "diagnostic-playbook:campaign-editor",
+        "verdict": "irrelevant",
+        "supportingEvidence": [
+          {
+            "kind": "resource-representation",
+            "id": "diagnostic-playbook:campaign-editor:canonical:0"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "This high-ranked cross-domain playbook does not address the observed issue family and is deliberately judged as a non-applicable near match."
+      },
+      {
+        "resourceKey": "diagnostic-playbook:event-processing-delay",
+        "verdict": "applicable-next-step",
+        "supportingEvidence": [
+          {
+            "kind": "case-fact",
+            "id": "fact:accepted-multiple"
+          },
+          {
+            "kind": "resource-representation",
+            "id": "diagnostic-playbook:event-processing-delay:canonical:0"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "The candidate supplies a bounded investigation path that directly addresses the observed case evidence without asserting a confirmed cause. The descriptor is relevant for the next accepted-response, timeline, identity, timing, and affected-store comparison; relevance does not confirm applicability, root cause, SLA, or mitigation."
+      },
+      {
+        "resourceKey": "knowledge-article:event-tracking-debugging",
+        "verdict": "applicable-next-step",
+        "supportingEvidence": [
+          {
+            "kind": "case-fact",
+            "id": "fact:accepted-multiple"
+          },
+          {
+            "kind": "resource-representation",
+            "id": "knowledge-article:event-tracking-debugging:section:3"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "The candidate supplies a bounded investigation path that directly addresses the observed case evidence without asserting a confirmed cause. This article is required because its aligned multi-store comparison is necessary to distinguish broad impact from an isolated missing-timeline report without assigning cause."
+      },
+      {
+        "resourceKey": "knowledge-article:sms-compliance",
+        "verdict": "irrelevant",
+        "supportingEvidence": [
+          {
+            "kind": "case-fact",
+            "id": "fact:accepted-multiple"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "The candidate is visible only through cross-resource reference provenance and addresses a different issue family than the observed case."
+      },
+      {
+        "resourceKey": "knowledge-article:webhook-signature-validation",
+        "verdict": "irrelevant",
+        "supportingEvidence": [
+          {
+            "kind": "case-fact",
+            "id": "fact:accepted-multiple"
+          }
+        ],
+        "contradictingEvidence": [],
+        "missingEvidence": [],
+        "rationale": "The candidate is visible only through cross-resource reference provenance and addresses a different issue family than the observed case."
+      }
+    ],
+    "unjudgedCandidateKeys": [
+      "diagnostic-playbook:article-backed",
+      "diagnostic-playbook:flow-trigger",
+      "knowledge-article:flow-trigger-troubleshooting",
+      "knowledge-article:profile-sync-issues",
+      "knowledge-article:segmentation-audience-rules",
+      "knowledge-article:shopify-integration-sync",
+      "knowledge-article:support-operations-playbook",
+      "known-cause:shopify-custom-field-mapping",
+      "known-cause:sms-quiet-hours",
+      "known-cause:sms-stop-sync-delay",
+      "known-cause:track-api-local-time-timestamp",
+      "known-cause:webhook-delivery-latency",
+      "known-cause:webhook-secret-rotation"
+    ],
+    "synthesisOracle": {
+      "disposition": "hypothesis",
+      "acceptableLeadingCandidateSets": [
+        [
+          "diagnostic-playbook:event-processing-delay"
+        ],
+        [
+          "knowledge-article:event-tracking-debugging"
+        ]
+      ],
+      "acceptableAlternativeCandidateKeys": [],
+      "discriminatorIntents": [
+        {
+          "id": "intent:primary-discriminator",
+          "separatesCandidateKeys": [
+            "diagnostic-playbook:event-processing-delay",
+            "knowledge-article:event-tracking-debugging"
+          ],
+          "requiredConcepts": [
+            "accepted response",
+            "aligned profile timeline",
+            "cross-store scope",
+            "flow eligibility separation"
+          ]
+        }
+      ],
+      "forbiddenClaims": [
+        "Do not claim a confirmed root cause from applicability evidence alone.",
+        "Do not claim that B5 authorizes remediation, routing, lifecycle transition, or customer-facing action.",
+        "Do not infer a root cause, processing SLA, or mitigation from the aligned absence alone."
+      ]
+    },
+    "review": {
+      "status": "pending"
+    }
+  }
+]

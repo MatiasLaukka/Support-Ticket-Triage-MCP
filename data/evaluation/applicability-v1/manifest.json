@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "development": {
+    "path": "development.json",
+    "sha256": "4c1de8820b3f1e382d7425383e0594699cdda37b69bb5da97d3a19de3186a652"
+  },
+  "b4CaptureHash": "bf6a9fcbf5d9e3f7d5f58b638faa5bc7151d3f1f83c7504091f4b745f3a051d9",
+  "sourceReadinessDevelopmentHash": "9a97bda213a3b2b1804464f5d9f343a79e907c257d3031c4c0c3952fd99a2f4a",
+  "sourceRevision": "01b3c3eec4d5ef81c90b836fefa1ca5944eecead",
+  "corpusHash": "43f9e3b0c9c3ca9095f7a15fd90e8a72d685a693c5a749646ffb4022de6082c5",
+  "representationVersion": 3,
+  "indexGeneration": 1,
+  "lexicalGeneration": 1,
+  "semanticGeneration": 1,
+  "caseIds": [
+    "readiness-editor-exact-chunkload-001",
+    "readiness-webhook-exact-rotation-001",
+    "readiness-flow-exact-viewed-product-001",
+    "readiness-editor-paraphrase-screen-001",
+    "readiness-webhook-paraphrase-late-001",
+    "readiness-flow-paraphrase-automation-001",
+    "readiness-editor-contrast-private-001",
+    "readiness-webhook-contrast-raw-body-001",
+    "readiness-flow-contrast-excluded-001",
+    "readiness-editor-disagreement-001",
+    "readiness-webhook-disagreement-001",
+    "readiness-flow-disagreement-001",
+    "readiness-editor-insufficient-001",
+    "readiness-webhook-insufficient-001",
+    "readiness-flow-insufficient-001",
+    "readiness-editor-near-match-001",
+    "readiness-webhook-near-match-001",
+    "readiness-flow-near-match-001",
+    "readiness-editor-exact-no-code-001",
+    "readiness-webhook-opaque-id-negative-001",
+    "readiness-event-exact-accepted-missing-multi-store-001"
+  ]
+}

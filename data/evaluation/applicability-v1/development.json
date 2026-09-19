@@ -310,16 +310,15 @@
       "disposition": "hypothesis",
       "acceptableLeadingHypotheses": [
         {
-          "id": "hypothesis:leading-path",
+          "id": "hypothesis:leading-rotation-mismatch",
           "candidateKeyPool": [
-            "diagnostic-playbook:article-backed",
-            "knowledge-article:webhook-signature-validation"
+            "known-cause:webhook-secret-rotation"
           ],
           "minimumCandidateMatches": 1,
           "requiredConcepts": [
-            "signature verification",
-            "rotation",
-            "raw body"
+            "post-rotation signing secret mismatch",
+            "signature failure",
+            "current verifier input"
           ]
         }
       ],
@@ -327,14 +326,14 @@
         {
           "id": "hypothesis:alternative-1",
           "candidateKeyPool": [
-            "known-cause:webhook-secret-rotation"
+            "diagnostic-playbook:article-backed",
+            "knowledge-article:webhook-signature-validation"
           ],
           "minimumCandidateMatches": 1,
           "requiredConcepts": [
             "raw signed body",
-            "signed headers",
-            "verifier input",
-            "rotation"
+            "verifier input mismatch",
+            "signature verification"
           ]
         }
       ],
@@ -350,10 +349,10 @@
             "run-check"
           ],
           "requiredConcepts": [
+            "active signing secret",
             "raw signed body",
             "signed headers",
-            "verifier input",
-            "rotation timing"
+            "verifier input"
           ]
         }
       ],
@@ -836,16 +835,16 @@
       "disposition": "hypothesis",
       "acceptableLeadingHypotheses": [
         {
-          "id": "hypothesis:leading-path",
+          "id": "hypothesis:leading-delivery-latency",
           "candidateKeyPool": [
-            "diagnostic-playbook:article-backed",
-            "knowledge-article:webhook-signature-validation"
+            "known-cause:webhook-delivery-latency"
           ],
           "minimumCandidateMatches": 1,
           "requiredConcepts": [
-            "webhook delivery",
-            "latency",
-            "timing"
+            "webhook delivery latency",
+            "dispatch",
+            "endpoint response",
+            "retry"
           ]
         }
       ],
@@ -853,14 +852,15 @@
         {
           "id": "hypothesis:alternative-1",
           "candidateKeyPool": [
-            "known-cause:webhook-delivery-latency"
+            "diagnostic-playbook:article-backed",
+            "knowledge-article:webhook-signature-validation"
           ],
           "minimumCandidateMatches": 1,
           "requiredConcepts": [
+            "downstream timing path",
             "event creation",
-            "dispatch",
-            "endpoint-response",
-            "retry"
+            "receiver response",
+            "notification delay"
           ]
         }
       ],
@@ -3574,11 +3574,11 @@
           "id": "intent:case-gap-evidence",
           "targetRanks": [],
           "allowedActionTypes": [
-            "request-customer-evidence"
+            "inspect-internal"
           ],
           "requiredConcepts": [
-            "troubleshooting symptom",
-            "investigation goal",
+            "resolve delivery identifier",
+            "delivery record status",
             "delivery record context"
           ]
         }
@@ -3587,7 +3587,8 @@
       "forbiddenClaims": [
         "Do not claim a confirmed root cause from applicability evidence alone.",
         "Do not claim that B5 authorizes remediation, routing, lifecycle transition, or customer-facing action.",
-        "Do not turn an opaque identifier into evidence for a signature, rotation, or latency hypothesis."
+        "Do not turn an opaque identifier into evidence for a signature, rotation, or latency hypothesis.",
+        "Do not ask the requester to restate the problem before attempting the available delivery-record lookup."
       ]
     },
     "review": {

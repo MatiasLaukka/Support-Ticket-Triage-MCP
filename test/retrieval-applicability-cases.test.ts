@@ -155,7 +155,7 @@ describe("B5 applicability development oracle", () => {
     }
   });
 
-  it("requires the opaque-ID negative control to abstain with only a specific evidence request", () => {
+  it("requires the opaque-ID negative control to abstain and inspect the referenced record before asking the requester to restate anything", () => {
     const { cases } = loadApplicabilityDevelopment(CASE_ROOT);
     const opaque = cases.find(({ id }) => id === "readiness-webhook-opaque-id-negative-001");
     expect(opaque?.synthesisOracle.disposition).toBe("abstain");
@@ -163,8 +163,10 @@ describe("B5 applicability development oracle", () => {
     expect(opaque?.synthesisOracle.orderedAlternativeHypotheses).toEqual([]);
     expect(opaque?.synthesisOracle.evidenceActionIntents).toEqual([expect.objectContaining({
       targetRanks: [],
-      allowedActionTypes: ["request-customer-evidence"],
+      allowedActionTypes: ["inspect-internal"],
+      requiredConcepts: expect.arrayContaining(["resolve delivery identifier", "delivery record status"]),
     })]);
+    expect(opaque?.synthesisOracle.forbiddenClaims.join(" ")).toMatch(/do not ask the requester to restate the problem/i);
   });
 
   it("normalizes evidence polarity so irrelevant candidates never claim support", () => {
@@ -192,7 +194,13 @@ describe("B5 applicability development oracle", () => {
       }
     }
     const rotation = cases.find(({ id }) => id === "readiness-webhook-exact-rotation-001")!;
-    expect(rotation.synthesisOracle.orderedAlternativeHypotheses[0]?.candidateKeyPool).toEqual(["known-cause:webhook-secret-rotation"]);
+    expect(rotation.synthesisOracle.acceptableLeadingHypotheses[0]?.candidateKeyPool).toEqual(["known-cause:webhook-secret-rotation"]);
+    expect(rotation.synthesisOracle.orderedAlternativeHypotheses[0]?.candidateKeyPool).toEqual([
+      "diagnostic-playbook:article-backed",
+      "knowledge-article:webhook-signature-validation",
+    ]);
+    const latency = cases.find(({ id }) => id === "readiness-webhook-paraphrase-late-001")!;
+    expect(latency.synthesisOracle.acceptableLeadingHypotheses[0]?.candidateKeyPool).toEqual(["known-cause:webhook-delivery-latency"]);
   });
 
   it("does not keep event-ingestion troubleshooting applicable after aligned event presence is already established", () => {

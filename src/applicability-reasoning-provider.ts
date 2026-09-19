@@ -25,6 +25,8 @@ export const APPLICABILITY_REASONING_INSTRUCTIONS = [
   "Insufficient-evidence means the candidate is plausible but specific named evidence is still required.",
   "Irrelevant means the resource does not meaningfully address the case; do not invent supporting evidence for an irrelevant candidate.",
   "After candidate assessment, choose one leading diagnostic hypothesis whenever the evidence supports prioritizing a path; do not abstain merely because the leading hypothesis still needs evidence.",
+  "The leading hypothesis must state a falsifiable explanatory claim or bounded mechanism; do not merely restate symptoms, name a resource, or say to troubleshoot a category.",
+  "When a plausible known-cause candidate best explains the current evidence, it may lead even when marked insufficient-evidence; use playbooks and articles to support evidence collection rather than automatically ranking them above the cause.",
   "A candidate-grounded hypothesis may use applicable-next-step or insufficient-evidence candidates, but never contradicted or irrelevant candidates; preserve missing evidence for insufficient candidates.",
   "Order alternatives from next-most-plausible to least plausible so a later diagnostic iteration can fall back when evidence contradicts the leader.",
   "A novel hypothesis is allowed when the supplied candidate set does not adequately explain the observed facts; ground it in case facts and explicitly explain why the candidate set is insufficient.",

@@ -208,6 +208,13 @@ describe("OpenAiApplicabilityReasoningProvider", () => {
     })).toThrow(/valid absolute URL/);
   });
 
+  it("requires falsifiable best-first hypotheses instead of generic troubleshooting labels", () => {
+    expect(APPLICABILITY_REASONING_INSTRUCTIONS).toMatch(/falsifiable explanatory claim|bounded mechanism/i);
+    expect(APPLICABILITY_REASONING_INSTRUCTIONS).toMatch(/known-cause candidate.*may lead.*insufficient-evidence/i);
+    expect(APPLICABILITY_REASONING_INSTRUCTIONS).toMatch(/playbooks and articles.*evidence collection/i);
+    expect(APPLICABILITY_REASONING_INSTRUCTIONS).toMatch(/do not ask the requester to restate the problem/i);
+  });
+
   it("uses one stateless Responses API call with strict dynamic schema", async () => {
     const input = validInput("evidence-only");
     const fetch = vi.fn(async (_url: string, _init: { body: string }) => ({ ok: true, status: 200, text: async () => responseBody(input) }));

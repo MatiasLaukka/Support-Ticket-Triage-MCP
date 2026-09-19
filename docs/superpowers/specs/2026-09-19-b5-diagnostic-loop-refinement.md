@@ -45,6 +45,8 @@ When a path can be prioritized, synthesis returns exactly one leading hypothesis
 
 A candidate-grounded hypothesis may use candidates assessed `applicable-next-step` or `insufficient-evidence`. It may combine complementary resources, such as a playbook and knowledge article, when they support one diagnostic explanation/path. It may not use `contradicted` or `irrelevant` candidates.
 
+A leading hypothesis must be a falsifiable explanatory claim or bounded mechanism, not merely a symptom restatement, resource name, or generic troubleshooting category. When a plausible known-cause candidate best explains the current evidence, it may lead even if it remains `insufficient-evidence`; playbooks and knowledge articles should then support evidence collection rather than automatically displacing the cause from rank 0.
+
 An `insufficient-evidence` candidate may lead. Its missing evidence must remain explicit so the next evidence action can test it. B5 must not abstain merely because the best current hypothesis is unconfirmed.
 
 ## Open-world hypothesis escape hatch
@@ -74,7 +76,7 @@ The provider should prefer internal evidence and bounded checks. It must not ask
 
 ## Abstention
 
-Abstention is reserved for cases where neither the candidate set nor a grounded novel explanation can responsibly be prioritized. An abstention still returns specific evidence actions needed to form a hypothesis. The opaque-identifier negative control is an intended example: without any troubleshooting symptom, the engine may need one precise clarification rather than inventing a signature, latency, or rotation problem.
+Abstention is reserved for cases where neither the candidate set nor a grounded novel explanation can responsibly be prioritized. An abstention still returns specific evidence actions needed to form a hypothesis. The opaque-identifier negative control is an intended example: the engine should first use the supplied identifier to inspect the referenced delivery record and available context, rather than asking the requester to restate the problem; only a specific residual clarification may be requested if the internal lookup still cannot establish an investigation target.
 
 ## Iteration semantics
 

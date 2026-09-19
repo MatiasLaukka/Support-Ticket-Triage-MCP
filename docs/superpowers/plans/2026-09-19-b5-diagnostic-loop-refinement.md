@@ -23,14 +23,14 @@ Required behavior:
 - keep all four candidate verdicts;
 - enforce candidate evidence polarity;
 - replace resource-bag synthesis with one leading hypothesis plus ordered alternatives;
-- allow `insufficient-evidence` candidates to lead when missing evidence is preserved;
+- allow `insufficient-evidence` candidates to lead when missing evidence is preserved, including promoting a concrete known cause above generic supporting resources when it is the best current explanation;
 - allow case-fact-grounded novel hypotheses with an explicit candidate-gap explanation;
 - replace generic discriminating questions with concrete evidence actions;
 - require a leading evidence action for non-abstaining synthesis;
 - retain one stateless request per lane and no runtime authority;
 - keep all 21 oracle reviews pending;
 - change the two flow cases whose event presence is already established so event-ingestion troubleshooting is not treated as a next diagnostic step; and
-- retain the opaque-ID case as an abstention with a precise evidence request.
+- retain the opaque-ID case as an abstention, but inspect the supplied identifier internally before any customer clarification.
 
 Verify:
 

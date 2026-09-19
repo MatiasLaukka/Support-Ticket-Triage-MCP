@@ -404,12 +404,19 @@ function assertEvidenceReferencesResolve(input: ApplicabilityReasoningInput, out
 }
 function assertSynthesisConsistent(input: ApplicabilityReasoningInput, output: ApplicabilityProviderOutput): void {
   const assessments = new Map(output.candidateAssessments.map((assessment) => [assessment.resourceKey, assessment]));
+  const representationOwners = new Map(input.evidenceRegistry.map((representation) => [representation.id, representation.resourceKey]));
   const assertHypothesis = (hypothesis: DiagnosticHypothesis) => {
     if (hypothesis.kind === "novel") {
       if (!hypothesis.evidence.some((reference) => reference.kind === "case-fact")) throw new InvalidApplicabilitySchemaError("synthesis", ["novel-hypothesis"]);
       return;
     }
     if (new Set(hypothesis.candidateKeys).size !== hypothesis.candidateKeys.length) throw new InvalidApplicabilitySchemaError("synthesis", ["hypothesis-candidate"]);
+    const candidateKeys = new Set(hypothesis.candidateKeys);
+    for (const reference of hypothesis.evidence) {
+      if (reference.kind === "resource-representation" && !candidateKeys.has(representationOwners.get(reference.id)!)) {
+        throw new InvalidApplicabilitySchemaError("synthesis", ["hypothesis-candidate"]);
+      }
+    }
     for (const key of hypothesis.candidateKeys) {
       const assessment = assessments.get(key);
       if (assessment === undefined || assessment.verdict === "contradicted" || assessment.verdict === "irrelevant") throw new InvalidApplicabilitySchemaError("synthesis", ["hypothesis-candidate"]);
@@ -420,8 +427,14 @@ function assertSynthesisConsistent(input: ApplicabilityReasoningInput, output: A
     }
   };
   if (output.synthesis.disposition === "abstain") return;
-  assertHypothesis(output.synthesis.leadingHypothesis);
-  for (const alternative of output.synthesis.alternatives) assertHypothesis(alternative);
+  const hypotheses = [output.synthesis.leadingHypothesis, ...output.synthesis.alternatives];
+  for (const hypothesis of hypotheses) assertHypothesis(hypothesis);
+  const groundedIdentities = hypotheses.flatMap((hypothesis) =>
+    hypothesis.kind === "candidate-grounded" ? [[...hypothesis.candidateKeys].sort(compareOrdinal).join("\u0000")] : [],
+  );
+  if (new Set(groundedIdentities).size !== groundedIdentities.length) {
+    throw new InvalidApplicabilitySchemaError("synthesis", ["hypothesis-candidate"]);
+  }
   const maxRank = output.synthesis.alternatives.length;
   if (!output.synthesis.nextEvidenceActions.some(({ hypothesisRanks }) => hypothesisRanks.includes(0))) {
     throw new InvalidApplicabilitySchemaError("synthesis", ["leading-evidence-action"]);

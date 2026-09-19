@@ -224,6 +224,29 @@ describe("B5 applicability contracts", () => {
     expect(() => validateApplicabilityProviderOutput(input, duplicatePolarity)).toThrow(/evidence-polarity|provider-output/i);
   });
 
+  it("rejects candidate-grounded hypotheses that cite another candidate or repeat the same fallback", () => {
+    const input = validApplicabilityInput("evidence-only");
+    input.evidenceRegistry.push({
+      id: "representation:z-reference-only",
+      resourceKey: "known-cause:reference-only",
+      kind: "canonical",
+      title: "Reference-only candidate",
+      contentHash: hash("6"),
+      evidenceOrigin: "reference-grounded",
+      matchedChannels: [],
+      text: "A separate candidate representation.",
+    });
+    const crossCandidate = validProviderOutput(input);
+    if (crossCandidate.synthesis.disposition !== "hypothesis" || crossCandidate.synthesis.leadingHypothesis.kind !== "candidate-grounded") throw new Error("Expected candidate-grounded hypothesis.");
+    crossCandidate.synthesis.leadingHypothesis.evidence.push({ kind: "resource-representation", id: "representation:z-reference-only" });
+    expect(() => validateApplicabilityProviderOutput(input, crossCandidate)).toThrow(/hypothesis-candidate|synthesis/i);
+
+    const duplicateFallback = validProviderOutput(input);
+    if (duplicateFallback.synthesis.disposition !== "hypothesis") throw new Error("Expected hypothesis synthesis.");
+    duplicateFallback.synthesis.alternatives = [structuredClone(duplicateFallback.synthesis.leadingHypothesis)];
+    expect(() => validateApplicabilityProviderOutput(input, duplicateFallback)).toThrow(/hypothesis-candidate|synthesis/i);
+  });
+
   it("allows a grounded novel hypothesis but requires case-fact grounding and a concrete leading evidence action", () => {
     const input = validApplicabilityInput("evidence-only");
     const output = validProviderOutput(input);

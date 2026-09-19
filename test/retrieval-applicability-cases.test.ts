@@ -15,12 +15,15 @@ import {
   validateApplicabilityDevelopment,
 } from "../src/retrieval/applicability-cases.js";
 import { validateRankingCapture, type RankingCapture } from "../src/retrieval/ranking-capture.js";
-import { ReadinessCaseSchema, ReadinessManifestSchema } from "../src/retrieval/readiness-cases.js";
+import { ReadinessCaseSchema } from "../src/retrieval/readiness-cases.js";
 import { hashText } from "../src/retrieval/representations.js";
 import { loadRetrievalSources } from "../src/retrieval/sources.js";
 
 const CASE_ROOT = resolve("data/evaluation/applicability-v1");
-const READINESS_ROOT = resolve("data/evaluation/knowledge-readiness");
+const READINESS_DEVELOPMENT_PATH = resolve("data/evaluation/knowledge-readiness/development.json");
+const SOURCE_READINESS_DEVELOPMENT_HASH = "9a97bda213a3b2b1804464f5d9f343a79e907c257d3031c4c0c3952fd99a2f4a";
+const APPROVAL_REVIEWED_AT = "2026-09-20T00:37:37+03:00";
+const APPROVAL_DECISION_REF = "I approve the B5 applicability development oracle for Task 6 freeze.";
 const CAPTURE_PATH = resolve("reports/retrieval/b4-ranking/development-20260916-22590b22-timeout120s/capture.json");
 
 function sha256(bytes: Buffer): string {
@@ -29,9 +32,8 @@ function sha256(bytes: Buffer): string {
 
 async function validationFixture() {
   const loaded = loadApplicabilityDevelopment(CASE_ROOT);
-  const readinessManifest = ReadinessManifestSchema.parse(JSON.parse(readFileSync(join(READINESS_ROOT, "manifest.json"), "utf8")));
-  const readinessBytes = readFileSync(join(READINESS_ROOT, readinessManifest.development.path));
-  expect(sha256(readinessBytes)).toBe(readinessManifest.development.sha256);
+  const readinessBytes = readFileSync(READINESS_DEVELOPMENT_PATH);
+  expect(sha256(readinessBytes)).toBe(SOURCE_READINESS_DEVELOPMENT_HASH);
   const readinessCases = ReadinessCaseSchema.array().parse(JSON.parse(readinessBytes.toString("utf8")));
 
   const rawCapture: unknown = JSON.parse(readFileSync(CAPTURE_PATH, "utf8"));
@@ -49,7 +51,7 @@ async function validationFixture() {
     .sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0)));
   expect(projectedCorpusHash).toBe(capture.identity.corpusHash);
 
-  return { loaded, readinessManifest, readinessCases, capture, sourceSnapshot };
+  return { loaded, readinessCases, capture, sourceSnapshot };
 }
 
 describe("B5 applicability development oracle", () => {
@@ -109,7 +111,7 @@ describe("B5 applicability development oracle", () => {
       {
         capture: fixture.capture,
         sourceReadinessCases: fixture.readinessCases,
-        sourceReadinessDevelopmentHash: fixture.readinessManifest.development.sha256,
+        sourceReadinessDevelopmentHash: SOURCE_READINESS_DEVELOPMENT_HASH,
         sourceSnapshot: fixture.sourceSnapshot,
       },
     )).not.toThrow();
@@ -211,10 +213,67 @@ describe("B5 applicability development oracle", () => {
     }
   });
 
-  it("keeps all 21 draft reviews pending and refuses provider-execution selection", () => {
+  it("freezes exactly 21 approved cases in manifest order with the explicit Task 6 decision reference", () => {
+    const { cases, manifest } = loadApplicabilityDevelopment(CASE_ROOT);
+    expect(cases).toHaveLength(21);
+    expect(cases.map(({ id }) => id)).toEqual(manifest.caseIds);
+    expect(cases.every(({ review }) => review.status === "approved")).toBe(true);
+    for (const entry of cases) {
+      if (entry.review.status !== "approved") throw new Error("Expected approved review.");
+      expect(entry.review.reviewedBy).toBe("Matu");
+      expect(entry.review.reviewedAt).toBe(APPROVAL_REVIEWED_AT);
+      expect(entry.review.decisionRef).toBe(APPROVAL_DECISION_REF);
+    }
+    const selected = selectApplicabilityDevelopmentForExecution(cases);
+    expect(selected).toHaveLength(21);
+    expect(selected.map(({ id }) => id)).toEqual(manifest.caseIds);
+  });
+
+  it("fails closed when any approved case is reverted to pending", () => {
     const { cases } = loadApplicabilityDevelopment(CASE_ROOT);
-    expect(cases.every(({ review }) => review.status === "pending")).toBe(true);
-    expect(() => selectApplicabilityDevelopmentForExecution(cases)).toThrow(/approved review/i);
+    const mutated = structuredClone(cases);
+    mutated[0]!.review = { status: "pending" };
+    expect(() => selectApplicabilityDevelopmentForExecution(mutated)).toThrow(/approved review/i);
+  });
+
+  it("fails closed when approved development bytes change without a matching manifest hash", () => {
+    const actual = loadApplicabilityDevelopment(CASE_ROOT);
+    const root = mkdtempSync(join(tmpdir(), "b5-applicability-approved-hash-"));
+    try {
+      writeFileSync(join(root, "manifest.json"), `${JSON.stringify(actual.manifest, null, 2)}\n`);
+      const original = readFileSync(join(CASE_ROOT, "development.json"), "utf8");
+      const changed = original.replace('"reviewedBy": "Matu"', '"reviewedBy": "Matu-changed"');
+      expect(changed).not.toBe(original);
+      writeFileSync(join(root, "development.json"), changed);
+      expect(() => loadApplicabilityDevelopment(root)).toThrow(/hash mismatch/i);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("fails closed on duplicate judgments, missing explicit unjudged candidates, or post-approval source mismatch", async () => {
+    const fixture = await validationFixture();
+    const context = {
+      capture: fixture.capture,
+      sourceReadinessCases: fixture.readinessCases,
+      sourceReadinessDevelopmentHash: SOURCE_READINESS_DEVELOPMENT_HASH,
+      sourceSnapshot: fixture.sourceSnapshot,
+    };
+
+    const duplicateJudgment = structuredClone(fixture.loaded.cases);
+    duplicateJudgment[0]!.judgments.push(structuredClone(duplicateJudgment[0]!.judgments[0]!));
+    expect(() => validateApplicabilityDevelopment(fixture.loaded.manifest, duplicateJudgment, context)).toThrow(/duplicate judgments/i);
+
+    const missingUnjudged = structuredClone(fixture.loaded.cases);
+    expect(missingUnjudged[0]!.unjudgedCandidateKeys.length).toBeGreaterThan(0);
+    missingUnjudged[0]!.unjudgedCandidateKeys = missingUnjudged[0]!.unjudgedCandidateKeys.slice(1);
+    expect(() => validateApplicabilityDevelopment(fixture.loaded.manifest, missingUnjudged, context)).toThrow(/partition every captured candidate/i);
+
+    expect(() => validateApplicabilityDevelopment(
+      fixture.loaded.manifest,
+      fixture.loaded.cases,
+      { ...context, sourceReadinessDevelopmentHash: "0".repeat(64) },
+    )).toThrow(/source readiness hash mismatch/i);
   });
 
   it("rejects unknown fields at the strict schema and duplicate safe-case facts during semantic validation", async () => {
@@ -229,7 +288,7 @@ describe("B5 applicability development oracle", () => {
       {
         capture: fixture.capture,
         sourceReadinessCases: fixture.readinessCases,
-        sourceReadinessDevelopmentHash: fixture.readinessManifest.development.sha256,
+        sourceReadinessDevelopmentHash: SOURCE_READINESS_DEVELOPMENT_HASH,
         sourceSnapshot: fixture.sourceSnapshot,
       },
     )).toThrow(/duplicate fact/i);

@@ -160,6 +160,57 @@ describe("B5 applicability evaluation", () => {
     expect(report.classification).toBe("inconclusive");
   });
 
+  it("recognizes controlled semantic aliases without requiring oracle phrases verbatim", () => {
+    const fixture = metricFixture() as any;
+    fixture.cases[0].synthesisOracle.acceptableLeadingHypotheses = [{
+      id: "semantic-alias",
+      candidateKeyPool: ["knowledge-article:a"],
+      minimumCandidateMatches: 1,
+      requiredConcepts: ["campaign editor", "chunk loading", "cross-session"],
+    }];
+    fixture.cases[0].synthesisOracle.orderedAlternativeHypotheses = [];
+    fixture.cases[0].synthesisOracle.evidenceActionIntents = [];
+    for (const lane of fixture.capture.cases[0].lanes) {
+      lane.result.synthesis.leadingHypothesis.summary =
+        "The campaign editor fails across isolated sessions with a repeated ChunkLoadError.";
+      lane.result.synthesis.alternatives = [];
+    }
+
+    const report = scoreApplicabilityCapture(fixture);
+    expect(report.lanes["evidence-only"].hypothesisAccuracy).toEqual({ numerator: 1, denominator: 1, rate: 1 });
+    expect(report.lanes["taxonomy-informed"].hypothesisAccuracy).toEqual({ numerator: 1, denominator: 1, rate: 1 });
+  });
+
+  it("scores one evidence intent across multiple actions that collectively cover its ranks and concepts", () => {
+    const fixture = metricFixture() as any;
+    fixture.cases[0].synthesisOracle.evidenceActionIntents = [{
+      id: "joint-webhook-discriminator",
+      targetRanks: [0, 1],
+      allowedActionTypes: ["inspect-internal", "run-check"],
+      requiredConcepts: ["raw signed body", "signed headers", "verifier input", "rotation timing"],
+    }];
+    for (const lane of fixture.capture.cases[0].lanes) {
+      lane.result.synthesis.nextEvidenceActions = [
+        {
+          actionType: "inspect-internal",
+          action: "Inspect the receiver key-version metadata against the sender post-rotation signing version.",
+          expectedEvidence: "A post-rotation mismatch or matching key usage.",
+          hypothesisRanks: [0],
+        },
+        {
+          actionType: "run-check",
+          action: "Compare the exact raw request body and signed headers against the verifier input for the same delivery.",
+          expectedEvidence: "Byte and header equality or a verifier-input difference.",
+          hypothesisRanks: [1],
+        },
+      ];
+    }
+
+    const report = scoreApplicabilityCapture(fixture);
+    expect(report.lanes["evidence-only"].evidenceActionCoverage).toEqual({ numerator: 1, denominator: 1, rate: 1 });
+    expect(report.lanes["taxonomy-informed"].evidenceActionCoverage).toEqual({ numerator: 1, denominator: 1, rate: 1 });
+  });
+
   it("renders deterministic Markdown from a scored report", () => {
     const report = scoreApplicabilityCapture(metricFixture() as any);
     expect(renderApplicabilityMarkdown(report)).toBe(renderApplicabilityMarkdown(structuredClone(report)));

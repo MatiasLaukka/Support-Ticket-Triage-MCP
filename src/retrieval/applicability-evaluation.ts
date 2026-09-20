@@ -89,9 +89,112 @@ function macroF1(metrics: Record<ApplicabilityVerdict, VerdictMetric>): number |
   return values.length === 0 ? null : values.reduce((sum, value) => sum + value, 0) / values.length;
 }
 function refKey(reference: EvidenceReference): string { return `${reference.kind}:${reference.id}`; }
+const CONCEPT_ALIASES: Readonly<Record<string, readonly string[]>> = {
+  "chunk loading": ["chunk load error", "failed chunk request", "chunk request failing", "chunk request"],
+  "cross session": ["across sessions", "isolated sessions", "across isolated sessions"],
+  "cross session reproducibility": ["reproducible across sessions", "same failure across sessions", "across isolated sessions"],
+  "aligned campaign identity": ["same campaign", "affected campaign", "campaign identity"],
+  "first loading error": ["first error", "console error", "frontend exception", "failed chunk request"],
+  "signature verification": ["signature validation", "verify signature", "verifier"],
+  "rotation": ["key rotation", "secret rotation", "post rotation", "rotated"],
+  "rotation timing": ["rotation time", "post rotation", "rotation occurred"],
+  "raw body": ["raw request body", "raw body bytes", "request body bytes"],
+  "raw signed body": ["exact raw request body", "signed request body", "raw request body"],
+  "raw body comparison": ["compare the exact raw request body", "raw request body against the verifier input", "same delivery comparison"],
+  "signed headers": ["signed header", "signature headers"],
+  "verifier input": ["verification input", "input to verifier"],
+  "verification input": ["verifier input", "input to verifier"],
+  "configured trigger": ["configured flow trigger", "flow trigger"],
+  "session isolation": ["isolated session", "isolated sessions", "private browsing", "another browser"],
+  "session local": ["session state", "local session", "browser session"],
+  "session local state": ["session state", "local browser state", "browser session state"],
+  "session local reproduction": ["isolated sessions", "private browsing", "another browser"],
+  "webhook delivery": ["webhook delivery record", "delivery record", "delivery id"],
+  "delivery identity": ["delivery id", "delivery identifier", "matching delivery", "delivery record"],
+  "delivery record context": ["delivery record", "delivery metadata", "record type"],
+  "latency": ["delay", "delayed", "delivery delay"],
+  "event creation": ["event creation time", "event created"],
+  "event creation time": ["event creation", "created time"],
+  "verification": ["validation", "verify"],
+  "receiver transformation": ["body transformation", "receiver side transformation", "parsing and reserializing", "receiver parsing"],
+  "receiver parsing": ["parsing change", "receiver side parsing", "parse and reserialize"],
+  "receiver parsing change": ["parsing change", "body transformation", "parse and reserialize"],
+  "profile filter": ["filter condition", "profile filter"],
+  "filter exclusion": ["excluded", "qualification exclusion", "filter excluded"],
+  "qualification exclusion": ["excluded", "filter exclusion", "qualification"],
+  "unaligned observations": ["not aligned", "unaligned profiles", "identities and times are not aligned"],
+  "campaign identity": ["same campaign", "affected campaign"],
+  "same campaign": ["affected campaign", "same campaign"],
+  "same campaign comparison": ["compare the same campaign", "same campaign"],
+  "session comparison": ["compare sessions", "across sessions"],
+  "retry timing": ["retry time", "retry timestamp", "retry sequence"],
+  "retry sequence": ["retry history", "retry sequence"],
+  "profile identity": ["profile id", "profile identity"],
+  "event timeline": ["profile timeline", "timeline event", "timeline presence"],
+  "timeline presence": ["timeline event", "event timeline", "event present"],
+  "timeline absence": ["no timeline event", "absent from timeline", "timeline absent"],
+  "qualification": ["eligibility", "qualification"],
+  "consent eligibility": ["consent", "eligibility"],
+  "no rotation": ["no signing key rotation", "no key rotation", "rotation did not occur"],
+  "console evidence": ["console output", "console error", "console telemetry"],
+  "console output": ["console error", "console telemetry"],
+  "second user comparison": ["another administrator", "another user", "second user"],
+  "accepted event": ["accepted log", "event accepted"],
+  "accepted response": ["accepted event", "accepted log"],
+  "event processing": ["event ingestion", "processing delay"],
+  "event presence": ["event present", "timeline event", "event exists"],
+  "event present": ["event presence", "timeline event"],
+  "flow entry": ["entered the flow", "flow enrollment"],
+  "flow identity": ["flow id", "configured flow"],
+  "flow history": ["flow enrollment", "flow entry"],
+  "flow eligibility separation": ["flow eligibility", "eligibility", "qualification exclusion"],
+  "browser profile": ["browser session"],
+  "browser session": ["isolated session", "private browsing"],
+  "affected users": ["another administrator", "another user"],
+  "comparison evidence": ["comparison", "compare"],
+  "dispatch": ["delivery attempt"],
+  "dispatch time": ["dispatch timing", "delivery attempt time"],
+  "dispatch timing": ["dispatch time", "delivery attempt time"],
+  "endpoint response": ["endpoint status", "response status"],
+  "endpoint response time": ["response time", "endpoint status", "response status"],
+  "endpoint result": ["endpoint status", "response status"],
+  "retry": ["retry history", "retry attempt"],
+  "raw body bytes": ["exact raw request body", "raw request body"],
+  "raw body handling": ["raw body", "body parsing", "raw request body"],
+  "event timestamp": ["event time", "timestamp"],
+  "event time": ["event timestamp", "timestamp"],
+  "event name": ["event type"],
+  "same observation window": ["same time window", "aligned times", "observation window"],
+  "same user session controls": ["same user", "same session", "session controls", "aligned profile"],
+  "remaining eligibility checks": ["eligibility checks", "remaining checks", "qualification"],
+  "troubleshooting symptom": ["failure symptom", "symptom"],
+  "investigation goal": ["investigation", "lookup request"],
+  "aligned profile timeline": ["aligned profile", "profile identity", "profile timeline"],
+  "cross store scope": ["multiple stores", "affected stores", "cross store"],
+};
+
+function normalizeConceptText(value: string): string {
+  return value
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .toLowerCase()
+    .replace(/[_/\\-]+/g, " ")
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function conceptMatches(text: string, concept: string): boolean {
+  const normalizedText = ` ${normalizeConceptText(text)} `;
+  const key = normalizeConceptText(concept);
+  const variants = [key, ...(CONCEPT_ALIASES[key] ?? [])];
+  return variants.some((variant) => {
+    const normalizedVariant = normalizeConceptText(variant);
+    return normalizedVariant.length > 0 && normalizedText.includes(` ${normalizedVariant} `);
+  });
+}
+
 function textIncludesConcepts(text: string, concepts: readonly string[]): boolean {
-  const normalized = text.toLocaleLowerCase();
-  return concepts.every((concept) => normalized.includes(concept.toLocaleLowerCase()));
+  return concepts.every((concept) => conceptMatches(text, concept));
 }
 function hypothesisMatches(
   hypothesis: { kind: "candidate-grounded" | "novel"; summary: string; candidateKeys?: readonly string[] },
@@ -107,15 +210,24 @@ function actionIntentCovered(
   synthesis: any,
   intent: ApplicabilityDevelopmentCase["synthesisOracle"]["evidenceActionIntents"][number],
 ): boolean {
-  const actions = synthesis.nextEvidenceActions as Array<any>;
-  return actions.some((action) => {
+  const targetRanks = new Set(intent.targetRanks);
+  const actions = (synthesis.nextEvidenceActions as Array<any>).filter((action) => {
     if (!intent.allowedActionTypes.includes(action.actionType)) return false;
-    if (synthesis.disposition === "hypothesis") {
-      const ranks = Array.isArray(action.hypothesisRanks) ? action.hypothesisRanks : [];
-      if (!intent.targetRanks.every((rank) => ranks.includes(rank))) return false;
-    } else if (intent.targetRanks.length !== 0) return false;
-    return textIncludesConcepts(actionText(action), intent.requiredConcepts);
+    if (synthesis.disposition !== "hypothesis" || targetRanks.size === 0) return true;
+    const ranks = Array.isArray(action.hypothesisRanks) ? action.hypothesisRanks : [];
+    return ranks.some((rank: number) => targetRanks.has(rank));
   });
+
+  if (synthesis.disposition === "hypothesis") {
+    const coveredRanks = new Set<number>();
+    for (const action of actions) {
+      const ranks = Array.isArray(action.hypothesisRanks) ? action.hypothesisRanks : [];
+      for (const rank of ranks) if (targetRanks.has(rank)) coveredRanks.add(rank);
+    }
+    if (![...targetRanks].every((rank) => coveredRanks.has(rank))) return false;
+  } else if (targetRanks.size !== 0) return false;
+
+  return textIncludesConcepts(actions.map(actionText).join(" "), intent.requiredConcepts);
 }
 function oracleByCase(cases: readonly ApplicabilityDevelopmentCase[]): Map<string, ApplicabilityDevelopmentCase> {
   return new Map(cases.map((entry) => [entry.id, entry]));

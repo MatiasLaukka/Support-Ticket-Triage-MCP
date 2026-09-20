@@ -373,6 +373,9 @@ function primaryMetricValues(lane: ApplicabilityLaneEvaluation): readonly (numbe
   return [lane.macroF1, lane.applicablePrecision.rate, lane.applicableRecall.rate, lane.hypothesisAccuracy.rate, lane.hypothesisCoverage.rate, lane.abstentionRecall.rate, lane.alternativeCoverage.rate, lane.evidenceActionCoverage.rate];
 }
 function classify(evidence: ApplicabilityLaneEvaluation, taxonomy: ApplicabilityLaneEvaluation, delta: ReturnType<typeof taxonomyDelta>): "promising" | "regressive" | "inconclusive" {
+  if (evidence.outcomes.failed > 0 || taxonomy.outcomes.failed > 0 || evidence.outcomes.skipped > 0 || taxonomy.outcomes.skipped > 0) {
+    return "inconclusive";
+  }
   if (delta.addedDangerousFalsePositives.length > 0) return "regressive";
   const firstDanger = evidence.dangerousFalsePositive.rate; const secondDanger = taxonomy.dangerousFalsePositive.rate;
   if (firstDanger !== null && secondDanger !== null && secondDanger > firstDanger) return "regressive";

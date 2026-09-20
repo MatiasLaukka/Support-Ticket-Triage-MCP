@@ -149,6 +149,17 @@ describe("B5 applicability evaluation", () => {
     expect(report.taxonomyDelta).toMatchObject({ beneficial: 1, harmful: 0 });
   });
 
+  it("marks a comparison inconclusive when either lane contains a failed result", () => {
+    const fixture = metricFixture();
+    fixture.capture.cases[0].lanes[0].result = {
+      status: "assessment-failed",
+      reason: "invalid-provider-output",
+      failureMode: "synthesis:missing-evidence",
+    };
+    const report = scoreApplicabilityCapture(fixture as any);
+    expect(report.classification).toBe("inconclusive");
+  });
+
   it("renders deterministic Markdown from a scored report", () => {
     const report = scoreApplicabilityCapture(metricFixture() as any);
     expect(renderApplicabilityMarkdown(report)).toBe(renderApplicabilityMarkdown(structuredClone(report)));

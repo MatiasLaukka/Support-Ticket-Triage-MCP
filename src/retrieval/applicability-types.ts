@@ -277,7 +277,7 @@ export type ApplicabilityCaseResult =
   | { status: "assessment-skipped"; reason: "no-assessable-candidates" | "prompt-injection-detected" | "input-too-large" }
   | { status: "assessment-failed"; reason: "invalid-provider-output" | ApplicabilityProviderFailureReason; failureMode?: ApplicabilityInvalidProviderFailureMode };
 const boundedErrorFields = new Set([
-  "unknown-field", "unique-identities", "candidate-order", "evidence-registry-order", "candidate-evidence", "matched-representation", "matched-representation-origin", "candidate-taxonomy-order", "candidate-taxonomy", "taxonomy-semantic-set", "evidence-reference", "evidence-polarity", "abstain", "hypothesis-candidate", "novel-hypothesis", "missing-evidence", "hypothesis-rank", "leading-evidence-action", "taxonomyRelation",
+  "unknown-field", "unique-identities", "candidate-order", "evidence-registry-order", "candidate-evidence", "matched-representation", "matched-representation-origin", "candidate-taxonomy-order", "candidate-taxonomy", "taxonomy-semantic-set", "evidence-reference", "unknown-case-fact", "unknown-representation", "cross-candidate-representation", "evidence-polarity", "abstain", "hypothesis-candidate", "hypothesis-candidate-duplicate-key", "hypothesis-candidate-cross-evidence", "hypothesis-candidate-verdict", "hypothesis-candidate-duplicate-hypothesis", "novel-hypothesis", "missing-evidence", "hypothesis-rank", "leading-evidence-action", "taxonomyRelation",
 ]);
 export class InvalidApplicabilitySchemaError extends Error {
   readonly stage: InvalidApplicabilityStage;
@@ -382,12 +382,15 @@ function assertEvidenceReferencesResolve(input: ApplicabilityReasoningInput, out
   const representationOwners = new Map(input.evidenceRegistry.map((representation) => [representation.id, representation.resourceKey]));
   const assertReference = (reference: EvidenceReference, candidateKey?: string) => {
     if (reference.kind === "case-fact") {
-      if (!factIds.has(reference.id)) throw new InvalidApplicabilitySchemaError("evidence-reference", ["evidence-reference"]);
+      if (!factIds.has(reference.id)) throw new InvalidApplicabilitySchemaError("evidence-reference", ["unknown-case-fact"]);
       return;
     }
     const owner = representationOwners.get(reference.id);
-    if (owner === undefined || (candidateKey !== undefined && owner !== candidateKey)) {
-      throw new InvalidApplicabilitySchemaError("evidence-reference", ["evidence-reference"]);
+    if (owner === undefined) {
+      throw new InvalidApplicabilitySchemaError("evidence-reference", ["unknown-representation"]);
+    }
+    if (candidateKey !== undefined && owner !== candidateKey) {
+      throw new InvalidApplicabilitySchemaError("evidence-reference", ["cross-candidate-representation"]);
     }
   };
   for (const assessment of output.candidateAssessments) {
@@ -418,19 +421,25 @@ function assertSynthesisConsistent(input: ApplicabilityReasoningInput, output: A
       if (!hypothesis.evidence.some((reference) => reference.kind === "case-fact")) throw new InvalidApplicabilitySchemaError("synthesis", ["novel-hypothesis"]);
       return;
     }
-    if (new Set(hypothesis.candidateKeys).size !== hypothesis.candidateKeys.length) throw new InvalidApplicabilitySchemaError("synthesis", ["hypothesis-candidate"]);
+    if (new Set(hypothesis.candidateKeys).size !== hypothesis.candidateKeys.length) {
+      throw new InvalidApplicabilitySchemaError("synthesis", ["hypothesis-candidate-duplicate-key"]);
+    }
     const candidateKeys = new Set(hypothesis.candidateKeys);
     for (const reference of hypothesis.evidence) {
       if (reference.kind === "resource-representation" && !candidateKeys.has(representationOwners.get(reference.id)!)) {
-        throw new InvalidApplicabilitySchemaError("synthesis", ["hypothesis-candidate"]);
+        throw new InvalidApplicabilitySchemaError("synthesis", ["hypothesis-candidate-cross-evidence"]);
       }
     }
     for (const key of hypothesis.candidateKeys) {
       const assessment = assessments.get(key);
-      if (assessment === undefined || assessment.verdict === "contradicted" || assessment.verdict === "irrelevant") throw new InvalidApplicabilitySchemaError("synthesis", ["hypothesis-candidate"]);
+      if (assessment === undefined || assessment.verdict === "contradicted" || assessment.verdict === "irrelevant") {
+        throw new InvalidApplicabilitySchemaError("synthesis", ["hypothesis-candidate-verdict"]);
+      }
       if (assessment.verdict === "insufficient-evidence") {
         const preserved = new Set(hypothesis.missingEvidence.map(({ item }) => item));
-        if (assessment.missingEvidence.some(({ item }) => !preserved.has(item))) throw new InvalidApplicabilitySchemaError("synthesis", ["missing-evidence"]);
+        if (assessment.missingEvidence.some(({ item }) => !preserved.has(item))) {
+          throw new InvalidApplicabilitySchemaError("synthesis", ["missing-evidence"]);
+        }
       }
     }
   };
@@ -441,7 +450,7 @@ function assertSynthesisConsistent(input: ApplicabilityReasoningInput, output: A
     hypothesis.kind === "candidate-grounded" ? [[...hypothesis.candidateKeys].sort(compareOrdinal).join("\u0000")] : [],
   );
   if (new Set(groundedIdentities).size !== groundedIdentities.length) {
-    throw new InvalidApplicabilitySchemaError("synthesis", ["hypothesis-candidate"]);
+    throw new InvalidApplicabilitySchemaError("synthesis", ["hypothesis-candidate-duplicate-hypothesis"]);
   }
   const maxRank = output.synthesis.alternatives.length;
   if (!output.synthesis.nextEvidenceActions.some(({ hypothesisRanks }) => hypothesisRanks.includes(0))) {

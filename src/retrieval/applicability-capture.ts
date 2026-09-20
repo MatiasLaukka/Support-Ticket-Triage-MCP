@@ -119,7 +119,7 @@ const ProviderOutputSchema = z.object({
 }).strict();
 
 const InvalidProviderFailureModeSchema = z.string().min(1).max(96).regex(
-  /^(?:(?:input|provider-output|candidate-coverage|evidence-reference|synthesis|taxonomy-output)(?::[A-Za-z0-9._-]{1,64})?|capture-privacy:(?:ticket-id|email|secret-or-prompt|secret|path|customer-identifier))$/,
+  /^(?:(?:input|provider-output|candidate-coverage|evidence-reference|synthesis|taxonomy-output)(?::[A-Za-z0-9._-]{1,64})?|capture-privacy:(?:ticket-id|email|secret-or-prompt|system-prompt|developer-message|raw-provider-payload|credential-label|secret|path|customer-identifier))$/,
 );
 
 const ResultSchema = z.discriminatedUnion("status", [
@@ -249,7 +249,10 @@ export type ApplicabilityCapture = z.infer<typeof CaptureSchema>;
 const privacyPatterns = [
   { category: "ticket-id", pattern: /\bTKT-\d+\b/i },
   { category: "email", pattern: /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/i },
-  { category: "secret-or-prompt", pattern: /\b(?:system prompt|developer message|raw provider payload|api[-_ ]?key|access[-_ ]?token|password)\b/i },
+  { category: "system-prompt", pattern: /\bsystem prompt\b/i },
+  { category: "developer-message", pattern: /\bdeveloper message\b/i },
+  { category: "raw-provider-payload", pattern: /\braw provider payload\b/i },
+  { category: "credential-label", pattern: /\b(?:api[-_ ]?key|access[-_ ]?token|password)\b/i },
   { category: "secret", pattern: /\bsk-[A-Za-z0-9_-]+\b/ },
   { category: "path", pattern: /(?:[A-Za-z]:[\\/]|(?:^|\s)(?:~?[\\/]|[\\/]{2})[A-Za-z0-9._-]+[\\/])/ },
   { category: "customer-identifier", pattern: /\b(?:customer|requester|account)\s*(?:id|identifier|name)?\s*[:=]/i },

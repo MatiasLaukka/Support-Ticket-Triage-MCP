@@ -206,8 +206,7 @@ const EvidenceActionBaseShape = {
 };
 const RankedEvidenceActionSchema = z.object({
   ...EvidenceActionBaseShape,
-  hypothesisRanks: z.array(z.number().int().min(0).max(8)).min(1).max(9)
-    .refine((values) => new Set(values).size === values.length, "Hypothesis ranks must be unique."),
+  hypothesisRanks: z.array(z.number().int().min(0).max(8)).min(1).max(9),
 }).strict();
 const GapEvidenceActionSchema = z.object(EvidenceActionBaseShape).strict();
 const HypothesisSynthesisSchema = z.object({
@@ -440,6 +439,9 @@ function assertSynthesisConsistent(input: ApplicabilityReasoningInput, output: A
     throw new InvalidApplicabilitySchemaError("synthesis", ["leading-evidence-action"]);
   }
   for (const action of output.synthesis.nextEvidenceActions) {
+    if (new Set(action.hypothesisRanks).size !== action.hypothesisRanks.length) {
+      throw new InvalidApplicabilitySchemaError("synthesis", ["hypothesis-rank"]);
+    }
     if (action.hypothesisRanks.some((rank) => rank > maxRank)) throw new InvalidApplicabilitySchemaError("synthesis", ["hypothesis-rank"]);
   }
   if (output.synthesis.leadingHypothesis.kind === "novel" && input.candidates.length === 0) {

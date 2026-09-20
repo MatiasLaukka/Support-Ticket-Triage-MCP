@@ -247,6 +247,15 @@ describe("B5 applicability contracts", () => {
     expect(() => validateApplicabilityProviderOutput(input, duplicateFallback)).toThrow(/hypothesis-candidate|synthesis/i);
   });
 
+  it("rejects duplicate hypothesis ranks with the named semantic error", () => {
+    const input = validApplicabilityInput("evidence-only");
+    const output = validProviderOutput(input);
+    if (output.synthesis.disposition !== "hypothesis") throw new Error("Expected hypothesis synthesis.");
+    output.synthesis.nextEvidenceActions[0]!.hypothesisRanks = [0, 0];
+
+    expect(() => validateApplicabilityProviderOutput(input, output)).toThrow(/hypothesis-rank|synthesis/i);
+  });
+
   it("allows a grounded novel hypothesis but requires case-fact grounding and a concrete leading evidence action", () => {
     const input = validApplicabilityInput("evidence-only");
     const output = validProviderOutput(input);

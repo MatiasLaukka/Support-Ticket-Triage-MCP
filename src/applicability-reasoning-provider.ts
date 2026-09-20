@@ -31,6 +31,7 @@ export const APPLICABILITY_REASONING_INSTRUCTIONS = [
   "Order alternatives from next-most-plausible to least plausible so a later diagnostic iteration can fall back when evidence contradicts the leader.",
   "A novel hypothesis is allowed when the supplied candidate set does not adequately explain the observed facts; ground it in case facts and explicitly explain why the candidate set is insufficient.",
   "Produce concrete next evidence actions for the leading hypothesis and relevant alternatives. Prefer internal inspection or bounded runnable checks; request customer evidence only when the required evidence is not internally available.",
+  "In hypothesis dispositions, hypothesisRanks is zero-based: rank 0 is the leading hypothesis, rank 1 is the first alternative, rank 2 is the second alternative, and so on. Every hypothesis disposition must include at least one next evidence action whose hypothesisRanks contains 0, actions may reference only ranks that actually exist, and a rank must not repeat within one action.",
   "Do not ask the requester to restate the problem or provide generic troubleshooting context already present in the case.",
   "Abstain only when neither the candidate set nor a grounded novel explanation can be responsibly prioritized; even then, request only specific evidence needed to form a hypothesis.",
   "Taxonomy is advisory; agreement is not applicability and disagreement is not automatic rejection.",
@@ -305,7 +306,7 @@ function buildApplicabilityJsonSchema(input: ApplicabilityReasoningInput): Recor
   };
 
   const missingEvidence = strictObject({
-    item: { type: "string", minLength: 1, maxLength: 300 },
+    item: boundedString(300),
     evidence: { type: "array", maxItems: 16, items: evidenceReference },
   }, ["item", "evidence"]);
 
@@ -318,7 +319,7 @@ function buildApplicabilityJsonSchema(input: ApplicabilityReasoningInput): Recor
     supportingEvidence: { type: "array", maxItems: 32, items: evidenceReference },
     contradictingEvidence: { type: "array", maxItems: 32, items: evidenceReference },
     missingEvidence: { type: "array", maxItems: 16, items: missingEvidence },
-    explanation: { type: "string", minLength: 1, maxLength: 600 },
+    explanation: boundedString(600),
   };
   const assessmentRequired = [
     "resourceKey",
@@ -338,7 +339,7 @@ function buildApplicabilityJsonSchema(input: ApplicabilityReasoningInput): Recor
 
   const candidateGroundedHypothesis = strictObject({
     kind: { type: "string", enum: ["candidate-grounded"] },
-    summary: { type: "string", minLength: 1, maxLength: 600 },
+    summary: boundedString(600),
     candidateKeys: {
       type: "array",
       minItems: 1,
@@ -351,17 +352,17 @@ function buildApplicabilityJsonSchema(input: ApplicabilityReasoningInput): Recor
 
   const novelHypothesis = strictObject({
     kind: { type: "string", enum: ["novel"] },
-    summary: { type: "string", minLength: 1, maxLength: 600 },
+    summary: boundedString(600),
     evidence: { type: "array", minItems: 1, maxItems: 32, items: evidenceReference },
-    whyCandidateSetIsInsufficient: { type: "string", minLength: 1, maxLength: 600 },
+    whyCandidateSetIsInsufficient: boundedString(600),
     missingEvidence: { type: "array", maxItems: 16, items: missingEvidence },
   }, ["kind", "summary", "evidence", "whyCandidateSetIsInsufficient", "missingEvidence"]);
 
   const rankedHypothesis = { anyOf: [candidateGroundedHypothesis, novelHypothesis] };
   const actionBase = {
     actionType: { type: "string", enum: ["inspect-internal", "run-check", "request-customer-evidence"] },
-    action: { type: "string", minLength: 1, maxLength: 400 },
-    expectedEvidence: { type: "string", minLength: 1, maxLength: 300 },
+    action: boundedString(400),
+    expectedEvidence: boundedString(300),
   };
   const rankedAction = strictObject({
     ...actionBase,
@@ -369,7 +370,6 @@ function buildApplicabilityJsonSchema(input: ApplicabilityReasoningInput): Recor
       type: "array",
       minItems: 1,
       maxItems: 9,
-      uniqueItems: true,
       items: { type: "integer", minimum: 0, maximum: 8 },
     },
   }, ["actionType", "action", "expectedEvidence", "hypothesisRanks"]);
@@ -384,12 +384,12 @@ function buildApplicabilityJsonSchema(input: ApplicabilityReasoningInput): Recor
 
   const abstain = strictObject({
     disposition: { type: "string", enum: ["abstain"] },
-    summary: { type: "string", minLength: 1, maxLength: 600 },
+    summary: boundedString(600),
     coverageGaps: {
       type: "array",
       minItems: 1,
       maxItems: 16,
-      items: { type: "string", minLength: 1, maxLength: 300 },
+      items: boundedString(300),
     },
     nextEvidenceActions: { type: "array", minItems: 1, maxItems: 8, items: gapAction },
   }, ["disposition", "summary", "coverageGaps", "nextEvidenceActions"]);
@@ -404,6 +404,11 @@ function buildApplicabilityJsonSchema(input: ApplicabilityReasoningInput): Recor
     synthesis: { anyOf: [hypothesis, abstain] },
   }, ["candidateAssessments", "synthesis"]);
 }
+
+function boundedString(maxLength: number): Record<string, unknown> {
+  return { type: "string", pattern: `^[\\s\\S]{1,${maxLength}}$` };
+}
+
 function strictObject(
   properties: Record<string, unknown>,
   required: readonly string[],

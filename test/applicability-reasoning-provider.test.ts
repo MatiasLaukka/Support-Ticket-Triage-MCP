@@ -213,6 +213,9 @@ describe("OpenAiApplicabilityReasoningProvider", () => {
     expect(APPLICABILITY_REASONING_INSTRUCTIONS).toMatch(/known-cause candidate.*may lead.*insufficient-evidence/i);
     expect(APPLICABILITY_REASONING_INSTRUCTIONS).toMatch(/playbooks and articles.*evidence collection/i);
     expect(APPLICABILITY_REASONING_INSTRUCTIONS).toMatch(/do not ask the requester to restate the problem/i);
+    expect(APPLICABILITY_REASONING_INSTRUCTIONS).toMatch(/hypothesisRanks is zero-based.*rank 0 is the leading hypothesis/i);
+    expect(APPLICABILITY_REASONING_INSTRUCTIONS).toMatch(/at least one next evidence action.*contains 0/i);
+    expect(APPLICABILITY_REASONING_INSTRUCTIONS).toMatch(/rank must not repeat within one action/i);
   });
 
   it("uses one stateless Responses API call with strict dynamic schema", async () => {
@@ -234,6 +237,12 @@ describe("OpenAiApplicabilityReasoningProvider", () => {
       text: { format: { type: "json_schema", name: "b5_applicability", strict: true } },
     });
     expect(request).not.toHaveProperty("previous_response_id");
+
+    const serializedSchema = JSON.stringify(request.text.format.schema);
+    expect(serializedSchema).not.toContain('"uniqueItems"');
+    expect(serializedSchema).not.toContain('"minLength"');
+    expect(serializedSchema).not.toContain('"maxLength"');
+    expect(serializedSchema).toContain('"pattern"');
 
     const assessment = request.text.format.schema.properties.candidateAssessments;
     expect(assessment.minItems).toBe(1);
@@ -398,6 +407,9 @@ describe("OpenAiApplicabilityReasoningProvider", () => {
     expect(APPLICABILITY_REASONING_INSTRUCTIONS).toMatch(/novel hypothesis/i);
     expect(APPLICABILITY_REASONING_INSTRUCTIONS).toMatch(/concrete next evidence actions/i);
     expect(APPLICABILITY_REASONING_INSTRUCTIONS).toMatch(/do not ask the requester to restate the problem/i);
+    expect(APPLICABILITY_REASONING_INSTRUCTIONS).toMatch(/hypothesisRanks is zero-based.*rank 0 is the leading hypothesis/i);
+    expect(APPLICABILITY_REASONING_INSTRUCTIONS).toMatch(/at least one next evidence action.*contains 0/i);
+    expect(APPLICABILITY_REASONING_INSTRUCTIONS).toMatch(/rank must not repeat within one action/i);
     expect(APPLICABILITY_REASONING_INSTRUCTIONS).toMatch(/do not infer lifecycle, recommendation, routing, remediation execution/i);
   });
 });

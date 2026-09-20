@@ -210,12 +210,16 @@ describe("OpenAiApplicabilityReasoningProvider", () => {
 
   it("requires falsifiable best-first hypotheses instead of generic troubleshooting labels", () => {
     expect(APPLICABILITY_REASONING_INSTRUCTIONS).toMatch(/falsifiable explanatory claim|bounded mechanism/i);
-    expect(APPLICABILITY_REASONING_INSTRUCTIONS).toMatch(/known-cause candidate.*may lead.*insufficient-evidence/i);
+    expect(APPLICABILITY_REASONING_INSTRUCTIONS).toMatch(/known-cause candidate may lead only when case-specific evidence supports its distinguishing mechanism/i);
     expect(APPLICABILITY_REASONING_INSTRUCTIONS).toMatch(/candidate assessments are the authoritative source of missing evidence/i);
     expect(APPLICABILITY_REASONING_INSTRUCTIONS).toMatch(/resource-representation citations.*case facts only/i);
     expect(APPLICABILITY_REASONING_INSTRUCTIONS).toMatch(/distinct falsifiable mechanisms/i);
-    expect(APPLICABILITY_REASONING_INSTRUCTIONS).toMatch(/playbooks and articles.*evidence collection/i);
     expect(APPLICABILITY_REASONING_INSTRUCTIONS).toMatch(/do not ask the requester to restate the problem/i);
+    expect(APPLICABILITY_REASONING_INSTRUCTIONS).toMatch(/diagnostic applicability.*not general usefulness/i);
+    expect(APPLICABILITY_REASONING_INSTRUCTIONS).toMatch(/locate, identify, or inspect a record/i);
+    expect(APPLICABILITY_REASONING_INSTRUCTIONS).toMatch(/no troubleshooting symptom.*abstain/i);
+    expect(APPLICABILITY_REASONING_INSTRUCTIONS).toMatch(/broader investigation path.*leader.*known cause.*alternative/i);
+    expect(APPLICABILITY_REASONING_INSTRUCTIONS).toMatch(/multiple actions may collectively discriminate/i);
     expect(APPLICABILITY_REASONING_INSTRUCTIONS).toMatch(/hypothesisRanks is zero-based.*rank 0 is the leading hypothesis/i);
     expect(APPLICABILITY_REASONING_INSTRUCTIONS).toMatch(/at least one next evidence action.*contains 0/i);
     expect(APPLICABILITY_REASONING_INSTRUCTIONS).toMatch(/rank must not repeat within one action/i);
@@ -425,6 +429,11 @@ describe("OpenAiApplicabilityReasoningProvider", () => {
     expect(APPLICABILITY_REASONING_INSTRUCTIONS).toMatch(/novel hypothesis/i);
     expect(APPLICABILITY_REASONING_INSTRUCTIONS).toMatch(/concrete next evidence actions/i);
     expect(APPLICABILITY_REASONING_INSTRUCTIONS).toMatch(/do not ask the requester to restate the problem/i);
+    expect(APPLICABILITY_REASONING_INSTRUCTIONS).toMatch(/diagnostic applicability.*not general usefulness/i);
+    expect(APPLICABILITY_REASONING_INSTRUCTIONS).toMatch(/locate, identify, or inspect a record/i);
+    expect(APPLICABILITY_REASONING_INSTRUCTIONS).toMatch(/no troubleshooting symptom.*abstain/i);
+    expect(APPLICABILITY_REASONING_INSTRUCTIONS).toMatch(/broader investigation path.*leader.*known cause.*alternative/i);
+    expect(APPLICABILITY_REASONING_INSTRUCTIONS).toMatch(/multiple actions may collectively discriminate/i);
     expect(APPLICABILITY_REASONING_INSTRUCTIONS).toMatch(/hypothesisRanks is zero-based.*rank 0 is the leading hypothesis/i);
     expect(APPLICABILITY_REASONING_INSTRUCTIONS).toMatch(/at least one next evidence action.*contains 0/i);
     expect(APPLICABILITY_REASONING_INSTRUCTIONS).toMatch(/rank must not repeat within one action/i);

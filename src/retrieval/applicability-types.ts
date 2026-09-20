@@ -7,7 +7,7 @@ import type { AiUsage } from "../domain.js";
 import type { Reference, ResourceKey, ResourceType, TaxonomyMetadata } from "./types.js";
 
 export const APPLICABILITY_CONTRACT_VERSION = 4 as const;
-export const APPLICABILITY_PROMPT_VERSION = "b5-applicability-v4" as const;
+export const APPLICABILITY_PROMPT_VERSION = "b5-applicability-v5" as const;
 export const APPLICABILITY_OUTPUT_RESERVE_TOKENS = 4_096 as const;
 
 export type ApplicabilityLane = "evidence-only" | "taxonomy-informed";

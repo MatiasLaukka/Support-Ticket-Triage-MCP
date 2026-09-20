@@ -85,7 +85,7 @@ function metricFixture(): { capture: any; cases: any[] } {
   return { capture, cases };
 }
 
-function fakeProvider(model: string, failFirst = false): { provider: ApplicabilityReasoningProvider; calls: ReturnType<typeof vi.fn> } {
+function fakeProvider(model: string, failFirst = false, unsafeFirst = false): { provider: ApplicabilityReasoningProvider; calls: ReturnType<typeof vi.fn> } {
   let callIndex = 0;
   const calls = vi.fn();
   const provider: ApplicabilityReasoningProvider = {
@@ -100,7 +100,11 @@ function fakeProvider(model: string, failFirst = false): { provider: Applicabili
         resourceKey: candidate.resourceKey,
         verdict: "applicable-next-step" as const,
         supportingEvidence: [{ kind: "case-fact" as const, id: firstFact.id }, { kind: "resource-representation" as const, id: candidate.evidence.status === "available" ? candidate.evidence.representationIds[0]! : "never" }],
-        contradictingEvidence: [], missingEvidence: [], explanation: "The candidate supports a bounded synthetic investigation.",
+        contradictingEvidence: [],
+        missingEvidence: [],
+        explanation: unsafeFirst && callIndex === 1
+          ? "Inspect C:\\Users\\someone\\ticket.txt before continuing."
+          : "The candidate supports a bounded synthetic investigation.",
         ...(input.lane === "taxonomy-informed" ? { taxonomyRelation: "neutral" as const } : {}),
       }));
       const lead = available[0];
@@ -209,6 +213,20 @@ describe("B5 applicability evaluation", () => {
     expect(fake.calls).toHaveBeenCalledTimes(42);
     expect(report.exclusions.failedCases).toHaveLength(1);
     expect(report.exclusions.failedCases[0].reason).toBe("timeout");
+  }, 30_000);
+
+  it("bounds capture-unsafe provider narrative as an invalid-provider-output lane without aborting the paid run", async () => {
+    const outputDir = outputPath("task8-privacy-failure");
+    const fake = fakeProvider("fake-model", false, true);
+    setApplicabilityEvaluationProviderFactoryForTests(() => fake.provider);
+    const report = await runApplicabilityEvaluation(compareArgs(outputDir), {}) as any;
+    expect(fake.calls).toHaveBeenCalledTimes(42);
+    expect(report.exclusions.failedCases).toHaveLength(1);
+    expect(report.exclusions.failedCases[0].reason).toBe("invalid-provider-output");
+    const serializedCapture = await readFile(resolve(outputDir, "capture.json"), "utf8");
+    expect(serializedCapture).not.toContain("C:\\Users\\someone\\ticket.txt");
+    expect(JSON.parse(serializedCapture).cases.flatMap((entry: any) => entry.lanes)
+      .filter((lane: any) => lane.result.status === "assessment-failed" && lane.result.reason === "invalid-provider-output")).toHaveLength(1);
   }, 30_000);
 
   it("never overwrites an existing output directory", async () => {

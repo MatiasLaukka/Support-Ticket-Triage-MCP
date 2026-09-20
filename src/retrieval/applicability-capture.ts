@@ -238,14 +238,26 @@ export type ApplicabilityCaseCapture = z.infer<typeof CaseCaptureSchema>;
 export type ApplicabilityCaptureWithoutHash = z.infer<typeof CaptureWithoutHashSchema>;
 export type ApplicabilityCapture = z.infer<typeof CaptureSchema>;
 
-const privacyPatterns: readonly RegExp[] = [
-  /\bTKT-\d+\b/i,
-  /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/i,
-  /\b(?:system prompt|developer message|raw provider payload|api[-_ ]?key|access[-_ ]?token|password)\b/i,
-  /\bsk-[A-Za-z0-9_-]+\b/,
-  /(?:[A-Za-z]:[\\/]|(?:^|\s)(?:~?[\\/]|[\\/]{2})[A-Za-z0-9._-]+[\\/])/,
-  /\b(?:customer|requester|account)\s*(?:id|identifier|name)?\s*[:=]/i,
-];
+const privacyPatterns = [
+  { category: "ticket-id", pattern: /\bTKT-\d+\b/i },
+  { category: "email", pattern: /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/i },
+  { category: "secret-or-prompt", pattern: /\b(?:system prompt|developer message|raw provider payload|api[-_ ]?key|access[-_ ]?token|password)\b/i },
+  { category: "secret", pattern: /\bsk-[A-Za-z0-9_-]+\b/ },
+  { category: "path", pattern: /(?:[A-Za-z]:[\\/]|(?:^|\s)(?:~?[\\/]|[\\/]{2})[A-Za-z0-9._-]+[\\/])/ },
+  { category: "customer-identifier", pattern: /\b(?:customer|requester|account)\s*(?:id|identifier|name)?\s*[:=]/i },
+] as const;
+
+export type ApplicabilityCapturePrivacyCategory = (typeof privacyPatterns)[number]["category"];
+
+export class ApplicabilityCapturePrivacyError extends Error {
+  readonly category: ApplicabilityCapturePrivacyCategory;
+
+  constructor(category: ApplicabilityCapturePrivacyCategory) {
+    super(`B5 applicability capture contains forbidden ${category} material.`);
+    this.name = "ApplicabilityCapturePrivacyError";
+    this.category = category;
+  }
+}
 
 function canonicalize(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(canonicalize);
@@ -280,10 +292,12 @@ function assertUnique(values: readonly string[], message: string): void {
   if (new Set(values).size !== values.length) throw new Error(message);
 }
 
-function assertPrivacyBounded(value: unknown): void {
+export function assertApplicabilityCapturePrivacyBounded(value: unknown): void {
   const serialized = JSON.stringify(value);
-  if (privacyPatterns.some((pattern) => pattern.test(serialized))) {
-    throw new Error("B5 applicability capture contains a forbidden customer, prompt, secret, or path value.");
+  for (const { category, pattern } of privacyPatterns) {
+    if (pattern.test(serialized)) {
+      throw new ApplicabilityCapturePrivacyError(category);
+    }
   }
 }
 
@@ -332,7 +346,7 @@ export function createApplicabilityCapture(input: ApplicabilityCaptureWithoutHas
 
 export function validateApplicabilityCapture(value: unknown): asserts value is ApplicabilityCapture {
   const capture = CaptureSchema.parse(value);
-  assertPrivacyBounded(capture);
+  assertApplicabilityCapturePrivacyBounded(capture);
 
   if (capture.identity.promptHash !== APPLICABILITY_PROMPT_HASH) throw new Error("B5 applicability capture prompt hash does not match the current prompt contract.");
   assertUnique(capture.identity.caseIds, "B5 applicability capture case IDs must be unique.");

@@ -11,6 +11,8 @@ import { unavailableReusableKnowledge } from "../src/knowledge-evolution/reusabl
 import { assessApplicabilityCase } from "../src/retrieval/applicability.js";
 import { canonicalNewB5ArtifactPath } from "../src/retrieval/applicability-artifact-path.js";
 import {
+  ApplicabilityCapturePrivacyError,
+  assertApplicabilityCapturePrivacyBounded,
   captureCandidates,
   captureEvidence,
   captureMeasurement,
@@ -295,7 +297,16 @@ async function executeLane(input: {
     promptInjectionDetected: input.prepared.basis.promptInjectionRuleIds.length > 0,
   });
   const completedAtMs = Date.now();
-  const sanitized = sanitizeApplicabilityResult(result);
+  let sanitized = sanitizeApplicabilityResult(result);
+  let telemetry = telemetryFor(result);
+  try {
+    assertApplicabilityCapturePrivacyBounded(sanitized);
+  } catch (error) {
+    if (!(error instanceof ApplicabilityCapturePrivacyError)) throw error;
+    if (result.status !== "complete" && result.status !== "partial-assessment") throw error;
+    sanitized = { status: "assessment-failed", reason: "invalid-provider-output" };
+    telemetry = null;
+  }
   return {
     lane: input.lane,
     nonTaxonomyBasisHash: input.prepared.basis.nonTaxonomyBasisHash,
@@ -303,7 +314,7 @@ async function executeLane(input: {
     inputMeasurement: captureMeasurement(measurement),
     result: sanitized,
     outputHash: hashCanonicalApplicabilityCapture(sanitized),
-    telemetry: telemetryFor(result),
+    telemetry,
     timing: { startedAtMs, completedAtMs },
     traceTruncated: false,
   };

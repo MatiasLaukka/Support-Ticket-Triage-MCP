@@ -251,7 +251,7 @@ const privacyPatterns = [
   { category: "system-prompt", pattern: /\bsystem prompt\b/i },
   { category: "developer-message", pattern: /\bdeveloper message\b/i },
   { category: "raw-provider-payload", pattern: /\braw provider payload\b/i },
-  { category: "credential-label", pattern: /\b(?:api[-_ ]?key|access[-_ ]?token|password)\b/i },
+
   { category: "secret", pattern: /\bsk-[A-Za-z0-9_-]+\b/ },
   { category: "path", pattern: /(?:[A-Za-z]:[\\/]|(?:^|\s)(?:~?[\\/]|[\\/]{2})[A-Za-z0-9._-]+[\\/])/ },
   { category: "customer-identifier", pattern: /\b(?:customer|requester|account)\s*(?:id|identifier|name)?\s*[:=]/i },

@@ -6,8 +6,8 @@ import { DiagnosticTaxonomyContextSchema, type DiagnosticTaxonomyContext } from 
 import type { AiUsage } from "../domain.js";
 import type { Reference, ResourceKey, ResourceType, TaxonomyMetadata } from "./types.js";
 
-export const APPLICABILITY_CONTRACT_VERSION = 3 as const;
-export const APPLICABILITY_PROMPT_VERSION = "b5-applicability-v3" as const;
+export const APPLICABILITY_CONTRACT_VERSION = 4 as const;
+export const APPLICABILITY_PROMPT_VERSION = "b5-applicability-v4" as const;
 export const APPLICABILITY_OUTPUT_RESERVE_TOKENS = 4_096 as const;
 
 export type ApplicabilityLane = "evidence-only" | "taxonomy-informed";
@@ -65,8 +65,12 @@ const TaxonomyMetadataSchema = z.object({
   productSurfaces: z.array(z.string().min(1).max(256)).max(32),
   problemClasses: z.array(z.string().min(1).max(256)).max(32),
 }).strict();
+const CaseFactEvidenceReferenceSchema = z.object({
+  kind: z.literal("case-fact"),
+  id: StableIdSchema,
+}).strict();
 const EvidenceReferenceSchema = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("case-fact"), id: StableIdSchema }).strict(),
+  CaseFactEvidenceReferenceSchema,
   z.object({ kind: z.literal("resource-representation"), id: StableIdSchema }).strict(),
 ]);
 const AvailableEvidenceSchema = z.object({
@@ -188,8 +192,8 @@ const CandidateGroundedHypothesisSchema = z.object({
   kind: z.literal("candidate-grounded"),
   summary: z.string().min(1).max(600),
   candidateKeys: z.array(ResourceKeySchema).min(1).max(8),
-  evidence: z.array(EvidenceReferenceSchema).min(1).max(32),
-  // Optional only for backward parsing of contract-v2 captures. Contract v3 providers do not emit it.
+  evidence: z.array(CaseFactEvidenceReferenceSchema).min(1).max(32),
+  // Retained only as parser compatibility for pre-v4 provider outputs.
   missingEvidence: z.array(MissingEvidenceItemSchema).max(16).optional(),
 }).strict();const NovelHypothesisSchema = z.object({
   kind: z.literal("novel"),
@@ -415,7 +419,6 @@ function assertEvidenceReferencesResolve(input: ApplicabilityReasoningInput, out
 }
 function assertSynthesisConsistent(input: ApplicabilityReasoningInput, output: ApplicabilityProviderOutput): void {
   const assessments = new Map(output.candidateAssessments.map((assessment) => [assessment.resourceKey, assessment]));
-  const representationOwners = new Map(input.evidenceRegistry.map((representation) => [representation.id, representation.resourceKey]));
   const assertHypothesis = (hypothesis: DiagnosticHypothesis) => {
     if (hypothesis.kind === "novel") {
       if (!hypothesis.evidence.some((reference) => reference.kind === "case-fact")) throw new InvalidApplicabilitySchemaError("synthesis", ["novel-hypothesis"]);
@@ -424,12 +427,7 @@ function assertSynthesisConsistent(input: ApplicabilityReasoningInput, output: A
     if (new Set(hypothesis.candidateKeys).size !== hypothesis.candidateKeys.length) {
       throw new InvalidApplicabilitySchemaError("synthesis", ["hypothesis-candidate-duplicate-key"]);
     }
-    const candidateKeys = new Set(hypothesis.candidateKeys);
-    for (const reference of hypothesis.evidence) {
-      if (reference.kind === "resource-representation" && !candidateKeys.has(representationOwners.get(reference.id)!)) {
-        throw new InvalidApplicabilitySchemaError("synthesis", ["hypothesis-candidate-cross-evidence"]);
-      }
-    }
+
     for (const key of hypothesis.candidateKeys) {
       const assessment = assessments.get(key);
       if (assessment === undefined || assessment.verdict === "contradicted" || assessment.verdict === "irrelevant") {
@@ -441,7 +439,12 @@ function assertSynthesisConsistent(input: ApplicabilityReasoningInput, output: A
   const hypotheses = [output.synthesis.leadingHypothesis, ...output.synthesis.alternatives];
   for (const hypothesis of hypotheses) assertHypothesis(hypothesis);
   const groundedIdentities = hypotheses.flatMap((hypothesis) =>
-    hypothesis.kind === "candidate-grounded" ? [[...hypothesis.candidateKeys].sort(compareOrdinal).join("\u0000")] : [],
+    hypothesis.kind === "candidate-grounded"
+      ? [JSON.stringify([
+          [...hypothesis.candidateKeys].sort(compareOrdinal),
+          hypothesis.summary.trim().replace(/\s+/g, " ").toLowerCase(),
+        ])]
+      : [],
   );
   if (new Set(groundedIdentities).size !== groundedIdentities.length) {
     throw new InvalidApplicabilitySchemaError("synthesis", ["hypothesis-candidate-duplicate-hypothesis"]);

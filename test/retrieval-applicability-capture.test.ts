@@ -192,6 +192,24 @@ describe("B5 applicability capture", () => {
     }
   });
 
+  it("allows credential terminology while continuing to reject secret-shaped values", () => {
+    const terminology = structuredClone(validCapture());
+    terminology.cases[0]!.safeCase.problemStatement = "The API key field is blank and the password field needs inspection.";
+    const terminologySafeCaseHash = hashCanonicalApplicabilityValue(terminology.cases[0]!.safeCase);
+    terminology.cases[0]!.safeCaseHash = terminologySafeCaseHash;
+    for (const lane of terminology.cases[0]!.lanes) lane.inputIdentity.safeCaseHash = terminologySafeCaseHash;
+    rehash(terminology);
+    expect(() => validateApplicabilityCapture(terminology)).not.toThrow();
+
+    const secret = structuredClone(validCapture());
+    secret.cases[0]!.safeCase.problemStatement = "The supplied credential was sk-test-secret-value.";
+    const secretSafeCaseHash = hashCanonicalApplicabilityValue(secret.cases[0]!.safeCase);
+    secret.cases[0]!.safeCaseHash = secretSafeCaseHash;
+    for (const lane of secret.cases[0]!.lanes) lane.inputIdentity.safeCaseHash = secretSafeCaseHash;
+    rehash(secret);
+    expect(() => validateApplicabilityCapture(secret)).toThrow(/forbidden/i);
+  });
+
   it("accepts bounded invalid-provider-output failure modes and rejects unbounded diagnostic text", () => {
     const capture = structuredClone(validCapture());
     capture.cases[0]!.lanes[0]!.result = {

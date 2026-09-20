@@ -212,6 +212,8 @@ describe("OpenAiApplicabilityReasoningProvider", () => {
     expect(APPLICABILITY_REASONING_INSTRUCTIONS).toMatch(/falsifiable explanatory claim|bounded mechanism/i);
     expect(APPLICABILITY_REASONING_INSTRUCTIONS).toMatch(/known-cause candidate.*may lead.*insufficient-evidence/i);
     expect(APPLICABILITY_REASONING_INSTRUCTIONS).toMatch(/candidate assessments are the authoritative source of missing evidence/i);
+    expect(APPLICABILITY_REASONING_INSTRUCTIONS).toMatch(/resource-representation citations.*case facts only/i);
+    expect(APPLICABILITY_REASONING_INSTRUCTIONS).toMatch(/distinct falsifiable mechanisms/i);
     expect(APPLICABILITY_REASONING_INSTRUCTIONS).toMatch(/playbooks and articles.*evidence collection/i);
     expect(APPLICABILITY_REASONING_INSTRUCTIONS).toMatch(/do not ask the requester to restate the problem/i);
     expect(APPLICABILITY_REASONING_INSTRUCTIONS).toMatch(/hypothesisRanks is zero-based.*rank 0 is the leading hypothesis/i);
@@ -262,6 +264,7 @@ describe("OpenAiApplicabilityReasoningProvider", () => {
       .properties.leadingHypothesis.anyOf[0];
     expect(candidateGrounded.properties).not.toHaveProperty("missingEvidence");
     expect(candidateGrounded.required).not.toContain("missingEvidence");
+    expect(candidateGrounded.properties.evidence.items.properties.kind.enum).toEqual(["case-fact"]);
     expect(assessment.items.anyOf[0].properties.resourceKey.enum).toEqual([
       "knowledge-article:performance-troubleshooting",
     ]);

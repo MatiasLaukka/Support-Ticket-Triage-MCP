@@ -1,6 +1,6 @@
 import type { ApplicabilityCapture, ApplicabilityCaseCapture, ApplicabilityLaneCapture } from "./applicability-capture.js";
 import type { ApplicabilityDevelopmentCase, ApplicabilityOracleJudgment } from "./applicability-cases.js";
-import type { ApplicabilityVerdict, DiagnosticHypothesis, EvidenceReference } from "./applicability-types.js";
+import type { ApplicabilityVerdict, EvidenceReference } from "./applicability-types.js";
 
 const VERDICTS = ["applicable-next-step", "contradicted", "insufficient-evidence", "irrelevant"] as const satisfies readonly ApplicabilityVerdict[];
 
@@ -93,8 +93,11 @@ function textIncludesConcepts(text: string, concepts: readonly string[]): boolea
   const normalized = text.toLocaleLowerCase();
   return concepts.every((concept) => normalized.includes(concept.toLocaleLowerCase()));
 }
-function hypothesisMatches(hypothesis: DiagnosticHypothesis, oracle: ApplicabilityDevelopmentCase["synthesisOracle"]["acceptableLeadingHypotheses"][number]): boolean {
-  if (hypothesis.kind !== "candidate-grounded") return false;
+function hypothesisMatches(
+  hypothesis: { kind: "candidate-grounded" | "novel"; summary: string; candidateKeys?: readonly string[] },
+  oracle: ApplicabilityDevelopmentCase["synthesisOracle"]["acceptableLeadingHypotheses"][number],
+): boolean {
+  if (hypothesis.kind !== "candidate-grounded" || hypothesis.candidateKeys === undefined) return false;
   const pool = new Set<string>(oracle.candidateKeyPool);
   const matches = hypothesis.candidateKeys.filter((key) => pool.has(key)).length;
   return matches >= oracle.minimumCandidateMatches && textIncludesConcepts(hypothesis.summary, oracle.requiredConcepts);

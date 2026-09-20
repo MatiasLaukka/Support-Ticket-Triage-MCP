@@ -27,7 +27,8 @@ export const APPLICABILITY_REASONING_INSTRUCTIONS = [
   "After candidate assessment, choose one leading diagnostic hypothesis whenever the evidence supports prioritizing a path; do not abstain merely because the leading hypothesis still needs evidence.",
   "The leading hypothesis must state a falsifiable explanatory claim or bounded mechanism; do not merely restate symptoms, name a resource, or say to troubleshoot a category.",
   "When a plausible known-cause candidate best explains the current evidence, it may lead even when marked insufficient-evidence; use playbooks and articles to support evidence collection rather than automatically ranking them above the cause.",
-  "A candidate-grounded hypothesis may use applicable-next-step or insufficient-evidence candidates, but never contradicted or irrelevant candidates. Candidate assessments are the authoritative source of missing evidence; do not duplicate that prose in candidate-grounded hypotheses, and make the next evidence action test the relevant gap.",
+  "A candidate-grounded hypothesis may use applicable-next-step or insufficient-evidence candidates, but never contradicted or irrelevant candidates. Candidate assessments are the authoritative source of missing evidence and resource-representation citations; do not duplicate either in candidate-grounded hypotheses. Candidate-grounded hypothesis evidence must use case facts only, and make the next evidence action test the relevant gap.",
+  "Different candidate-grounded hypotheses may reuse the same candidate set only when their summaries state distinct falsifiable mechanisms; do not repeat equivalent hypotheses as alternatives.",
   "Order alternatives from next-most-plausible to least plausible so a later diagnostic iteration can fall back when evidence contradicts the leader.",
   "A novel hypothesis is allowed when the supplied candidate set does not adequately explain the observed facts; ground it in case facts and explicitly explain why the candidate set is insufficient.",
   "Produce concrete next evidence actions for the leading hypothesis and relevant alternatives. Prefer internal inspection or bounded runnable checks; request customer evidence only when the required evidence is not internally available.",
@@ -297,12 +298,14 @@ function buildApplicabilityJsonSchema(input: ApplicabilityReasoningInput): Recor
     ]),
   );
 
+  const caseFactEvidenceReference = strictObject({
+    kind: { type: "string", enum: ["case-fact"] },
+    id: { type: "string", enum: factIds },
+  }, ["kind", "id"]);
+
   const evidenceReference = {
     anyOf: [
-      strictObject({
-        kind: { type: "string", enum: ["case-fact"] },
-        id: { type: "string", enum: factIds },
-      }, ["kind", "id"]),
+      caseFactEvidenceReference,
       strictObject({
         kind: { type: "string", enum: ["resource-representation"] },
         id: { type: "string", enum: representationIds },
@@ -370,7 +373,7 @@ function buildApplicabilityJsonSchema(input: ApplicabilityReasoningInput): Recor
       maxItems: 8,
       items: { type: "string", enum: candidateKeys },
     },
-    evidence: { type: "array", minItems: 1, maxItems: 32, items: evidenceReference },
+    evidence: { type: "array", minItems: 1, maxItems: 32, items: caseFactEvidenceReference },
   }, ["kind", "summary", "candidateKeys", "evidence"]);
 
   const novelHypothesis = strictObject({

@@ -247,7 +247,20 @@ describe("B5 applicability contracts", () => {
     expect(() => validateApplicabilityProviderOutput(input, output)).not.toThrow();
   });
 
-  it("rejects candidate-grounded hypotheses that cite another candidate or repeat the same fallback", () => {
+  it("allows distinct grounded hypotheses to reuse the same candidate set", () => {
+    const input = validApplicabilityInput("evidence-only");
+    const output = validProviderOutput(input);
+    if (output.synthesis.disposition !== "hypothesis" || output.synthesis.leadingHypothesis.kind !== "candidate-grounded") {
+      throw new Error("Expected candidate-grounded hypothesis.");
+    }
+    const alternative = structuredClone(output.synthesis.leadingHypothesis);
+    alternative.summary = "The same evidence may instead indicate a distinct bounded loading mechanism.";
+    output.synthesis.alternatives = [alternative];
+
+    expect(() => validateApplicabilityProviderOutput(input, output)).not.toThrow();
+  });
+
+  it("rejects resource evidence in grounded synthesis and repeated equivalent fallbacks", () => {
     const input = validApplicabilityInput("evidence-only");
     input.evidenceRegistry.push({
       id: "representation:z-reference-only",
@@ -261,8 +274,11 @@ describe("B5 applicability contracts", () => {
     });
     const crossCandidate = validProviderOutput(input);
     if (crossCandidate.synthesis.disposition !== "hypothesis" || crossCandidate.synthesis.leadingHypothesis.kind !== "candidate-grounded") throw new Error("Expected candidate-grounded hypothesis.");
-    crossCandidate.synthesis.leadingHypothesis.evidence.push({ kind: "resource-representation", id: "representation:z-reference-only" });
-    expect(() => validateApplicabilityProviderOutput(input, crossCandidate)).toThrow(/hypothesis-candidate|synthesis/i);
+    (crossCandidate.synthesis.leadingHypothesis.evidence as Array<{ kind: string; id: string }>).push({
+      kind: "resource-representation",
+      id: "representation:z-reference-only",
+    });
+    expect(() => validateApplicabilityProviderOutput(input, crossCandidate)).toThrow(/provider-output|unknown-field|synthesis/i);
 
     const duplicateFallback = validProviderOutput(input);
     if (duplicateFallback.synthesis.disposition !== "hypothesis") throw new Error("Expected hypothesis synthesis.");

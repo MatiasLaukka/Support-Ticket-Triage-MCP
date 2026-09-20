@@ -114,7 +114,7 @@ function fakeProvider(model: string, failFirst = false, unsafeFirst = false): { 
           candidateAssessments: assessments,
           synthesis: {
             disposition: "hypothesis" as const,
-            leadingHypothesis: { kind: "candidate-grounded" as const, summary: "A bounded candidate mechanism is the first hypothesis.", candidateKeys: [lead.resourceKey], evidence: [{ kind: "case-fact" as const, id: firstFact.id }, { kind: "resource-representation" as const, id: lead.evidence.representationIds[0]! }], missingEvidence: [] },
+            leadingHypothesis: { kind: "candidate-grounded" as const, summary: "A bounded candidate mechanism is the first hypothesis.", candidateKeys: [lead.resourceKey], evidence: [{ kind: "case-fact" as const, id: firstFact.id }], missingEvidence: [] },
             alternatives: [],
             nextEvidenceActions: [{ actionType: "inspect-internal" as const, action: "Inspect the bounded internal evidence for the leading mechanism.", expectedEvidence: "Evidence supporting or contradicting the leading mechanism.", hypothesisRanks: [0] }],
           },

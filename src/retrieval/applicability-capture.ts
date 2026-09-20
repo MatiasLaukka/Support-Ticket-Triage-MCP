@@ -79,9 +79,8 @@ const CandidateHypothesisSchema = z.object({
   summary: z.string().min(1).max(600),
   candidateKeys: z.array(ResourceKeySchema).min(1).max(8),
   evidence: z.array(EvidenceReferenceSchema).min(1).max(32),
-  missingEvidence: z.array(MissingEvidenceSchema).max(16),
-}).strict();
-const NovelHypothesisSchema = z.object({
+  missingEvidence: z.array(MissingEvidenceSchema).max(16).optional(),
+}).strict();const NovelHypothesisSchema = z.object({
   kind: z.literal("novel"),
   summary: z.string().min(1).max(600),
   evidence: z.array(EvidenceReferenceSchema).min(1).max(32),

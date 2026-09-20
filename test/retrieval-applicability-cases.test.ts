@@ -58,8 +58,8 @@ describe("B5 applicability development oracle", () => {
   it("loads an LF-hashed manifest with exactly the frozen 21 ordered development cases", () => {
     const loaded = loadApplicabilityDevelopment(CASE_ROOT);
     expect(loaded.manifest.version).toBe(2);
-    expect(loaded.manifest.applicabilityContractVersion).toBe(2);
-    expect(loaded.manifest.promptVersion).toBe("b5-applicability-v2");
+    expect(loaded.manifest.applicabilityContractVersion).toBe(3);
+    expect(loaded.manifest.promptVersion).toBe("b5-applicability-v3");
     expect(loaded.cases).toHaveLength(21);
     expect(loaded.manifest.caseIds).toHaveLength(21);
     expect(loaded.cases.map(({ id }) => id)).toEqual(loaded.manifest.caseIds);

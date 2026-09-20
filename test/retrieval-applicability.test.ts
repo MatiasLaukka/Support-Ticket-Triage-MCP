@@ -224,6 +224,29 @@ describe("B5 applicability contracts", () => {
     expect(() => validateApplicabilityProviderOutput(input, duplicatePolarity)).toThrow(/evidence-polarity|provider-output/i);
   });
 
+  it("keeps insufficient-evidence gaps authoritative on candidate assessments without duplicating hypothesis prose", () => {
+    const input = validApplicabilityInput("evidence-only");
+    const output = validProviderOutput(input);
+    const assessment = output.candidateAssessments[0]!;
+    assessment.verdict = "insufficient-evidence";
+    assessment.missingEvidence = [{
+      item: "A fresh browser console trace is required.",
+      evidence: [{ kind: "case-fact", id: "fact:chunkload" }],
+    }];
+    if (output.synthesis.disposition !== "hypothesis" || output.synthesis.leadingHypothesis.kind !== "candidate-grounded") {
+      throw new Error("Expected candidate-grounded hypothesis.");
+    }
+    delete output.synthesis.leadingHypothesis.missingEvidence;
+    output.synthesis.nextEvidenceActions = [{
+      actionType: "run-check",
+      action: "Capture a fresh browser console trace for the same campaign.",
+      expectedEvidence: "A trace that supports or contradicts the leading mechanism.",
+      hypothesisRanks: [0],
+    }];
+
+    expect(() => validateApplicabilityProviderOutput(input, output)).not.toThrow();
+  });
+
   it("rejects candidate-grounded hypotheses that cite another candidate or repeat the same fallback", () => {
     const input = validApplicabilityInput("evidence-only");
     input.evidenceRegistry.push({
@@ -473,13 +496,20 @@ describe("B5 applicability orchestration", () => {
   it("enforces synthesis consistency after provider output", async () => {
     const input = validApplicabilityInput("evidence-only");
     const output = validProviderOutput(input);
-    output.candidateAssessments[0]!.verdict = "insufficient-evidence";
-    output.candidateAssessments[0]!.missingEvidence = [{ item: "A browser console trace is required.", evidence: [] }];
+    const assessment = output.candidateAssessments[0]!;
+    assessment.verdict = "contradicted";
+    assessment.supportingEvidence = [];
+    assessment.contradictingEvidence = [{ kind: "case-fact", id: "fact:chunkload" }];
+    assessment.missingEvidence = [];
     const provider = { assess: vi.fn(async () => ({ output, telemetry })) };
 
     const result = await assessApplicabilityCase({ input, provider, measurement: validMeasurement(), promptInjectionDetected: false });
 
-    expect(result).toEqual({ status: "assessment-failed", reason: "invalid-provider-output", failureMode: "synthesis:missing-evidence" });
+    expect(result).toEqual({
+      status: "assessment-failed",
+      reason: "invalid-provider-output",
+      failureMode: "synthesis:hypothesis-candidate-verdict",
+    });
   });
 
   it("propagates unexpected programming errors", async () => {

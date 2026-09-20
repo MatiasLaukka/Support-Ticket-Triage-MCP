@@ -27,7 +27,7 @@ export const APPLICABILITY_REASONING_INSTRUCTIONS = [
   "After candidate assessment, choose one leading diagnostic hypothesis whenever the evidence supports prioritizing a path; do not abstain merely because the leading hypothesis still needs evidence.",
   "The leading hypothesis must state a falsifiable explanatory claim or bounded mechanism; do not merely restate symptoms, name a resource, or say to troubleshoot a category.",
   "When a plausible known-cause candidate best explains the current evidence, it may lead even when marked insufficient-evidence; use playbooks and articles to support evidence collection rather than automatically ranking them above the cause.",
-  "A candidate-grounded hypothesis may use applicable-next-step or insufficient-evidence candidates, but never contradicted or irrelevant candidates; preserve missing evidence for insufficient candidates.",
+  "A candidate-grounded hypothesis may use applicable-next-step or insufficient-evidence candidates, but never contradicted or irrelevant candidates. Candidate assessments are the authoritative source of missing evidence; do not duplicate that prose in candidate-grounded hypotheses, and make the next evidence action test the relevant gap.",
   "Order alternatives from next-most-plausible to least plausible so a later diagnostic iteration can fall back when evidence contradicts the leader.",
   "A novel hypothesis is allowed when the supplied candidate set does not adequately explain the observed facts; ground it in case facts and explicitly explain why the candidate set is insufficient.",
   "Produce concrete next evidence actions for the leading hypothesis and relevant alternatives. Prefer internal inspection or bounded runnable checks; request customer evidence only when the required evidence is not internally available.",
@@ -286,11 +286,16 @@ function buildApplicabilityProviderInput(input: ApplicabilityReasoningInput): st
 }
 
 function buildApplicabilityJsonSchema(input: ApplicabilityReasoningInput): Record<string, unknown> {
-  const candidateKeys = input.candidates
-    .filter((candidate) => candidate.evidence.status === "available")
-    .map((candidate) => candidate.resourceKey);
+  const assessableCandidates = input.candidates.filter((candidate) => candidate.evidence.status === "available");
+  const candidateKeys = assessableCandidates.map((candidate) => candidate.resourceKey);
   const factIds = [...input.case.observedFacts, ...input.case.conversationState].map(({ id }) => id);
   const representationIds = input.evidenceRegistry.map(({ id }) => id);
+  const representationIdsByCandidate = new Map(
+    assessableCandidates.map((candidate) => [
+      candidate.resourceKey,
+      candidate.evidence.status === "available" ? [...candidate.evidence.representationIds] : [],
+    ]),
+  );
 
   const evidenceReference = {
     anyOf: [
@@ -305,22 +310,24 @@ function buildApplicabilityJsonSchema(input: ApplicabilityReasoningInput): Recor
     ],
   };
 
+  const candidateEvidenceReference = (candidateKey: string) => ({
+    anyOf: [
+      strictObject({
+        kind: { type: "string", enum: ["case-fact"] },
+        id: { type: "string", enum: factIds },
+      }, ["kind", "id"]),
+      strictObject({
+        kind: { type: "string", enum: ["resource-representation"] },
+        id: { type: "string", enum: representationIdsByCandidate.get(candidateKey) ?? [] },
+      }, ["kind", "id"]),
+    ],
+  });
+
   const missingEvidence = strictObject({
     item: boundedString(300),
     evidence: { type: "array", maxItems: 16, items: evidenceReference },
   }, ["item", "evidence"]);
 
-  const assessmentProperties: Record<string, unknown> = {
-    resourceKey: { type: "string", enum: candidateKeys },
-    verdict: {
-      type: "string",
-      enum: ["applicable-next-step", "contradicted", "insufficient-evidence", "irrelevant"],
-    },
-    supportingEvidence: { type: "array", maxItems: 32, items: evidenceReference },
-    contradictingEvidence: { type: "array", maxItems: 32, items: evidenceReference },
-    missingEvidence: { type: "array", maxItems: 16, items: missingEvidence },
-    explanation: boundedString(600),
-  };
   const assessmentRequired = [
     "resourceKey",
     "verdict",
@@ -329,13 +336,30 @@ function buildApplicabilityJsonSchema(input: ApplicabilityReasoningInput): Recor
     "missingEvidence",
     "explanation",
   ];
-  if (input.lane === "taxonomy-informed") {
-    assessmentProperties.taxonomyRelation = {
-      type: "string",
-      enum: ["supports", "conflicts", "neutral", "unavailable"],
+
+  const candidateAssessment = (candidateKey: string): Record<string, unknown> => {
+    const scopedEvidenceReference = candidateEvidenceReference(candidateKey);
+    const assessmentProperties: Record<string, unknown> = {
+      resourceKey: { type: "string", enum: [candidateKey] },
+      verdict: {
+        type: "string",
+        enum: ["applicable-next-step", "contradicted", "insufficient-evidence", "irrelevant"],
+      },
+      supportingEvidence: { type: "array", maxItems: 32, items: scopedEvidenceReference },
+      contradictingEvidence: { type: "array", maxItems: 32, items: scopedEvidenceReference },
+      missingEvidence: { type: "array", maxItems: 16, items: missingEvidence },
+      explanation: boundedString(600),
     };
-    assessmentRequired.push("taxonomyRelation");
-  }
+    const required = [...assessmentRequired];
+    if (input.lane === "taxonomy-informed") {
+      assessmentProperties.taxonomyRelation = {
+        type: "string",
+        enum: ["supports", "conflicts", "neutral", "unavailable"],
+      };
+      required.push("taxonomyRelation");
+    }
+    return strictObject(assessmentProperties, required);
+  };
 
   const candidateGroundedHypothesis = strictObject({
     kind: { type: "string", enum: ["candidate-grounded"] },
@@ -347,8 +371,7 @@ function buildApplicabilityJsonSchema(input: ApplicabilityReasoningInput): Recor
       items: { type: "string", enum: candidateKeys },
     },
     evidence: { type: "array", minItems: 1, maxItems: 32, items: evidenceReference },
-    missingEvidence: { type: "array", maxItems: 16, items: missingEvidence },
-  }, ["kind", "summary", "candidateKeys", "evidence", "missingEvidence"]);
+  }, ["kind", "summary", "candidateKeys", "evidence"]);
 
   const novelHypothesis = strictObject({
     kind: { type: "string", enum: ["novel"] },
@@ -399,12 +422,11 @@ function buildApplicabilityJsonSchema(input: ApplicabilityReasoningInput): Recor
       type: "array",
       minItems: candidateKeys.length,
       maxItems: candidateKeys.length,
-      items: strictObject(assessmentProperties, assessmentRequired),
+      items: { anyOf: candidateKeys.map((candidateKey) => candidateAssessment(candidateKey)) },
     },
     synthesis: { anyOf: [hypothesis, abstain] },
   }, ["candidateAssessments", "synthesis"]);
 }
-
 function boundedString(maxLength: number): Record<string, unknown> {
   return { type: "string", pattern: `^[\\s\\S]{1,${maxLength}}$` };
 }

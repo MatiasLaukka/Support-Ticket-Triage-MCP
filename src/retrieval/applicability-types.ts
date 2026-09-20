@@ -6,8 +6,8 @@ import { DiagnosticTaxonomyContextSchema, type DiagnosticTaxonomyContext } from 
 import type { AiUsage } from "../domain.js";
 import type { Reference, ResourceKey, ResourceType, TaxonomyMetadata } from "./types.js";
 
-export const APPLICABILITY_CONTRACT_VERSION = 2 as const;
-export const APPLICABILITY_PROMPT_VERSION = "b5-applicability-v2" as const;
+export const APPLICABILITY_CONTRACT_VERSION = 3 as const;
+export const APPLICABILITY_PROMPT_VERSION = "b5-applicability-v3" as const;
 export const APPLICABILITY_OUTPUT_RESERVE_TOKENS = 4_096 as const;
 
 export type ApplicabilityLane = "evidence-only" | "taxonomy-informed";
@@ -189,9 +189,9 @@ const CandidateGroundedHypothesisSchema = z.object({
   summary: z.string().min(1).max(600),
   candidateKeys: z.array(ResourceKeySchema).min(1).max(8),
   evidence: z.array(EvidenceReferenceSchema).min(1).max(32),
-  missingEvidence: z.array(MissingEvidenceItemSchema).max(16),
-}).strict();
-const NovelHypothesisSchema = z.object({
+  // Optional only for backward parsing of contract-v2 captures. Contract v3 providers do not emit it.
+  missingEvidence: z.array(MissingEvidenceItemSchema).max(16).optional(),
+}).strict();const NovelHypothesisSchema = z.object({
   kind: z.literal("novel"),
   summary: z.string().min(1).max(600),
   evidence: z.array(EvidenceReferenceSchema).min(1).max(32),
@@ -409,7 +409,7 @@ function assertEvidenceReferencesResolve(input: ApplicabilityReasoningInput, out
     const hypotheses = [output.synthesis.leadingHypothesis, ...output.synthesis.alternatives];
     for (const hypothesis of hypotheses) {
       for (const reference of hypothesis.evidence) assertReference(reference);
-      for (const reference of hypothesis.missingEvidence.flatMap((item) => item.evidence)) assertReference(reference);
+      for (const reference of (hypothesis.missingEvidence ?? []).flatMap((item) => item.evidence)) assertReference(reference);
     }
   }
 }
@@ -434,12 +434,6 @@ function assertSynthesisConsistent(input: ApplicabilityReasoningInput, output: A
       const assessment = assessments.get(key);
       if (assessment === undefined || assessment.verdict === "contradicted" || assessment.verdict === "irrelevant") {
         throw new InvalidApplicabilitySchemaError("synthesis", ["hypothesis-candidate-verdict"]);
-      }
-      if (assessment.verdict === "insufficient-evidence") {
-        const preserved = new Set(hypothesis.missingEvidence.map(({ item }) => item));
-        if (assessment.missingEvidence.some(({ item }) => !preserved.has(item))) {
-          throw new InvalidApplicabilitySchemaError("synthesis", ["missing-evidence"]);
-        }
       }
     }
   };

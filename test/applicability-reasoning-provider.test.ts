@@ -211,6 +211,7 @@ describe("OpenAiApplicabilityReasoningProvider", () => {
   it("requires falsifiable best-first hypotheses instead of generic troubleshooting labels", () => {
     expect(APPLICABILITY_REASONING_INSTRUCTIONS).toMatch(/falsifiable explanatory claim|bounded mechanism/i);
     expect(APPLICABILITY_REASONING_INSTRUCTIONS).toMatch(/known-cause candidate.*may lead.*insufficient-evidence/i);
+    expect(APPLICABILITY_REASONING_INSTRUCTIONS).toMatch(/candidate assessments are the authoritative source of missing evidence/i);
     expect(APPLICABILITY_REASONING_INSTRUCTIONS).toMatch(/playbooks and articles.*evidence collection/i);
     expect(APPLICABILITY_REASONING_INSTRUCTIONS).toMatch(/do not ask the requester to restate the problem/i);
     expect(APPLICABILITY_REASONING_INSTRUCTIONS).toMatch(/hypothesisRanks is zero-based.*rank 0 is the leading hypothesis/i);
@@ -247,10 +248,24 @@ describe("OpenAiApplicabilityReasoningProvider", () => {
     const assessment = request.text.format.schema.properties.candidateAssessments;
     expect(assessment.minItems).toBe(1);
     expect(assessment.maxItems).toBe(1);
-    expect(assessment.items.properties.resourceKey.enum).toEqual([
+    expect(assessment.items.anyOf).toHaveLength(1);
+    const scopedAssessment = assessment.items.anyOf[0];
+    expect(scopedAssessment.properties.resourceKey.enum).toEqual([
+      input.candidates.find((candidate) => candidate.evidence.status === "available")!.resourceKey,
+    ]);
+    const expectedRepresentationIds = input.candidates.find((candidate) => candidate.evidence.status === "available")!.evidence;
+    if (expectedRepresentationIds.status !== "available") throw new Error("Expected available candidate.");
+    expect(scopedAssessment.properties.supportingEvidence.items.anyOf[1].properties.id.enum)
+      .toEqual(expectedRepresentationIds.representationIds);
+
+    const candidateGrounded = request.text.format.schema.properties.synthesis.anyOf[0]
+      .properties.leadingHypothesis.anyOf[0];
+    expect(candidateGrounded.properties).not.toHaveProperty("missingEvidence");
+    expect(candidateGrounded.required).not.toContain("missingEvidence");
+    expect(assessment.items.anyOf[0].properties.resourceKey.enum).toEqual([
       "knowledge-article:performance-troubleshooting",
     ]);
-    expect(assessment.items.properties).not.toHaveProperty("taxonomyRelation");
+    expect(assessment.items.anyOf[0].properties).not.toHaveProperty("taxonomyRelation");
     const synthesis = request.text.format.schema.properties.synthesis;
     const hypothesis = synthesis.anyOf.find((item: { properties?: { disposition?: { enum?: string[] } } }) => item.properties?.disposition?.enum?.includes("hypothesis"));
     expect(hypothesis.properties).toHaveProperty("leadingHypothesis");
@@ -290,7 +305,7 @@ describe("OpenAiApplicabilityReasoningProvider", () => {
     if (input.lane !== "taxonomy-informed" || projected.lane !== "taxonomy-informed") throw new Error("Expected taxonomy lane.");
     expect(projected.taxonomy).toEqual(input.taxonomy);
 
-    const assessment = request.text.format.schema.properties.candidateAssessments.items;
+    const assessment = request.text.format.schema.properties.candidateAssessments.items.anyOf[0];
     expect(assessment.properties.taxonomyRelation.enum).toEqual(["supports", "conflicts", "neutral", "unavailable"]);
     expect(assessment.required).toContain("taxonomyRelation");
   });

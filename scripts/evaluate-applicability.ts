@@ -304,7 +304,11 @@ async function executeLane(input: {
   } catch (error) {
     if (!(error instanceof ApplicabilityCapturePrivacyError)) throw error;
     if (result.status !== "complete" && result.status !== "partial-assessment") throw error;
-    sanitized = { status: "assessment-failed", reason: "invalid-provider-output" };
+    sanitized = {
+      status: "assessment-failed",
+      reason: "invalid-provider-output",
+      failureMode: `capture-privacy:${error.category}`,
+    };
     telemetry = null;
   }
   return {

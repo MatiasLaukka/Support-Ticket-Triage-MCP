@@ -265,13 +265,17 @@ export interface ApplicabilityReasoningProvider {
   assess(input: ApplicabilityReasoningInput): Promise<ApplicabilityReasoningExecution>;
 }
 
+export type InvalidApplicabilityStage = "input" | "provider-output" | "candidate-coverage" | "evidence-reference" | "synthesis" | "taxonomy-output";
+export type ApplicabilityInvalidProviderFailureMode =
+  | InvalidApplicabilityStage
+  | `${InvalidApplicabilityStage}:${string}`
+  | `capture-privacy:${string}`;
+
 export type ApplicabilityCaseResult =
   | { status: "complete"; assessments: readonly CandidateAssessment[]; synthesis: ApplicabilityProviderOutput["synthesis"]; telemetry: ApplicabilityReasoningExecution["telemetry"] }
   | { status: "partial-assessment"; assessments: readonly CandidateAssessment[]; synthesis: ApplicabilityProviderOutput["synthesis"]; unavailableCandidates: readonly { resourceKey: ResourceKey; reasons: readonly EvidenceUnavailableReason[] }[]; telemetry: ApplicabilityReasoningExecution["telemetry"] }
   | { status: "assessment-skipped"; reason: "no-assessable-candidates" | "prompt-injection-detected" | "input-too-large" }
-  | { status: "assessment-failed"; reason: "invalid-provider-output" | ApplicabilityProviderFailureReason };
-
-type InvalidApplicabilityStage = "input" | "provider-output" | "candidate-coverage" | "evidence-reference" | "synthesis" | "taxonomy-output";
+  | { status: "assessment-failed"; reason: "invalid-provider-output" | ApplicabilityProviderFailureReason; failureMode?: ApplicabilityInvalidProviderFailureMode };
 const boundedErrorFields = new Set([
   "unknown-field", "unique-identities", "candidate-order", "evidence-registry-order", "candidate-evidence", "matched-representation", "matched-representation-origin", "candidate-taxonomy-order", "candidate-taxonomy", "taxonomy-semantic-set", "evidence-reference", "evidence-polarity", "abstain", "hypothesis-candidate", "novel-hypothesis", "missing-evidence", "hypothesis-rank", "leading-evidence-action", "taxonomyRelation",
 ]);
@@ -287,6 +291,11 @@ export class InvalidApplicabilitySchemaError extends Error {
     this.fields = boundedFields;
   }
 }
+export function applicabilityInvalidProviderFailureMode(error: InvalidApplicabilitySchemaError): ApplicabilityInvalidProviderFailureMode {
+  const field = error.fields[0];
+  return field === undefined ? error.stage : `${error.stage}:${field}`;
+}
+
 export class ApplicabilityProviderUnavailableError extends Error {
   readonly reason: ApplicabilityProviderFailureReason;
   readonly httpStatus: number | null;

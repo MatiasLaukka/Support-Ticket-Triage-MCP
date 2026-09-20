@@ -118,6 +118,10 @@ const ProviderOutputSchema = z.object({
   ]),
 }).strict();
 
+const InvalidProviderFailureModeSchema = z.string().min(1).max(96).regex(
+  /^(?:(?:input|provider-output|candidate-coverage|evidence-reference|synthesis|taxonomy-output)(?::[A-Za-z0-9._-]{1,64})?|capture-privacy:(?:ticket-id|email|secret-or-prompt|secret|path|customer-identifier))$/,
+);
+
 const ResultSchema = z.discriminatedUnion("status", [
   z.object({ status: z.literal("complete"), assessments: z.array(CandidateAssessmentSchema).max(64), synthesis: ProviderOutputSchema.shape.synthesis }).strict(),
   z.object({
@@ -130,7 +134,11 @@ const ResultSchema = z.discriminatedUnion("status", [
     }).strict()).max(64),
   }).strict(),
   z.object({ status: z.literal("assessment-skipped"), reason: z.enum(["no-assessable-candidates", "prompt-injection-detected", "input-too-large"]) }).strict(),
-  z.object({ status: z.literal("assessment-failed"), reason: z.enum(["invalid-provider-output", "not-configured", "transport", "http", "response-body", "timeout", "context-exhausted"]) }).strict(),
+  z.object({
+    status: z.literal("assessment-failed"),
+    reason: z.enum(["invalid-provider-output", "not-configured", "transport", "http", "response-body", "timeout", "context-exhausted"]),
+    failureMode: InvalidProviderFailureModeSchema.optional(),
+  }).strict(),
 ]);
 
 const UsageSchema = z.object({

@@ -453,7 +453,7 @@ describe("B5 applicability orchestration", () => {
     const result = await assessApplicabilityCase({ input, provider, measurement: validMeasurement(), promptInjectionDetected: false });
 
     expect(provider.assess).toHaveBeenCalledTimes(1);
-    expect(result).toEqual({ status: "assessment-failed", reason: "invalid-provider-output" });
+    expect(result).toEqual({ status: "assessment-failed", reason: "invalid-provider-output", failureMode: "candidate-coverage" });
   });
 
   it("rejects a provider verdict for a system-owned unavailable candidate", async () => {
@@ -467,7 +467,7 @@ describe("B5 applicability orchestration", () => {
 
     const result = await assessApplicabilityCase({ input, provider, measurement: validMeasurement(), promptInjectionDetected: false });
 
-    expect(result).toEqual({ status: "assessment-failed", reason: "invalid-provider-output" });
+    expect(result).toEqual({ status: "assessment-failed", reason: "invalid-provider-output", failureMode: "candidate-coverage" });
   });
 
   it("enforces synthesis consistency after provider output", async () => {
@@ -479,7 +479,7 @@ describe("B5 applicability orchestration", () => {
 
     const result = await assessApplicabilityCase({ input, provider, measurement: validMeasurement(), promptInjectionDetected: false });
 
-    expect(result).toEqual({ status: "assessment-failed", reason: "invalid-provider-output" });
+    expect(result).toEqual({ status: "assessment-failed", reason: "invalid-provider-output", failureMode: "synthesis:missing-evidence" });
   });
 
   it("propagates unexpected programming errors", async () => {

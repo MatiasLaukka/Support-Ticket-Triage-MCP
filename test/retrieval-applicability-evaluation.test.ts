@@ -212,7 +212,8 @@ describe("B5 applicability evaluation", () => {
     const report = await runApplicabilityEvaluation(compareArgs(outputDir), {}) as any;
     expect(fake.calls).toHaveBeenCalledTimes(42);
     expect(report.exclusions.failedCases).toHaveLength(1);
-    expect(report.exclusions.failedCases[0].reason).toBe("timeout");
+    expect(report.exclusions.failedCases[0]).toMatchObject({ reason: "timeout", failureMode: "provider:timeout" });
+    expect(report.exclusions.failureModeCounts).toEqual({ "provider:timeout": 1 });
   }, 30_000);
 
   it("bounds capture-unsafe provider narrative as an invalid-provider-output lane without aborting the paid run", async () => {
@@ -222,11 +223,17 @@ describe("B5 applicability evaluation", () => {
     const report = await runApplicabilityEvaluation(compareArgs(outputDir), {}) as any;
     expect(fake.calls).toHaveBeenCalledTimes(42);
     expect(report.exclusions.failedCases).toHaveLength(1);
-    expect(report.exclusions.failedCases[0].reason).toBe("invalid-provider-output");
+    expect(report.exclusions.failedCases[0]).toMatchObject({
+      reason: "invalid-provider-output",
+      failureMode: "capture-privacy:path",
+    });
+    expect(report.exclusions.failureModeCounts).toEqual({ "capture-privacy:path": 1 });
     const serializedCapture = await readFile(resolve(outputDir, "capture.json"), "utf8");
     expect(serializedCapture).not.toContain("C:\\Users\\someone\\ticket.txt");
     expect(JSON.parse(serializedCapture).cases.flatMap((entry: any) => entry.lanes)
-      .filter((lane: any) => lane.result.status === "assessment-failed" && lane.result.reason === "invalid-provider-output")).toHaveLength(1);
+      .filter((lane: any) => lane.result.status === "assessment-failed"
+        && lane.result.reason === "invalid-provider-output"
+        && lane.result.failureMode === "capture-privacy:path")).toHaveLength(1);
   }, 30_000);
 
   it("never overwrites an existing output directory", async () => {

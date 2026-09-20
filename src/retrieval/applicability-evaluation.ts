@@ -58,7 +58,8 @@ export type ApplicabilityEvaluationReport = {
     unjudgedPairs: number;
     unavailablePairs: number;
     skippedCases: readonly { caseId: string; lane: string; reason: string }[];
-    failedCases: readonly { caseId: string; lane: string; reason: string }[];
+    failedCases: readonly { caseId: string; lane: string; reason: string; failureMode?: string }[];
+    failureModeCounts: Readonly<Record<string, number>>;
     novelHypothesisCases: readonly { caseId: string; lane: string }[];
   };
   classification: "promising" | "regressive" | "inconclusive";
@@ -345,7 +346,8 @@ function exclusions(capture: ApplicabilityCapture, cases: readonly Applicability
   const byCase = oracleByCase(cases);
   let unjudgedPairs = 0; let unavailablePairs = 0;
   const skippedCases: { caseId: string; lane: string; reason: string }[] = [];
-  const failedCases: { caseId: string; lane: string; reason: string }[] = [];
+  const failedCases: { caseId: string; lane: string; reason: string; failureMode?: string }[] = [];
+  const failureModeCounts: Record<string, number> = {};
   const novelHypothesisCases: { caseId: string; lane: string }[] = [];
   for (const capturedCase of capture.cases) {
     const oracle = byCase.get(capturedCase.caseId); if (!oracle) continue;
@@ -354,11 +356,17 @@ function exclusions(capture: ApplicabilityCapture, cases: readonly Applicability
     unavailablePairs += capturedCase.candidates.filter((candidate) => judged.has(candidate.resourceKey) && candidate.evidence.status === "unavailable").length;
     for (const lane of capturedCase.lanes) {
       if (lane.result.status === "assessment-skipped") skippedCases.push({ caseId: capturedCase.caseId, lane: lane.lane, reason: lane.result.reason });
-      if (lane.result.status === "assessment-failed") failedCases.push({ caseId: capturedCase.caseId, lane: lane.lane, reason: lane.result.reason });
+      if (lane.result.status === "assessment-failed") {
+        const failureMode = lane.result.reason === "invalid-provider-output"
+          ? lane.result.failureMode ?? "invalid-provider-output:unknown"
+          : `provider:${lane.result.reason}`;
+        failedCases.push({ caseId: capturedCase.caseId, lane: lane.lane, reason: lane.result.reason, failureMode });
+        failureModeCounts[failureMode] = (failureModeCounts[failureMode] ?? 0) + 1;
+      }
       if ((lane.result.status === "complete" || lane.result.status === "partial-assessment") && lane.result.synthesis.disposition === "hypothesis" && lane.result.synthesis.leadingHypothesis.kind === "novel") novelHypothesisCases.push({ caseId: capturedCase.caseId, lane: lane.lane });
     }
   }
-  return { unjudgedPairs, unavailablePairs, skippedCases, failedCases, novelHypothesisCases };
+  return { unjudgedPairs, unavailablePairs, skippedCases, failedCases, failureModeCounts, novelHypothesisCases };
 }
 
 function primaryMetricValues(lane: ApplicabilityLaneEvaluation): readonly (number | null)[] {
@@ -432,6 +440,9 @@ export function renderApplicabilityMarkdown(report: ApplicabilityEvaluationRepor
     `- Unavailable judged pairs: ${report.exclusions.unavailablePairs}`,
     `- Skipped cases: ${report.exclusions.skippedCases.length}`,
     `- Failed cases: ${report.exclusions.failedCases.length}`,
+    ...Object.entries(report.exclusions.failureModeCounts)
+      .sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0)
+      .map(([mode, count]) => `- Failure mode ${mode}: ${count}`),
     `- Novel leading hypotheses requiring review: ${report.exclusions.novelHypothesisCases.length}`,
     "", "A single paired development run is preliminary evidence. This classification does not select a provider or authorize runtime integration.", "",
   ].join("\n");

@@ -192,6 +192,25 @@ describe("B5 applicability capture", () => {
     }
   });
 
+  it("accepts bounded invalid-provider-output failure modes and rejects unbounded diagnostic text", () => {
+    const capture = structuredClone(validCapture());
+    capture.cases[0]!.lanes[0]!.result = {
+      status: "assessment-failed",
+      reason: "invalid-provider-output",
+      failureMode: "synthesis:hypothesis-rank",
+    };
+    capture.cases[0]!.lanes[0]!.telemetry = null;
+    capture.cases[0]!.lanes[0]!.outputHash = hashCanonicalApplicabilityCapture(capture.cases[0]!.lanes[0]!.result);
+    rehash(capture);
+    expect(() => validateApplicabilityCapture(capture)).not.toThrow();
+
+    const unsafe: any = structuredClone(capture);
+    unsafe.cases[0].lanes[0].result.failureMode = "synthesis:C:\\Users\\someone\\raw.txt";
+    unsafe.cases[0].lanes[0].outputHash = hashCanonicalApplicabilityCapture(unsafe.cases[0].lanes[0].result);
+    rehash(unsafe);
+    expect(() => validateApplicabilityCapture(unsafe)).toThrow();
+  });
+
   it("rejects arbitrary provider error details and preserves bounded failure reasons only", () => {
     const capture: any = structuredClone(validCapture());
     capture.cases[0].lanes[0].result = { status: "assessment-failed", reason: "timeout", error: "socket details" };

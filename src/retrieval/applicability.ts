@@ -2,6 +2,7 @@ import type { ApplicabilityInputMeasurement } from "./applicability-evidence.js"
 import {
   ApplicabilityProviderUnavailableError,
   InvalidApplicabilitySchemaError,
+  applicabilityInvalidProviderFailureMode,
   validateApplicabilityInput,
   validateApplicabilityProviderOutput,
   type ApplicabilityCaseResult,
@@ -93,10 +94,11 @@ export async function assessApplicabilityCase(input: {
       };
     }
 
-    if (error instanceof InvalidApplicabilitySchemaError) {
+        if (error instanceof InvalidApplicabilitySchemaError) {
       return {
         status: "assessment-failed",
         reason: "invalid-provider-output",
+        failureMode: applicabilityInvalidProviderFailureMode(error),
       };
     }
 

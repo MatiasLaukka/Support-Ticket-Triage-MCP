@@ -179,6 +179,10 @@ describe("B5 applicability evaluation", () => {
     const report = scoreApplicabilityCapture(fixture);
     expect(report.lanes["evidence-only"].hypothesisAccuracy).toEqual({ numerator: 1, denominator: 1, rate: 1 });
     expect(report.lanes["taxonomy-informed"].hypothesisAccuracy).toEqual({ numerator: 1, denominator: 1, rate: 1 });
+    expect(report.lanes["evidence-only"].leadingCandidateAccuracy).toEqual({ numerator: 1, denominator: 1, rate: 1 });
+    expect(report.lanes["evidence-only"].leadingMechanismConceptCoverage).toEqual({ numerator: 1, denominator: 1, rate: 1 });
+    expect(report.lanes["taxonomy-informed"].leadingCandidateAccuracy).toEqual({ numerator: 1, denominator: 1, rate: 1 });
+    expect(report.lanes["taxonomy-informed"].leadingMechanismConceptCoverage).toEqual({ numerator: 1, denominator: 1, rate: 1 });
   });
 
   it("scores one evidence intent across multiple actions that collectively cover its ranks and concepts", () => {
@@ -209,6 +213,62 @@ describe("B5 applicability evaluation", () => {
     const report = scoreApplicabilityCapture(fixture);
     expect(report.lanes["evidence-only"].evidenceActionCoverage).toEqual({ numerator: 1, denominator: 1, rate: 1 });
     expect(report.lanes["taxonomy-informed"].evidenceActionCoverage).toEqual({ numerator: 1, denominator: 1, rate: 1 });
+    expect(report.lanes["evidence-only"].actionRankCoverage).toEqual({ numerator: 1, denominator: 1, rate: 1 });
+    expect(report.lanes["evidence-only"].actionConceptCoverage).toEqual({ numerator: 1, denominator: 1, rate: 1 });
+    expect(report.lanes["taxonomy-informed"].actionRankCoverage).toEqual({ numerator: 1, denominator: 1, rate: 1 });
+    expect(report.lanes["taxonomy-informed"].actionConceptCoverage).toEqual({ numerator: 1, denominator: 1, rate: 1 });
+  });
+
+  it("keeps correct leading candidate structure separate from unmatched mechanism wording", () => {
+    const fixture = metricFixture() as any;
+    fixture.cases[0].synthesisOracle.acceptableLeadingHypotheses = [{
+      id: "structure-only",
+      candidateKeyPool: ["knowledge-article:a"],
+      minimumCandidateMatches: 1,
+      requiredConcepts: ["deliberately absent mechanism phrase"],
+    }];
+    fixture.cases[0].synthesisOracle.orderedAlternativeHypotheses = [];
+    fixture.cases[0].synthesisOracle.evidenceActionIntents = [];
+    for (const lane of fixture.capture.cases[0].lanes) {
+      lane.result.synthesis.leadingHypothesis.summary = "A bounded candidate mechanism is the first hypothesis.";
+      lane.result.synthesis.alternatives = [];
+    }
+
+    const report = scoreApplicabilityCapture(fixture);
+    expect(report.lanes["evidence-only"].leadingCandidateAccuracy).toEqual({ numerator: 1, denominator: 1, rate: 1 });
+    expect(report.lanes["evidence-only"].leadingMechanismConceptCoverage).toEqual({ numerator: 0, denominator: 1, rate: 0 });
+    expect(report.lanes["evidence-only"].hypothesisAccuracy).toEqual({ numerator: 0, denominator: 1, rate: 0 });
+  });
+
+  it("keeps correct action rank structure separate from unmatched discriminator wording", () => {
+    const fixture = metricFixture() as any;
+    fixture.cases[0].synthesisOracle.evidenceActionIntents = [{
+      id: "structure-only-action",
+      targetRanks: [0],
+      allowedActionTypes: ["inspect-internal"],
+      requiredConcepts: ["deliberately absent discriminator phrase"],
+    }];
+    for (const lane of fixture.capture.cases[0].lanes) {
+      lane.result.synthesis.nextEvidenceActions = [{
+        actionType: "inspect-internal",
+        action: "Inspect the bounded internal evidence for the leading mechanism.",
+        expectedEvidence: "Evidence supporting or contradicting the leading mechanism.",
+        hypothesisRanks: [0],
+      }];
+    }
+
+    const report = scoreApplicabilityCapture(fixture);
+    expect(report.lanes["evidence-only"].actionRankCoverage).toEqual({ numerator: 1, denominator: 1, rate: 1 });
+    expect(report.lanes["evidence-only"].actionConceptCoverage).toEqual({ numerator: 0, denominator: 1, rate: 0 });
+    expect(report.lanes["evidence-only"].evidenceActionCoverage).toEqual({ numerator: 0, denominator: 1, rate: 0 });
+  });
+
+  it("records the synthesis metric and concept matcher versions in every scored report", () => {
+    const report = scoreApplicabilityCapture(metricFixture() as any);
+    expect(report.evaluationIdentity).toEqual({
+      metricVersion: "b5-synthesis-metrics-v2",
+      conceptMatcherVersion: "controlled-alias-v1",
+    });
   });
 
   it("renders deterministic Markdown from a scored report", () => {

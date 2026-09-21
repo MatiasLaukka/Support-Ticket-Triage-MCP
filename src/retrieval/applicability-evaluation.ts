@@ -3,6 +3,8 @@ import type { ApplicabilityDevelopmentCase, ApplicabilityOracleJudgment } from "
 import type { ApplicabilityVerdict, EvidenceReference } from "./applicability-types.js";
 
 const VERDICTS = ["applicable-next-step", "contradicted", "insufficient-evidence", "irrelevant"] as const satisfies readonly ApplicabilityVerdict[];
+export const APPLICABILITY_METRIC_VERSION = "b5-synthesis-metrics-v2" as const;
+export const APPLICABILITY_CONCEPT_MATCHER_VERSION = "controlled-alias-v1" as const;
 
 type Rate = { numerator: number; denominator: number; rate: number | null };
 type VerdictMetric = { support: number; precision: number | null; recall: number | null; f1: number | null };
@@ -18,12 +20,21 @@ export type ApplicabilityLaneEvaluation = {
   insufficientEvidenceRecognition: Rate;
   structuralEvidenceReferences: Rate;
   semanticallyCorrectCitations: Rate;
+  /** Legacy combined candidate+concept score retained for historical report comparability. */
   hypothesisAccuracy: Rate;
+  leadingCandidateAccuracy: Rate;
+  leadingMechanismConceptCoverage: Rate;
   hypothesisCoverage: Rate;
   abstentionPrecision: Rate;
   abstentionRecall: Rate;
+  /** Legacy combined alternative candidate+concept score retained for historical report comparability. */
   alternativeCoverage: Rate;
+  alternativeCandidateCoverage: Rate;
+  alternativeMechanismConceptCoverage: Rate;
+  /** Legacy combined action rank+concept score retained for historical report comparability. */
   evidenceActionCoverage: Rate;
+  actionRankCoverage: Rate;
+  actionConceptCoverage: Rate;
   novelHypothesesRequiringReview: readonly string[];
   unsupportedClaimCount: number;
   hallucinatedReferenceCount: number;
@@ -43,6 +54,10 @@ export type ApplicabilityEvaluationReport = {
   holdoutExecuted: false;
   captureHash: string;
   identity: ApplicabilityCapture["identity"];
+  evaluationIdentity: {
+    metricVersion: typeof APPLICABILITY_METRIC_VERSION;
+    conceptMatcherVersion: typeof APPLICABILITY_CONCEPT_MATCHER_VERSION;
+  };
   baseline: ApplicabilityLaneEvaluation;
   lanes: Record<"evidence-only" | "taxonomy-informed", ApplicabilityLaneEvaluation>;
   taxonomyDelta: {
@@ -196,27 +211,61 @@ function conceptMatches(text: string, concept: string): boolean {
 function textIncludesConcepts(text: string, concepts: readonly string[]): boolean {
   return concepts.every((concept) => conceptMatches(text, concept));
 }
-function hypothesisMatches(
-  hypothesis: { kind: "candidate-grounded" | "novel"; summary: string; candidateKeys?: readonly string[] },
-  oracle: ApplicabilityDevelopmentCase["synthesisOracle"]["acceptableLeadingHypotheses"][number],
+type ScorableHypothesis = {
+  kind: string;
+  candidateKeys?: readonly string[];
+  summary: string;
+};
+type HypothesisExpectation =
+  ApplicabilityDevelopmentCase["synthesisOracle"]["acceptableLeadingHypotheses"][number];
+
+function hypothesisCandidateMatches(
+  hypothesis: ScorableHypothesis,
+  oracle: HypothesisExpectation,
 ): boolean {
-  if (hypothesis.kind !== "candidate-grounded" || hypothesis.candidateKeys === undefined) return false;
+  if (hypothesis.kind !== "candidate-grounded" || !hypothesis.candidateKeys) return false;
   const pool = new Set<string>(oracle.candidateKeyPool);
   const matches = hypothesis.candidateKeys.filter((key) => pool.has(key)).length;
-  return matches >= oracle.minimumCandidateMatches && textIncludesConcepts(hypothesis.summary, oracle.requiredConcepts);
+  return matches >= oracle.minimumCandidateMatches;
 }
-function actionText(action: { action: string; expectedEvidence: string }): string { return `${action.action} ${action.expectedEvidence}`; }
-function actionIntentCovered(
+
+function hypothesisMechanismMatches(
+  hypothesis: ScorableHypothesis,
+  oracle: HypothesisExpectation,
+): boolean {
+  return hypothesisCandidateMatches(hypothesis, oracle)
+    && textIncludesConcepts(hypothesis.summary, oracle.requiredConcepts);
+}
+
+/** Legacy combined score helper. */
+function hypothesisMatches(hypothesis: ScorableHypothesis, oracle: HypothesisExpectation): boolean {
+  return hypothesisMechanismMatches(hypothesis, oracle);
+}
+
+function actionText(action: { action: string; expectedEvidence: string }): string {
+  return `${action.action} ${action.expectedEvidence}`;
+}
+
+function structurallyRelevantActions(
   synthesis: any,
   intent: ApplicabilityDevelopmentCase["synthesisOracle"]["evidenceActionIntents"][number],
-): boolean {
+): Array<any> {
   const targetRanks = new Set(intent.targetRanks);
-  const actions = (synthesis.nextEvidenceActions as Array<any>).filter((action) => {
+  return (synthesis.nextEvidenceActions as Array<any>).filter((action) => {
     if (!intent.allowedActionTypes.includes(action.actionType)) return false;
     if (synthesis.disposition !== "hypothesis" || targetRanks.size === 0) return true;
     const ranks = Array.isArray(action.hypothesisRanks) ? action.hypothesisRanks : [];
     return ranks.some((rank: number) => targetRanks.has(rank));
   });
+}
+
+function actionIntentRankCovered(
+  synthesis: any,
+  intent: ApplicabilityDevelopmentCase["synthesisOracle"]["evidenceActionIntents"][number],
+): boolean {
+  const targetRanks = new Set(intent.targetRanks);
+  const actions = structurallyRelevantActions(synthesis, intent);
+  if (actions.length === 0) return false;
 
   if (synthesis.disposition === "hypothesis") {
     const coveredRanks = new Set<number>();
@@ -224,11 +273,28 @@ function actionIntentCovered(
       const ranks = Array.isArray(action.hypothesisRanks) ? action.hypothesisRanks : [];
       for (const rank of ranks) if (targetRanks.has(rank)) coveredRanks.add(rank);
     }
-    if (![...targetRanks].every((rank) => coveredRanks.has(rank))) return false;
-  } else if (targetRanks.size !== 0) return false;
+    return [...targetRanks].every((rank) => coveredRanks.has(rank));
+  }
+  return targetRanks.size === 0;
+}
 
+function actionIntentConceptCovered(
+  synthesis: any,
+  intent: ApplicabilityDevelopmentCase["synthesisOracle"]["evidenceActionIntents"][number],
+): boolean {
+  if (!actionIntentRankCovered(synthesis, intent)) return false;
+  const actions = structurallyRelevantActions(synthesis, intent);
   return textIncludesConcepts(actions.map(actionText).join(" "), intent.requiredConcepts);
 }
+
+/** Legacy combined score helper. */
+function actionIntentCovered(
+  synthesis: any,
+  intent: ApplicabilityDevelopmentCase["synthesisOracle"]["evidenceActionIntents"][number],
+): boolean {
+  return actionIntentConceptCovered(synthesis, intent);
+}
+
 function oracleByCase(cases: readonly ApplicabilityDevelopmentCase[]): Map<string, ApplicabilityDevelopmentCase> {
   return new Map(cases.map((entry) => [entry.id, entry]));
 }
@@ -263,8 +329,11 @@ function emptyLaneEvaluation(): ApplicabilityLaneEvaluation {
   return {
     confusionMatrix: matrix, perVerdict: metrics, macroF1: null,
     applicablePrecision: rate(0, 0), applicableRecall: rate(0, 0), dangerousFalsePositive: rate(0, 0), insufficientEvidenceRecognition: rate(0, 0),
-    structuralEvidenceReferences: rate(0, 0), semanticallyCorrectCitations: rate(0, 0), hypothesisAccuracy: rate(0, 0), hypothesisCoverage: rate(0, 0),
-    abstentionPrecision: rate(0, 0), abstentionRecall: rate(0, 0), alternativeCoverage: rate(0, 0), evidenceActionCoverage: rate(0, 0),
+    structuralEvidenceReferences: rate(0, 0), semanticallyCorrectCitations: rate(0, 0),
+    hypothesisAccuracy: rate(0, 0), leadingCandidateAccuracy: rate(0, 0), leadingMechanismConceptCoverage: rate(0, 0), hypothesisCoverage: rate(0, 0),
+    abstentionPrecision: rate(0, 0), abstentionRecall: rate(0, 0),
+    alternativeCoverage: rate(0, 0), alternativeCandidateCoverage: rate(0, 0), alternativeMechanismConceptCoverage: rate(0, 0),
+    evidenceActionCoverage: rate(0, 0), actionRankCoverage: rate(0, 0), actionConceptCoverage: rate(0, 0),
     novelHypothesesRequiringReview: [], unsupportedClaimCount: 0, hallucinatedReferenceCount: 0, taxonomyRelations: { supports: 0, conflicts: 0, neutral: 0, unavailable: 0 },
     outcomes: { complete: 0, partial: 0, skipped: 0, failed: 0 },
     inputSizing: { serializedBytes: [], estimatedInputTokens: [], minimumContextTokens: [] },
@@ -280,9 +349,15 @@ function scoreLane(
   let structuralNumerator = 0; let structuralDenominator = 0;
   let semanticNumerator = 0; let semanticDenominator = 0;
   let hypothesisCorrect = 0; let hypothesisEligible = 0; let hypothesisCovered = 0; let hypothesisCoverageEligible = 0;
+  let leadingCandidateNumerator = 0; let leadingCandidateDenominator = 0;
+  let leadingConceptNumerator = 0; let leadingConceptDenominator = 0;
   let abstainPredicted = 0; let abstainCorrect = 0; let abstainExpected = 0;
   let alternativeNumerator = 0; let alternativeDenominator = 0;
+  let alternativeCandidateNumerator = 0; let alternativeCandidateDenominator = 0;
+  let alternativeConceptNumerator = 0; let alternativeConceptDenominator = 0;
   let actionNumerator = 0; let actionDenominator = 0;
+  let actionRankNumerator = 0; let actionRankDenominator = 0;
+  let actionConceptNumerator = 0; let actionConceptDenominator = 0;
   const novelCases: string[] = [];
   let hallucinatedReferenceCount = 0;
   let unsupportedClaimCount = 0;
@@ -341,22 +416,59 @@ function scoreLane(
     if (oracle.synthesisOracle.disposition === "hypothesis") {
       hypothesisCoverageEligible += 1;
       if (synthesis.disposition === "hypothesis") hypothesisCovered += 1;
+
       if (synthesis.disposition === "hypothesis" && synthesis.leadingHypothesis.kind === "novel") {
         novelCases.push(capturedCase.caseId);
       } else if (synthesis.disposition === "hypothesis") {
         hypothesisEligible += 1;
-        if (oracle.synthesisOracle.acceptableLeadingHypotheses.some((expected) => hypothesisMatches(synthesis.leadingHypothesis, expected))) hypothesisCorrect += 1;
+        leadingCandidateDenominator += 1;
+
+        const compatibleExpectations = oracle.synthesisOracle.acceptableLeadingHypotheses
+          .filter((expected) => hypothesisCandidateMatches(synthesis.leadingHypothesis, expected));
+        if (compatibleExpectations.length > 0) {
+          leadingCandidateNumerator += 1;
+          leadingConceptDenominator += 1;
+          if (compatibleExpectations.some((expected) =>
+            textIncludesConcepts(synthesis.leadingHypothesis.summary, expected.requiredConcepts))) {
+            leadingConceptNumerator += 1;
+          }
+        }
+
+        if (oracle.synthesisOracle.acceptableLeadingHypotheses
+          .some((expected) => hypothesisMatches(synthesis.leadingHypothesis, expected))) {
+          hypothesisCorrect += 1;
+        }
       }
+
       if (synthesis.disposition === "hypothesis") {
         oracle.synthesisOracle.orderedAlternativeHypotheses.forEach((expected, index) => {
           alternativeDenominator += 1;
+          alternativeCandidateDenominator += 1;
           const actual = synthesis.alternatives[index];
+          if (actual !== undefined && hypothesisCandidateMatches(actual, expected)) {
+            alternativeCandidateNumerator += 1;
+            alternativeConceptDenominator += 1;
+            if (textIncludesConcepts(actual.summary, expected.requiredConcepts)) {
+              alternativeConceptNumerator += 1;
+            }
+          }
           if (actual !== undefined && hypothesisMatches(actual, expected)) alternativeNumerator += 1;
         });
-      } else alternativeDenominator += oracle.synthesisOracle.orderedAlternativeHypotheses.length;
+      } else {
+        alternativeDenominator += oracle.synthesisOracle.orderedAlternativeHypotheses.length;
+        alternativeCandidateDenominator += oracle.synthesisOracle.orderedAlternativeHypotheses.length;
+      }
     }
+
     for (const intent of oracle.synthesisOracle.evidenceActionIntents) {
       actionDenominator += 1;
+      actionRankDenominator += 1;
+      const rankCovered = actionIntentRankCovered(synthesis, intent);
+      if (rankCovered) {
+        actionRankNumerator += 1;
+        actionConceptDenominator += 1;
+        if (actionIntentConceptCovered(synthesis, intent)) actionConceptNumerator += 1;
+      }
       if (actionIntentCovered(synthesis, intent)) actionNumerator += 1;
     }
   }
@@ -379,11 +491,17 @@ function scoreLane(
     structuralEvidenceReferences: rate(structuralNumerator, structuralDenominator),
     semanticallyCorrectCitations: rate(semanticNumerator, semanticDenominator),
     hypothesisAccuracy: rate(hypothesisCorrect, hypothesisEligible),
+    leadingCandidateAccuracy: rate(leadingCandidateNumerator, leadingCandidateDenominator),
+    leadingMechanismConceptCoverage: rate(leadingConceptNumerator, leadingConceptDenominator),
     hypothesisCoverage: rate(hypothesisCovered, hypothesisCoverageEligible),
     abstentionPrecision: rate(abstainCorrect, abstainPredicted),
     abstentionRecall: rate(abstainCorrect, abstainExpected),
     alternativeCoverage: rate(alternativeNumerator, alternativeDenominator),
+    alternativeCandidateCoverage: rate(alternativeCandidateNumerator, alternativeCandidateDenominator),
+    alternativeMechanismConceptCoverage: rate(alternativeConceptNumerator, alternativeConceptDenominator),
     evidenceActionCoverage: rate(actionNumerator, actionDenominator),
+    actionRankCoverage: rate(actionRankNumerator, actionRankDenominator),
+    actionConceptCoverage: rate(actionConceptNumerator, actionConceptDenominator),
     novelHypothesesRequiringReview: novelCases,
     unsupportedClaimCount,
     hallucinatedReferenceCount,
@@ -485,7 +603,7 @@ function exclusions(capture: ApplicabilityCapture, cases: readonly Applicability
 }
 
 function primaryMetricValues(lane: ApplicabilityLaneEvaluation): readonly (number | null)[] {
-  return [lane.macroF1, lane.applicablePrecision.rate, lane.applicableRecall.rate, lane.hypothesisAccuracy.rate, lane.hypothesisCoverage.rate, lane.abstentionRecall.rate, lane.alternativeCoverage.rate, lane.evidenceActionCoverage.rate];
+  return [lane.macroF1, lane.applicablePrecision.rate, lane.applicableRecall.rate, lane.leadingCandidateAccuracy.rate, lane.hypothesisCoverage.rate, lane.abstentionRecall.rate, lane.alternativeCandidateCoverage.rate, lane.actionRankCoverage.rate];
 }
 function classify(evidence: ApplicabilityLaneEvaluation, taxonomy: ApplicabilityLaneEvaluation, delta: ReturnType<typeof taxonomyDelta>): "promising" | "regressive" | "inconclusive" {
   if (evidence.outcomes.failed > 0 || taxonomy.outcomes.failed > 0 || evidence.outcomes.skipped > 0 || taxonomy.outcomes.skipped > 0) {
@@ -515,6 +633,10 @@ export function scoreApplicabilityCapture(input: { capture: ApplicabilityCapture
     holdoutExecuted: false,
     captureHash: input.capture.captureHash,
     identity: input.capture.identity,
+    evaluationIdentity: {
+      metricVersion: APPLICABILITY_METRIC_VERSION,
+      conceptMatcherVersion: APPLICABILITY_CONCEPT_MATCHER_VERSION,
+    },
     baseline: scoreBaseline(input.capture, input.cases),
     lanes: { "evidence-only": evidence, "taxonomy-informed": taxonomy },
     taxonomyDelta: delta,
@@ -527,7 +649,7 @@ function metric(value: number | null): string { return value === null ? "n/a" : 
 export function renderApplicabilityMarkdown(report: ApplicabilityEvaluationReport): string {
   const laneRows = (["evidence-only", "taxonomy-informed"] as const).map((lane) => {
     const item = report.lanes[lane];
-    return `| ${lane} | ${metric(item.macroF1)} | ${metric(item.applicablePrecision.rate)} | ${metric(item.applicableRecall.rate)} | ${metric(item.dangerousFalsePositive.rate)} | ${metric(item.hypothesisAccuracy.rate)} | ${metric(item.evidenceActionCoverage.rate)} |`;
+    return `| ${lane} | ${metric(item.macroF1)} | ${metric(item.applicablePrecision.rate)} | ${metric(item.applicableRecall.rate)} | ${metric(item.dangerousFalsePositive.rate)} | ${metric(item.leadingCandidateAccuracy.rate)} | ${metric(item.leadingMechanismConceptCoverage.rate)} | ${metric(item.actionRankCoverage.rate)} | ${metric(item.actionConceptCoverage.rate)} |`;
   });
   const confusion = (lane: "evidence-only" | "taxonomy-informed") => VERDICTS.map((actual) => `| ${actual} | ${VERDICTS.map((predicted) => report.lanes[lane].confusionMatrix[actual][predicted]).join(" | ")} |`);
   return [
@@ -537,10 +659,11 @@ export function renderApplicabilityMarkdown(report: ApplicabilityEvaluationRepor
     `- Holdout executed: ${report.holdoutExecuted}`,
     `- Provider/model: ${report.identity.providerKind} / ${report.identity.model}`,
     `- Contract/prompt: ${report.identity.contractVersion} / ${report.identity.promptVersion}`,
+    `- Evaluation metrics/matcher: ${report.evaluationIdentity.metricVersion} / ${report.evaluationIdentity.conceptMatcherVersion}`,
     ...(report.authorizationReference ? [`- Authorization: ${report.authorizationReference}`] : []),
     "", "## Lane summary", "",
-    "| Lane | Macro F1 | Applicable precision | Applicable recall | Dangerous FP | Hypothesis accuracy | Evidence-action coverage |",
-    "|---|---:|---:|---:|---:|---:|---:|", ...laneRows,
+    "| Lane | Macro F1 | Applicable precision | Applicable recall | Dangerous FP | Leader candidates | Leader concepts | Action ranks | Action concepts |",
+    "|---|---:|---:|---:|---:|---:|---:|---:|---:|", ...laneRows,
     "", "## Evidence-only confusion matrix", "",
     `| Actual \\ Predicted | ${VERDICTS.join(" | ")} |`, `|---|${VERDICTS.map(() => "---:").join("|")}|`, ...confusion("evidence-only"),
     "", "## Taxonomy-informed confusion matrix", "",

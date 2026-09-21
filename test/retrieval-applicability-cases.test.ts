@@ -59,7 +59,7 @@ describe("B5 applicability development oracle", () => {
     const loaded = loadApplicabilityDevelopment(CASE_ROOT);
     expect(loaded.manifest.version).toBe(2);
     expect(loaded.manifest.applicabilityContractVersion).toBe(4);
-    expect(loaded.manifest.promptVersion).toBe("b5-applicability-v5");
+    expect(loaded.manifest.promptVersion).toBe("b5-applicability-v6");
     expect(loaded.cases).toHaveLength(21);
     expect(loaded.manifest.caseIds).toHaveLength(21);
     expect(loaded.cases.map(({ id }) => id)).toEqual(loaded.manifest.caseIds);

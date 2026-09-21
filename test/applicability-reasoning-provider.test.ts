@@ -216,6 +216,9 @@ describe("OpenAiApplicabilityReasoningProvider", () => {
     expect(APPLICABILITY_REASONING_INSTRUCTIONS).toMatch(/distinct falsifiable mechanisms/i);
     expect(APPLICABILITY_REASONING_INSTRUCTIONS).toMatch(/do not ask the requester to restate the problem/i);
     expect(APPLICABILITY_REASONING_INSTRUCTIONS).toMatch(/diagnostic applicability.*not general usefulness/i);
+    expect(APPLICABILITY_REASONING_INSTRUCTIONS).toMatch(/supportingEvidence means evidence supporting diagnostic applicability/i);
+    expect(APPLICABILITY_REASONING_INSTRUCTIONS).toMatch(/verdict irrelevant.*supportingEvidence must be empty/i);
+    expect(APPLICABILITY_REASONING_INSTRUCTIONS).toMatch(/same evidence reference as both supporting and contradicting/i);
     expect(APPLICABILITY_REASONING_INSTRUCTIONS).toMatch(/locate, identify, or inspect a record/i);
     expect(APPLICABILITY_REASONING_INSTRUCTIONS).toMatch(/no troubleshooting symptom.*abstain/i);
     expect(APPLICABILITY_REASONING_INSTRUCTIONS).toMatch(/broader investigation path.*leader.*known cause.*alternative/i);
@@ -254,15 +257,24 @@ describe("OpenAiApplicabilityReasoningProvider", () => {
     const assessment = request.text.format.schema.properties.candidateAssessments;
     expect(assessment.minItems).toBe(1);
     expect(assessment.maxItems).toBe(1);
-    expect(assessment.items.anyOf).toHaveLength(1);
-    const scopedAssessment = assessment.items.anyOf[0];
-    expect(scopedAssessment.properties.resourceKey.enum).toEqual([
-      input.candidates.find((candidate) => candidate.evidence.status === "available")!.resourceKey,
-    ]);
-    const expectedRepresentationIds = input.candidates.find((candidate) => candidate.evidence.status === "available")!.evidence;
+    expect(assessment.items.anyOf).toHaveLength(4);
+    const expectedCandidate = input.candidates.find((candidate) => candidate.evidence.status === "available")!;
+    const expectedRepresentationIds = expectedCandidate.evidence;
     if (expectedRepresentationIds.status !== "available") throw new Error("Expected available candidate.");
-    expect(scopedAssessment.properties.supportingEvidence.items.anyOf[1].properties.id.enum)
-      .toEqual(expectedRepresentationIds.representationIds);
+    const assessmentByVerdict = new Map<string, any>(
+      assessment.items.anyOf.map((variant: any) => [variant.properties.verdict.enum[0], variant]),
+    );
+    for (const variant of assessment.items.anyOf) {
+      expect(variant.properties.resourceKey.enum).toEqual([expectedCandidate.resourceKey]);
+      expect(variant.properties.supportingEvidence.items.anyOf[1].properties.id.enum)
+        .toEqual(expectedRepresentationIds.representationIds);
+      expect(variant.properties).not.toHaveProperty("taxonomyRelation");
+    }
+    expect(assessmentByVerdict.get("applicable-next-step").properties.supportingEvidence.minItems).toBe(1);
+    expect(assessmentByVerdict.get("contradicted").properties.contradictingEvidence.minItems).toBe(1);
+    expect(assessmentByVerdict.get("insufficient-evidence").properties.supportingEvidence.minItems).toBe(1);
+    expect(assessmentByVerdict.get("insufficient-evidence").properties.missingEvidence.minItems).toBe(1);
+    expect(assessmentByVerdict.get("irrelevant").properties.supportingEvidence.maxItems).toBe(0);
 
     const candidateGrounded = request.text.format.schema.properties.synthesis.anyOf[0]
       .properties.leadingHypothesis.anyOf[0];
@@ -312,9 +324,12 @@ describe("OpenAiApplicabilityReasoningProvider", () => {
     if (input.lane !== "taxonomy-informed" || projected.lane !== "taxonomy-informed") throw new Error("Expected taxonomy lane.");
     expect(projected.taxonomy).toEqual(input.taxonomy);
 
-    const assessment = request.text.format.schema.properties.candidateAssessments.items.anyOf[0];
-    expect(assessment.properties.taxonomyRelation.enum).toEqual(["supports", "conflicts", "neutral", "unavailable"]);
-    expect(assessment.required).toContain("taxonomyRelation");
+    const assessmentVariants = request.text.format.schema.properties.candidateAssessments.items.anyOf;
+    expect(assessmentVariants).toHaveLength(4);
+    for (const assessment of assessmentVariants) {
+      expect(assessment.properties.taxonomyRelation.enum).toEqual(["supports", "conflicts", "neutral", "unavailable"]);
+      expect(assessment.required).toContain("taxonomyRelation");
+    }
   });
 
   it("normalizes an explicitly configured OpenAI-compatible base URL without fallback", async () => {
@@ -430,6 +445,9 @@ describe("OpenAiApplicabilityReasoningProvider", () => {
     expect(APPLICABILITY_REASONING_INSTRUCTIONS).toMatch(/concrete next evidence actions/i);
     expect(APPLICABILITY_REASONING_INSTRUCTIONS).toMatch(/do not ask the requester to restate the problem/i);
     expect(APPLICABILITY_REASONING_INSTRUCTIONS).toMatch(/diagnostic applicability.*not general usefulness/i);
+    expect(APPLICABILITY_REASONING_INSTRUCTIONS).toMatch(/supportingEvidence means evidence supporting diagnostic applicability/i);
+    expect(APPLICABILITY_REASONING_INSTRUCTIONS).toMatch(/verdict irrelevant.*supportingEvidence must be empty/i);
+    expect(APPLICABILITY_REASONING_INSTRUCTIONS).toMatch(/same evidence reference as both supporting and contradicting/i);
     expect(APPLICABILITY_REASONING_INSTRUCTIONS).toMatch(/locate, identify, or inspect a record/i);
     expect(APPLICABILITY_REASONING_INSTRUCTIONS).toMatch(/no troubleshooting symptom.*abstain/i);
     expect(APPLICABILITY_REASONING_INSTRUCTIONS).toMatch(/broader investigation path.*leader.*known cause.*alternative/i);

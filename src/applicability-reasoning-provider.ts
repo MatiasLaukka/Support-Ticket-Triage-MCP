@@ -24,6 +24,7 @@ export const APPLICABILITY_REASONING_INSTRUCTIONS = [
   "Contradicted means observed evidence conflicts with required candidate conditions.",
   "Insufficient-evidence means the candidate is plausible but specific named evidence is still required.",
   "Irrelevant means the resource does not meaningfully address the case; do not invent supporting evidence for an irrelevant candidate.",
+  "Evidence polarity is strict: supportingEvidence means evidence supporting diagnostic applicability, not evidence explaining why a candidate is irrelevant. For verdict irrelevant, supportingEvidence must be empty; put the reason in explanation and use contradictingEvidence only when a supplied fact or representation directly rules the candidate out. Never cite the same evidence reference as both supporting and contradicting evidence.",
   "Applicability means diagnostic applicability to the reported symptom or causal investigation target, not general usefulness for navigation, record lookup, or support operations.",
   "Do not mark a symptom-specific diagnostic resource applicable-next-step merely because it can help locate, identify, or inspect a record.",
   "When the case contains no troubleshooting symptom or causal investigation target and only asks to resolve or locate an identifier or record, mark symptom-specific diagnostic resources irrelevant and abstain; use an internal lookup action to resolve record context without inventing a diagnosis.",
@@ -319,10 +320,7 @@ function buildApplicabilityJsonSchema(input: ApplicabilityReasoningInput): Recor
 
   const candidateEvidenceReference = (candidateKey: string) => ({
     anyOf: [
-      strictObject({
-        kind: { type: "string", enum: ["case-fact"] },
-        id: { type: "string", enum: factIds },
-      }, ["kind", "id"]),
+      caseFactEvidenceReference,
       strictObject({
         kind: { type: "string", enum: ["resource-representation"] },
         id: { type: "string", enum: representationIdsByCandidate.get(candidateKey) ?? [] },
@@ -344,28 +342,52 @@ function buildApplicabilityJsonSchema(input: ApplicabilityReasoningInput): Recor
     "explanation",
   ];
 
-  const candidateAssessment = (candidateKey: string): Record<string, unknown> => {
+  const candidateAssessmentVariants = (candidateKey: string): Record<string, unknown>[] => {
     const scopedEvidenceReference = candidateEvidenceReference(candidateKey);
-    const assessmentProperties: Record<string, unknown> = {
-      resourceKey: { type: "string", enum: [candidateKey] },
-      verdict: {
-        type: "string",
-        enum: ["applicable-next-step", "contradicted", "insufficient-evidence", "irrelevant"],
-      },
-      supportingEvidence: { type: "array", maxItems: 32, items: scopedEvidenceReference },
-      contradictingEvidence: { type: "array", maxItems: 32, items: scopedEvidenceReference },
-      missingEvidence: { type: "array", maxItems: 16, items: missingEvidence },
-      explanation: boundedString(600),
-    };
     const required = [...assessmentRequired];
-    if (input.lane === "taxonomy-informed") {
-      assessmentProperties.taxonomyRelation = {
-        type: "string",
-        enum: ["supports", "conflicts", "neutral", "unavailable"],
-      };
-      required.push("taxonomyRelation");
-    }
-    return strictObject(assessmentProperties, required);
+    if (input.lane === "taxonomy-informed") required.push("taxonomyRelation");
+
+    const variant = (
+      verdict: "applicable-next-step" | "contradicted" | "insufficient-evidence" | "irrelevant",
+      constraints: {
+        supportingMinItems?: number;
+        supportingMaxItems?: number;
+        contradictingMinItems?: number;
+        missingMinItems?: number;
+      },
+    ): Record<string, unknown> => strictObject({
+      resourceKey: { type: "string", enum: [candidateKey] },
+      verdict: { type: "string", enum: [verdict] },
+      supportingEvidence: {
+        type: "array",
+        ...(constraints.supportingMinItems === undefined ? {} : { minItems: constraints.supportingMinItems }),
+        maxItems: constraints.supportingMaxItems ?? 32,
+        items: scopedEvidenceReference,
+      },
+      contradictingEvidence: {
+        type: "array",
+        ...(constraints.contradictingMinItems === undefined ? {} : { minItems: constraints.contradictingMinItems }),
+        maxItems: 32,
+        items: scopedEvidenceReference,
+      },
+      missingEvidence: {
+        type: "array",
+        ...(constraints.missingMinItems === undefined ? {} : { minItems: constraints.missingMinItems }),
+        maxItems: 16,
+        items: missingEvidence,
+      },
+      explanation: boundedString(600),
+      ...(input.lane === "taxonomy-informed"
+        ? { taxonomyRelation: { type: "string", enum: ["supports", "conflicts", "neutral", "unavailable"] } }
+        : {}),
+    }, required);
+
+    return [
+      variant("applicable-next-step", { supportingMinItems: 1 }),
+      variant("contradicted", { contradictingMinItems: 1 }),
+      variant("insufficient-evidence", { supportingMinItems: 1, missingMinItems: 1 }),
+      variant("irrelevant", { supportingMaxItems: 0 }),
+    ];
   };
 
   const candidateGroundedHypothesis = strictObject({
@@ -429,7 +451,7 @@ function buildApplicabilityJsonSchema(input: ApplicabilityReasoningInput): Recor
       type: "array",
       minItems: candidateKeys.length,
       maxItems: candidateKeys.length,
-      items: { anyOf: candidateKeys.map((candidateKey) => candidateAssessment(candidateKey)) },
+      items: { anyOf: candidateKeys.flatMap((candidateKey) => candidateAssessmentVariants(candidateKey)) },
     },
     synthesis: { anyOf: [hypothesis, abstain] },
   }, ["candidateAssessments", "synthesis"]);

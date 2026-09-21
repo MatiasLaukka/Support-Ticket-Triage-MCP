@@ -7,7 +7,7 @@ import type { AiUsage } from "../domain.js";
 import type { Reference, ResourceKey, ResourceType, TaxonomyMetadata } from "./types.js";
 
 export const APPLICABILITY_CONTRACT_VERSION = 4 as const;
-export const APPLICABILITY_PROMPT_VERSION = "b5-applicability-v5" as const;
+export const APPLICABILITY_PROMPT_VERSION = "b5-applicability-v6" as const;
 export const APPLICABILITY_OUTPUT_RESERVE_TOKENS = 4_096 as const;
 
 export type ApplicabilityLane = "evidence-only" | "taxonomy-informed";
@@ -281,7 +281,7 @@ export type ApplicabilityCaseResult =
   | { status: "assessment-skipped"; reason: "no-assessable-candidates" | "prompt-injection-detected" | "input-too-large" }
   | { status: "assessment-failed"; reason: "invalid-provider-output" | ApplicabilityProviderFailureReason; failureMode?: ApplicabilityInvalidProviderFailureMode };
 const boundedErrorFields = new Set([
-  "unknown-field", "unique-identities", "candidate-order", "evidence-registry-order", "candidate-evidence", "matched-representation", "matched-representation-origin", "candidate-taxonomy-order", "candidate-taxonomy", "taxonomy-semantic-set", "evidence-reference", "unknown-case-fact", "unknown-representation", "cross-candidate-representation", "evidence-polarity", "abstain", "hypothesis-candidate", "hypothesis-candidate-duplicate-key", "hypothesis-candidate-cross-evidence", "hypothesis-candidate-verdict", "hypothesis-candidate-duplicate-hypothesis", "novel-hypothesis", "missing-evidence", "hypothesis-rank", "leading-evidence-action", "taxonomyRelation",
+  "unknown-field", "unique-identities", "candidate-order", "evidence-registry-order", "candidate-evidence", "matched-representation", "matched-representation-origin", "candidate-taxonomy-order", "candidate-taxonomy", "taxonomy-semantic-set", "evidence-reference", "unknown-case-fact", "unknown-representation", "cross-candidate-representation", "evidence-polarity", "evidence-overlap", "irrelevant-support", "abstain", "hypothesis-candidate", "hypothesis-candidate-duplicate-key", "hypothesis-candidate-cross-evidence", "hypothesis-candidate-verdict", "hypothesis-candidate-duplicate-hypothesis", "novel-hypothesis", "missing-evidence", "hypothesis-rank", "leading-evidence-action", "taxonomyRelation",
 ]);
 export class InvalidApplicabilitySchemaError extends Error {
   readonly stage: InvalidApplicabilityStage;
@@ -400,14 +400,14 @@ function assertEvidenceReferencesResolve(input: ApplicabilityReasoningInput, out
   for (const assessment of output.candidateAssessments) {
     const supporting = new Set(assessment.supportingEvidence.map(evidenceReferenceKey));
     if (assessment.contradictingEvidence.some((reference) => supporting.has(evidenceReferenceKey(reference)))) {
-      throw new InvalidApplicabilitySchemaError("provider-output", ["evidence-polarity"]);
+      throw new InvalidApplicabilitySchemaError("provider-output", ["evidence-overlap"]);
     }
     for (const reference of [...assessment.supportingEvidence, ...assessment.contradictingEvidence]) assertReference(reference, assessment.resourceKey);
     for (const reference of assessment.missingEvidence.flatMap((item) => item.evidence)) assertReference(reference);
     if (assessment.verdict === "applicable-next-step" && assessment.supportingEvidence.length === 0) throw new InvalidApplicabilitySchemaError("provider-output", ["evidence-reference"]);
     if (assessment.verdict === "insufficient-evidence" && (assessment.supportingEvidence.length === 0 || assessment.missingEvidence.length === 0)) throw new InvalidApplicabilitySchemaError("synthesis", ["missing-evidence"]);
     if (assessment.verdict === "contradicted" && assessment.contradictingEvidence.length === 0) throw new InvalidApplicabilitySchemaError("provider-output", ["evidence-reference"]);
-    if (assessment.verdict === "irrelevant" && assessment.supportingEvidence.length !== 0) throw new InvalidApplicabilitySchemaError("provider-output", ["evidence-polarity"]);
+    if (assessment.verdict === "irrelevant" && assessment.supportingEvidence.length !== 0) throw new InvalidApplicabilitySchemaError("provider-output", ["irrelevant-support"]);
   }
   if (output.synthesis.disposition === "hypothesis") {
     const hypotheses = [output.synthesis.leadingHypothesis, ...output.synthesis.alternatives];

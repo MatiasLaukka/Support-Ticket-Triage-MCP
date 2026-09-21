@@ -1,7 +1,7 @@
 {
   "version": 2,
   "applicabilityContractVersion": 4,
-  "promptVersion": "b5-applicability-v5",
+  "promptVersion": "b5-applicability-v6",
   "development": {
     "path": "development.json",
     "sha256": "8a79ce122f99bd1c63749b8a4af4a4d6c1d74f5e0039268b412b1ed2f1a68462"

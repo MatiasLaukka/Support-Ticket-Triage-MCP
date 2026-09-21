@@ -224,6 +224,22 @@ describe("B5 applicability contracts", () => {
     expect(() => validateApplicabilityProviderOutput(input, duplicatePolarity)).toThrow(/evidence-polarity|provider-output/i);
   });
 
+  it("distinguishes irrelevant support from support-contradiction overlap", () => {
+    const input = validApplicabilityInput("evidence-only");
+
+    const irrelevantSupport = validProviderOutput(input);
+    irrelevantSupport.candidateAssessments[0]!.verdict = "irrelevant";
+    expect(() => validateApplicabilityProviderOutput(input, irrelevantSupport))
+      .toThrow(/irrelevant-support/);
+
+    const overlap = validProviderOutput(input);
+    overlap.candidateAssessments[0]!.contradictingEvidence = [
+      structuredClone(overlap.candidateAssessments[0]!.supportingEvidence[0]!),
+    ];
+    expect(() => validateApplicabilityProviderOutput(input, overlap))
+      .toThrow(/evidence-overlap/);
+  });
+
   it("keeps insufficient-evidence gaps authoritative on candidate assessments without duplicating hypothesis prose", () => {
     const input = validApplicabilityInput("evidence-only");
     const output = validProviderOutput(input);

@@ -71,6 +71,7 @@ const retrievalIndex: IndexMetadata = {
 const fullBasis: HybridShadowBasis = {
   operationalEventId: "00000000-0000-4000-8000-000000000222",
   eventSequence: 18,
+  snapshotThroughSequence: 19,
   ticketRevision: 7,
   customerReplyWatermark: replyWatermark,
   taxonomyRevision: 4,
@@ -224,6 +225,7 @@ describe("SQLite hybrid shadow-run persistence", () => {
     expect(run.basis).toMatchObject({
       operationalEventId: "00000000-0000-4000-8000-000000000222",
       eventSequence: 18,
+      snapshotThroughSequence: 19,
       ticketRevision: 7,
       customerReplyWatermark: replyWatermark,
       taxonomyRevision: 4,
@@ -499,6 +501,14 @@ describe("SQLite hybrid shadow-run persistence", () => {
     (invalid.input as Record<string, unknown>).extension = { futureMeaning: "unversioned" };
 
     expect(() => parseHybridShadowRun(invalid)).toThrow();
+  });
+
+  it("preserves legacy H4a trigger-only snapshots as-of their trigger sequence", () => {
+    const legacy = structuredClone(completedRun()) as unknown as Record<string, unknown>;
+    const basis = legacy.basis as Record<string, unknown>;
+    delete basis.snapshotThroughSequence;
+
+    expect(parseHybridShadowRun(legacy).basis.snapshotThroughSequence).toBe(fullBasis.eventSequence);
   });
 
   it("rejects malformed nested retrieval candidates", () => {

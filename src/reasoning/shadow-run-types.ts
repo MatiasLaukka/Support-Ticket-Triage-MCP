@@ -64,7 +64,10 @@ const PositiveIntegerSchema = z.number().int().positive();
 
 export interface HybridShadowBasis {
   operationalEventId: OperationalEvent["id"];
+  /** Trigger identity; this is not the end of the committed state snapshot. */
   eventSequence: OperationalEvent["sequence"];
+  /** Highest event sequence committed atomically by the triggering operation. */
+  snapshotThroughSequence: OperationalEvent["sequence"];
   ticketRevision: TicketRevision["revision"];
   customerReplyWatermark: CustomerReplyWatermark;
   taxonomyRevision: DiagnosticTaxonomyRevision["revision"];
@@ -76,16 +79,34 @@ export interface HybridShadowBasis {
  * The retrieval knowledge snapshot is persisted once on input.basis.retrievalIndex.
  * Its IndexMetadata identity replaces the former synthetic knowledge-as-of time.
  */
-export const HybridShadowBasisSchema: z.ZodType<HybridShadowBasis> = z.object({
+const HybridShadowBasisInputSchema = z.object({
   operationalEventId: OperationalEventIdSchema,
   eventSequence: TicketSequenceSchema,
+  snapshotThroughSequence: TicketSequenceSchema.optional(),
   ticketRevision: RevisionNumberSchema,
   customerReplyWatermark: CustomerReplyWatermarkSchema,
   taxonomyRevision: RevisionNumberSchema.refine((value) => value > 0, {
     message: "Taxonomy revision must be positive.",
   }),
   retrievalQueryHash: z.string(),
-}).strict();
+}).strict().superRefine((basis, context) => {
+  if (basis.snapshotThroughSequence !== undefined && basis.snapshotThroughSequence < basis.eventSequence) {
+    context.addIssue({
+      code: "custom",
+      path: ["snapshotThroughSequence"],
+      message: "Snapshot boundary cannot precede its trigger event.",
+    });
+  }
+});
+
+export const HybridShadowBasisSchema: z.ZodType<HybridShadowBasis> = HybridShadowBasisInputSchema.transform(
+  (basis) => ({
+    ...basis,
+    // H4a payloads were captured strictly as of the trigger sequence, so this
+    // preserves their recorded semantics while H4b records the full atomic boundary.
+    snapshotThroughSequence: basis.snapshotThroughSequence ?? basis.eventSequence,
+  }),
+);
 
 /** Reuses the existing B5 execution provenance vocabulary; it does not imply model authority. */
 export type ReasoningProviderIdentity = Pick<

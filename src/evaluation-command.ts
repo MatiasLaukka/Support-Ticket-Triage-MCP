@@ -221,11 +221,11 @@ export async function evaluateTicketCommand(
           reportHybridShadowCaptureFailure(deps, commandId, new Error("Committed capture snapshot was unavailable."));
           return deps.retrievalObserver!.observe(query, commandId);
         }
-        const event = committedEvaluationTrigger(committedEvaluationCapture, commandId);
-        const mode = event === undefined ? undefined : hybridShadowModeForEvent(event);
-        if (event === undefined || mode === undefined) {
+        const trigger = committedEvaluationTrigger(committedEvaluationCapture, commandId);
+        const mode = trigger === undefined ? undefined : hybridShadowModeForEvent(trigger.event);
+        if (trigger === undefined || mode === undefined) {
           reportHybridShadowCaptureFailure(deps, commandId, new HybridShadowCaptureError(
-            "Committed evaluation result does not identify one recommendation-submitted trigger event.",
+            "Committed evaluation result does not identify one recommendation-submitted trigger and operation boundary.",
           ));
           return deps.retrievalObserver!.observe(query, commandId);
         }
@@ -234,8 +234,9 @@ export async function evaluateTicketCommand(
           try {
             context = assembleHybridShadowCaptureContext({
               mode,
-              event,
+              event: trigger.event,
               snapshot: committedEvaluationCapture!.snapshot,
+              snapshotThroughSequence: trigger.snapshotThroughSequence,
               query: actualQuery,
               retrievalExecution,
             });
@@ -261,18 +262,26 @@ function committedEvaluationTrigger(
     snapshot: OperationalWorkflowSnapshot;
   },
   commandId: string,
-): OperationalWorkflowSnapshot["events"][number] | undefined {
+): {
+  event: OperationalWorkflowSnapshot["events"][number];
+  snapshotThroughSequence: OperationalWorkflowSnapshot["events"][number]["sequence"];
+} | undefined {
   if (capture.result.operation !== "evaluate-ticket" || capture.result.tickets.length !== 1) return undefined;
   const [ticketResult] = capture.result.tickets;
-  if (ticketResult === undefined) return undefined;
-  const eventIds = new Set(ticketResult.operationalEventIds);
-  const events = capture.snapshot.events.filter((event) =>
-    eventIds.has(event.id)
-    && event.ticketId === ticketResult.ticketId
-    && event.commandId === commandId
-    && event.action === "recommendation-submitted",
-  );
-  return events.length === 1 ? events[0] : undefined;
+  if (ticketResult === undefined || ticketResult.operationalEventIds.length === 0) return undefined;
+  const eventIds = ticketResult.operationalEventIds;
+  if (new Set(eventIds).size !== eventIds.length) return undefined;
+  const events = eventIds.map((id) => capture.snapshot.events.find((event) => event.id === id));
+  if (events.some((event) => event === undefined)) return undefined;
+  const committedOperationEvents = events as OperationalWorkflowSnapshot["events"];
+  if (committedOperationEvents.some((event) =>
+    event.ticketId !== ticketResult.ticketId || event.commandId !== commandId)) return undefined;
+  const triggers = committedOperationEvents.filter((event) => event.action === "recommendation-submitted");
+  if (triggers.length !== 1) return undefined;
+  return {
+    event: triggers[0]!,
+    snapshotThroughSequence: Math.max(...committedOperationEvents.map(({ sequence }) => sequence)),
+  };
 }
 
 function reportHybridShadowCaptureFailure(

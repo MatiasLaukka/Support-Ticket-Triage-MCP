@@ -173,6 +173,7 @@ function source(mode: "evaluation" | "diagnosis" = "evaluation", ranking: Retrie
     mode,
     event: evaluationEvent,
     snapshot: state,
+    snapshotThroughSequence: evaluationEvent.sequence,
     query,
     retrievalExecution: { retrieval: retrieval(), ranking },
   };
@@ -191,6 +192,7 @@ describe("hybrid shadow capture assembler", () => {
       basis: {
         operationalEventId: evaluationEventId,
         eventSequence: 3,
+        snapshotThroughSequence: 3,
         ticketRevision: 7,
         customerReplyWatermark: { state: "none" },
         taxonomyRevision: 1,
@@ -237,6 +239,8 @@ describe("hybrid shadow capture assembler", () => {
       .toMatchObject({ message: "ranking unavailable", code: "INVALID_RANKING_INPUT" });
     expect(failed.retrievalExecution.ranking.status === "failed" && failed.retrievalExecution.ranking.error)
       .not.toBe(rankingError);
+    expect(notRequested.opportunityId).toMatch(/^hybrid-shadow-opportunity:/);
+    expect(failed.opportunityId).toMatch(/^hybrid-shadow-opportunity:/);
   });
 
   it("retains distinct retrieved evidence identities and provenance", () => {
@@ -291,8 +295,14 @@ describe("hybrid shadow capture assembler", () => {
 
   it("does not use later ticket, reply, or taxonomy revisions for the trigger basis", () => {
     const initial = source();
-    const laterReplyEvent = event("00000000-0000-4000-8000-000000000008", 4, "customer-reply-received");
-    const laterTaxonomyEvent = event("00000000-0000-4000-8000-000000000009", 5, "diagnostic-taxonomy-revised");
+    const laterReplyEvent = {
+      ...event("00000000-0000-4000-8000-000000000008", 4, "customer-reply-received"),
+      commandId: "00000000-0000-4000-8000-000000000017",
+    };
+    const laterTaxonomyEvent = {
+      ...event("00000000-0000-4000-8000-000000000009", 5, "diagnostic-taxonomy-revised"),
+      commandId: "00000000-0000-4000-8000-000000000018",
+    };
     const laterTaxonomy = {
       id: "taxonomy-2",
       ticketId: ticket.id,
@@ -327,7 +337,10 @@ describe("hybrid shadow capture assembler", () => {
     });
 
     const futureTicket = TicketSchema.parse({ ...ticket, revision: 8 });
-    const futureTicketEvent = event("00000000-0000-4000-8000-000000000011", 4, "ticket-updated");
+    const futureTicketEvent = {
+      ...event("00000000-0000-4000-8000-000000000011", 4, "ticket-updated"),
+      commandId: "00000000-0000-4000-8000-000000000019",
+    };
     const missingHistory = {
       ...initial.snapshot,
       ticket: futureTicket,
@@ -342,6 +355,67 @@ describe("hybrid shadow capture assembler", () => {
     } as unknown as OperationalWorkflowSnapshot;
     expect(() => assembleHybridShadowCaptureContext({ ...initial, snapshot: missingHistory }))
       .toThrow(/later-state leakage/i);
+  });
+
+  it("uses taxonomy appended after the trigger in the same committed evaluation operation", () => {
+    const initial = source();
+    const sameOperationTaxonomyEvent = {
+      ...event("00000000-0000-4000-8000-000000000014", 4, "diagnostic-taxonomy-revised"),
+      commandId: evaluationEvent.commandId,
+    };
+    const sameOperationSnapshot = {
+      ...initial.snapshot,
+      events: [evaluationEvent, sameOperationTaxonomyEvent],
+      diagnosticTaxonomyRevisions: [{
+        id: "taxonomy-same-operation",
+        ticketId: ticket.id,
+        revision: 1,
+        context: {} as never,
+        operationalEventId: sameOperationTaxonomyEvent.id,
+        createdAt: sameOperationTaxonomyEvent.occurredAt,
+      }],
+    } as OperationalWorkflowSnapshot;
+
+    const context = assembleHybridShadowCaptureContext({
+      ...initial,
+      snapshot: sameOperationSnapshot,
+      snapshotThroughSequence: sameOperationTaxonomyEvent.sequence,
+    });
+
+    expect(context.basis).toMatchObject({
+      eventSequence: evaluationEvent.sequence,
+      snapshotThroughSequence: sameOperationTaxonomyEvent.sequence,
+      taxonomyRevision: 1,
+    });
+  });
+
+  it("does not use taxonomy appended by a later operation beyond the committed snapshot boundary", () => {
+    const initial = source();
+    const laterTaxonomyEvent = {
+      ...event("00000000-0000-4000-8000-000000000015", 4, "diagnostic-taxonomy-revised"),
+      commandId: "00000000-0000-4000-8000-000000000020",
+    };
+    const laterTaxonomy = {
+      id: "taxonomy-later-operation",
+      ticketId: ticket.id,
+      revision: 2,
+      context: {} as never,
+      operationalEventId: laterTaxonomyEvent.id,
+      createdAt: laterTaxonomyEvent.occurredAt,
+    };
+
+    const context = assembleHybridShadowCaptureContext({
+      ...initial,
+      snapshot: {
+        ...initial.snapshot,
+        events: [...initial.snapshot.events, laterTaxonomyEvent],
+        diagnosticTaxonomyRevisions: [...initial.snapshot.diagnosticTaxonomyRevisions, laterTaxonomy],
+      },
+      snapshotThroughSequence: evaluationEvent.sequence,
+    });
+
+    expect(context.basis.taxonomyRevision).toBe(1);
+    expect(context.basis.snapshotThroughSequence).toBe(evaluationEvent.sequence);
   });
 
   it("rejects query text derived from customer content absent from the committed snapshot", () => {
@@ -387,8 +461,54 @@ describe("hybrid shadow capture assembler", () => {
       ...source(),
       event: repeatedEvent,
       snapshot: repeatedSnapshot,
+      snapshotThroughSequence: repeatedEvent.sequence,
     });
     expect(otherEvent.opportunityId).not.toBe(evaluation.opportunityId);
+  });
+
+  it("distinguishes retrieval snapshots but excludes ranking duration from opportunity identity", () => {
+    const initial = source();
+    const original = assembleHybridShadowCaptureContext(initial);
+    const changedSnapshot = assembleHybridShadowCaptureContext({
+      ...initial,
+      retrievalExecution: {
+        ...initial.retrievalExecution,
+        retrieval: {
+          ...initial.retrievalExecution.retrieval,
+          metadata: { ...index, generation: index.generation + 1 },
+        },
+      },
+    });
+    const ranked = rankingResult(initial.query);
+    const sameRankedInputDifferentDuration = assembleHybridShadowCaptureContext({
+      ...initial,
+      retrievalExecution: {
+        retrieval: retrieval(),
+        ranking: { status: "succeeded", result: ranked, durationMs: 999 },
+      },
+    });
+    const sameRankedInputDifferentDurationAgain = assembleHybridShadowCaptureContext({
+      ...initial,
+      retrievalExecution: {
+        retrieval: retrieval(),
+        ranking: { status: "succeeded", result: ranked, durationMs: 1 },
+      },
+    });
+
+    expect(changedSnapshot.basis.retrievalQueryHash).toBe(original.basis.retrievalQueryHash);
+    expect(changedSnapshot.basis.taxonomyRevision).toBe(original.basis.taxonomyRevision);
+    expect(changedSnapshot.opportunityId).not.toBe(original.opportunityId);
+    expect(sameRankedInputDifferentDuration.opportunityId)
+      .toBe(sameRankedInputDifferentDurationAgain.opportunityId);
+  });
+
+  it("keeps opportunity identity independent of the future reasoning provider", () => {
+    const base = source();
+    const luna = { ...base, provider: { model: "Luna" } };
+    const qwen = { ...base, provider: { model: "Qwen" } };
+
+    expect(assembleHybridShadowCaptureContext(luna).opportunityId)
+      .toBe(assembleHybridShadowCaptureContext(qwen).opportunityId);
   });
 
   it("maps only the existing committed evaluation trigger", () => {
@@ -397,15 +517,28 @@ describe("hybrid shadow capture assembler", () => {
     expect(hybridShadowModeForEvent(event("00000000-0000-4000-8000-000000000005", 5, "customer-reply-received"))).toBeUndefined();
   });
 
-  it("emits the captured context after a committed evaluation and isolates sink failure", async () => {
+  it("captures same-operation taxonomy after evaluation commits and isolates sink failure", async () => {
     const commandId = "00000000-0000-4000-8000-000000000007";
+    const taxonomyEventId = "00000000-0000-4000-8000-000000000016";
+    const committedTaxonomyEvent = {
+      ...event(taxonomyEventId, 4, "diagnostic-taxonomy-revised"),
+      commandId,
+    };
     const committedSnapshot = {
       ...snapshot(),
-      events: [taxonomyEvent, { ...evaluationEvent, commandId }],
+      events: [{ ...evaluationEvent, commandId }, committedTaxonomyEvent],
+      diagnosticTaxonomyRevisions: [{
+        id: "taxonomy-same-transaction",
+        ticketId: ticket.id,
+        revision: 1,
+        context: {} as never,
+        operationalEventId: taxonomyEventId,
+        createdAt: committedTaxonomyEvent.occurredAt,
+      }],
     } as OperationalWorkflowSnapshot;
     const committedResult: OperationalResultReference = {
       operation: "evaluate-ticket",
-      tickets: [{ ticketId: ticket.id, operationalEventIds: [evaluationEventId], resultingRevision: null }],
+      tickets: [{ ticketId: ticket.id, operationalEventIds: [evaluationEventId, taxonomyEventId], resultingRevision: null }],
       recommendationId: "00000000-0000-4000-8000-000000000006",
     };
     let commits = 0;
@@ -448,7 +581,11 @@ describe("hybrid shadow capture assembler", () => {
     expect(result).toEqual({ status: "committed" });
     expect(commits).toBe(1);
     expect(captures).toHaveLength(1);
-    expect(captures[0]).toMatchObject({ mode: "evaluation", trigger: { id: evaluationEventId, sequence: 3 }, basis: { taxonomyRevision: 1 } });
+    expect(captures[0]).toMatchObject({
+      mode: "evaluation",
+      trigger: { id: evaluationEventId, sequence: 3 },
+      basis: { eventSequence: 3, snapshotThroughSequence: 4, taxonomyRevision: 1 },
+    });
     expect(diagnostics).toEqual([{
       code: "HYBRID_SHADOW_CAPTURE_FAILED",
       commandId,

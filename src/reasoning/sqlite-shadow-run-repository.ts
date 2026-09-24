@@ -3,6 +3,7 @@ import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { TicketIdSchema } from "../domain.js";
 import {
+  HYBRID_SHADOW_RUN_PAYLOAD_VERSION,
   HybridShadowRunIdSchema,
   parseHybridShadowRun,
   type HybridShadowRun,
@@ -10,7 +11,6 @@ import {
 } from "./shadow-run-types.js";
 
 const SHADOW_RUN_SCHEMA_VERSION = 1;
-const SHADOW_RUN_PAYLOAD_VERSION = 1;
 const SHADOW_RUN_COLUMNS = [
   { name: "run_id", type: "TEXT", notnull: 1, primaryKey: 1 },
   { name: "ticket_id", type: "TEXT", notnull: 1, primaryKey: 0 },
@@ -164,11 +164,11 @@ export class SqliteHybridShadowRunRepository implements HybridShadowRunRepositor
         snapshot.runId,
         snapshot.ticketId,
         snapshot.mode,
-        snapshot.provider.providerId,
-        snapshot.provider.modelId,
+        snapshot.provider.providerKind,
+        snapshot.provider.model,
         snapshot.status,
         snapshot.recordedAt,
-        SHADOW_RUN_PAYLOAD_VERSION,
+        HYBRID_SHADOW_RUN_PAYLOAD_VERSION,
         payloadJson,
       );
     });
@@ -223,7 +223,7 @@ export class SqliteHybridShadowRunRepository implements HybridShadowRunRepositor
 
   private decodeRow(row: ShadowRunRow): HybridShadowRun {
     try {
-      if (row.payload_version !== SHADOW_RUN_PAYLOAD_VERSION) {
+      if (row.payload_version !== HYBRID_SHADOW_RUN_PAYLOAD_VERSION) {
         throw new Error(`Unsupported payload version ${String(row.payload_version)}.`);
       }
       const parsed = JSON.parse(row.payload_json) as unknown;
@@ -232,8 +232,8 @@ export class SqliteHybridShadowRunRepository implements HybridShadowRunRepositor
         run.runId !== row.run_id
         || run.ticketId !== row.ticket_id
         || run.mode !== row.mode
-        || run.provider.providerId !== row.provider_id
-        || run.provider.modelId !== row.model_id
+        || run.provider.providerKind !== row.provider_id
+        || run.provider.model !== row.model_id
         || run.status !== row.status
         || run.recordedAt !== row.recorded_at
       ) {
@@ -376,7 +376,7 @@ const INITIAL_SCHEMA_SQL = `
     model_id TEXT NOT NULL CHECK (length(trim(model_id)) > 0),
     status TEXT NOT NULL CHECK (status IN ('completed', 'failed')),
     recorded_at TEXT NOT NULL,
-    payload_version INTEGER NOT NULL CHECK (payload_version = ${SHADOW_RUN_PAYLOAD_VERSION}),
+    payload_version INTEGER NOT NULL CHECK (payload_version = ${HYBRID_SHADOW_RUN_PAYLOAD_VERSION}),
     payload_json TEXT NOT NULL CHECK (json_valid(payload_json) AND json_type(payload_json) = 'object')
   );
   CREATE INDEX hybrid_shadow_runs_ticket_order_idx

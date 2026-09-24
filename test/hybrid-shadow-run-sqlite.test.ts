@@ -5,12 +5,17 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { CustomerReplyWatermark, TicketId } from "../src/domain.js";
 import type {
+  EvidenceAction,
+  EvidenceActionId,
+  EvidenceObservation,
+  EvidenceObservationId,
   HybridReasoningInput,
   HybridReasoningResult,
   ReasoningRankingExecution,
 } from "../src/reasoning/types.js";
 import {
   HybridShadowRunIdSchema,
+  parseHybridShadowRun,
   type HybridShadowRun,
   type HybridShadowBasis,
 } from "../src/reasoning/shadow-run-types.js";
@@ -20,6 +25,8 @@ import {
 } from "../src/reasoning/sqlite-shadow-run-repository.js";
 import type { RankingResult } from "../src/retrieval/ranking-types.js";
 import type { IndexMetadata, ResourceType } from "../src/retrieval/types.js";
+import { buildRetrievalQuery } from "../src/retrieval/stage.js";
+import type { EvidenceRequirementId } from "../src/evidence-catalog.js";
 
 const ticketId = "TKT-0101" as TicketId;
 const runIds = {
@@ -37,6 +44,20 @@ const replyWatermark: CustomerReplyWatermark = {
   id: "00000000-0000-4000-8000-000000000111",
 };
 
+const retrievalQuery = buildRetrievalQuery({
+  ticket: {
+    id: ticketId,
+    revision: 7,
+    updatedAt: "2026-09-21T11:00:00.000Z",
+    subject: "Webhook delivery delayed",
+    description: "Delivery attempts arrive late.",
+    status: "open",
+  } as any,
+  customerReplies: [],
+  customerReplyWatermark: replyWatermark.id,
+  references: [],
+});
+
 const retrievalIndex: IndexMetadata = {
   schemaVersion: 2,
   representationVersion: 1,
@@ -53,8 +74,7 @@ const fullBasis: HybridShadowBasis = {
   ticketRevision: 7,
   customerReplyWatermark: replyWatermark,
   taxonomyRevision: 4,
-  retrievalInputHash: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" as HybridShadowBasis["retrievalInputHash"],
-  knowledgeAsOf: "2026-09-21T11:15:00.000Z",
+  retrievalQueryHash: retrievalQuery.queryHash,
 };
 
 const roots: string[] = [];
@@ -123,7 +143,7 @@ function rankingResult(): RankingResult {
     policy: { id: "lexical-only-v1", kind: "lexical-only" },
     tieBreak: "ordinal-resource-key",
     queryBasis: {
-      queryHash: "query-hash-1",
+      queryHash: fullBasis.retrievalQueryHash,
       ticketId,
       ticketRevision: 7,
       customerReplyWatermark: replyWatermark.state === "reply" ? replyWatermark.id : null,
@@ -160,7 +180,7 @@ function rankingResult(): RankingResult {
 function completedRun(
   runId: string = runIds.evaluation,
   options: { ticketId?: TicketId; mode?: "evaluation" | "diagnosis"; recordedAt?: string; ranking?: ReasoningRankingExecution } = {},
-): HybridShadowRun {
+): Extract<HybridShadowRun, { status: "completed" }> {
   const mode = options.mode ?? "evaluation";
   const runTicketId = options.ticketId ?? ticketId;
   const input = reasoningInput(mode, runTicketId, options.ranking);
@@ -168,7 +188,7 @@ function completedRun(
     runId: HybridShadowRunIdSchema.parse(runId),
     ticketId: runTicketId,
     mode,
-    provider: { providerId: "example-provider", modelId: "example-model" },
+    provider: { providerKind: "openai-responses", model: "gpt-5.6-luna" },
     status: "completed",
     recordedAt: options.recordedAt ?? "2026-09-21T11:16:00.000Z",
     basis: structuredClone(fullBasis),
@@ -183,7 +203,7 @@ function failedRun(): HybridShadowRun {
     runId: HybridShadowRunIdSchema.parse(runIds.failed),
     ticketId,
     mode: "diagnosis",
-    provider: { providerId: "example-provider", modelId: "example-model" },
+    provider: { providerKind: "openai-responses", model: "gpt-5.6-luna" },
     status: "failed",
     recordedAt: "2026-09-21T11:17:00.000Z",
     basis: structuredClone(fullBasis),
@@ -201,6 +221,16 @@ describe("SQLite hybrid shadow-run persistence", () => {
 
     expect(repository.getShadowRun(run.runId)).toEqual(run);
     expect(repository.listShadowRunsForTicket(ticketId)).toEqual([run]);
+    expect(run.basis).toMatchObject({
+      operationalEventId: "00000000-0000-4000-8000-000000000222",
+      eventSequence: 18,
+      ticketRevision: 7,
+      customerReplyWatermark: replyWatermark,
+      taxonomyRevision: 4,
+      retrievalQueryHash: retrievalQuery.queryHash,
+    });
+    expect(run.input.basis.retrievalIndex).toEqual(retrievalIndex);
+    expect(run.provider).toEqual({ providerKind: "openai-responses", model: "gpt-5.6-luna" });
 
     repository.close();
     const reopened = SqliteHybridShadowRunRepository.open(path);
@@ -234,9 +264,18 @@ describe("SQLite hybrid shadow-run persistence", () => {
     const first = openRepository();
     const second = openRepository();
     const firstRun = completedRun();
-    const secondRun = completedRun();
-    Object.assign(firstRun.input, { extension: { z: 2, a: { y: true, b: false } } });
-    Object.assign(secondRun.input, { extension: { a: { b: false, y: true }, z: 2 } });
+    const originalSecondRun = completedRun();
+    const secondRun = {
+      result: originalSecondRun.result,
+      input: originalSecondRun.input,
+      basis: originalSecondRun.basis,
+      recordedAt: originalSecondRun.recordedAt,
+      status: originalSecondRun.status,
+      provider: originalSecondRun.provider,
+      mode: originalSecondRun.mode,
+      ticketId: originalSecondRun.ticketId,
+      runId: originalSecondRun.runId,
+    } satisfies HybridShadowRun;
     first.repository.recordShadowRun(firstRun);
     second.repository.recordShadowRun(secondRun);
 
@@ -280,6 +319,8 @@ describe("SQLite hybrid shadow-run persistence", () => {
     repository.recordShadowRun(run);
 
     expect(repository.getShadowRun(run.runId)?.input.ranking).toEqual(ranking);
+    expect(repository.getShadowRun(run.runId)?.basis.retrievalQueryHash)
+      .toBe(retrievalQuery.queryHash);
     expect(repository.getShadowRun(run.runId)?.status).toBe("completed");
     },
   );
@@ -293,6 +334,38 @@ describe("SQLite hybrid shadow-run persistence", () => {
     expect(repository.getShadowRun(run.runId)).toEqual(run);
     expect(repository.getShadowRun(run.runId)).not.toHaveProperty("result");
     expect(repository.getShadowRun(run.runId)?.input.ranking).toEqual({ status: "failed", durationMs: 12 });
+  });
+
+  it("round-trips separate observation identities and their provenance", () => {
+    const { repository } = openRepository();
+    const run = completedRun();
+    run.input.observations = [
+      {
+        id: "observation-ticket" as EvidenceObservationId,
+        fact: "The ticket reports a delivery delay.",
+        provenance: { sourceType: "ticket", sourceId: "ticket-body", sourceRevision: 7 },
+        observedAt: "2026-09-21T11:10:00.000Z",
+      },
+      {
+        id: "observation-reply" as EvidenceObservationId,
+        fact: "The customer confirmed the delay is ongoing.",
+        provenance: {
+          sourceType: "customer-reply",
+          sourceId: replyWatermark.id,
+          sourceRevision: "reply-revision-1",
+        },
+        validAt: "2026-09-21T11:10:00.000Z",
+        freshnessPolicy: "current-customer-reply",
+      },
+    ];
+
+    repository.recordShadowRun(run);
+
+    expect(repository.getShadowRun(run.runId)?.input.observations).toEqual(run.input.observations);
+    expect(repository.getShadowRun(run.runId)?.input.observations.map(({ id }) => id)).toEqual([
+      "observation-ticket",
+      "observation-reply",
+    ]);
   });
 
   it("rejects duplicate run identities without overwriting the original snapshot", () => {
@@ -418,5 +491,148 @@ describe("SQLite hybrid shadow-run persistence", () => {
       tamper.close();
     }
     expect(repository.getShadowRun(run.runId)).toEqual(run);
+  });
+
+  it("rejects undeclared semantic payload extensions", () => {
+    const run = completedRun();
+    const invalid = structuredClone(run) as unknown as Record<string, unknown>;
+    (invalid.input as Record<string, unknown>).extension = { futureMeaning: "unversioned" };
+
+    expect(() => parseHybridShadowRun(invalid)).toThrow();
+  });
+
+  it("rejects malformed nested retrieval candidates", () => {
+    const run = completedRun();
+    const invalid = structuredClone(run) as unknown as Record<string, unknown>;
+    const input = invalid.input as Record<string, unknown>;
+    input.retrievalCandidates = [{
+      resourceKey: "knowledge-article:bad-candidate",
+      resourceType: "knowledge-article",
+      lexical: { bestRank: "first", bestBm25Score: 0, matches: [] },
+      deterministicReferences: [],
+      knownCauseReferences: [],
+    }];
+
+    expect(() => parseHybridShadowRun(invalid)).toThrow();
+  });
+
+  it("rejects malformed successful ranking payloads", () => {
+    const run = completedRun(runIds.evaluation, {
+      ranking: { status: "succeeded", result: rankingResult(), durationMs: 3 },
+    });
+    const invalid = structuredClone(run) as unknown as Record<string, unknown>;
+    const input = invalid.input as Record<string, unknown>;
+    const ranking = input.ranking as Record<string, unknown>;
+    const result = ranking.result as Record<string, unknown>;
+    result.candidates = [{
+      resourceKey: "knowledge-article:bad-ranking-candidate",
+      resourceType: "knowledge-article",
+      lexical: { bestRank: 1 },
+      deterministicReferences: [],
+      knownCauseReferences: [],
+    }];
+
+    expect(() => parseHybridShadowRun(invalid)).toThrow();
+  });
+
+  it("rejects ranking query identity that differs from the stored retrieval query", () => {
+    const run = completedRun(runIds.evaluation, {
+      ranking: { status: "succeeded", result: rankingResult(), durationMs: 3 },
+    });
+    const invalid = structuredClone(run) as unknown as Record<string, unknown>;
+    const input = invalid.input as Record<string, unknown>;
+    const ranking = input.ranking as Record<string, unknown>;
+    const result = ranking.result as Record<string, unknown>;
+    const queryBasis = result.queryBasis as Record<string, unknown>;
+    queryBasis.queryHash = "different-retrieval-query";
+
+    expect(() => parseHybridShadowRun(invalid)).toThrow();
+  });
+
+  it("rejects dangling hypothesis evidence requirements", () => {
+    const run = completedRun();
+    run.result.hypotheses = [{
+      id: "hypothesis-1",
+      statement: "A test hypothesis.",
+      rank: 1,
+      evidenceRequirementIds: ["delivery-id" as EvidenceRequirementId],
+    }];
+
+    expect(() => parseHybridShadowRun(run)).toThrow();
+  });
+
+  it("rejects relationships that reference observations absent from the reasoning input", () => {
+    const run = completedRun();
+    run.result.hypotheses = [{ id: "hypothesis-1", statement: "A test hypothesis.", rank: 1 }];
+    run.result.relationships = [{
+      hypothesisId: "hypothesis-1",
+      evidenceId: "observation-missing" as EvidenceObservationId,
+      relationship: "supports",
+    }];
+
+    expect(() => parseHybridShadowRun(run)).toThrow();
+  });
+
+  it("rejects evidence actions that reference absent requirements", () => {
+    const run = completedRun();
+    run.result.hypotheses = [{ id: "hypothesis-1", statement: "A test hypothesis.", rank: 1 }];
+    run.result.actions = [{
+      id: "action-1" as EvidenceActionId,
+      description: "Collect more evidence.",
+      hypothesisIds: ["hypothesis-1"],
+      requirementIds: ["delivery-id" as EvidenceRequirementId],
+    }];
+
+    expect(() => parseHybridShadowRun(run)).toThrow();
+  });
+
+  it("rejects evidence actions that reference absent hypotheses", () => {
+    const run = completedRun();
+    run.result.actions = [{
+      id: "action-1" as EvidenceActionId,
+      description: "Collect more evidence.",
+      hypothesisIds: ["hypothesis-missing"],
+    }];
+
+    expect(() => parseHybridShadowRun(run)).toThrow();
+  });
+
+  it.each([
+    ["observation", (run: Extract<HybridShadowRun, { status: "completed" }>) => {
+      const observation: EvidenceObservation = {
+        id: "observation-1" as EvidenceObservationId,
+        fact: "The delivery was delayed.",
+        provenance: { sourceType: "ticket", sourceId: "ticket-body" },
+      };
+      run.input.observations = [observation, structuredClone(observation)];
+    }],
+    ["requirement", (run: Extract<HybridShadowRun, { status: "completed" }>) => {
+      const requirement = {
+        id: "delivery-id" as EvidenceRequirementId,
+        label: "Delivery ID",
+        customerQuestion: "Delivery ID",
+        aliases: ["delivery"],
+        source: "knowledge" as const,
+      };
+      run.result.evidenceRequirements = [requirement, structuredClone(requirement)];
+    }],
+    ["hypothesis", (run: Extract<HybridShadowRun, { status: "completed" }>) => {
+      const hypothesis = { id: "hypothesis-1", statement: "A test hypothesis.", rank: 1 };
+      run.result.hypotheses = [hypothesis, structuredClone(hypothesis)];
+    }],
+    ["action", (run: Extract<HybridShadowRun, { status: "completed" }>) => {
+      const action: EvidenceAction = {
+        id: "action-1" as EvidenceActionId,
+        description: "Collect more evidence.",
+        hypothesisIds: ["hypothesis-1"],
+      };
+      run.result.hypotheses = [{ id: "hypothesis-1", statement: "A test hypothesis.", rank: 1 }];
+      run.result.actions = [action, structuredClone(action)];
+    }],
+  ] as const)("rejects duplicate %s identities", (_label, mutate) => {
+    const run = completedRun();
+    mutate(run);
+
+    expect(() => parseHybridShadowRun(run)).toThrow();
   });
 });

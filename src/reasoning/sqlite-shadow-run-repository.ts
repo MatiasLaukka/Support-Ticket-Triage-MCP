@@ -5,14 +5,21 @@ import { TicketIdSchema } from "../domain.js";
 import { canonicalJsonStringify } from "./canonical-json.js";
 import {
   HYBRID_SHADOW_RUN_PAYLOAD_VERSION,
+  LEGACY_HYBRID_SHADOW_RUN_PAYLOAD_VERSION,
+  HybridShadowExecutionKeySchema,
+  HybridShadowOpportunityIdSchema,
   HybridShadowRunIdSchema,
+  parseLegacyHybridShadowRun,
   parseHybridShadowRun,
+  parseHybridShadowRunV2,
+  type HybridShadowRunV2,
   type HybridShadowRun,
   type HybridShadowRunId,
 } from "./shadow-run-types.js";
 
-const SHADOW_RUN_SCHEMA_VERSION = 1;
-const SHADOW_RUN_COLUMNS = [
+const SHADOW_RUN_SCHEMA_VERSION = 2;
+const SHADOW_RUN_BUSY_TIMEOUT_MS = 250;
+const SHADOW_RUN_V1_COLUMNS = [
   { name: "run_id", type: "TEXT", notnull: 1, primaryKey: 1 },
   { name: "ticket_id", type: "TEXT", notnull: 1, primaryKey: 0 },
   { name: "mode", type: "TEXT", notnull: 1, primaryKey: 0 },
@@ -22,6 +29,17 @@ const SHADOW_RUN_COLUMNS = [
   { name: "recorded_at", type: "TEXT", notnull: 1, primaryKey: 0 },
   { name: "payload_version", type: "INTEGER", notnull: 1, primaryKey: 0 },
   { name: "payload_json", type: "TEXT", notnull: 1, primaryKey: 0 },
+] as const;
+const SHADOW_RUN_COLUMNS = [
+  ...SHADOW_RUN_V1_COLUMNS,
+  { name: "opportunity_id", type: "TEXT", notnull: 0, primaryKey: 0 },
+  { name: "execution_key", type: "TEXT", notnull: 0, primaryKey: 0 },
+] as const;
+const SHADOW_RUN_V1_INDEXES = ["hybrid_shadow_runs_ticket_order_idx"] as const;
+const SHADOW_RUN_INDEXES = [
+  ...SHADOW_RUN_V1_INDEXES,
+  "hybrid_shadow_runs_opportunity_order_idx",
+  "hybrid_shadow_runs_execution_key_unique_idx",
 ] as const;
 
 interface ShadowRunRow {
@@ -34,6 +52,8 @@ interface ShadowRunRow {
   recorded_at: string;
   payload_version: number;
   payload_json: string;
+  opportunity_id: string | null;
+  execution_key: string | null;
 }
 
 export type HybridShadowRunStoreErrorCode =
@@ -43,6 +63,7 @@ export type HybridShadowRunStoreErrorCode =
   | "INVALID_RUN"
   | "INVALID_ID"
   | "RUN_ID_CONFLICT"
+  | "EXECUTION_KEY_CONFLICT"
   | "RUN_PAYLOAD_ERROR"
   | "PERSISTENCE_ERROR";
 
@@ -57,10 +78,22 @@ export class HybridShadowRunStoreError extends Error {
   }
 }
 
+export interface HybridShadowRunRecordResult {
+  outcome: "recorded" | "replayed";
+  run: HybridShadowRunV2;
+}
+
 export interface HybridShadowRunRepository {
   recordShadowRun(run: HybridShadowRun): void;
+  recordOrReplayShadowRun(run: HybridShadowRunV2): HybridShadowRunRecordResult;
   getShadowRun(runId: HybridShadowRunId): HybridShadowRun | undefined;
+  getShadowRunByExecutionKey(
+    executionKey: HybridShadowRunV2["executionKey"],
+  ): HybridShadowRunV2 | undefined;
   listShadowRunsForTicket(ticketId: HybridShadowRun["ticketId"]): readonly HybridShadowRun[];
+  listShadowRunsForOpportunity(
+    opportunityId: HybridShadowRunV2["opportunityId"],
+  ): readonly HybridShadowRunV2[];
 }
 
 export class SqliteHybridShadowRunRepository implements HybridShadowRunRepository {
@@ -79,10 +112,9 @@ export class SqliteHybridShadowRunRepository implements HybridShadowRunRepositor
     }
     if (normalizedPath !== ":memory:") mkdirSync(dirname(normalizedPath), { recursive: true });
     try {
-      return new SqliteHybridShadowRunRepository(
-        normalizedPath,
-        new Database(normalizedPath),
-      );
+      const database = new Database(normalizedPath);
+      database.pragma(`busy_timeout = ${SHADOW_RUN_BUSY_TIMEOUT_MS}`);
+      return new SqliteHybridShadowRunRepository(normalizedPath, database);
     } catch (error) {
       throw new HybridShadowRunStoreError(
         "Hybrid shadow-run database could not be opened.",
@@ -124,6 +156,8 @@ export class SqliteHybridShadowRunRepository implements HybridShadowRunRepositor
           { cause: error },
         );
       }
+    } else if (version === 1) {
+      this.migrateV1ToV2();
     }
 
     this.validateCurrentSchema();
@@ -134,9 +168,13 @@ export class SqliteHybridShadowRunRepository implements HybridShadowRunRepositor
     this.assertInitialized();
     let validatedRun: HybridShadowRun;
     let payloadJson: string;
+    let payloadVersion: number;
     try {
       validatedRun = parseHybridShadowRun(run);
       payloadJson = canonicalJsonStringify(validatedRun);
+      payloadVersion = "opportunityId" in validatedRun
+        ? HYBRID_SHADOW_RUN_PAYLOAD_VERSION
+        : LEGACY_HYBRID_SHADOW_RUN_PAYLOAD_VERSION;
     } catch (error) {
       throw new HybridShadowRunStoreError(
         "Hybrid shadow run is invalid or cannot be safely serialized.",
@@ -148,8 +186,8 @@ export class SqliteHybridShadowRunRepository implements HybridShadowRunRepositor
     const insert = this.database.prepare(`
       INSERT INTO hybrid_shadow_runs (
         run_id, ticket_id, mode, provider_id, model_id, status, recorded_at,
-        payload_version, payload_json
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        payload_version, payload_json, opportunity_id, execution_key
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     const transaction = this.database.transaction((snapshot: HybridShadowRun) => {
       const existing = this.database.prepare(
@@ -169,8 +207,10 @@ export class SqliteHybridShadowRunRepository implements HybridShadowRunRepositor
         snapshot.provider.model,
         snapshot.status,
         snapshot.recordedAt,
-        HYBRID_SHADOW_RUN_PAYLOAD_VERSION,
+        payloadVersion,
         payloadJson,
+        "opportunityId" in snapshot ? snapshot.opportunityId : null,
+        "executionKey" in snapshot ? snapshot.executionKey : null,
       );
     });
 
@@ -178,6 +218,79 @@ export class SqliteHybridShadowRunRepository implements HybridShadowRunRepositor
       transaction.immediate(validatedRun);
     } catch (error) {
       if (error instanceof HybridShadowRunStoreError) throw error;
+      throw new HybridShadowRunStoreError(
+        "Hybrid shadow run could not be recorded.",
+        "PERSISTENCE_ERROR",
+        { cause: error },
+      );
+    }
+  }
+
+  recordOrReplayShadowRun(run: HybridShadowRunV2): HybridShadowRunRecordResult {
+    this.assertInitialized();
+    let validatedRun: HybridShadowRunV2;
+    let payloadJson: string;
+    try {
+      validatedRun = parseHybridShadowRunV2(run);
+      payloadJson = canonicalJsonStringify(validatedRun);
+    } catch (error) {
+      throw new HybridShadowRunStoreError(
+        "Hybrid shadow run is invalid or cannot be safely serialized.",
+        "INVALID_RUN",
+        { cause: error },
+      );
+    }
+
+    const insert = this.database.prepare(`
+      INSERT INTO hybrid_shadow_runs (
+        run_id, ticket_id, mode, provider_id, model_id, status, recorded_at,
+        payload_version, payload_json, opportunity_id, execution_key
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    const transaction = this.database.transaction((snapshot: HybridShadowRunV2) => {
+      insert.run(
+        snapshot.runId,
+        snapshot.ticketId,
+        snapshot.mode,
+        snapshot.provider.providerKind,
+        snapshot.provider.model,
+        snapshot.status,
+        snapshot.recordedAt,
+        HYBRID_SHADOW_RUN_PAYLOAD_VERSION,
+        payloadJson,
+        snapshot.opportunityId,
+        snapshot.executionKey,
+      );
+    });
+
+    try {
+      transaction.immediate(validatedRun);
+      return { outcome: "recorded", run: validatedRun };
+    } catch (error) {
+      if (isExecutionKeyUniqueCollision(error)) {
+        const winner = this.getShadowRunByExecutionKey(validatedRun.executionKey);
+        if (winner === undefined) {
+          throw new HybridShadowRunStoreError(
+            "Execution-key uniqueness failed without a readable winning run.",
+            "PERSISTENCE_ERROR",
+            { cause: error },
+          );
+        }
+        if (semanticRunJson(winner) === semanticRunJson(validatedRun)) {
+          return { outcome: "replayed", run: winner };
+        }
+        throw new HybridShadowRunStoreError(
+          "A different hybrid shadow run already uses this execution identity.",
+          "EXECUTION_KEY_CONFLICT",
+        );
+      }
+      if (isRunIdUniqueCollision(error)) {
+        throw new HybridShadowRunStoreError(
+          `Hybrid shadow run ${validatedRun.runId} already exists.`,
+          "RUN_ID_CONFLICT",
+          { cause: error },
+        );
+      }
       throw new HybridShadowRunStoreError(
         "Hybrid shadow run could not be recorded.",
         "PERSISTENCE_ERROR",
@@ -200,6 +313,30 @@ export class SqliteHybridShadowRunRepository implements HybridShadowRunRepositor
     return row === undefined ? undefined : this.decodeRow(row);
   }
 
+  getShadowRunByExecutionKey(
+    executionKey: HybridShadowRunV2["executionKey"],
+  ): HybridShadowRunV2 | undefined {
+    this.assertInitialized();
+    const parsedExecutionKey = HybridShadowExecutionKeySchema.safeParse(executionKey);
+    if (!parsedExecutionKey.success) {
+      throw new HybridShadowRunStoreError("Hybrid shadow execution key is invalid.", "INVALID_ID", {
+        cause: parsedExecutionKey.error,
+      });
+    }
+    const row = this.database.prepare(`
+      SELECT * FROM hybrid_shadow_runs WHERE execution_key = ?
+    `).get(parsedExecutionKey.data) as ShadowRunRow | undefined;
+    if (row === undefined) return undefined;
+    const run = this.decodeRow(row);
+    if (!("executionKey" in run)) {
+      throw new HybridShadowRunStoreError(
+        `Stored hybrid shadow run ${row.run_id} has no execution identity.`,
+        "RUN_PAYLOAD_ERROR",
+      );
+    }
+    return run;
+  }
+
   listShadowRunsForTicket(ticketId: HybridShadowRun["ticketId"]): readonly HybridShadowRun[] {
     this.assertInitialized();
     const parsedTicketId = TicketIdSchema.safeParse(ticketId);
@@ -216,6 +353,33 @@ export class SqliteHybridShadowRunRepository implements HybridShadowRunRepositor
     return rows.map((row) => this.decodeRow(row));
   }
 
+  listShadowRunsForOpportunity(
+    opportunityId: HybridShadowRunV2["opportunityId"],
+  ): readonly HybridShadowRunV2[] {
+    this.assertInitialized();
+    const parsedOpportunityId = HybridShadowOpportunityIdSchema.safeParse(opportunityId);
+    if (!parsedOpportunityId.success) {
+      throw new HybridShadowRunStoreError("Hybrid shadow opportunity ID is invalid.", "INVALID_ID", {
+        cause: parsedOpportunityId.error,
+      });
+    }
+    const rows = this.database.prepare(`
+      SELECT * FROM hybrid_shadow_runs
+      WHERE opportunity_id = ?
+      ORDER BY julianday(recorded_at) ASC, run_id ASC
+    `).all(parsedOpportunityId.data) as ShadowRunRow[];
+    return rows.map((row) => {
+      const run = this.decodeRow(row);
+      if (!("opportunityId" in run)) {
+        throw new HybridShadowRunStoreError(
+          `Stored hybrid shadow run ${row.run_id} has no opportunity identity.`,
+          "RUN_PAYLOAD_ERROR",
+        );
+      }
+      return run;
+    });
+  }
+
   close(): void {
     if (this.closed) return;
     this.database.close();
@@ -224,11 +388,20 @@ export class SqliteHybridShadowRunRepository implements HybridShadowRunRepositor
 
   private decodeRow(row: ShadowRunRow): HybridShadowRun {
     try {
-      if (row.payload_version !== HYBRID_SHADOW_RUN_PAYLOAD_VERSION) {
+      const parsed = JSON.parse(row.payload_json) as unknown;
+      let run: HybridShadowRun;
+      let identityMismatch: boolean;
+      if (row.payload_version === LEGACY_HYBRID_SHADOW_RUN_PAYLOAD_VERSION) {
+        run = parseLegacyHybridShadowRun(parsed);
+        identityMismatch = row.opportunity_id !== null || row.execution_key !== null;
+      } else if (row.payload_version === HYBRID_SHADOW_RUN_PAYLOAD_VERSION) {
+        const currentRun = parseHybridShadowRunV2(parsed);
+        run = currentRun;
+        identityMismatch = currentRun.opportunityId !== row.opportunity_id
+          || currentRun.executionKey !== row.execution_key;
+      } else {
         throw new Error(`Unsupported payload version ${String(row.payload_version)}.`);
       }
-      const parsed = JSON.parse(row.payload_json) as unknown;
-      const run = parseHybridShadowRun(parsed);
       if (
         run.runId !== row.run_id
         || run.ticketId !== row.ticket_id
@@ -237,6 +410,7 @@ export class SqliteHybridShadowRunRepository implements HybridShadowRunRepositor
         || run.provider.model !== row.model_id
         || run.status !== row.status
         || run.recordedAt !== row.recorded_at
+        || identityMismatch
       ) {
         throw new Error("Stored columns do not match the run payload.");
       }
@@ -251,6 +425,17 @@ export class SqliteHybridShadowRunRepository implements HybridShadowRunRepositor
   }
 
   private validateCurrentSchema(): void {
+    this.validateSchema(SHADOW_RUN_COLUMNS, SHADOW_RUN_INDEXES);
+  }
+
+  private validateV1Schema(): void {
+    this.validateSchema(SHADOW_RUN_V1_COLUMNS, SHADOW_RUN_V1_INDEXES);
+  }
+
+  private validateSchema(
+    expectedColumns: readonly { name: string; type: string; notnull: number; primaryKey: number }[],
+    expectedIndexes: readonly string[],
+  ): void {
     const tables = this.schemaObjectNames();
     if (!tables.includes("hybrid_shadow_runs")) {
       throw new HybridShadowRunStoreError(
@@ -270,7 +455,7 @@ export class SqliteHybridShadowRunRepository implements HybridShadowRunRepositor
       notnull,
       primaryKey: pk,
     }));
-    if (JSON.stringify(actual) !== JSON.stringify(SHADOW_RUN_COLUMNS)) {
+    if (JSON.stringify(actual) !== JSON.stringify(expectedColumns)) {
       throw new HybridShadowRunStoreError(
         "Hybrid shadow-run table has an unexpected structure.",
         "SCHEMA_ERROR",
@@ -292,10 +477,43 @@ export class SqliteHybridShadowRunRepository implements HybridShadowRunRepositor
     const indexNames = this.database.prepare(`
       SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'hybrid_shadow_runs'
     `).all() as Array<{ name: string }>;
-    if (!indexNames.some(({ name }) => name === "hybrid_shadow_runs_ticket_order_idx")) {
+    if (expectedIndexes.some((expectedName) => !indexNames.some(({ name }) => name === expectedName))) {
       throw new HybridShadowRunStoreError(
-        "Hybrid shadow-run ticket ordering index is missing.",
+        "Hybrid shadow-run indexes are missing or inconsistent.",
         "SCHEMA_ERROR",
+      );
+    }
+  }
+
+  private migrateV1ToV2(): void {
+    this.validateV1Schema();
+    try {
+      const migrate = this.database.transaction(() => {
+        this.database.exec(`
+          DROP TRIGGER hybrid_shadow_runs_no_update;
+          DROP TRIGGER hybrid_shadow_runs_no_delete;
+          DROP INDEX hybrid_shadow_runs_ticket_order_idx;
+          ALTER TABLE hybrid_shadow_runs RENAME TO hybrid_shadow_runs_v1;
+          ${SHADOW_RUN_TABLE_SQL}
+          INSERT INTO hybrid_shadow_runs (
+            run_id, ticket_id, mode, provider_id, model_id, status, recorded_at,
+            payload_version, payload_json, opportunity_id, execution_key
+          )
+          SELECT
+            run_id, ticket_id, mode, provider_id, model_id, status, recorded_at,
+            payload_version, payload_json, NULL, NULL
+          FROM hybrid_shadow_runs_v1;
+          DROP TABLE hybrid_shadow_runs_v1;
+          ${SHADOW_RUN_INDEX_AND_TRIGGER_SQL}
+        `);
+        this.database.pragma(`user_version = ${SHADOW_RUN_SCHEMA_VERSION}`);
+      });
+      migrate.immediate();
+    } catch (error) {
+      throw new HybridShadowRunStoreError(
+        "Hybrid shadow-run schema migration failed.",
+        "SCHEMA_ERROR",
+        { cause: error },
       );
     }
   }
@@ -325,7 +543,7 @@ export class SqliteHybridShadowRunRepository implements HybridShadowRunRepositor
   }
 }
 
-const INITIAL_SCHEMA_SQL = `
+const SHADOW_RUN_TABLE_SQL = `
   CREATE TABLE hybrid_shadow_runs (
     run_id TEXT PRIMARY KEY NOT NULL,
     ticket_id TEXT NOT NULL,
@@ -334,11 +552,31 @@ const INITIAL_SCHEMA_SQL = `
     model_id TEXT NOT NULL CHECK (length(trim(model_id)) > 0),
     status TEXT NOT NULL CHECK (status IN ('completed', 'failed')),
     recorded_at TEXT NOT NULL,
-    payload_version INTEGER NOT NULL CHECK (payload_version = ${HYBRID_SHADOW_RUN_PAYLOAD_VERSION}),
-    payload_json TEXT NOT NULL CHECK (json_valid(payload_json) AND json_type(payload_json) = 'object')
+    payload_version INTEGER NOT NULL CHECK (payload_version IN (
+      ${LEGACY_HYBRID_SHADOW_RUN_PAYLOAD_VERSION}, ${HYBRID_SHADOW_RUN_PAYLOAD_VERSION}
+    )),
+    payload_json TEXT NOT NULL CHECK (json_valid(payload_json) AND json_type(payload_json) = 'object'),
+    opportunity_id TEXT,
+    execution_key TEXT,
+    CHECK (
+      (payload_version = ${LEGACY_HYBRID_SHADOW_RUN_PAYLOAD_VERSION}
+        AND opportunity_id IS NULL AND execution_key IS NULL)
+      OR
+      (payload_version = ${HYBRID_SHADOW_RUN_PAYLOAD_VERSION}
+        AND opportunity_id IS NOT NULL AND execution_key IS NOT NULL)
+    )
   );
+`;
+
+const SHADOW_RUN_INDEX_AND_TRIGGER_SQL = `
   CREATE INDEX hybrid_shadow_runs_ticket_order_idx
     ON hybrid_shadow_runs(ticket_id, recorded_at, run_id);
+  CREATE INDEX hybrid_shadow_runs_opportunity_order_idx
+    ON hybrid_shadow_runs(opportunity_id, recorded_at, run_id)
+    WHERE opportunity_id IS NOT NULL;
+  CREATE UNIQUE INDEX hybrid_shadow_runs_execution_key_unique_idx
+    ON hybrid_shadow_runs(execution_key)
+    WHERE execution_key IS NOT NULL;
   CREATE TRIGGER hybrid_shadow_runs_no_update
     BEFORE UPDATE ON hybrid_shadow_runs
     BEGIN SELECT RAISE(ABORT, 'hybrid shadow runs are immutable'); END;
@@ -346,3 +584,27 @@ const INITIAL_SCHEMA_SQL = `
     BEFORE DELETE ON hybrid_shadow_runs
     BEGIN SELECT RAISE(ABORT, 'hybrid shadow runs are append-only'); END;
 `;
+
+const INITIAL_SCHEMA_SQL = `${SHADOW_RUN_TABLE_SQL}${SHADOW_RUN_INDEX_AND_TRIGGER_SQL}`;
+
+function semanticRunJson(run: HybridShadowRunV2): string {
+  const { runId: _runId, recordedAt: _recordedAt, ...semanticPayload } = run;
+  return canonicalJsonStringify(semanticPayload);
+}
+
+function isExecutionKeyUniqueCollision(error: unknown): boolean {
+  return hasSqliteError(error, "SQLITE_CONSTRAINT_UNIQUE")
+    && error.message.includes("hybrid_shadow_runs.execution_key");
+}
+
+function isRunIdUniqueCollision(error: unknown): boolean {
+  return (hasSqliteError(error, "SQLITE_CONSTRAINT_PRIMARYKEY")
+      || hasSqliteError(error, "SQLITE_CONSTRAINT_UNIQUE"))
+    && error.message.includes("hybrid_shadow_runs.run_id");
+}
+
+function hasSqliteError(error: unknown, code: string): error is Error & { code: string } {
+  return error instanceof Error
+    && "code" in error
+    && (error as Error & { code?: unknown }).code === code;
+}

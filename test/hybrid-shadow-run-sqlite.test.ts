@@ -16,9 +16,12 @@ import type {
 import {
   HybridShadowRunIdSchema,
   parseHybridShadowRun,
+  type HybridShadowExecutionKey,
   type HybridShadowRun,
+  type HybridShadowRunV2,
   type HybridShadowBasis,
 } from "../src/reasoning/shadow-run-types.js";
+import type { HybridShadowOpportunityId } from "../src/reasoning/hybrid-shadow-capture.js";
 import {
   HybridShadowRunStoreError,
   SqliteHybridShadowRunRepository,
@@ -36,6 +39,10 @@ const runIds = {
   sameTimeB: "00000000-0000-4000-8000-000000000004",
   otherTicket: "00000000-0000-4000-8000-000000000005",
   failed: "00000000-0000-4000-8000-000000000006",
+  replay: "00000000-0000-4000-8000-000000000007",
+  conflict: "00000000-0000-4000-8000-000000000008",
+  otherProvider: "00000000-0000-4000-8000-000000000009",
+  concurrent: "00000000-0000-4000-8000-000000000010",
 } as const;
 
 const replyWatermark: CustomerReplyWatermark = {
@@ -94,6 +101,50 @@ function openRepository(): { repository: SqliteHybridShadowRunRepository; path: 
   repositories.push(repository);
   repository.initialize();
   return { repository, path };
+}
+
+function createLegacyV1Database(path: string, run: HybridShadowRun): string {
+  const database = new Database(path);
+  database.exec(`
+    CREATE TABLE hybrid_shadow_runs (
+      run_id TEXT PRIMARY KEY NOT NULL,
+      ticket_id TEXT NOT NULL,
+      mode TEXT NOT NULL CHECK (mode IN ('evaluation', 'diagnosis')),
+      provider_id TEXT NOT NULL CHECK (length(trim(provider_id)) > 0),
+      model_id TEXT NOT NULL CHECK (length(trim(model_id)) > 0),
+      status TEXT NOT NULL CHECK (status IN ('completed', 'failed')),
+      recorded_at TEXT NOT NULL,
+      payload_version INTEGER NOT NULL CHECK (payload_version = 1),
+      payload_json TEXT NOT NULL CHECK (json_valid(payload_json) AND json_type(payload_json) = 'object')
+    );
+    CREATE INDEX hybrid_shadow_runs_ticket_order_idx
+      ON hybrid_shadow_runs(ticket_id, recorded_at, run_id);
+    CREATE TRIGGER hybrid_shadow_runs_no_update
+      BEFORE UPDATE ON hybrid_shadow_runs
+      BEGIN SELECT RAISE(ABORT, 'hybrid shadow runs are immutable'); END;
+    CREATE TRIGGER hybrid_shadow_runs_no_delete
+      BEFORE DELETE ON hybrid_shadow_runs
+      BEGIN SELECT RAISE(ABORT, 'hybrid shadow runs are append-only'); END;
+  `);
+  const payloadJson = JSON.stringify(run);
+  database.prepare(`
+    INSERT INTO hybrid_shadow_runs (
+      run_id, ticket_id, mode, provider_id, model_id, status, recorded_at,
+      payload_version, payload_json
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)
+  `).run(
+    run.runId,
+    run.ticketId,
+    run.mode,
+    run.provider.providerKind,
+    run.provider.model,
+    run.status,
+    run.recordedAt,
+    payloadJson,
+  );
+  database.pragma("user_version = 1");
+  database.close();
+  return payloadJson;
 }
 
 function reasoningInput(
@@ -198,6 +249,27 @@ function completedRun(
   };
 }
 
+function completedRunWithOpportunity(
+  runId: string = runIds.evaluation,
+  options: {
+    recordedAt?: string;
+    opportunityId?: string;
+    executionKey?: string;
+    provider?: HybridShadowRunV2["provider"];
+  } = {},
+): Extract<HybridShadowRunV2, { status: "completed" }> {
+  const base = completedRun(runId, { recordedAt: options.recordedAt });
+  return {
+    ...base,
+    provider: options.provider ?? base.provider,
+    opportunityId: (options.opportunityId ?? (
+      "hybrid-shadow-opportunity:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    )) as HybridShadowOpportunityId,
+    executionKey: (options.executionKey
+      ?? "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb") as HybridShadowExecutionKey,
+  };
+}
+
 function failedRun(): HybridShadowRun {
   const input = reasoningInput("diagnosis", ticketId, { status: "failed", durationMs: 12 });
   return {
@@ -241,10 +313,131 @@ describe("SQLite hybrid shadow-run persistence", () => {
     expect(reopened.getShadowRun(run.runId)).toEqual(run);
     const inspector = new Database(path, { readonly: true });
     try {
-      expect(inspector.pragma("user_version", { simple: true })).toBe(1);
+        expect(inspector.pragma("user_version", { simple: true })).toBe(2);
     } finally {
       inspector.close();
     }
+  });
+
+  it("migrates v1 payloads without inventing opportunity or execution identities", () => {
+    const root = mkdtempSync(join(tmpdir(), "hybrid-shadow-run-v1-migration-"));
+    roots.push(root);
+    const path = join(root, "shadow-runs.sqlite");
+    const legacy = completedRun();
+    const legacyPayloadJson = createLegacyV1Database(path, legacy);
+
+    const repository = SqliteHybridShadowRunRepository.open(path);
+    repositories.push(repository);
+    repository.initialize();
+
+    expect(repository.getShadowRun(legacy.runId)).toEqual(legacy);
+    expect(repository.getShadowRun(legacy.runId)).not.toHaveProperty("opportunityId");
+    expect(repository.getShadowRun(legacy.runId)).not.toHaveProperty("executionKey");
+    const inspector = new Database(path, { readonly: true });
+    try {
+      expect(inspector.pragma("user_version", { simple: true })).toBe(2);
+      expect(inspector.prepare(`
+        SELECT payload_version, opportunity_id, execution_key, payload_json
+        FROM hybrid_shadow_runs WHERE run_id = ?
+      `).get(legacy.runId)).toEqual({
+        payload_version: 1,
+        opportunity_id: null,
+        execution_key: null,
+        payload_json: legacyPayloadJson,
+      });
+    } finally {
+      inspector.close();
+    }
+  });
+
+  it("round-trips a v2 run with its H4b opportunity and execution identities", () => {
+    const { repository, path } = openRepository();
+    const run = completedRunWithOpportunity();
+
+    repository.recordShadowRun(run);
+
+    expect(repository.getShadowRun(run.runId)).toEqual(run);
+    expect(repository.listShadowRunsForOpportunity(run.opportunityId)).toEqual([run]);
+    const inspector = new Database(path, { readonly: true });
+    try {
+      expect(inspector.prepare(`
+        SELECT payload_version, opportunity_id, execution_key
+        FROM hybrid_shadow_runs WHERE run_id = ?
+      `).get(run.runId)).toEqual({
+        payload_version: 2,
+        opportunity_id: run.opportunityId,
+        execution_key: run.executionKey,
+      });
+    } finally {
+      inspector.close();
+    }
+  });
+
+  it("records a new v2 execution and returns its stored run", () => {
+    const { repository } = openRepository();
+    const run = completedRunWithOpportunity();
+
+    expect(repository.recordOrReplayShadowRun(run)).toEqual({ outcome: "recorded", run });
+    expect(repository.getShadowRun(run.runId)).toEqual(run);
+  });
+
+  it("replays an exact semantic execution while ignoring only run ID and recorded time", () => {
+    const { repository } = openRepository();
+    const original = completedRunWithOpportunity();
+    const retry = completedRunWithOpportunity(runIds.replay, { recordedAt: "2026-09-24T12:00:00.000Z" });
+    repository.recordOrReplayShadowRun(original);
+
+    expect(repository.recordOrReplayShadowRun(retry)).toEqual({ outcome: "replayed", run: original });
+    expect(repository.listShadowRunsForOpportunity(original.opportunityId)).toEqual([original]);
+  });
+
+  it("rejects different semantic payload reuse of an execution key", () => {
+    const { repository } = openRepository();
+    const original = completedRunWithOpportunity();
+    const conflicting = completedRunWithOpportunity(runIds.conflict, {
+      recordedAt: "2026-09-24T12:00:00.000Z",
+    });
+    conflicting.result.hypotheses = [{ id: "different", statement: "Different result.", rank: 1 }];
+    repository.recordOrReplayShadowRun(original);
+
+    expect(() => repository.recordOrReplayShadowRun(conflicting)).toThrowError(
+      expect.objectContaining({ code: "EXECUTION_KEY_CONFLICT" }),
+    );
+    expect(repository.listShadowRunsForOpportunity(original.opportunityId)).toEqual([original]);
+  });
+
+  it("resolves duplicate insert attempts from separate connections through the unique key", async () => {
+    const first = openRepository();
+    const second = SqliteHybridShadowRunRepository.open(first.path);
+    repositories.push(second);
+    second.initialize();
+    const original = completedRunWithOpportunity(runIds.concurrent);
+    const retry = completedRunWithOpportunity(runIds.replay, { recordedAt: "2026-09-24T12:00:00.000Z" });
+
+    const results = await Promise.all([
+      Promise.resolve().then(() => first.repository.recordOrReplayShadowRun(original)),
+      Promise.resolve().then(() => second.recordOrReplayShadowRun(retry)),
+    ]);
+
+    expect(results.map(({ outcome }) => outcome).sort()).toEqual(["recorded", "replayed"]);
+    expect(first.repository.listShadowRunsForOpportunity(original.opportunityId)).toHaveLength(1);
+  });
+
+  it("stores distinct provider executions under one opportunity", () => {
+    const { repository } = openRepository();
+    const luna = completedRunWithOpportunity(runIds.evaluation);
+    const qwen = completedRunWithOpportunity(runIds.otherProvider, {
+      provider: { providerKind: "controlled-test", model: "Qwen fake" },
+      executionKey: "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    });
+
+    repository.recordOrReplayShadowRun(luna);
+    repository.recordOrReplayShadowRun(qwen);
+
+    expect(repository.listShadowRunsForOpportunity(luna.opportunityId).map(({ provider }) => provider)).toEqual([
+      luna.provider,
+      qwen.provider,
+    ]);
   });
 
   it("rejects a database schema version newer than the repository supports", () => {
@@ -252,7 +445,7 @@ describe("SQLite hybrid shadow-run persistence", () => {
     roots.push(root);
     const path = join(root, "shadow-runs.sqlite");
     const newerDatabase = new Database(path);
-    newerDatabase.pragma("user_version = 2");
+    newerDatabase.pragma("user_version = 3");
     newerDatabase.close();
     const repository = SqliteHybridShadowRunRepository.open(path);
     repositories.push(repository);

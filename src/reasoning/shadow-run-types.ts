@@ -40,10 +40,13 @@ import type {
   ReasoningMode,
   ReasoningRankingExecution,
 } from "./types.js";
+import type { HybridShadowOpportunityId } from "./hybrid-shadow-capture.js";
 
 declare const hybridShadowRunIdBrand: unique symbol;
+declare const hybridShadowExecutionKeyBrand: unique symbol;
 
-export const HYBRID_SHADOW_RUN_PAYLOAD_VERSION = 1 as const;
+export const LEGACY_HYBRID_SHADOW_RUN_PAYLOAD_VERSION = 1 as const;
+export const HYBRID_SHADOW_RUN_PAYLOAD_VERSION = 2 as const;
 
 export type HybridShadowRunId = string & {
   readonly [hybridShadowRunIdBrand]: true;
@@ -52,6 +55,18 @@ export type HybridShadowRunId = string & {
 export const HybridShadowRunIdSchema = z.uuid().transform(
   (value) => value as HybridShadowRunId,
 );
+
+export type HybridShadowExecutionKey = string & {
+  readonly [hybridShadowExecutionKeyBrand]: true;
+};
+
+export const HybridShadowOpportunityIdSchema: z.ZodType<HybridShadowOpportunityId> = z.string()
+  .regex(/^hybrid-shadow-opportunity:[a-f0-9]{64}$/)
+  .transform((value) => value as HybridShadowOpportunityId);
+
+export const HybridShadowExecutionKeySchema: z.ZodType<HybridShadowExecutionKey> = z.string()
+  .regex(/^[a-f0-9]{64}$/)
+  .transform((value) => value as HybridShadowExecutionKey);
 
 const ReasoningModeSchema = z.enum(["evaluation", "diagnosis"]);
 const NonBlankStringSchema = z.string().min(1).refine(
@@ -473,7 +488,7 @@ interface HybridShadowRunCommon {
   input: HybridReasoningInput;
 }
 
-export type HybridShadowRun = HybridShadowRunCommon & (
+type HybridShadowRunStatus =
   | {
       status: "completed";
       result: HybridReasoningResult;
@@ -483,8 +498,16 @@ export type HybridShadowRun = HybridShadowRunCommon & (
       status: "failed";
       result?: never;
       failure: HybridShadowRunFailure;
-    }
-);
+    };
+
+export type LegacyHybridShadowRun = HybridShadowRunCommon & HybridShadowRunStatus;
+
+export type HybridShadowRunV2 = HybridShadowRunCommon & {
+  opportunityId: HybridShadowOpportunityId;
+  executionKey: HybridShadowExecutionKey;
+} & HybridShadowRunStatus;
+
+export type HybridShadowRun = LegacyHybridShadowRun | HybridShadowRunV2;
 
 const HybridShadowRunCommonSchema = z.object({
   runId: HybridShadowRunIdSchema,
@@ -497,7 +520,7 @@ const HybridShadowRunCommonSchema = z.object({
 }).strict();
 
 /** Exact schema for the JSON payload version stored beside each SQLite row. */
-const HybridShadowRunPayloadV1Schema: z.ZodType<HybridShadowRun> = z.discriminatedUnion("status", [
+const HybridShadowRunPayloadV1Schema: z.ZodType<LegacyHybridShadowRun> = z.discriminatedUnion("status", [
   HybridShadowRunCommonSchema.extend({
     status: z.literal("completed"),
     result: HybridReasoningResultSchema,
@@ -508,13 +531,47 @@ const HybridShadowRunPayloadV1Schema: z.ZodType<HybridShadowRun> = z.discriminat
   }).strict(),
 ]);
 
+const HybridShadowRunPayloadV2Schema: z.ZodType<HybridShadowRunV2> = z.discriminatedUnion("status", [
+  HybridShadowRunCommonSchema.extend({
+    opportunityId: HybridShadowOpportunityIdSchema,
+    executionKey: HybridShadowExecutionKeySchema,
+    status: z.literal("completed"),
+    result: HybridReasoningResultSchema,
+  }).strict(),
+  HybridShadowRunCommonSchema.extend({
+    opportunityId: HybridShadowOpportunityIdSchema,
+    executionKey: HybridShadowExecutionKeySchema,
+    status: z.literal("failed"),
+    failure: HybridShadowRunFailureSchema,
+  }).strict(),
+]);
+
 export function parseHybridShadowRun(value: unknown): HybridShadowRun {
+  if (isRecord(value) && ("opportunityId" in value || "executionKey" in value)) {
+    return parseHybridShadowRunV2(value);
+  }
+  return parseLegacyHybridShadowRun(value);
+}
+
+export function parseLegacyHybridShadowRun(value: unknown): LegacyHybridShadowRun {
   const parsed = HybridShadowRunPayloadV1Schema.safeParse(value);
   if (!parsed.success) {
     throw new Error("Hybrid shadow-run payload does not match the supported contract.");
   }
 
-  const run = parsed.data;
+  return validateHybridShadowRun(parsed.data);
+}
+
+export function parseHybridShadowRunV2(value: unknown): HybridShadowRunV2 {
+  const parsed = HybridShadowRunPayloadV2Schema.safeParse(value);
+  if (!parsed.success) {
+    throw new Error("Hybrid shadow-run payload does not match the supported contract.");
+  }
+
+  return validateHybridShadowRun(parsed.data);
+}
+
+function validateHybridShadowRun<T extends HybridShadowRun>(run: T): T {
   if (
     run.input.mode !== run.mode
     || run.input.basis.ticketId !== run.ticketId
@@ -541,6 +598,10 @@ export function parseHybridShadowRun(value: unknown): HybridShadowRun {
     validateReasoningGraph(run.result, run.input.observations);
   }
   return run;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function validateReasoningGraph(

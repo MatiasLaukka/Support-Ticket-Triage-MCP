@@ -17,21 +17,27 @@ export function assembleHybridReasoningInput(
   source: HybridReasoningInputAssemblySource,
 ): HybridReasoningInput {
   const retrieval = source.retrievalExecution.retrieval;
+  const ranking = source.retrievalExecution.ranking;
 
   return {
     mode: source.mode,
     basis: {
       ticketId: source.ticket.id,
       ticketRevision: source.ticket.revision,
-      customerReplyWatermark: source.customerReplyWatermark,
-      retrievalIndex: retrieval.metadata,
+      customerReplyWatermark: structuredClone(source.customerReplyWatermark),
+      retrievalIndex: structuredClone(retrieval.metadata),
     },
-    observations: retrieval.candidates.map((candidate) => ({ ...candidate })),
-    retrieval: {
+    observations: [],
+    retrievalCandidates: structuredClone(retrieval.candidates),
+    retrieval: structuredClone({
       lexical: retrieval.lexical,
       semantic: retrieval.semantic,
       referenceDiagnostics: retrieval.referenceDiagnostics,
-    },
-    ranking: source.retrievalExecution.ranking,
+    }),
+    ranking: ranking.status === "succeeded"
+      ? { ...ranking, result: structuredClone(ranking.result) }
+      : ranking.status === "failed"
+        ? { status: "failed", durationMs: ranking.durationMs }
+        : { status: "not-requested" },
   };
 }

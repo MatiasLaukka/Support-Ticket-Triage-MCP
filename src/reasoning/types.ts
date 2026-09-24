@@ -5,10 +5,18 @@ import type {
   TicketId,
 } from "../domain.js";
 import type { EvidenceRequirementId } from "../evidence-catalog.js";
-import type { RetrievalRankingExecution } from "../retrieval/execution.js";
-import type { Candidate, IndexMetadata, ResourceKey, RetrievalResult } from "../retrieval/types.js";
+import type { RankingResult } from "../retrieval/ranking-types.js";
+import type { Candidate, IndexMetadata, RetrievalResult } from "../retrieval/types.js";
+
+declare const reasoningIdentityBrand: unique symbol;
+
+type ReasoningIdentity<Kind extends string> = string & {
+  readonly [reasoningIdentityBrand]: Kind;
+};
 
 export type ReasoningMode = "evaluation" | "diagnosis";
+export type EvidenceObservationId = ReasoningIdentity<"evidence-observation">;
+export type EvidenceActionId = ReasoningIdentity<"evidence-action">;
 
 export interface ReasoningBasis {
   ticketId: TicketId;
@@ -22,8 +30,17 @@ export type EvidenceRequirement = Omit<DomainEvidenceRequirement, "id"> & {
   id: EvidenceRequirementId;
 };
 
-/** A retrieval candidate is one observation; Candidate carries its ResourceKey and source/channel provenance. */
-export interface EvidenceObservation extends Candidate {
+export interface EvidenceObservationProvenance {
+  sourceType: string;
+  sourceId: string;
+  sourceRevision?: string | number;
+}
+
+/** A recorded fact or result, identified independently from resources that may help interpret it. */
+export interface EvidenceObservation {
+  id: EvidenceObservationId;
+  fact: string;
+  provenance: EvidenceObservationProvenance;
   observedAt?: IsoTimestamp;
   validAt?: IsoTimestamp;
   /** Policy values remain open until the repository defines a freshness-policy vocabulary. */
@@ -37,7 +54,7 @@ export interface Hypothesis {
   statement: string;
   /** Relative ordinal only; this is not model confidence or operational authority. */
   rank: number;
-  evidenceRequirements?: readonly EvidenceRequirement[];
+  evidenceRequirementIds?: readonly EvidenceRequirementId[];
 }
 
 export type EvidenceRelationshipKind =
@@ -47,29 +64,37 @@ export type EvidenceRelationshipKind =
 
 export interface EvidenceRelationship {
   hypothesisId: Hypothesis["id"];
-  evidenceId: ResourceKey;
+  evidenceId: EvidenceObservationId;
   relationship: EvidenceRelationshipKind;
   rationale?: string;
 }
 
 /** Advisory description only; this contract does not make actions executable. */
 export interface EvidenceAction {
+  id: EvidenceActionId;
   description: string;
   hypothesisIds: readonly [Hypothesis["id"], ...Hypothesis["id"][]];
   requirementIds?: readonly EvidenceRequirementId[];
 }
 
+export type ReasoningRankingExecution =
+  | { status: "not-requested" }
+  | { status: "succeeded"; result: RankingResult; durationMs: number }
+  | { status: "failed"; durationMs: number };
+
 export interface HybridReasoningInput {
   mode: ReasoningMode;
   basis: ReasoningBasis;
   observations: readonly EvidenceObservation[];
+  retrievalCandidates: readonly Candidate[];
   retrieval: Pick<RetrievalResult, "lexical" | "semantic" | "referenceDiagnostics">;
-  ranking: RetrievalRankingExecution;
+  ranking: ReasoningRankingExecution;
 }
 
 export interface HybridReasoningResult {
   mode: ReasoningMode;
   basis: ReasoningBasis;
+  evidenceRequirements: readonly EvidenceRequirement[];
   hypotheses: readonly Hypothesis[];
   relationships: readonly EvidenceRelationship[];
   actions: readonly EvidenceAction[];

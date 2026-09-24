@@ -12,6 +12,7 @@ import {
   parseLegacyHybridShadowRun,
   parseHybridShadowRun,
   parseHybridShadowRunV2,
+  type LegacyHybridShadowRun,
   type HybridShadowRunV2,
   type HybridShadowRun,
   type HybridShadowRunId,
@@ -84,6 +85,8 @@ export interface HybridShadowRunRecordResult {
 }
 
 export interface HybridShadowRunRepository {
+  recordShadowRun(run: HybridShadowRunV2): HybridShadowRunRecordResult;
+  recordShadowRun(run: LegacyHybridShadowRun): void;
   recordShadowRun(run: HybridShadowRun): HybridShadowRunRecordResult | undefined;
   recordOrReplayShadowRun(run: HybridShadowRunV2): HybridShadowRunRecordResult;
   getShadowRun(runId: HybridShadowRunId): HybridShadowRun | undefined;
@@ -176,6 +179,9 @@ export class SqliteHybridShadowRunRepository implements HybridShadowRunRepositor
     }
   }
 
+  recordShadowRun(run: HybridShadowRunV2): HybridShadowRunRecordResult;
+  recordShadowRun(run: LegacyHybridShadowRun): void;
+  recordShadowRun(run: HybridShadowRun): HybridShadowRunRecordResult | undefined;
   recordShadowRun(run: HybridShadowRun): HybridShadowRunRecordResult | undefined {
     this.assertInitialized();
     let validatedRun: HybridShadowRun;

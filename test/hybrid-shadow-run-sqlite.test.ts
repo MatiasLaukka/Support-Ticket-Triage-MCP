@@ -25,6 +25,7 @@ import type { HybridShadowOpportunityId } from "../src/reasoning/hybrid-shadow-c
 import {
   HybridShadowRunStoreError,
   SqliteHybridShadowRunRepository,
+  type HybridShadowRunRecordResult,
 } from "../src/reasoning/sqlite-shadow-run-repository.js";
 import type { RankingResult } from "../src/retrieval/ranking-types.js";
 import type { IndexMetadata, ResourceType } from "../src/retrieval/types.js";
@@ -578,7 +579,8 @@ describe("SQLite hybrid shadow-run persistence", () => {
   it("applies execution-key replay and conflict handling to v2 writes through recordShadowRun", () => {
     const { repository } = openRepository();
     const original = completedRunWithOpportunity();
-    expect(repository.recordShadowRun(original)).toEqual({ outcome: "recorded", run: original });
+    const recorded: HybridShadowRunRecordResult = repository.recordShadowRun(original);
+    expect(recorded).toEqual({ outcome: "recorded", run: original });
     const replay = {
       ...structuredClone(original),
       runId: HybridShadowRunIdSchema.parse(runIds.replay),

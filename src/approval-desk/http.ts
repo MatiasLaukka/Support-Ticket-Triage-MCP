@@ -947,6 +947,7 @@ async function createRecommendation(
       classificationReasoningProvider: options.classificationReasoningProvider,
       taxonomyReasoningProvider: options.taxonomyReasoningProvider,
       retrievalObserver: deps.retrievalObserver,
+      hybridShadowCaptureSink: deps.hybridShadowCaptureSink,
       loadExpectedOutcome: options.expectedOutcomesPath === undefined
         ? undefined
         : async (requestedTicketId) => {

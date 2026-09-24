@@ -39,9 +39,14 @@ import {
 } from "./triage-service.js";
 import { OperationalCommandDispatcher } from "./operational-command-dispatch.js";
 import { buildRetrievalQuery, type RetrievalObserver } from "./retrieval/stage.js";
-import { buildConversationContextForTicket } from "./approval-desk/conversation-context.js";
-import { classifyTicketFromContext } from "./approval-desk/classifier.js";
-import type { Reference } from "./retrieval/types.js";
+import { deterministicRetrievalReferences } from "./retrieval/deterministic-references.js";
+import type { OperationalResultReference, OperationalWorkflowSnapshot } from "./operational/domain.js";
+import {
+  assembleHybridShadowCaptureContext,
+  HybridShadowCaptureError,
+  hybridShadowModeForEvent,
+  type HybridShadowCaptureSink,
+} from "./reasoning/hybrid-shadow-capture.js";
 
 const CustomerReplyInputSchema = z.object({
   id: z.string().trim().min(1).max(80),
@@ -87,6 +92,7 @@ export interface EvaluationCommandDependencies {
   readonly taxonomyReasoningProvider?: TaxonomyReasoningProvider;
   readonly loadExpectedOutcome?: (ticketId: string) => Promise<ExpectedOutcome | undefined>;
   readonly retrievalObserver?: RetrievalObserver;
+  readonly hybridShadowCaptureSink?: HybridShadowCaptureSink;
 }
 
 export async function evaluateTicketCommand(
@@ -96,6 +102,10 @@ export async function evaluateTicketCommand(
 ): Promise<ReturnType<TriageService["replayOperationalEvaluation"]>> {
   let capturedBasis: Parameters<typeof buildRetrievalQuery>[0] | undefined;
   let didCommit = false;
+  let committedEvaluationCapture: {
+    result: OperationalResultReference;
+    snapshot: OperationalWorkflowSnapshot;
+  } | undefined;
   const definition = {
     operation: "evaluate-ticket",
     parse: (input: unknown) => EvaluationCommandInputSchema.parse(input),
@@ -176,6 +186,15 @@ export async function evaluateTicketCommand(
     },
     commit: (unit: Parameters<TriageService["commitOperationalEvaluation"]>[0], prepared: PreparedOperationalEvaluation, id: string) => {
       const result = deps.service.commitOperationalEvaluation(unit, prepared, id);
+      if (deps.hybridShadowCaptureSink !== undefined) {
+        try {
+          const snapshot = unit.readWorkflowSnapshot(prepared.recommendationInput.ticketId);
+          committedEvaluationCapture = structuredClone({ result, snapshot });
+        } catch {
+          // Optional capture material must never cause the authoritative write to fail.
+          committedEvaluationCapture = undefined;
+        }
+      }
       didCommit = true;
       return result;
     },
@@ -188,33 +207,90 @@ export async function evaluateTicketCommand(
     // delay it, including when an embedding provider or SQLite reconciliation stalls.
     void Promise.resolve()
       .then(() => {
-        const references = deterministicRetrievalReferences(capturedBasis!);
+        const references = deterministicRetrievalReferences({
+          ticket: capturedBasis!.ticket,
+          customerReplies: capturedBasis!.customerReplies,
+        });
         return buildRetrievalQuery({ ...capturedBasis!, references });
       })
-      .then((query) => deps.retrievalObserver!.observe(query, commandId))
+      .then((query) => {
+        if (deps.hybridShadowCaptureSink === undefined) {
+          return deps.retrievalObserver!.observe(query, commandId);
+        }
+        if (committedEvaluationCapture === undefined) {
+          reportHybridShadowCaptureFailure(deps, commandId, new Error("Committed capture snapshot was unavailable."));
+          return deps.retrievalObserver!.observe(query, commandId);
+        }
+        const event = committedEvaluationTrigger(committedEvaluationCapture, commandId);
+        const mode = event === undefined ? undefined : hybridShadowModeForEvent(event);
+        if (event === undefined || mode === undefined) {
+          reportHybridShadowCaptureFailure(deps, commandId, new HybridShadowCaptureError(
+            "Committed evaluation result does not identify one recommendation-submitted trigger event.",
+          ));
+          return deps.retrievalObserver!.observe(query, commandId);
+        }
+        return deps.retrievalObserver!.observe(query, commandId, async (actualQuery, retrievalExecution) => {
+          let context: ReturnType<typeof assembleHybridShadowCaptureContext>;
+          try {
+            context = assembleHybridShadowCaptureContext({
+              mode,
+              event,
+              snapshot: committedEvaluationCapture!.snapshot,
+              query: actualQuery,
+              retrievalExecution,
+            });
+          } catch (error) {
+            reportHybridShadowCaptureFailure(deps, commandId, error);
+            return;
+          }
+          try {
+            await deps.hybridShadowCaptureSink!.capture(context);
+          } catch (error) {
+            reportHybridShadowCaptureFailure(deps, commandId, error, "HYBRID_SHADOW_CAPTURE_FAILED");
+          }
+        });
+      })
       .catch(() => deps.retrievalObserver?.reportFailure?.(commandId));
   }
   return result;
 }
 
-function deterministicRetrievalReferences(input: Parameters<typeof buildRetrievalQuery>[0]): readonly Reference[] {
-  const classification = classifyTicketFromContext(buildConversationContextForTicket({
-    ticket: input.ticket,
-    customerReplies: input.customerReplies,
-  }));
-  const references: Reference[] = classification.knowledgeArticleIds.map((sourceId) => ({
-    resourceKey: `knowledge-article:${sourceId}`,
-    channel: "deterministic-reference",
-    sourceId,
-    reason: "classifier-association",
-  }));
-  if (classification.knownCause) {
-    references.push({
-      resourceKey: `known-cause:${classification.knownCause}`,
-      channel: "deterministic-reference",
-      sourceId: classification.knownCause,
-      reason: "safety-inclusion",
-    });
+function committedEvaluationTrigger(
+  capture: {
+    result: OperationalResultReference;
+    snapshot: OperationalWorkflowSnapshot;
+  },
+  commandId: string,
+): OperationalWorkflowSnapshot["events"][number] | undefined {
+  if (capture.result.operation !== "evaluate-ticket" || capture.result.tickets.length !== 1) return undefined;
+  const [ticketResult] = capture.result.tickets;
+  if (ticketResult === undefined) return undefined;
+  const eventIds = new Set(ticketResult.operationalEventIds);
+  const events = capture.snapshot.events.filter((event) =>
+    eventIds.has(event.id)
+    && event.ticketId === ticketResult.ticketId
+    && event.commandId === commandId
+    && event.action === "recommendation-submitted",
+  );
+  return events.length === 1 ? events[0] : undefined;
+}
+
+function reportHybridShadowCaptureFailure(
+  deps: EvaluationCommandDependencies,
+  commandId: string,
+  error: unknown,
+  failureCode?: "HYBRID_SHADOW_CAPTURE_INCONSISTENT" | "HYBRID_SHADOW_CAPTURE_FAILED",
+): void {
+  const code = failureCode ?? (error instanceof HybridShadowCaptureError
+    ? error.code
+    : "HYBRID_SHADOW_CAPTURE_FAILED");
+  try {
+    if (deps.hybridShadowCaptureSink?.reportFailure !== undefined) {
+      deps.hybridShadowCaptureSink.reportFailure({ code, commandId });
+    } else {
+      deps.retrievalObserver?.reportFailure?.(commandId, code);
+    }
+  } catch {
+    // Capture diagnostics are advisory and cannot affect the committed command.
   }
-  return references;
 }

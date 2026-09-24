@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import type { Ticket } from "../domain.js";
 import type { CustomerReply } from "../approval-desk/ai-evaluation.js";
-import { executeRetrieval } from "./execution.js";
+import { executeRetrieval, type RetrievalExecution } from "./execution.js";
 import type { IndexManager } from "./index-manager.js";
 import type { EmbeddingProvider, IndexMetadata, Limits, Query, Reference, RetrievalTrace } from "./types.js";
 import { RETRIEVAL_SCHEMA_VERSION, RetrievalIntegrityError, RetrievalRepresentationVersionError, type RetrievalStore } from "./sqlite-store.js";
@@ -35,7 +35,16 @@ export function buildRetrievalQuery(input: {
   return { queryText, queryHash, ticketId: input.ticket.id, sourceRevision: input.ticket.revision, customerReplyWatermark: input.customerReplyWatermark, queryTruncated, references: [...input.references], ...(input.taxonomy ? { taxonomy: input.taxonomy } : {}) };
 }
 
-export interface RetrievalObserver { observe(query: Query, commandId: string): Promise<void>; reportFailure?(commandId: string): void; recent(): readonly RetrievalTrace[]; close(): Promise<void> }
+export interface RetrievalObserver {
+  observe(
+    query: Query,
+    commandId: string,
+    onExecution?: (query: Query, execution: RetrievalExecution) => void | Promise<void>,
+  ): Promise<void>;
+  reportFailure?(commandId: string, code?: string): void;
+  recent(): readonly RetrievalTrace[];
+  close(): Promise<void>;
+}
 
 export interface RetrievalRankingConfig {
   policy: RankingPolicy;
@@ -48,7 +57,11 @@ export function createRetrievalObserver(input: { manager: IndexManager; store: R
   const controller = new AbortController();
   const active = new Set<Promise<void>>();
   let closed = false;
-  const observe = (query: Query, commandId: string): Promise<void> => {
+  const observe = (
+    query: Query,
+    commandId: string,
+    onExecution?: (query: Query, execution: RetrievalExecution) => void | Promise<void>,
+  ): Promise<void> => {
     if (closed) return Promise.resolve();
     const work = (async () => {
       try {
@@ -77,6 +90,13 @@ export function createRetrievalObserver(input: { manager: IndexManager; store: R
           traces.push(trace);
         }
         while (traces.length > TRACE_LIMIT) traces.shift();
+        if (onExecution !== undefined) {
+          try {
+            await onExecution(query, execution);
+          } catch {
+            reportRetrievalFailure(commandId, report, "RETRIEVAL_EXECUTION_CALLBACK_FAILED");
+          }
+        }
       } catch (error) {
         if (!controller.signal.aborted) {
           const code = error instanceof RetrievalRepresentationVersionError ? "INDEX_UPGRADE_REQUIRED" : error instanceof RetrievalIntegrityError ? "INDEX_INTEGRITY_ERROR" : "RETRIEVAL_OBSERVATION_FAILED";
@@ -91,7 +111,7 @@ export function createRetrievalObserver(input: { manager: IndexManager; store: R
   };
   return {
     observe,
-    reportFailure(commandId) { reportRetrievalFailure(commandId, report); },
+    reportFailure(commandId, code) { reportRetrievalFailure(commandId, report, code); },
     recent() { return traces.map((trace) => structuredClone(trace)); },
     async close() { if (closed) return; closed = true; controller.abort(); await Promise.allSettled([...active]); await input.manager.close(); input.store.close(); },
   };
@@ -160,7 +180,7 @@ export function createUnavailableRetrievalObserver(input: ((diagnostic: { code: 
       while (traces.length > TRACE_LIMIT) traces.shift();
       reportRetrievalFailure(commandId, report, failureCode ?? "RETRIEVAL_OBSERVATION_FAILED");
     },
-    reportFailure(commandId) { reportRetrievalFailure(commandId, report); },
+    reportFailure(commandId, code) { reportRetrievalFailure(commandId, report, code); },
     recent() { return traces.map((trace) => structuredClone(trace)); },
     async close() { /* no derived resources were opened */ },
   };

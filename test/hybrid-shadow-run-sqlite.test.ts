@@ -575,6 +575,85 @@ describe("SQLite hybrid shadow-run persistence", () => {
     expect(repository.getShadowRun(original.runId)).toEqual(original);
   });
 
+  it("applies execution-key replay and conflict handling to v2 writes through recordShadowRun", () => {
+    const { repository } = openRepository();
+    const original = completedRunWithOpportunity();
+    expect(repository.recordShadowRun(original)).toEqual({ outcome: "recorded", run: original });
+    const replay = {
+      ...structuredClone(original),
+      runId: HybridShadowRunIdSchema.parse(runIds.replay),
+      recordedAt: "2026-09-21T11:18:00.000Z",
+    };
+
+    expect(repository.recordShadowRun(replay)).toEqual({ outcome: "replayed", run: original });
+    expect(repository.listShadowRunsForOpportunity(original.opportunityId)).toEqual([original]);
+
+    const conflict = {
+      ...structuredClone(replay),
+      runId: HybridShadowRunIdSchema.parse(runIds.conflict),
+      provider: { ...replay.provider, model: "different-model" },
+    };
+    expect(() => repository.recordShadowRun(conflict)).toThrowError(
+      expect.objectContaining({ code: "EXECUTION_KEY_CONFLICT" }),
+    );
+  });
+
+  it.each([
+    ["non-unique", "CREATE INDEX hybrid_shadow_runs_execution_key_unique_idx ON hybrid_shadow_runs(execution_key)"],
+    ["wrong-column", "CREATE UNIQUE INDEX hybrid_shadow_runs_execution_key_unique_idx ON hybrid_shadow_runs(opportunity_id) WHERE opportunity_id IS NOT NULL"],
+    ["wrong-predicate", "CREATE UNIQUE INDEX hybrid_shadow_runs_execution_key_unique_idx ON hybrid_shadow_runs(execution_key) WHERE status = 'completed'"],
+  ])("rejects a same-named execution-key index with a $0 definition", (_kind, definition) => {
+    const { repository, path } = openRepository();
+    repository.close();
+    const tamper = new Database(path);
+    try {
+      tamper.exec(`DROP INDEX hybrid_shadow_runs_execution_key_unique_idx; ${definition};`);
+    } finally {
+      tamper.close();
+    }
+
+    const reopened = SqliteHybridShadowRunRepository.open(path);
+    repositories.push(reopened);
+    expect(() => reopened.initialize()).toThrowError(
+      expect.objectContaining({ code: "SCHEMA_ERROR" }),
+    );
+  });
+
+  it("normalizes execution-key read locks as persistence errors", () => {
+    const { repository, path } = openRepository();
+    const run = completedRunWithOpportunity();
+    repository.recordOrReplayShadowRun(run);
+    const lock = new Database(path);
+    try {
+      lock.exec("BEGIN EXCLUSIVE");
+      expect(() => repository.getShadowRunByExecutionKey(run.executionKey)).toThrowError(
+        expect.objectContaining({ code: "PERSISTENCE_ERROR" }),
+      );
+    } finally {
+      if (lock.inTransaction) lock.exec("ROLLBACK");
+      lock.close();
+    }
+  });
+
+  it("normalizes schema initialization locks as persistence errors", () => {
+    const root = mkdtempSync(join(tmpdir(), "hybrid-shadow-run-v1-lock-"));
+    roots.push(root);
+    const path = join(root, "shadow-runs.sqlite");
+    createLegacyV1Database(path, completedRun());
+    const lock = new Database(path);
+    lock.exec("BEGIN EXCLUSIVE");
+    const repository = SqliteHybridShadowRunRepository.open(path);
+    repositories.push(repository);
+    try {
+      expect(() => repository.initialize()).toThrowError(
+        expect.objectContaining({ code: "PERSISTENCE_ERROR" }),
+      );
+    } finally {
+      if (lock.inTransaction) lock.exec("ROLLBACK");
+      lock.close();
+    }
+  });
+
   it("lists a ticket's runs in stable recorded-time and run-ID order and isolates other tickets", () => {
     const { repository } = openRepository();
     const sameTimeB = completedRun(runIds.sameTimeB, { recordedAt: "2026-09-21T11:16:00.000Z" });

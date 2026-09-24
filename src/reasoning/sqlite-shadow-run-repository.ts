@@ -84,7 +84,7 @@ export interface HybridShadowRunRecordResult {
 }
 
 export interface HybridShadowRunRepository {
-  recordShadowRun(run: HybridShadowRun): void;
+  recordShadowRun(run: HybridShadowRun): HybridShadowRunRecordResult | undefined;
   recordOrReplayShadowRun(run: HybridShadowRunV2): HybridShadowRunRecordResult;
   getShadowRun(runId: HybridShadowRunId): HybridShadowRun | undefined;
   getShadowRunByExecutionKey(
@@ -128,43 +128,55 @@ export class SqliteHybridShadowRunRepository implements HybridShadowRunRepositor
     this.assertOpen();
     if (this.initialized) return;
 
-    const version = Number(this.database.pragma("user_version", { simple: true }));
-    if (!Number.isInteger(version) || version < 0 || version > SHADOW_RUN_SCHEMA_VERSION) {
-      throw new HybridShadowRunStoreError(
-        `Hybrid shadow-run database schema version ${String(version)} is not supported.`,
-        "SCHEMA_ERROR",
-      );
-    }
-
-    if (version === 0) {
-      if (this.schemaObjectNames().length > 0) {
+    try {
+      const version = Number(this.database.pragma("user_version", { simple: true }));
+      if (!Number.isInteger(version) || version < 0 || version > SHADOW_RUN_SCHEMA_VERSION) {
         throw new HybridShadowRunStoreError(
-          "Hybrid shadow-run database has objects but no supported schema version.",
+          `Hybrid shadow-run database schema version ${String(version)} is not supported.`,
           "SCHEMA_ERROR",
         );
       }
-      try {
-        const migrate = this.database.transaction(() => {
-          this.database.exec(INITIAL_SCHEMA_SQL);
-          this.database.pragma(`user_version = ${SHADOW_RUN_SCHEMA_VERSION}`);
-        });
-        migrate.immediate();
-      } catch (error) {
+
+      if (version === 0) {
+        if (this.schemaObjectNames().length > 0) {
+          throw new HybridShadowRunStoreError(
+            "Hybrid shadow-run database has objects but no supported schema version.",
+            "SCHEMA_ERROR",
+          );
+        }
+        try {
+          const migrate = this.database.transaction(() => {
+            this.database.exec(INITIAL_SCHEMA_SQL);
+            this.database.pragma(`user_version = ${SHADOW_RUN_SCHEMA_VERSION}`);
+          });
+          migrate.immediate();
+        } catch (error) {
+          if (isSqliteLockError(error)) throw error;
+          throw new HybridShadowRunStoreError(
+            "Hybrid shadow-run schema migration failed.",
+            "SCHEMA_ERROR",
+            { cause: error },
+          );
+        }
+      } else if (version === 1) {
+        this.migrateV1ToV2();
+      }
+
+      this.validateCurrentSchema();
+      this.initialized = true;
+    } catch (error) {
+      if (isSqliteLockError(error)) {
         throw new HybridShadowRunStoreError(
-          "Hybrid shadow-run schema migration failed.",
-          "SCHEMA_ERROR",
+          "Hybrid shadow-run database is busy.",
+          "PERSISTENCE_ERROR",
           { cause: error },
         );
       }
-    } else if (version === 1) {
-      this.migrateV1ToV2();
+      throw error;
     }
-
-    this.validateCurrentSchema();
-    this.initialized = true;
   }
 
-  recordShadowRun(run: HybridShadowRun): void {
+  recordShadowRun(run: HybridShadowRun): HybridShadowRunRecordResult | undefined {
     this.assertInitialized();
     let validatedRun: HybridShadowRun;
     let payloadJson: string;
@@ -181,6 +193,10 @@ export class SqliteHybridShadowRunRepository implements HybridShadowRunRepositor
         "INVALID_RUN",
         { cause: error },
       );
+    }
+
+    if ("opportunityId" in validatedRun) {
+      return this.recordOrReplayShadowRun(validatedRun);
     }
 
     const insert = this.database.prepare(`
@@ -323,9 +339,21 @@ export class SqliteHybridShadowRunRepository implements HybridShadowRunRepositor
         cause: parsedExecutionKey.error,
       });
     }
-    const row = this.database.prepare(`
-      SELECT * FROM hybrid_shadow_runs WHERE execution_key = ?
-    `).get(parsedExecutionKey.data) as ShadowRunRow | undefined;
+    let row: ShadowRunRow | undefined;
+    try {
+      row = this.database.prepare(`
+        SELECT * FROM hybrid_shadow_runs WHERE execution_key = ?
+      `).get(parsedExecutionKey.data) as ShadowRunRow | undefined;
+    } catch (error) {
+      if (isSqliteLockError(error)) {
+        throw new HybridShadowRunStoreError(
+          "Hybrid shadow run could not be read because the database is busy.",
+          "PERSISTENCE_ERROR",
+          { cause: error },
+        );
+      }
+      throw error;
+    }
     if (row === undefined) return undefined;
     const run = this.decodeRow(row);
     if (!("executionKey" in run)) {
@@ -426,6 +454,7 @@ export class SqliteHybridShadowRunRepository implements HybridShadowRunRepositor
 
   private validateCurrentSchema(): void {
     this.validateSchema(SHADOW_RUN_COLUMNS, SHADOW_RUN_INDEXES);
+    this.validateExecutionKeyIndex();
   }
 
   private validateV1Schema(): void {
@@ -474,12 +503,51 @@ export class SqliteHybridShadowRunRepository implements HybridShadowRunRepositor
         "SCHEMA_ERROR",
       );
     }
-    const indexNames = this.database.prepare(`
-      SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'hybrid_shadow_runs'
-    `).all() as Array<{ name: string }>;
-    if (expectedIndexes.some((expectedName) => !indexNames.some(({ name }) => name === expectedName))) {
+    const indexes = this.database.prepare("PRAGMA index_list(hybrid_shadow_runs)").all() as Array<{
+      name: string;
+      unique: number;
+      partial: number;
+    }>;
+    if (expectedIndexes.some((expectedName) => !indexes.some(({ name }) => name === expectedName))) {
       throw new HybridShadowRunStoreError(
         "Hybrid shadow-run indexes are missing or inconsistent.",
+        "SCHEMA_ERROR",
+      );
+    }
+  }
+
+  private validateExecutionKeyIndex(): void {
+    const indexes = this.database.prepare("PRAGMA index_list(hybrid_shadow_runs)").all() as Array<{
+      name: string;
+      unique: number;
+      partial: number;
+    }>;
+    const executionKeyIndex = indexes.find(
+      ({ name }) => name === "hybrid_shadow_runs_execution_key_unique_idx",
+    );
+    const executionKeyColumns = this.database.prepare(
+      "PRAGMA index_info(hybrid_shadow_runs_execution_key_unique_idx)",
+    ).all() as Array<{ name: string | null }>;
+    const executionKeyIndexDefinition = this.database.prepare(`
+      SELECT sql FROM sqlite_master
+      WHERE type = 'index' AND name = 'hybrid_shadow_runs_execution_key_unique_idx'
+    `).get() as { sql: string | null } | undefined;
+    const normalizedExecutionKeyIndexSql = (executionKeyIndexDefinition?.sql ?? "")
+      .replace(/\s+/g, " ")
+      .trim()
+      .toLowerCase()
+      .replace(/;$/, "");
+    if (
+      executionKeyIndex?.unique !== 1
+      || executionKeyIndex.partial !== 1
+      || JSON.stringify(executionKeyColumns.map(({ name }) => name)) !== JSON.stringify(["execution_key"])
+      || normalizedExecutionKeyIndexSql !== (
+        "create unique index hybrid_shadow_runs_execution_key_unique_idx "
+        + "on hybrid_shadow_runs(execution_key) where execution_key is not null"
+      )
+    ) {
+      throw new HybridShadowRunStoreError(
+        "Hybrid shadow-run execution-key uniqueness constraint is missing or inconsistent.",
         "SCHEMA_ERROR",
       );
     }
@@ -510,6 +578,7 @@ export class SqliteHybridShadowRunRepository implements HybridShadowRunRepositor
       });
       migrate.immediate();
     } catch (error) {
+      if (isSqliteLockError(error)) throw error;
       throw new HybridShadowRunStoreError(
         "Hybrid shadow-run schema migration failed.",
         "SCHEMA_ERROR",
@@ -607,4 +676,8 @@ function hasSqliteError(error: unknown, code: string): error is Error & { code: 
   return error instanceof Error
     && "code" in error
     && (error as Error & { code?: unknown }).code === code;
+}
+
+function isSqliteLockError(error: unknown): error is Error & { code: string } {
+  return hasSqliteError(error, "SQLITE_BUSY") || hasSqliteError(error, "SQLITE_LOCKED");
 }

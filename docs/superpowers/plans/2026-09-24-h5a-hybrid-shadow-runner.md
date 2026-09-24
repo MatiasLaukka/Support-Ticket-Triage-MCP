@@ -58,6 +58,8 @@
 - Add a repository operation that atomically records a v2 run or returns the matching existing run as replay.
 - Attempt the transactional insert under a partial SQLite UNIQUE execution-key constraint; on that constraint collision, re-read the winning row by key and compare semantic payloads excluding only run UUID and `recordedAt`. Return replay for equal payloads and a typed conflict for different payloads. The database constraint is authoritative; a preflight read may only avoid unnecessary provider work. Normalize SQLite busy/locked behavior using the existing repository conventions: use a 250 ms SQLite busy timeout and normalize SQLITE_BUSY/SQLITE_LOCKED to PERSISTENCE_ERROR; do not add retry behavior.
 - Enforce uniqueness with a partial SQLite unique index on non-null execution keys; keep legacy rows outside that index.
+- Route v2 writes through every existing repository write entry point, and expose recorded/replayed outcomes while preserving the legacy v1 write behavior. Validate the actual execution-key index definition as unique, partial, and restricted to non-null `execution_key` values.
+- Normalize busy/locked errors from execution-key reads and schema initialization as `PERSISTENCE_ERROR`.
 
 - [x] Add failing tests for a new execution, exact semantic replay with changed UUID/time, conflicting payload reuse, duplicate insert attempts from two repository connections, different providers on one opportunity, and opportunity lookup ordering. The repository method attempts insertion directly; the unique index resolves collisions without a preflight existence check.
 - [x] Run `npx vitest run test/hybrid-shadow-run-sqlite.test.ts`; confirm the new idempotency/concurrency assertions fail before implementation.

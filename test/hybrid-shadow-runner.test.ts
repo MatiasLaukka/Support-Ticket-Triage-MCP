@@ -2,8 +2,9 @@ import { createHash } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { IsoTimestampSchema, TicketSchema, type CustomerReplyWatermark } from "../src/domain.js";
+import { OpenAiApplicabilityReasoningProvider } from "../src/applicability-reasoning-provider.js";
 import type { CustomerReply } from "../src/approval-desk/ai-evaluation.js";
 import type { OperationalEvent, OperationalWorkflowSnapshot } from "../src/operational/domain.js";
 import {
@@ -12,12 +13,14 @@ import {
 } from "../src/reasoning/hybrid-shadow-capture.js";
 import { assembleHybridReasoningInput } from "../src/reasoning/input-assembler.js";
 import {
+  createHybridShadowRunCaptureSink,
   HYBRID_REASONING_PROVIDER_CONTRACT_VERSION,
   HybridReasoningProviderError,
   runHybridShadowOpportunity,
   type DeepReadonly,
   type HybridReasoningProvider,
 } from "../src/reasoning/hybrid-shadow-runner.js";
+import { B5TaxonomyInformedHybridReasoningProvider } from "../src/reasoning/b5-hybrid-reasoning-provider.js";
 import {
   HybridShadowRunIdSchema,
   parseHybridShadowRunV3,
@@ -35,9 +38,11 @@ import {
   SqliteHybridShadowRunRepository,
 } from "../src/reasoning/sqlite-shadow-run-repository.js";
 import { deterministicRetrievalReferences } from "../src/retrieval/deterministic-references.js";
+import { hashRepresentation, hashResource } from "../src/retrieval/representations.js";
 import type { RetrievalExecution } from "../src/retrieval/execution.js";
 import { buildRetrievalQuery } from "../src/retrieval/stage.js";
-import type { IndexMetadata, RetrievalResult } from "../src/retrieval/types.js";
+import type { Candidate, IndexMetadata, ProjectedResource, RetrievalResult } from "../src/retrieval/types.js";
+import { validB5Output } from "./fixtures/hybrid-reasoning.js";
 
 const runIds = {
   success: "20000000-0000-4000-8000-000000000001",
@@ -92,7 +97,55 @@ function openRepository(): { repository: SqliteHybridShadowRunRepository; path: 
   return { repository, path };
 }
 
-function context(mode: "evaluation" | "diagnosis" = "evaluation", generation = 8): HybridShadowCaptureContext {
+const b5ResourceKey: Candidate["resourceKey"] = "knowledge-article:webhook-delay";
+const b5RepresentationId = `${b5ResourceKey}:section:0`;
+
+function b5ProjectedResource(): ProjectedResource {
+  const representationBase = {
+    id: b5RepresentationId,
+    resourceKey: b5ResourceKey,
+    kind: "section",
+    ordinal: 0,
+    title: "Webhook delivery timing",
+    heading: "Retry interval",
+    keywords: ["webhook", "retry"],
+    lexicalText: "webhook retry interval delivery timing",
+    semanticText: "Compare attempt timestamps with the configured retry interval.",
+  };
+  const representation = { ...representationBase, contentHash: hashRepresentation(representationBase) };
+  const resourceBase = {
+    key: b5ResourceKey,
+    type: "knowledge-article" as const,
+    sourceId: "article-webhook-delay",
+    sourceVersion: "article-v1",
+    family: "article" as const,
+    linkedResourceKeys: [] as const,
+  };
+  return {
+    resource: { ...resourceBase, contentHash: hashResource(resourceBase, [representation]) },
+    representations: [representation],
+  };
+}
+
+function b5Candidate(): Candidate {
+  return {
+    resourceKey: b5ResourceKey,
+    resourceType: "knowledge-article",
+    lexical: {
+      bestRank: 1,
+      bestBm25Score: -0.5,
+      matches: [{ representationId: b5RepresentationId, resourceKey: b5ResourceKey, score: -0.5, rank: 1 }],
+    },
+    deterministicReferences: [],
+    knownCauseReferences: [],
+  };
+}
+
+function context(
+  mode: "evaluation" | "diagnosis" = "evaluation",
+  generation = 8,
+  withB5Evidence = false,
+): HybridShadowCaptureContext {
   const ticket = TicketSchema.parse({
     id: "TKT-0101",
     createdAt: "2026-09-21T11:00:00.000Z",
@@ -123,7 +176,7 @@ function context(mode: "evaluation" | "diagnosis" = "evaluation", generation = 8
     metadata: index,
     lexical: { status: "used" },
     semantic: { status: "unavailable", reason: "provider-not-configured" },
-    candidates: [],
+    candidates: withB5Evidence ? [b5Candidate()] : [],
     referenceDiagnostics: [],
   };
   const retrievalExecution: RetrievalExecution = {
@@ -183,7 +236,13 @@ function context(mode: "evaluation" | "diagnosis" = "evaluation", generation = 8
     snapshotThroughSequence: evaluationEvent.sequence,
     query,
     retrievalExecution,
-    resolvedRetrievalSnapshot: { metadata: structuredClone(index), sourceSnapshot: { resources: [], unavailableFamilies: [] } },
+    resolvedRetrievalSnapshot: {
+      metadata: structuredClone(index),
+      sourceSnapshot: {
+        resources: withB5Evidence ? [b5ProjectedResource()] : [],
+        unavailableFamilies: [],
+      },
+    },
   });
 }
 
@@ -203,8 +262,14 @@ const lunaIdentity: ReasoningProviderIdentity = { providerKind: "controlled-test
 class SuccessfulFakeHybridReasoningProvider implements HybridReasoningProvider {
   calls = 0;
   readonly inputs: DeepReadonly<HybridReasoningInput>[] = [];
+  readonly semanticContractId: string;
 
-  constructor(readonly identity: ReasoningProviderIdentity = lunaIdentity) {}
+  constructor(
+    readonly identity: ReasoningProviderIdentity = lunaIdentity,
+    semanticContractId = "test-hybrid-reasoning-v1",
+  ) {
+    this.semanticContractId = semanticContractId;
+  }
 
   async reason(input: DeepReadonly<HybridReasoningInput>): Promise<HybridReasoningResult> {
     this.calls += 1;
@@ -270,6 +335,30 @@ function assertDeepFrozen(value: unknown): void {
   for (const child of Object.values(value)) assertDeepFrozen(child);
 }
 
+function semanticInputFromRequest(body: string) {
+  const request = JSON.parse(body) as { input: string };
+  return JSON.parse(request.input.split("\n")[1]!) as HybridReasoningInput["applicability"];
+}
+
+function b5Provider(fetch: (url: string, init: { body: string }) => Promise<unknown>) {
+  return new B5TaxonomyInformedHybridReasoningProvider(
+    new OpenAiApplicabilityReasoningProvider({
+      apiKey: "unit-test-key",
+      model: "b5-test-model",
+      timeoutMs: 20_000,
+      maxOutputTokens: 4_096,
+      fetch: fetch as never,
+    }),
+    { providerKind: "openai-responses", model: "b5-test-model" },
+  );
+}
+
+function b5Response(output: unknown): string {
+  return JSON.stringify({
+    output: [{ content: [{ type: "output_text", text: JSON.stringify(output) }] }],
+  });
+}
+
 describe("provider-neutral hybrid shadow runner", () => {
   it("passes a deep-frozen input clone and persists a validated completed run", async () => {
     const { repository } = openRepository();
@@ -306,6 +395,7 @@ describe("provider-neutral hybrid shadow runner", () => {
       opportunityId: capture.opportunityId,
       providerContractVersion: 1,
       providerKind: lunaIdentity.providerKind,
+      semanticContractId: provider.semanticContractId,
     });
     expect(HYBRID_REASONING_PROVIDER_CONTRACT_VERSION).toBe(1);
     expect(completed.executionKey).toBe(createHash("sha256").update(expectedKeyPayload).digest("hex"));
@@ -361,6 +451,7 @@ describe("provider-neutral hybrid shadow runner", () => {
     const provider = new MalformedFakeHybridReasoningProvider();
     const closeAfterOutput: HybridReasoningProvider = {
       identity: provider.identity,
+      semanticContractId: provider.semanticContractId,
       async reason(input) {
         const output = await provider.reason(input);
         repository.close();
@@ -383,6 +474,7 @@ describe("provider-neutral hybrid shadow runner", () => {
     const { repository } = openRepository();
     const provider: HybridReasoningProvider = {
       identity: lunaIdentity,
+      semanticContractId: "test-hybrid-reasoning-v1",
       async reason() {
         throw new HybridReasoningProviderError("UNAVAILABLE", "raw provider detail must not be stored");
       },
@@ -445,6 +537,154 @@ describe("provider-neutral hybrid shadow runner", () => {
     expect(repository.listShadowRunsForOpportunity(capture.opportunityId)).toHaveLength(2);
   });
 
+  it("stores a changed semantic contract as a distinct execution for the same provider and opportunity", async () => {
+    const { repository } = openRepository();
+    const capture = context();
+    const makeProvider = (semanticContractId: string): HybridReasoningProvider => ({
+      identity: lunaIdentity,
+      semanticContractId,
+      async reason(input) { return resultFor(input); },
+    });
+
+    const first = await runHybridShadowOpportunity(
+      capture,
+      makeProvider("b5-taxonomy-informed-v1"),
+      repository,
+      metadata(runIds.success),
+    );
+    const second = await runHybridShadowOpportunity(
+      capture,
+      makeProvider("b5-evidence-only-v1"),
+      repository,
+      metadata(runIds.secondProvider, timestamps.other),
+    );
+
+    expect(first.outcome).toBe("recorded");
+    expect(second.outcome).toBe("recorded");
+    expect(second.run.executionKey).not.toBe(first.run.executionKey);
+    expect(repository.listShadowRunsForOpportunity(capture.opportunityId)).toHaveLength(2);
+  });
+
+  it("bridges an H4b capture through the existing capture-sink seam into H5a persistence", async () => {
+    const { repository } = openRepository();
+    const capture = context();
+    const provider = new SuccessfulFakeHybridReasoningProvider();
+    const sink = createHybridShadowRunCaptureSink(provider, repository, metadata(runIds.success));
+
+    await sink.capture(capture);
+
+    expect(provider.calls).toBe(1);
+    expect(repository.listShadowRunsForOpportunity(capture.opportunityId)).toHaveLength(1);
+  });
+
+  it("persists a completed taxonomy-informed B5 result from the frozen H4b input and replays without another provider call", async () => {
+    const { repository } = openRepository();
+    const capture = context("evaluation", 8, true);
+    const fetch = vi.fn(async (_url: string, init: { body: string }) => {
+      const semanticInput = semanticInputFromRequest(init.body);
+      return { ok: true, status: 200, text: async () => b5Response(validB5Output(semanticInput)) };
+    });
+    const provider = b5Provider(fetch);
+
+    const first = await runHybridShadowOpportunity(capture, provider, repository, metadata(runIds.success));
+    const completed = completedRunFrom(first);
+    const retry = await runHybridShadowOpportunity(capture, provider, repository, {
+      createRunId: () => { throw new Error("replay must not request a run ID"); },
+      clock: () => { throw new Error("replay must not request a timestamp"); },
+    });
+
+    expect(first.outcome).toBe("recorded");
+    expect(completed).toMatchObject({
+      mode: "evaluation",
+      basis: capture.basis,
+      input: { applicability: capture.input.applicability },
+      result: {
+        mode: "evaluation",
+        basis: capture.input.basis,
+        hypotheses: [{
+          id: "b5-taxonomy-informed-v1-hypothesis-1",
+          statement: "A growing retry queue is delaying webhook delivery.",
+          rank: 1,
+        }],
+        relationships: [],
+      },
+    });
+    expect(completed.result).not.toHaveProperty("observations");
+    expect(JSON.stringify(completed.result)).not.toContain("confidence");
+    expect(retry).toEqual({ outcome: "replayed", run: first.run });
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(repository.listShadowRunsForOpportunity(capture.opportunityId)).toHaveLength(1);
+  });
+
+  it("keeps provider input frozen when the caller later mutates its captured runtime object", async () => {
+    const { repository } = openRepository();
+    const capture = context("evaluation", 8, true);
+    const expected = structuredClone(capture.input.applicability);
+    let notifyFetch!: () => void;
+    let releaseFetch!: () => void;
+    const fetchStarted = new Promise<void>((resolve) => { notifyFetch = resolve; });
+    const fetchGate = new Promise<void>((resolve) => { releaseFetch = resolve; });
+    let sent: HybridReasoningInput["applicability"] | undefined;
+    const fetch = vi.fn(async (_url: string, init: { body: string }) => {
+      sent = semanticInputFromRequest(init.body);
+      notifyFetch();
+      await fetchGate;
+      return { ok: true, status: 200, text: async () => b5Response(validB5Output(sent!)) };
+    });
+
+    const attempt = runHybridShadowOpportunity(capture, b5Provider(fetch), repository, metadata(runIds.success));
+    await fetchStarted;
+    capture.input.applicability.case.problemStatement = "mutated after provider invocation";
+    capture.input.applicability.evidenceRegistry[0]!.text = "mutated evidence text";
+    releaseFetch();
+    await attempt;
+
+    expect(sent).toEqual(expected);
+    expect(sent?.case.problemStatement).not.toBe("mutated after provider invocation");
+    expect(sent?.evidenceRegistry[0]?.text).not.toBe("mutated evidence text");
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("persists B5 provider and malformed-output failures as bounded failed shadow runs", async () => {
+    const { repository } = openRepository();
+    const providerFailureCapture = context("evaluation", 8, true);
+    const failingFetch = vi.fn(async () => { throw new Error("provider response secret must not persist"); });
+    const failed = await runHybridShadowOpportunity(
+      providerFailureCapture,
+      b5Provider(failingFetch),
+      repository,
+      metadata(runIds.failure),
+    );
+
+    const malformedCapture = context("evaluation", 9, true);
+    const malformedFetch = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      text: async () => b5Response({ candidateAssessments: [] }),
+    }));
+    const malformed = await runHybridShadowOpportunity(
+      malformedCapture,
+      b5Provider(malformedFetch),
+      repository,
+      metadata(runIds.malformed, timestamps.other),
+    );
+
+    expect(failed.outcome).toBe("recorded");
+    expect(failedRunFrom(failed).failure).toEqual({
+      code: "UNAVAILABLE",
+      message: "The reasoning provider is unavailable.",
+    });
+    expect(JSON.stringify(failed.run)).not.toContain("provider response secret");
+    expect(malformed.outcome).toBe("recorded");
+    expect(failedRunFrom(malformed).failure).toEqual({
+      code: "INVALID_OUTPUT",
+      message: "The reasoning provider returned output that did not satisfy the reasoning contract.",
+    });
+    expect(malformed.run).not.toHaveProperty("result");
+    expect(repository.listShadowRunsForOpportunity(providerFailureCapture.opportunityId)).toHaveLength(1);
+    expect(repository.listShadowRunsForOpportunity(malformedCapture.opportunityId)).toHaveLength(1);
+  });
+
   it("stores a changed H4b opportunity as a separate run for the same provider", async () => {
     const { repository } = openRepository();
     const original = context("evaluation", 8);
@@ -496,6 +736,7 @@ describe("provider-neutral hybrid shadow runner", () => {
     const bothProvidersCalled = new Promise<void>((resolve) => { notifyBothProviders = resolve; });
     const provider: HybridReasoningProvider = {
       identity: lunaIdentity,
+      semanticContractId: "test-hybrid-reasoning-v1",
       async reason(input) {
         providerCalls += 1;
         if (providerCalls === 2) notifyBothProviders();

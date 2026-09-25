@@ -16,8 +16,8 @@ type ReasoningIdentity<Kind extends string> = string & {
 };
 
 export type ReasoningMode = "evaluation" | "diagnosis";
-/** Planned H5b policy identity; it is not a provider or operational authority. */
-export const PLANNED_B5_TAXONOMY_INFORMED_ADAPTER_ID = "b5-taxonomy-informed-v1" as const;
+/** Semantic adapter identity used in the H5a execution key, not operational authority. */
+export const B5_TAXONOMY_INFORMED_ADAPTER_ID = "b5-taxonomy-informed-v1" as const;
 export type EvidenceObservationId = ReasoningIdentity<"evidence-observation">;
 export type EvidenceActionId = ReasoningIdentity<"evidence-action">;
 

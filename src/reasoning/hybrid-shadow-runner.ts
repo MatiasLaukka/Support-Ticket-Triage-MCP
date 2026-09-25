@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { IsoTimestampSchema } from "../domain.js";
 import { canonicalJsonStringify } from "./canonical-json.js";
 import type { HybridShadowCaptureContext } from "./hybrid-shadow-capture.js";
+import type { HybridShadowCaptureSink } from "./hybrid-shadow-capture.js";
 import {
   HybridShadowExecutionKeySchema,
   HybridShadowOpportunityIdSchema,
@@ -31,10 +32,12 @@ export type DeepReadonly<T> = T extends (...args: never[]) => unknown
 
 export interface HybridReasoningProvider {
   readonly identity: ReasoningProviderIdentity;
+  /** Identifies adapter/prompt/output semantics beyond provider and model identity. */
+  readonly semanticContractId: string;
   reason(input: DeepReadonly<HybridReasoningInput>): Promise<HybridReasoningResult>;
 }
 
-export type HybridReasoningProviderFailureCode = "TIMEOUT" | "UNAVAILABLE";
+export type HybridReasoningProviderFailureCode = "TIMEOUT" | "UNAVAILABLE" | "INVALID_OUTPUT" | "UNSUPPORTED_MODE";
 
 /** Safe provider-neutral classification; the supplied message is never persisted. */
 export class HybridReasoningProviderError extends Error {
@@ -42,9 +45,22 @@ export class HybridReasoningProviderError extends Error {
     readonly code: HybridReasoningProviderFailureCode,
     message?: string,
   ) {
-    super(message ?? (code === "TIMEOUT" ? "The provider timed out." : "The provider is unavailable."));
+    super(message ?? providerFailureMessage(code));
     this.name = "HybridReasoningProviderError";
   }
+}
+
+/** Connect the existing H4b evaluation capture seam to the H5a runner. */
+export function createHybridShadowRunCaptureSink(
+  provider: HybridReasoningProvider,
+  repository: HybridShadowRunRepository,
+  metadata: HybridShadowRunMetadataSource,
+): HybridShadowCaptureSink {
+  return {
+    async capture(context) {
+      await runHybridShadowOpportunity(context, provider, repository, metadata);
+    },
+  };
 }
 
 export interface HybridShadowRunMetadataSource {
@@ -65,9 +81,11 @@ export async function runHybridShadowOpportunity(
 ): Promise<HybridShadowRunRecordResult> {
   const opportunityId = parseOpportunityId(capture.opportunityId);
   const providerIdentity = parseProviderIdentity(provider.identity);
+  const semanticContractId = parseSemanticContractId(provider.semanticContractId);
   const executionKey = HybridShadowExecutionKeySchema.parse(createHybridReasoningExecutionKey(
     opportunityId,
     providerIdentity,
+    semanticContractId,
   ));
 
   const existing = repository.getShadowRunByExecutionKey(executionKey);
@@ -144,14 +162,27 @@ export async function runHybridShadowOpportunity(
 function createHybridReasoningExecutionKey(
   opportunityId: HybridShadowCaptureContext["opportunityId"],
   provider: ReasoningProviderIdentity,
+  semanticContractId: string,
 ): string {
   const identity = {
     providerContractVersion: HYBRID_REASONING_PROVIDER_CONTRACT_VERSION,
     opportunityId,
+    semanticContractId,
     providerKind: provider.providerKind,
     model: provider.model,
   };
   return createHash("sha256").update(canonicalJsonStringify(identity)).digest("hex");
+}
+
+function parseSemanticContractId(value: unknown): string {
+  if (
+    typeof value !== "string"
+    || value.length > 120
+    || !/^[A-Za-z0-9][A-Za-z0-9._:/-]*$/.test(value)
+  ) {
+    throw new HybridShadowRunStoreError("Hybrid reasoning semantic contract identity is invalid.", "INVALID_RUN");
+  }
+  return value;
 }
 
 function parseOpportunityId(value: unknown): HybridShadowCaptureContext["opportunityId"] {
@@ -217,13 +248,23 @@ function classifyProviderFailure(error: unknown): HybridShadowRunFailure {
   return providerFailure("PROVIDER_ERROR");
 }
 
-function providerFailure(code: "TIMEOUT" | "UNAVAILABLE" | "INVALID_OUTPUT" | "PROVIDER_ERROR"):
+function providerFailure(code: "TIMEOUT" | "UNAVAILABLE" | "INVALID_OUTPUT" | "UNSUPPORTED_MODE" | "PROVIDER_ERROR"):
 HybridShadowRunFailure {
   const messages = {
     TIMEOUT: "The reasoning provider timed out.",
     UNAVAILABLE: "The reasoning provider is unavailable.",
     INVALID_OUTPUT: "The reasoning provider returned output that did not satisfy the reasoning contract.",
+    UNSUPPORTED_MODE: "The configured reasoning adapter does not support this reasoning mode.",
     PROVIDER_ERROR: "The reasoning provider failed.",
   } as const;
   return HybridShadowRunFailureSchema.parse({ code, message: messages[code] });
+}
+
+function providerFailureMessage(code: HybridReasoningProviderFailureCode): string {
+  switch (code) {
+    case "TIMEOUT": return "The provider timed out.";
+    case "UNAVAILABLE": return "The provider is unavailable.";
+    case "INVALID_OUTPUT": return "The provider returned invalid reasoning output.";
+    case "UNSUPPORTED_MODE": return "The provider does not support this reasoning mode.";
+  }
 }

@@ -1,15 +1,26 @@
 import { describe, expect, it, vi } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { TicketSchema, type CustomerReplyWatermark } from "../src/domain.js";
+import { OpenAiApplicabilityReasoningProvider } from "../src/applicability-reasoning-provider.js";
 import type { CustomerReply } from "../src/approval-desk/ai-evaluation.js";
 import type { OperationalEvent, OperationalResultReference, OperationalWorkflowSnapshot } from "../src/operational/domain.js";
 import { evaluateTicketCommand } from "../src/evaluation-command.js";
 import { assembleHybridShadowCaptureContext, hybridShadowModeForEvent } from "../src/reasoning/hybrid-shadow-capture.js";
+import {
+  createHybridShadowRunCaptureSink,
+} from "../src/reasoning/hybrid-shadow-runner.js";
+import { B5TaxonomyInformedHybridReasoningProvider } from "../src/reasoning/b5-hybrid-reasoning-provider.js";
+import { SqliteHybridShadowRunRepository } from "../src/reasoning/sqlite-shadow-run-repository.js";
+import { parseHybridShadowRunV3, HybridShadowRunIdSchema } from "../src/reasoning/shadow-run-types.js";
 import { deterministicRetrievalReferences } from "../src/retrieval/deterministic-references.js";
 import type { RetrievalExecution } from "../src/retrieval/execution.js";
 import { buildRetrievalQuery } from "../src/retrieval/stage.js";
 import { hashRepresentation, hashResource } from "../src/retrieval/representations.js";
 import type { Candidate, IndexMetadata, ProjectedResource, RetrievalResult, SourceSnapshot } from "../src/retrieval/types.js";
 import type { RankingResult } from "../src/retrieval/ranking-types.js";
+import { validB5Output } from "./fixtures/hybrid-reasoning.js";
 
 const ticket = TicketSchema.parse({
   id: "TKT-0101",
@@ -869,5 +880,129 @@ describe("hybrid shadow capture assembler", () => {
       code: "HYBRID_SHADOW_CAPTURE_FAILED",
       commandId,
     }]);
+  });
+
+  it("keeps completed B5 shadow output and provider failure outside authoritative evaluation success", async () => {
+    const root = mkdtempSync(join(tmpdir(), "hybrid-shadow-command-"));
+    const repository = SqliteHybridShadowRunRepository.open(join(root, "shadow.sqlite"));
+    repository.initialize();
+    try {
+      const baseEventIds = [evaluationEventId, taxonomyEventId];
+      let committedSnapshot = snapshot();
+      const committedResult: OperationalResultReference = {
+        operation: "evaluate-ticket",
+        tickets: [{ ticketId: ticket.id, operationalEventIds: baseEventIds, resultingRevision: null }],
+        recommendationId: "00000000-0000-4000-8000-000000000006",
+      };
+      let commits = 0;
+      const dispatcher = {
+        async run(definition: any, rawInput: unknown, commandId: string) {
+          const intent = definition.parse(rawInput);
+          const prepared = await definition.prepare(intent);
+          const result = definition.commit({ readWorkflowSnapshot: () => committedSnapshot }, prepared, commandId);
+          return definition.replay({ readWorkflowSnapshot: () => committedSnapshot }, result, commandId);
+        },
+      };
+      const execution: RetrievalExecution = { retrieval: retrieval(), ranking: { status: "not-requested" } };
+      const runMetadata = (runId: string) => ({
+        createRunId: () => HybridShadowRunIdSchema.parse(runId),
+        clock: () => "2026-09-25T13:00:00.000Z",
+      });
+      const createProvider = (model: string, fetch: (url: string, init: { body: string }) => Promise<unknown>) =>
+        new B5TaxonomyInformedHybridReasoningProvider(
+          new OpenAiApplicabilityReasoningProvider({
+            apiKey: "unit-test-key",
+            model,
+            timeoutMs: 20_000,
+            maxOutputTokens: 4_096,
+            fetch: fetch as never,
+          }),
+          { providerKind: "openai-responses", model },
+        );
+      const runCommand = async (
+        commandId: string,
+        provider: B5TaxonomyInformedHybridReasoningProvider,
+        runId: string,
+      ) => {
+        committedSnapshot = {
+          ...snapshot(),
+          events: [
+            { ...evaluationEvent, commandId },
+            { ...taxonomyEvent, commandId },
+          ],
+        };
+        return evaluateTicketCommand({
+          dispatcher: dispatcher as never,
+          service: {
+            commitOperationalEvaluation: () => { commits += 1; return committedResult; },
+            replayOperationalEvaluation: () => ({ status: "committed" } as never),
+          },
+          tickets: { get: async () => ticket },
+          audits: { list: async () => [] },
+          knowledge: { list: async () => [] },
+          knowledgeEvolution: { listReusableApproved: async () => ({ status: "available", contexts: [], issues: [] }) },
+          now: () => new Date("2026-09-21T11:00:00.000Z"),
+          env: {},
+          retrievalObserver: {
+            async observe(query, _commandId, onExecution) {
+              await onExecution?.(query, execution, () => resolvedSnapshot());
+            },
+            recent: () => [],
+            close: async () => undefined,
+          },
+          hybridShadowCaptureSink: createHybridShadowRunCaptureSink(
+            provider,
+            repository,
+            runMetadata(runId),
+          ),
+        }, { ticketId: ticket.id, aiPreference: "deterministic" }, commandId);
+      };
+      const successfulFetch = vi.fn(async (_url: string, init: { body: string }) => {
+        const request = JSON.parse(init.body) as { input: string };
+        const semanticInput = JSON.parse(request.input.split("\n")[1]!) as Parameters<typeof validB5Output>[0];
+        return {
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({
+            output: [{ content: [{ type: "output_text", text: JSON.stringify(validB5Output(semanticInput)) }] }],
+          }),
+        };
+      });
+      const failureFetch = vi.fn(async () => { throw new Error("provider secret must not affect evaluation"); });
+      const authoritativeBefore = structuredClone({ recommendations: committedSnapshot.recommendations, diagnoses: committedSnapshot.diagnoses });
+
+      const completedResult = await runCommand(
+        "00000000-0000-4000-8000-000000000017",
+        createProvider("b5-command-success", successfulFetch),
+        "20000000-0000-4000-8000-000000000012",
+      );
+      expect(completedResult).toEqual({ status: "committed" });
+      expect(successfulFetch).toHaveBeenCalledTimes(1);
+      await vi.waitFor(() => expect(repository.listShadowRunsForTicket(ticket.id)).toHaveLength(1));
+      const completed = parseHybridShadowRunV3(repository.listShadowRunsForTicket(ticket.id)[0]!);
+      expect(completed.status).toBe("completed");
+      expect(completed).toMatchObject({ mode: "evaluation", result: { mode: "evaluation" } });
+
+      const failedResult = await runCommand(
+        "00000000-0000-4000-8000-000000000018",
+        createProvider("b5-command-failure", failureFetch),
+        "20000000-0000-4000-8000-000000000013",
+      );
+      expect(failedResult).toEqual({ status: "committed" });
+      await vi.waitFor(() => expect(repository.listShadowRunsForTicket(ticket.id)).toHaveLength(2));
+      const records = repository.listShadowRunsForTicket(ticket.id).map(parseHybridShadowRunV3);
+      expect(commits).toBe(2);
+      expect(failureFetch).toHaveBeenCalledTimes(1);
+      expect(records.map(({ status }) => status)).toEqual(["completed", "failed"]);
+      expect(records.find(({ status }) => status === "failed")).toMatchObject({
+        failure: { code: "UNAVAILABLE", message: "The reasoning provider is unavailable." },
+      });
+      expect(JSON.stringify(records)).not.toContain("provider secret");
+      expect({ recommendations: committedSnapshot.recommendations, diagnoses: committedSnapshot.diagnoses })
+        .toEqual(authoritativeBefore);
+    } finally {
+      repository.close();
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });

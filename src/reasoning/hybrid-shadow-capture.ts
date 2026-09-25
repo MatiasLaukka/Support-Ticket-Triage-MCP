@@ -9,9 +9,25 @@ import type {
 } from "../operational/domain.js";
 import type { RetrievalExecution } from "../retrieval/execution.js";
 import type { CustomerReply } from "../approval-desk/ai-evaluation.js";
+import { DiagnosticTaxonomyContextSchema } from "../diagnostic-taxonomy.js";
+import { safeCaseText } from "../retrieval/representations.js";
+import {
+  APPLICABILITY_CONTRACT_VERSION,
+  validateApplicabilitySemanticInput,
+  type ApplicabilitySemanticReasoningInput,
+  type ApplicabilitySemanticCaseProjection,
+} from "../retrieval/applicability-types.js";
+import {
+  assertSafeApplicabilityCaseProjection,
+  type ApplicabilitySafeCaseContext,
+} from "../retrieval/applicability-case-safety.js";
+import {
+  buildApplicabilityTaxonomyProjection,
+  resolveApplicabilityEvidence,
+} from "../retrieval/applicability-evidence.js";
 import { buildRetrievalQuery } from "../retrieval/stage.js";
 import { deterministicRetrievalReferences } from "../retrieval/deterministic-references.js";
-import type { Query } from "../retrieval/types.js";
+import type { IndexMetadata, Query, SourceSnapshot } from "../retrieval/types.js";
 import { canonicalJsonStringify } from "./canonical-json.js";
 import { assembleHybridReasoningInput } from "./input-assembler.js";
 import { HybridShadowBasisSchema, type HybridShadowBasis } from "./shadow-run-types.js";
@@ -56,6 +72,11 @@ export interface HybridShadowCaptureAssemblySource {
   snapshotThroughSequence: OperationalEvent["sequence"];
   query: Query;
   retrievalExecution: RetrievalExecution;
+  /** Candidate content resolved from the same index identity as the execution. */
+  resolvedRetrievalSnapshot: {
+    metadata: IndexMetadata;
+    sourceSnapshot: SourceSnapshot;
+  };
 }
 
 /**
@@ -103,13 +124,56 @@ export function assembleHybridShadowCaptureContext(
     fail("No diagnostic taxonomy revision is causally applicable to the committed event.");
   }
   assertRankingConsistent(query, retrievalExecution);
+  assertResolvedRetrievalSnapshotConsistent(retrievalExecution, source.resolvedRetrievalSnapshot);
 
-  const input = assembleHybridReasoningInput({
+  const customerReplies = customerRepliesAt(snapshot, event, snapshotThroughSequence);
+  const applicabilityCase = safeApplicabilityCase(ticketAtEvent, customerReplies);
+  const evidence = resolveApplicabilityEvidence(
+    retrievalExecution.retrieval.candidates,
+    source.resolvedRetrievalSnapshot.sourceSnapshot,
+  );
+  if (evidence.candidates.some((candidate) => candidate.evidence.status !== "available")) {
+    fail("A retrieved candidate could not be resolved to frozen evidence content.");
+  }
+  const taxonomyContext = DiagnosticTaxonomyContextSchema.parse(taxonomyRevision.context);
+  const applicability = {
+    contractVersion: APPLICABILITY_CONTRACT_VERSION,
+    lane: "taxonomy-informed",
+    case: {
+      ...applicabilityCase,
+      observedFacts: applicabilityCase.observedFacts.map((fact) => ({ ...fact })),
+      conversationState: applicabilityCase.conversationState.map((fact) => ({ ...fact })),
+    },
+    candidates: evidence.candidates.map((candidate) => structuredClone(candidate)),
+    evidenceRegistry: evidence.evidenceRegistry.map((representation) => ({
+      ...representation,
+      matchedChannels: [...representation.matchedChannels],
+    })),
+    taxonomy: buildApplicabilityTaxonomyProjection(
+      taxonomyContext,
+      retrievalExecution.retrieval.candidates.map((candidate) => ({
+        resourceKey: candidate.resourceKey,
+        taxonomy: candidate.taxonomy === undefined ? null : candidate.taxonomy,
+      })),
+    ),
+  } satisfies ApplicabilitySemanticReasoningInput;
+  try {
+    validateApplicabilitySemanticInput(applicability);
+  } catch {
+    fail("Hybrid shadow B5 semantic input failed its structural validation.");
+  }
+
+  const assembledInput = assembleHybridReasoningInput({
     mode: source.mode,
     ticket: { id: ticketAtEvent.id, revision: ticketAtEvent.revision },
     customerReplyWatermark: watermarkAtEvent,
     retrievalExecution,
   });
+  const input: HybridReasoningInput = {
+    ...assembledInput,
+    applicability,
+    applicabilityTaxonomyRevision: taxonomyRevision.revision,
+  };
   if (
     input.basis.ticketId !== event.ticketId
     || input.basis.ticketRevision !== ticketAtEvent.revision
@@ -128,6 +192,9 @@ export function assembleHybridShadowCaptureContext(
     taxonomyRevision: taxonomyRevision.revision as DiagnosticTaxonomyRevision["revision"],
     retrievalQueryHash: query.queryHash,
   });
+  if (input.applicabilityTaxonomyRevision !== basis.taxonomyRevision) {
+    fail("Hybrid shadow taxonomy projection does not match the H4b taxonomy basis.");
+  }
   return {
     opportunityId: createOpportunityId({
       ticketId: event.ticketId,
@@ -251,6 +318,58 @@ function assertQueryMatchesCommittedContext(
   }
 }
 
+function safeApplicabilityCase(
+  ticket: TicketRevision["ticket"],
+  customerReplies: readonly CustomerReply[],
+): ApplicabilitySemanticCaseProjection {
+  const identifiers = [ticket.id, ticket.customer.name, ticket.requester?.name]
+    .filter((value): value is string => value !== undefined);
+  const problemStatement = safeCaseText(ticket.subject, identifiers);
+  if (problemStatement === undefined) {
+    fail("Committed ticket subject cannot be safely projected for B5 reasoning.");
+  }
+  const description = safeCaseText(ticket.description, identifiers);
+  const observedFacts = description === undefined
+    ? []
+    : [{ id: "ticket.description", statement: description }];
+  if (customerReplies.length > 16) {
+    fail("Committed customer conversation exceeds the B5 safe projection limit.");
+  }
+  const conversationState = customerReplies.flatMap((reply, index) => {
+    const statement = safeCaseText(reply.body, identifiers);
+    return statement === undefined ? [] : [{ id: `conversation.reply.${index + 1}`, statement }];
+  });
+  const projection: ApplicabilitySemanticCaseProjection = {
+    problemStatement,
+    observedFacts,
+    conversationState,
+  };
+  try {
+    assertSafeApplicabilityCaseProjection(projection satisfies ApplicabilitySafeCaseContext);
+  } catch {
+    fail("Committed ticket or customer content failed the B5 safe projection check.");
+  }
+  return projection;
+}
+
+function assertResolvedRetrievalSnapshotConsistent(
+  execution: RetrievalExecution,
+  resolved: HybridShadowCaptureAssemblySource["resolvedRetrievalSnapshot"],
+): void {
+  if (!isDeepStrictEqual(execution.retrieval.metadata, resolved.metadata)) {
+    fail("Resolved evidence retrieval metadata does not match the executed retrieval snapshot.");
+  }
+  const candidateKeys = execution.retrieval.candidates.map(({ resourceKey }) => resourceKey);
+  const resolvedKeys = resolved.sourceSnapshot.resources.map(({ resource }) => resource.key);
+  if (
+    new Set(candidateKeys).size !== candidateKeys.length
+    || new Set(resolvedKeys).size !== resolvedKeys.length
+    || !isDeepStrictEqual([...candidateKeys].sort(), [...resolvedKeys].sort())
+  ) {
+    fail("Resolved evidence resources do not match the retrieval candidate identities.");
+  }
+}
+
 function taxonomyRevisionAt(
   snapshot: OperationalWorkflowSnapshot,
   trigger: OperationalEvent,
@@ -366,6 +485,8 @@ function createOpportunityId(input: {
     basis: input.reasoningInput.basis,
     observations: input.reasoningInput.observations,
     retrievalCandidates: input.reasoningInput.retrievalCandidates,
+    applicability: input.reasoningInput.applicability,
+    applicabilityTaxonomyRevision: input.reasoningInput.applicabilityTaxonomyRevision,
     retrieval: input.reasoningInput.retrieval,
     ranking,
   };

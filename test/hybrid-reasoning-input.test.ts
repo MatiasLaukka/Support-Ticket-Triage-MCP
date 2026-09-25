@@ -12,7 +12,7 @@ import type {
   EvidenceObservationId,
   EvidenceRelationship,
   EvidenceRequirement,
-  HybridReasoningInput,
+  HybridReasoningInputV2,
   HybridReasoningResult,
   ReasoningBasis,
 } from "../src/reasoning/types.js";
@@ -320,8 +320,8 @@ describe("hybrid reasoning input assembler", () => {
   });
 
   it("keeps evaluation and diagnosis as distinguishable input modes", () => {
-    const evaluation: HybridReasoningInput = assembleHybridReasoningInput(input("evaluation"));
-    const diagnosis: HybridReasoningInput = assembleHybridReasoningInput(input("diagnosis"));
+    const evaluation: HybridReasoningInputV2 = assembleHybridReasoningInput(input("evaluation"));
+    const diagnosis: HybridReasoningInputV2 = assembleHybridReasoningInput(input("diagnosis"));
 
     expect(evaluation.mode).toBe("evaluation");
     expect(diagnosis.mode).toBe("diagnosis");

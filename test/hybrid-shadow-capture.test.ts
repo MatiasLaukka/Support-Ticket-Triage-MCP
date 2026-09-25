@@ -7,7 +7,8 @@ import { assembleHybridShadowCaptureContext, hybridShadowModeForEvent } from "..
 import { deterministicRetrievalReferences } from "../src/retrieval/deterministic-references.js";
 import type { RetrievalExecution } from "../src/retrieval/execution.js";
 import { buildRetrievalQuery } from "../src/retrieval/stage.js";
-import type { Candidate, IndexMetadata, RetrievalResult } from "../src/retrieval/types.js";
+import { hashRepresentation, hashResource } from "../src/retrieval/representations.js";
+import type { Candidate, IndexMetadata, ProjectedResource, RetrievalResult, SourceSnapshot } from "../src/retrieval/types.js";
 import type { RankingResult } from "../src/retrieval/ranking-types.js";
 
 const ticket = TicketSchema.parse({
@@ -42,6 +43,21 @@ const index: IndexMetadata = {
 const taxonomyEventId = "00000000-0000-4000-8000-000000000001";
 const evaluationEventId = "00000000-0000-4000-8000-000000000002";
 
+const taxonomyContext = {
+  primaryProductSurface: { domain: "messaging", area: "campaigns" },
+  secondaryProductSurfaces: [],
+  problemClasses: ["defect"],
+  support: { productSurface: "supported", problemClass: "tentative" },
+  basis: {
+    source: "initial-classification",
+    evidenceIds: [],
+    knowledgeArticleIds: [],
+    playbookIds: [],
+    knownCauseIds: [],
+    explanation: "The current taxonomy revision applies to this ticket.",
+  },
+};
+
 function event(id: string, sequence: number, action: OperationalEvent["action"]): OperationalEvent {
   return {
     id,
@@ -68,7 +84,7 @@ function snapshot(): OperationalWorkflowSnapshot {
       id: "taxonomy-1",
       ticketId: ticket.id,
       revision: 1,
-      context: {} as never,
+      context: structuredClone(taxonomyContext) as never,
       operationalEventId: taxonomyEventId,
       createdAt: taxonomyEvent.occurredAt,
     }],
@@ -93,6 +109,43 @@ function candidate(resourceKey: Candidate["resourceKey"], sourceId: string): Can
     }],
     knownCauseReferences: [],
   };
+}
+
+function projectedResource(resourceKey: Candidate["resourceKey"], sourceId: string): ProjectedResource {
+  const representationBase = {
+    id: `${resourceKey}:section:0`,
+    resourceKey,
+    kind: "section",
+    ordinal: 0,
+    title: `${sourceId} guide`,
+    heading: "Delivery checks",
+    keywords: ["webhook"],
+    lexicalText: `${sourceId} guide delivery checks`,
+    semanticText: `Compare ${sourceId} delivery attempts against the webhook retry policy.`,
+  };
+  const representation = { ...representationBase, contentHash: hashRepresentation(representationBase) };
+  const resourceBase = {
+    key: resourceKey,
+    type: "knowledge-article" as const,
+    sourceId,
+    sourceVersion: "article-v1",
+    family: "article" as const,
+    linkedResourceKeys: [] as const,
+  };
+  return {
+    resource: { ...resourceBase, contentHash: hashResource(resourceBase, [representation]) },
+    representations: [representation],
+  };
+}
+
+function resolvedSnapshot(sourceSnapshot: SourceSnapshot = {
+  resources: [
+    projectedResource("knowledge-article:webhook-delay", "article-webhook"),
+    projectedResource("knowledge-article:delivery-retry", "article-retry"),
+  ],
+  unavailableFamilies: [],
+}) {
+  return { metadata: structuredClone(index), sourceSnapshot };
 }
 
 function retrieval(): RetrievalResult {
@@ -176,6 +229,7 @@ function source(mode: "evaluation" | "diagnosis" = "evaluation", ranking: Retrie
     snapshotThroughSequence: evaluationEvent.sequence,
     query,
     retrievalExecution: { retrieval: retrieval(), ranking },
+    resolvedRetrievalSnapshot: resolvedSnapshot(),
   };
 }
 
@@ -255,6 +309,136 @@ describe("hybrid shadow capture assembler", () => {
     ]);
   });
 
+  it("freezes a safe case projection and resolved B5 evidence without raw operational objects", () => {
+    const context = assembleHybridShadowCaptureContext(source());
+
+    expect(context.input.applicability.case).toEqual({
+      problemStatement: "Webhook delivery is delayed",
+      observedFacts: [{ id: "ticket.description", statement: "Delivery attempts arrive late." }],
+      conversationState: [],
+    });
+    expect(context.input.applicability.case).not.toHaveProperty("caseId");
+    expect(context.input.applicability.case).not.toHaveProperty("ticketId");
+    expect(JSON.stringify(context.input.applicability)).not.toContain("Northstar Labs");
+    expect(JSON.stringify(context.input.applicability)).not.toContain("TKT-0101");
+    expect(JSON.stringify(context.input.applicability)).not.toContain("customer");
+
+    expect(context.input.applicability.candidates.map(({ resourceKey, sourceId, sourceVersion, contentHash }) => ({
+      resourceKey, sourceId, sourceVersion, contentHash,
+    }))).toEqual([
+      {
+        resourceKey: "knowledge-article:delivery-retry",
+        sourceId: "article-retry",
+        sourceVersion: "article-v1",
+        contentHash: projectedResource("knowledge-article:delivery-retry", "article-retry").resource.contentHash,
+      },
+      {
+        resourceKey: "knowledge-article:webhook-delay",
+        sourceId: "article-webhook",
+        sourceVersion: "article-v1",
+        contentHash: projectedResource("knowledge-article:webhook-delay", "article-webhook").resource.contentHash,
+      },
+    ]);
+    expect(context.input.applicability.evidenceRegistry.map(({ id, resourceKey, contentHash, evidenceOrigin, matchedChannels, text }) => ({
+      id, resourceKey, contentHash, evidenceOrigin, matchedChannels, text,
+    }))).toEqual([
+      {
+        id: "knowledge-article:delivery-retry:section:0",
+        resourceKey: "knowledge-article:delivery-retry",
+        contentHash: projectedResource("knowledge-article:delivery-retry", "article-retry").representations[0]!.contentHash,
+        evidenceOrigin: "reference-grounded",
+        matchedChannels: [],
+        text: "Compare article-retry delivery attempts against the webhook retry policy.",
+      },
+      {
+        id: "knowledge-article:webhook-delay:section:0",
+        resourceKey: "knowledge-article:webhook-delay",
+        contentHash: projectedResource("knowledge-article:webhook-delay", "article-webhook").representations[0]!.contentHash,
+        evidenceOrigin: "reference-grounded",
+        matchedChannels: [],
+        text: "Compare article-webhook delivery attempts against the webhook retry policy.",
+      },
+    ]);
+    expect(context.input.applicability.evidenceRegistry.map(({ id }) => id))
+      .toEqual([...context.input.applicability.evidenceRegistry.map(({ id }) => id)].sort());
+  });
+
+  it("does not let later ticket, customer-message, or retrieval-store mutations change frozen input", () => {
+    const initial = source();
+    const context = assembleHybridShadowCaptureContext(initial);
+    const frozen = structuredClone(context.input);
+
+    (initial.snapshot.ticket as { subject: string }).subject = "Changed after capture";
+    (initial.snapshot.messages as unknown as { body: string }[]).push({ body: "Later customer text" });
+    initial.resolvedRetrievalSnapshot.sourceSnapshot.resources[0]!.representations[0]!.semanticText = "Changed retrieval content";
+    const sourceTaxonomy = initial.snapshot.diagnosticTaxonomyRevisions[0]!.context as unknown as {
+      primaryProductSurface: { domain: string; area: string } | null;
+      support: { productSurface: string };
+    };
+    sourceTaxonomy.primaryProductSurface!.domain = "identity-access";
+    sourceTaxonomy.support.productSurface = "tentative";
+
+    expect(context.input).toEqual(frozen);
+    expect(JSON.stringify(context.input.applicability)).not.toContain("Changed after capture");
+    expect(JSON.stringify(context.input.applicability)).not.toContain("Later customer text");
+    expect(JSON.stringify(context.input.applicability)).not.toContain("Changed retrieval content");
+    expect(context.input.applicability.taxonomy.case.primaryProductSurface).toEqual(taxonomyContext.primaryProductSurface);
+    expect(context.input.applicability.taxonomy.case.support).toEqual(taxonomyContext.support);
+  });
+
+  it("freezes only committed customer conversation text as safe case context", () => {
+    const initial = source();
+    const replyEvent = {
+      ...event("00000000-0000-4000-8000-000000000018", 3, "customer-reply-received"),
+      commandId: evaluationEvent.commandId,
+    };
+    const trigger = { ...evaluationEvent, sequence: 4 };
+    const reply = {
+      id: "00000000-0000-4000-8000-000000000019",
+      ticketId: ticket.id,
+      operationalEventId: replyEvent.id,
+      kind: "customer" as const,
+      createdAt: replyEvent.occurredAt,
+      body: "We noticed repeated webhook attempts after the delivery delay.",
+    };
+    const customerReplies: CustomerReply[] = [{
+      id: reply.id,
+      ticketId: reply.ticketId,
+      createdAt: reply.createdAt,
+      body: reply.body,
+    }];
+    const replyWatermark: CustomerReplyWatermark = {
+      state: "reply",
+      timestamp: reply.createdAt,
+      id: reply.id,
+    };
+    const committedSnapshot = {
+      ...initial.snapshot,
+      events: [taxonomyEvent, replyEvent, trigger],
+      messages: [reply],
+      customerReplyWatermark: replyWatermark,
+    } as unknown as OperationalWorkflowSnapshot;
+    const query = buildRetrievalQuery({
+      ticket,
+      customerReplies,
+      customerReplyWatermark: JSON.stringify(replyWatermark),
+      references: deterministicRetrievalReferences({ ticket, customerReplies }),
+    });
+
+    const captured = assembleHybridShadowCaptureContext({
+      ...initial,
+      event: trigger,
+      snapshot: committedSnapshot,
+      snapshotThroughSequence: trigger.sequence,
+      query,
+    });
+
+    expect(captured.input.applicability.case.conversationState).toEqual([{
+      id: "conversation.reply.1",
+      statement: reply.body,
+    }]);
+  });
+
   it("rejects conflicting ticket, revision, watermark, and successful ranking identities", () => {
     const initial = source();
     expect(() => assembleHybridShadowCaptureContext({
@@ -291,6 +475,23 @@ describe("hybrid shadow capture assembler", () => {
         }, durationMs: 8 },
       },
     })).toThrow(/retrieval identity/i);
+    expect(() => assembleHybridShadowCaptureContext({
+      ...initial,
+      resolvedRetrievalSnapshot: {
+        ...initial.resolvedRetrievalSnapshot,
+        metadata: { ...index, generation: index.generation + 1 },
+      },
+    })).toThrow(/retrieval metadata/i);
+    expect(() => assembleHybridShadowCaptureContext({
+      ...initial,
+      resolvedRetrievalSnapshot: {
+        ...initial.resolvedRetrievalSnapshot,
+        sourceSnapshot: {
+          ...initial.resolvedRetrievalSnapshot.sourceSnapshot,
+          resources: initial.resolvedRetrievalSnapshot.sourceSnapshot.resources.slice(1),
+        },
+      },
+    })).toThrow(/candidate identities/i);
   });
 
   it("does not use later ticket, reply, or taxonomy revisions for the trigger basis", () => {
@@ -307,7 +508,7 @@ describe("hybrid shadow capture assembler", () => {
       id: "taxonomy-2",
       ticketId: ticket.id,
       revision: 2,
-      context: {} as never,
+      context: structuredClone(taxonomyContext) as never,
       operationalEventId: laterTaxonomyEvent.id,
       createdAt: laterTaxonomyEvent.occurredAt,
     };
@@ -335,6 +536,10 @@ describe("hybrid shadow capture assembler", () => {
       customerReplyWatermark: { state: "none" },
       taxonomyRevision: 1,
     });
+    expect(laterBasis.input.applicability.taxonomy.case.problemClasses).toEqual(["defect"]);
+    expect(laterBasis.input.applicability.case.conversationState).toEqual([]);
+    expect(laterBasis.input.applicability.taxonomy.case.basis.explanation)
+      .toBe("The current taxonomy revision applies to this ticket.");
 
     const futureTicket = TicketSchema.parse({ ...ticket, revision: 8 });
     const futureTicketEvent = {
@@ -370,7 +575,7 @@ describe("hybrid shadow capture assembler", () => {
         id: "taxonomy-same-operation",
         ticketId: ticket.id,
         revision: 1,
-        context: {} as never,
+        context: structuredClone(taxonomyContext) as never,
         operationalEventId: sameOperationTaxonomyEvent.id,
         createdAt: sameOperationTaxonomyEvent.occurredAt,
       }],
@@ -387,6 +592,8 @@ describe("hybrid shadow capture assembler", () => {
       snapshotThroughSequence: sameOperationTaxonomyEvent.sequence,
       taxonomyRevision: 1,
     });
+    expect(context.input.applicabilityTaxonomyRevision).toBe(context.basis.taxonomyRevision);
+    expect(context.input.applicability.taxonomy.case).toEqual(taxonomyContext);
   });
 
   it("does not use taxonomy appended by a later operation beyond the committed snapshot boundary", () => {
@@ -399,7 +606,7 @@ describe("hybrid shadow capture assembler", () => {
       id: "taxonomy-later-operation",
       ticketId: ticket.id,
       revision: 2,
-      context: {} as never,
+      context: { ...structuredClone(taxonomyContext), problemClasses: ["outage"] } as never,
       operationalEventId: laterTaxonomyEvent.id,
       createdAt: laterTaxonomyEvent.occurredAt,
     };
@@ -466,6 +673,72 @@ describe("hybrid shadow capture assembler", () => {
     expect(otherEvent.opportunityId).not.toBe(evaluation.opportunityId);
   });
 
+  it("includes case, resolved evidence, and taxonomy content in opportunity identity", () => {
+    const initial = source();
+    const original = assembleHybridShadowCaptureContext(initial);
+    const repeated = assembleHybridShadowCaptureContext(structuredClone(initial));
+    expect(repeated.opportunityId).toBe(original.opportunityId);
+
+    const changedTicket = TicketSchema.parse({
+      ...ticket,
+      description: "Webhook requests are delayed after retry exhaustion.",
+    });
+    const changedCaseSnapshot = { ...initial.snapshot, ticket: changedTicket } as OperationalWorkflowSnapshot;
+    const changedCaseQuery = buildRetrievalQuery({
+      ticket: changedTicket,
+      customerReplies: [],
+      customerReplyWatermark: JSON.stringify(watermark),
+      references: deterministicRetrievalReferences({ ticket: changedTicket, customerReplies: [] }),
+    });
+    const changedCase = assembleHybridShadowCaptureContext({
+      ...initial,
+      snapshot: changedCaseSnapshot,
+      query: changedCaseQuery,
+    });
+
+    const changedEvidenceSource = structuredClone(initial.resolvedRetrievalSnapshot.sourceSnapshot);
+    const evidenceResource = changedEvidenceSource.resources[0]!;
+    const changedRepresentationBase = {
+      ...evidenceResource.representations[0]!,
+      semanticText: "A changed frozen troubleshooting representation for the captured resource.",
+    };
+    const changedRepresentation = {
+      ...changedRepresentationBase,
+      contentHash: hashRepresentation(changedRepresentationBase),
+    };
+    const { contentHash: _oldContentHash, ...resourceBase } = evidenceResource.resource;
+    const changedResource = {
+      ...resourceBase,
+      contentHash: hashResource(resourceBase, [changedRepresentation]),
+    };
+    const changedEvidenceResources = changedEvidenceSource.resources.map((projected, index) => index === 0
+      ? { resource: changedResource, representations: [changedRepresentation] }
+      : projected);
+    const changedEvidence = assembleHybridShadowCaptureContext({
+      ...initial,
+      resolvedRetrievalSnapshot: {
+        metadata: structuredClone(index),
+        sourceSnapshot: { ...changedEvidenceSource, resources: changedEvidenceResources },
+      },
+    });
+
+    const changedTaxonomyRevision = {
+      ...initial.snapshot.diagnosticTaxonomyRevisions[0]!,
+      context: { ...structuredClone(taxonomyContext), problemClasses: ["outage"] },
+    };
+    const changedTaxonomy = assembleHybridShadowCaptureContext({
+      ...initial,
+      snapshot: {
+        ...initial.snapshot,
+        diagnosticTaxonomyRevisions: [changedTaxonomyRevision],
+      } as OperationalWorkflowSnapshot,
+    });
+
+    expect(changedCase.opportunityId).not.toBe(original.opportunityId);
+    expect(changedEvidence.opportunityId).not.toBe(original.opportunityId);
+    expect(changedTaxonomy.opportunityId).not.toBe(original.opportunityId);
+  });
+
   it("distinguishes retrieval snapshots but excludes ranking duration from opportunity identity", () => {
     const initial = source();
     const original = assembleHybridShadowCaptureContext(initial);
@@ -477,6 +750,10 @@ describe("hybrid shadow capture assembler", () => {
           ...initial.retrievalExecution.retrieval,
           metadata: { ...index, generation: index.generation + 1 },
         },
+      },
+      resolvedRetrievalSnapshot: {
+        ...initial.resolvedRetrievalSnapshot,
+        metadata: { ...index, generation: index.generation + 1 },
       },
     });
     const ranked = rankingResult(initial.query);
@@ -531,7 +808,7 @@ describe("hybrid shadow capture assembler", () => {
         id: "taxonomy-same-transaction",
         ticketId: ticket.id,
         revision: 1,
-        context: {} as never,
+        context: structuredClone(taxonomyContext) as never,
         operationalEventId: taxonomyEventId,
         createdAt: committedTaxonomyEvent.occurredAt,
       }],
@@ -570,7 +847,9 @@ describe("hybrid shadow capture assembler", () => {
       now: () => new Date("2026-09-21T11:00:00.000Z"),
       env: {},
       retrievalObserver: {
-        async observe(query, _commandId, onExecution) { await onExecution?.(query, execution); },
+        async observe(query, _commandId, onExecution) {
+          await onExecution?.(query, execution, () => resolvedSnapshot());
+        },
         recent: () => [],
         close: async () => undefined,
       },

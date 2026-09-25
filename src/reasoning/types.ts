@@ -5,6 +5,7 @@ import type {
   TicketId,
 } from "../domain.js";
 import type { EvidenceRequirementId } from "../evidence-catalog.js";
+import type { ApplicabilityTaxonomyInformedSemanticReasoningInput } from "../retrieval/applicability-types.js";
 import type { RankingResult } from "../retrieval/ranking-types.js";
 import type { Candidate, IndexMetadata, RetrievalResult } from "../retrieval/types.js";
 
@@ -15,6 +16,8 @@ type ReasoningIdentity<Kind extends string> = string & {
 };
 
 export type ReasoningMode = "evaluation" | "diagnosis";
+/** Planned H5b policy identity; it is not a provider or operational authority. */
+export const PLANNED_B5_TAXONOMY_INFORMED_ADAPTER_ID = "b5-taxonomy-informed-v1" as const;
 export type EvidenceObservationId = ReasoningIdentity<"evidence-observation">;
 export type EvidenceActionId = ReasoningIdentity<"evidence-action">;
 
@@ -82,13 +85,22 @@ export type ReasoningRankingExecution =
   | { status: "succeeded"; result: RankingResult; durationMs: number }
   | { status: "failed"; durationMs: number };
 
-export interface HybridReasoningInput {
+/** Exact H3/H4b/H5a input shape retained for decoding persisted payloads v1 and v2. */
+export interface HybridReasoningInputV2 {
   mode: ReasoningMode;
   basis: ReasoningBasis;
   observations: readonly EvidenceObservation[];
   retrievalCandidates: readonly Candidate[];
   retrieval: Pick<RetrievalResult, "lexical" | "semantic" | "referenceDiagnostics">;
   ranking: ReasoningRankingExecution;
+}
+
+/** Current frozen runtime input, extended with the B5 semantic boundary. */
+export interface HybridReasoningInput extends HybridReasoningInputV2 {
+  /** Provider-ready B5 semantics; excludes all offline evaluation identities. */
+  applicability: ApplicabilityTaxonomyInformedSemanticReasoningInput;
+  /** Must identify the exact taxonomy revision frozen in applicability.taxonomy. */
+  applicabilityTaxonomyRevision: number;
 }
 
 export interface HybridReasoningResult {

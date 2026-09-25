@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import type { Ticket } from "../domain.js";
 import type { CustomerReply } from "../approval-desk/ai-evaluation.js";
-import { executeRetrieval, type RetrievalExecution } from "./execution.js";
+import { executeRetrieval, type RetrievalCandidateSourceResolver, type RetrievalExecution } from "./execution.js";
 import type { IndexManager } from "./index-manager.js";
 import type { EmbeddingProvider, IndexMetadata, Limits, Query, Reference, RetrievalTrace } from "./types.js";
 import { RETRIEVAL_SCHEMA_VERSION, RetrievalIntegrityError, RetrievalRepresentationVersionError, type RetrievalStore } from "./sqlite-store.js";
@@ -39,7 +39,11 @@ export interface RetrievalObserver {
   observe(
     query: Query,
     commandId: string,
-    onExecution?: (query: Query, execution: RetrievalExecution) => void | Promise<void>,
+    onExecution?: (
+      query: Query,
+      execution: RetrievalExecution,
+      resolveCandidateSources?: RetrievalCandidateSourceResolver,
+    ) => void | Promise<void>,
   ): Promise<void>;
   reportFailure?(commandId: string, code?: string): void;
   recent(): readonly RetrievalTrace[];
@@ -60,7 +64,11 @@ export function createRetrievalObserver(input: { manager: IndexManager; store: R
   const observe = (
     query: Query,
     commandId: string,
-    onExecution?: (query: Query, execution: RetrievalExecution) => void | Promise<void>,
+    onExecution?: (
+      query: Query,
+      execution: RetrievalExecution,
+      resolveCandidateSources?: RetrievalCandidateSourceResolver,
+    ) => void | Promise<void>,
   ): Promise<void> => {
     if (closed) return Promise.resolve();
     const work = (async () => {
@@ -92,7 +100,10 @@ export function createRetrievalObserver(input: { manager: IndexManager; store: R
         while (traces.length > TRACE_LIMIT) traces.shift();
         if (onExecution !== undefined) {
           try {
-            await onExecution(query, execution);
+            await onExecution(query, execution, () => input.store.resolveCandidateSourceSnapshot(
+              execution.retrieval.metadata,
+              execution.retrieval.candidates,
+            ));
           } catch {
             reportRetrievalFailure(commandId, report, "RETRIEVAL_EXECUTION_CALLBACK_FAILED");
           }

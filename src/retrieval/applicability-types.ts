@@ -126,11 +126,13 @@ const ResolvedEvidenceRepresentationSchema = z.object({
   }
 });
 
-const SafeCaseProjectionSchema = z.object({
-  caseId: StableIdSchema,
+const SafeCaseContextSchema = z.object({
   problemStatement: z.string().min(1).max(600),
   observedFacts: z.array(FactSchema).max(32),
   conversationState: z.array(FactSchema).max(16),
+}).strict();
+const SafeCaseProjectionSchema = SafeCaseContextSchema.extend({
+  caseId: StableIdSchema,
 }).strict();
 
 const ApplicabilityInputIdentitySchema = z.object({
@@ -153,10 +155,11 @@ const ApplicabilityInputIdentitySchema = z.object({
 }).strict();
 
 const CandidateTaxonomyMetadataSchema = z.object({ resourceKey: ResourceKeySchema, taxonomy: TaxonomyMetadataSchema.nullable() }).strict();
-const TaxonomyProjectionSchema = z.object({
+export const ApplicabilityTaxonomyProjectionSchema = z.object({
   case: DiagnosticTaxonomyContextSchema,
   candidateMetadata: z.array(CandidateTaxonomyMetadataSchema).max(64),
 }).strict();
+const TaxonomyProjectionSchema = ApplicabilityTaxonomyProjectionSchema;
 
 const EvidenceOnlyInputSchema = z.object({
   contractVersion: z.literal(APPLICABILITY_CONTRACT_VERSION),
@@ -177,6 +180,27 @@ const TaxonomyInformedInputSchema = z.object({
 }).strict();
 
 export const ApplicabilityReasoningInputSchema = z.discriminatedUnion("lane", [EvidenceOnlyInputSchema, TaxonomyInformedInputSchema]);
+
+const SemanticEvidenceOnlyInputSchema = z.object({
+  contractVersion: z.literal(APPLICABILITY_CONTRACT_VERSION),
+  lane: z.literal("evidence-only"),
+  case: SafeCaseContextSchema,
+  candidates: z.array(ApplicabilityCandidateInputSchema).max(64),
+  evidenceRegistry: z.array(ResolvedEvidenceRepresentationSchema).max(256),
+}).strict();
+export const ApplicabilityTaxonomyInformedSemanticReasoningInputSchema = z.object({
+  contractVersion: z.literal(APPLICABILITY_CONTRACT_VERSION),
+  lane: z.literal("taxonomy-informed"),
+  case: SafeCaseContextSchema,
+  candidates: z.array(ApplicabilityCandidateInputSchema).max(64),
+  evidenceRegistry: z.array(ResolvedEvidenceRepresentationSchema).max(256),
+  taxonomy: ApplicabilityTaxonomyProjectionSchema,
+}).strict();
+/** Semantic B5 input deliberately excludes case-set/oracle/capture identities. */
+export const ApplicabilitySemanticReasoningInputSchema = z.discriminatedUnion("lane", [
+  SemanticEvidenceOnlyInputSchema,
+  ApplicabilityTaxonomyInformedSemanticReasoningInputSchema,
+]);
 
 const MissingEvidenceItemSchema = z.object({ item: z.string().min(1).max(300), evidence: z.array(EvidenceReferenceSchema).max(16) }).strict();
 const CandidateAssessmentSchema = z.object({
@@ -236,6 +260,11 @@ export interface SafeCaseProjection {
   observedFacts: readonly { id: string; statement: string }[];
   conversationState: readonly { id: string; statement: string }[];
 }
+export interface ApplicabilitySemanticCaseProjection {
+  problemStatement: string;
+  observedFacts: readonly { id: string; statement: string }[];
+  conversationState: readonly { id: string; statement: string }[];
+}
 export interface ResolvedEvidenceRepresentation {
   id: string;
   resourceKey: ResourceKey;
@@ -250,6 +279,13 @@ export interface ResolvedEvidenceRepresentation {
 export type ApplicabilityCandidateInput = z.infer<typeof ApplicabilityCandidateInputSchema>;
 export type ApplicabilityInputIdentity = z.infer<typeof ApplicabilityInputIdentitySchema>;
 export type ApplicabilityReasoningInput = z.infer<typeof ApplicabilityReasoningInputSchema>;
+export type ApplicabilitySemanticReasoningInput = z.infer<typeof ApplicabilitySemanticReasoningInputSchema>;
+export type ApplicabilityTaxonomyInformedSemanticReasoningInput = Extract<
+  ApplicabilitySemanticReasoningInput,
+  { lane: "taxonomy-informed" }
+>;
+export type ApplicabilityTaxonomyProjection = z.infer<typeof ApplicabilityTaxonomyProjectionSchema>;
+export type ApplicabilityProviderInput = ApplicabilityReasoningInput | ApplicabilitySemanticReasoningInput;
 export type ApplicabilityProviderOutput = z.infer<typeof ApplicabilityProviderOutputSchema>;
 export type CandidateAssessment = z.infer<typeof CandidateAssessmentSchema>;
 export type DiagnosticHypothesis = z.infer<typeof RankedHypothesisSchema>;
@@ -267,6 +303,10 @@ export interface ApplicabilityReasoningExecution {
 }
 export interface ApplicabilityReasoningProvider {
   assess(input: ApplicabilityReasoningInput): Promise<ApplicabilityReasoningExecution>;
+}
+/** B5 semantic reasoning boundary for runtime inputs without offline evaluation identity. */
+export interface ApplicabilitySemanticReasoningProvider {
+  assessSemantic(input: ApplicabilitySemanticReasoningInput): Promise<ApplicabilityReasoningExecution>;
 }
 
 export type InvalidApplicabilityStage = "input" | "provider-output" | "candidate-coverage" | "evidence-reference" | "synthesis" | "taxonomy-output";
@@ -331,6 +371,24 @@ export function validateApplicabilityInput(value: unknown): asserts value is App
   } catch {
     throw new InvalidApplicabilitySchemaError("input", ["unknown-field"]);
   }
+  validateApplicabilitySemanticFields(input);
+}
+
+export function validateApplicabilitySemanticInput(
+  value: unknown,
+): asserts value is ApplicabilitySemanticReasoningInput {
+  let input: ApplicabilitySemanticReasoningInput;
+  try {
+    input = ApplicabilitySemanticReasoningInputSchema.parse(normalizeApplicabilitySemanticSets(value));
+  } catch {
+    throw new InvalidApplicabilitySchemaError("input", ["unknown-field"]);
+  }
+  validateApplicabilitySemanticFields(input);
+}
+
+function validateApplicabilitySemanticFields(
+  input: ApplicabilityReasoningInput | ApplicabilitySemanticReasoningInput,
+): void {
   assertUnique([...input.case.observedFacts, ...input.case.conversationState].map((fact) => fact.id), "input");
   assertUnique(input.candidates.map((candidate) => candidate.resourceKey), "input");
   assertUnique(input.evidenceRegistry.map((representation) => representation.id), "input");
@@ -381,7 +439,7 @@ function sameOrdinalSet(left: readonly string[], right: readonly string[]): bool
 function evidenceReferenceKey(reference: EvidenceReference): string {
   return `${reference.kind}:${reference.id}`;
 }
-function assertEvidenceReferencesResolve(input: ApplicabilityReasoningInput, output: ApplicabilityProviderOutput): void {
+function assertEvidenceReferencesResolve(input: ApplicabilityProviderInput, output: ApplicabilityProviderOutput): void {
   const factIds = new Set([...input.case.observedFacts, ...input.case.conversationState].map((fact) => fact.id));
   const representationOwners = new Map(input.evidenceRegistry.map((representation) => [representation.id, representation.resourceKey]));
   const assertReference = (reference: EvidenceReference, candidateKey?: string) => {
@@ -417,7 +475,7 @@ function assertEvidenceReferencesResolve(input: ApplicabilityReasoningInput, out
     }
   }
 }
-function assertSynthesisConsistent(input: ApplicabilityReasoningInput, output: ApplicabilityProviderOutput): void {
+function assertSynthesisConsistent(input: ApplicabilityProviderInput, output: ApplicabilityProviderOutput): void {
   const assessments = new Map(output.candidateAssessments.map((assessment) => [assessment.resourceKey, assessment]));
   const assertHypothesis = (hypothesis: DiagnosticHypothesis) => {
     if (hypothesis.kind === "novel") {
@@ -469,8 +527,9 @@ function assertTaxonomyOutputMatchesLane(lane: ApplicabilityLane, output: Applic
   if (lane === "taxonomy-informed" && relations.some((relation) => relation === undefined)) throw new InvalidApplicabilitySchemaError("taxonomy-output", ["taxonomyRelation"]);
 }
 
-export function validateApplicabilityProviderOutput(input: ApplicabilityReasoningInput, value: unknown): asserts value is ApplicabilityProviderOutput {
-  validateApplicabilityInput(input);
+export function validateApplicabilityProviderOutput(input: ApplicabilityProviderInput, value: unknown): asserts value is ApplicabilityProviderOutput {
+  if ("identity" in input) validateApplicabilityInput(input);
+  else validateApplicabilitySemanticInput(input);
   let output: ApplicabilityProviderOutput;
   try {
     output = ApplicabilityProviderOutputSchema.parse(value);

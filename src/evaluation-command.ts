@@ -229,9 +229,17 @@ export async function evaluateTicketCommand(
           ));
           return deps.retrievalObserver!.observe(query, commandId);
         }
-        return deps.retrievalObserver!.observe(query, commandId, async (actualQuery, retrievalExecution) => {
+        return deps.retrievalObserver!.observe(query, commandId, async (
+          actualQuery,
+          retrievalExecution,
+          resolveCandidateSources,
+        ) => {
           let context: ReturnType<typeof assembleHybridShadowCaptureContext>;
           try {
+            const resolvedRetrievalSnapshot = resolveCandidateSources?.();
+            if (resolvedRetrievalSnapshot === undefined) {
+              throw new Error("The retrieval observer did not provide a frozen candidate-source resolver.");
+            }
             context = assembleHybridShadowCaptureContext({
               mode,
               event: trigger.event,
@@ -239,6 +247,7 @@ export async function evaluateTicketCommand(
               snapshotThroughSequence: trigger.snapshotThroughSequence,
               query: actualQuery,
               retrievalExecution,
+              resolvedRetrievalSnapshot,
             });
           } catch (error) {
             reportHybridShadowCaptureFailure(deps, commandId, error);

@@ -7,11 +7,15 @@ import { AiUsageSchema, type AiUsage } from "./domain.js";
 import {
   ApplicabilityProviderUnavailableError,
   InvalidApplicabilitySchemaError,
+  validateApplicabilitySemanticInput,
   validateApplicabilityInput,
   validateApplicabilityProviderOutput,
   type ApplicabilityReasoningExecution,
+  type ApplicabilityProviderInput,
   type ApplicabilityReasoningInput,
   type ApplicabilityReasoningProvider,
+  type ApplicabilitySemanticReasoningInput,
+  type ApplicabilitySemanticReasoningProvider,
 } from "./retrieval/applicability-types.js";
 import { StartupConfigError } from "./runtime.js";
 import { makeOpenAiResponsesUrl } from "./utils/normalize-url.js";
@@ -50,7 +54,7 @@ export const APPLICABILITY_PROMPT_HASH = createHash("sha256")
   .digest("hex");
 
 export class OpenAiApplicabilityReasoningProvider
-  implements ApplicabilityReasoningProvider
+  implements ApplicabilityReasoningProvider, ApplicabilitySemanticReasoningProvider
 {
   constructor(
     private readonly options: {
@@ -66,6 +70,15 @@ export class OpenAiApplicabilityReasoningProvider
 
   async assess(input: ApplicabilityReasoningInput): Promise<ApplicabilityReasoningExecution> {
     validateApplicabilityInput(input);
+    return this.assessValidated(input);
+  }
+
+  async assessSemantic(input: ApplicabilitySemanticReasoningInput): Promise<ApplicabilityReasoningExecution> {
+    validateApplicabilitySemanticInput(input);
+    return this.assessValidated(input);
+  }
+
+  private async assessValidated(input: ApplicabilityProviderInput): Promise<ApplicabilityReasoningExecution> {
     assertProviderOptions(this.options);
 
     const now = this.options.now ?? Date.now;
@@ -172,7 +185,7 @@ async function requestApplicabilityResponse(input: {
   maxOutputTokens: number;
   url: string;
   fetch: FetchLike;
-  input: ApplicabilityReasoningInput;
+  input: ApplicabilityProviderInput;
 }): Promise<{ outputText: string; usage?: AiUsage }> {
   const schema = buildApplicabilityJsonSchema(input.input);
   const providerInput = buildApplicabilityProviderInput(input.input);
@@ -283,7 +296,7 @@ async function requestApplicabilityResponse(input: {
   });
 }
 
-function buildApplicabilityProviderInput(input: ApplicabilityReasoningInput): string {
+function buildApplicabilityProviderInput(input: ApplicabilityProviderInput): string {
   return [
     "BEGIN_UNTRUSTED_APPLICABILITY_EVIDENCE",
     JSON.stringify(input),
@@ -291,7 +304,7 @@ function buildApplicabilityProviderInput(input: ApplicabilityReasoningInput): st
   ].join("\n");
 }
 
-function buildApplicabilityJsonSchema(input: ApplicabilityReasoningInput): Record<string, unknown> {
+function buildApplicabilityJsonSchema(input: ApplicabilityProviderInput): Record<string, unknown> {
   const assessableCandidates = input.candidates.filter((candidate) => candidate.evidence.status === "available");
   const candidateKeys = assessableCandidates.map((candidate) => candidate.resourceKey);
   const factIds = [...input.case.observedFacts, ...input.case.conversationState].map(({ id }) => id);

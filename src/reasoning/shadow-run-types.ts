@@ -9,7 +9,11 @@ import {
 import type { CustomerReplyWatermark, IsoTimestamp, TicketId } from "../domain.js";
 import { isEvidenceRequirementId } from "../evidence-catalog.js";
 import type { EvidenceRequirementId } from "../evidence-catalog.js";
-import type { ApplicabilityReasoningExecution } from "../retrieval/applicability-types.js";
+import {
+  ApplicabilityTaxonomyInformedSemanticReasoningInputSchema,
+  validateApplicabilitySemanticInput,
+  type ApplicabilityReasoningExecution,
+} from "../retrieval/applicability-types.js";
 import {
   OperationalEventIdSchema,
   RevisionNumberSchema,
@@ -36,6 +40,7 @@ import type {
   EvidenceRelationship,
   EvidenceRequirement,
   HybridReasoningInput,
+  HybridReasoningInputV2,
   HybridReasoningResult,
   ReasoningMode,
   ReasoningRankingExecution,
@@ -46,7 +51,8 @@ declare const hybridShadowRunIdBrand: unique symbol;
 declare const hybridShadowExecutionKeyBrand: unique symbol;
 
 export const LEGACY_HYBRID_SHADOW_RUN_PAYLOAD_VERSION = 1 as const;
-export const HYBRID_SHADOW_RUN_PAYLOAD_VERSION = 2 as const;
+export const HYBRID_SHADOW_RUN_V2_PAYLOAD_VERSION = 2 as const;
+export const HYBRID_SHADOW_RUN_PAYLOAD_VERSION = 3 as const;
 
 export type HybridShadowRunId = string & {
   readonly [hybridShadowRunIdBrand]: true;
@@ -460,6 +466,15 @@ const RankingExecutionSchema: z.ZodType<ReasoningRankingExecution> = z.discrimin
   }).strict(),
 ]);
 
+const HybridReasoningInputV2Schema: z.ZodType<HybridReasoningInputV2> = z.object({
+  mode: ReasoningModeSchema,
+  basis: ReasoningBasisSchema,
+  observations: z.array(EvidenceObservationSchema),
+  retrievalCandidates: z.array(CandidateSchema),
+  retrieval: RetrievalObservationSchema,
+  ranking: RankingExecutionSchema,
+}).strict();
+
 const HybridReasoningInputSchema: z.ZodType<HybridReasoningInput> = z.object({
   mode: ReasoningModeSchema,
   basis: ReasoningBasisSchema,
@@ -467,6 +482,10 @@ const HybridReasoningInputSchema: z.ZodType<HybridReasoningInput> = z.object({
   retrievalCandidates: z.array(CandidateSchema),
   retrieval: RetrievalObservationSchema,
   ranking: RankingExecutionSchema,
+  applicability: ApplicabilityTaxonomyInformedSemanticReasoningInputSchema,
+  applicabilityTaxonomyRevision: RevisionNumberSchema.refine((value) => value > 0, {
+    message: "Applicability taxonomy revision must be positive.",
+  }),
 }).strict();
 
 const HybridReasoningResultSchema: z.ZodType<HybridReasoningResult> = z.object({
@@ -478,14 +497,14 @@ const HybridReasoningResultSchema: z.ZodType<HybridReasoningResult> = z.object({
   actions: z.array(EvidenceActionSchema),
 }).strict();
 
-interface HybridShadowRunCommon {
+interface HybridShadowRunCommon<Input extends HybridReasoningInputV2 | HybridReasoningInput> {
   runId: HybridShadowRunId;
   ticketId: TicketId;
   mode: ReasoningMode;
   provider: ReasoningProviderIdentity;
   recordedAt: IsoTimestamp;
   basis: HybridShadowBasis;
-  input: HybridReasoningInput;
+  input: Input;
 }
 
 type HybridShadowRunStatus =
@@ -500,16 +519,32 @@ type HybridShadowRunStatus =
       failure: HybridShadowRunFailure;
     };
 
-export type LegacyHybridShadowRun = HybridShadowRunCommon & HybridShadowRunStatus;
+export type LegacyHybridShadowRun = HybridShadowRunCommon<HybridReasoningInputV2> & HybridShadowRunStatus;
 
-export type HybridShadowRunV2 = HybridShadowRunCommon & {
+export type HybridShadowRunV2 = HybridShadowRunCommon<HybridReasoningInputV2> & {
   opportunityId: HybridShadowOpportunityId;
   executionKey: HybridShadowExecutionKey;
 } & HybridShadowRunStatus;
 
-export type HybridShadowRun = LegacyHybridShadowRun | HybridShadowRunV2;
+export type HybridShadowRunV3 = HybridShadowRunCommon<HybridReasoningInput> & {
+  opportunityId: HybridShadowOpportunityId;
+  executionKey: HybridShadowExecutionKey;
+} & HybridShadowRunStatus;
 
-const HybridShadowRunCommonSchema = z.object({
+export type HybridShadowRunWithOpportunity = HybridShadowRunV2 | HybridShadowRunV3;
+export type HybridShadowRun = LegacyHybridShadowRun | HybridShadowRunV2 | HybridShadowRunV3;
+
+const HybridShadowRunCommonV2Schema = z.object({
+  runId: HybridShadowRunIdSchema,
+  ticketId: TicketIdSchema,
+  mode: ReasoningModeSchema,
+  provider: ReasoningProviderIdentitySchema,
+  recordedAt: IsoTimestampSchema,
+  basis: HybridShadowBasisSchema,
+  input: HybridReasoningInputV2Schema,
+}).strict();
+
+const HybridShadowRunCommonV3Schema = z.object({
   runId: HybridShadowRunIdSchema,
   ticketId: TicketIdSchema,
   mode: ReasoningModeSchema,
@@ -521,24 +556,39 @@ const HybridShadowRunCommonSchema = z.object({
 
 /** Exact schema for the JSON payload version stored beside each SQLite row. */
 const HybridShadowRunPayloadV1Schema: z.ZodType<LegacyHybridShadowRun> = z.discriminatedUnion("status", [
-  HybridShadowRunCommonSchema.extend({
+  HybridShadowRunCommonV2Schema.extend({
     status: z.literal("completed"),
     result: HybridReasoningResultSchema,
   }).strict(),
-  HybridShadowRunCommonSchema.extend({
+  HybridShadowRunCommonV2Schema.extend({
     status: z.literal("failed"),
     failure: HybridShadowRunFailureSchema,
   }).strict(),
 ]);
 
 const HybridShadowRunPayloadV2Schema: z.ZodType<HybridShadowRunV2> = z.discriminatedUnion("status", [
-  HybridShadowRunCommonSchema.extend({
+  HybridShadowRunCommonV2Schema.extend({
     opportunityId: HybridShadowOpportunityIdSchema,
     executionKey: HybridShadowExecutionKeySchema,
     status: z.literal("completed"),
     result: HybridReasoningResultSchema,
   }).strict(),
-  HybridShadowRunCommonSchema.extend({
+  HybridShadowRunCommonV2Schema.extend({
+    opportunityId: HybridShadowOpportunityIdSchema,
+    executionKey: HybridShadowExecutionKeySchema,
+    status: z.literal("failed"),
+    failure: HybridShadowRunFailureSchema,
+  }).strict(),
+]);
+
+const HybridShadowRunPayloadV3Schema: z.ZodType<HybridShadowRunV3> = z.discriminatedUnion("status", [
+  HybridShadowRunCommonV3Schema.extend({
+    opportunityId: HybridShadowOpportunityIdSchema,
+    executionKey: HybridShadowExecutionKeySchema,
+    status: z.literal("completed"),
+    result: HybridReasoningResultSchema,
+  }).strict(),
+  HybridShadowRunCommonV3Schema.extend({
     opportunityId: HybridShadowOpportunityIdSchema,
     executionKey: HybridShadowExecutionKeySchema,
     status: z.literal("failed"),
@@ -548,7 +598,10 @@ const HybridShadowRunPayloadV2Schema: z.ZodType<HybridShadowRunV2> = z.discrimin
 
 export function parseHybridShadowRun(value: unknown): HybridShadowRun {
   if (isRecord(value) && ("opportunityId" in value || "executionKey" in value)) {
-    return parseHybridShadowRunV2(value);
+    const input = isRecord(value.input) ? value.input : undefined;
+    return input !== undefined && ("applicability" in input || "applicabilityTaxonomyRevision" in input)
+      ? parseHybridShadowRunV3(value)
+      : parseHybridShadowRunV2(value);
   }
   return parseLegacyHybridShadowRun(value);
 }
@@ -571,6 +624,15 @@ export function parseHybridShadowRunV2(value: unknown): HybridShadowRunV2 {
   return validateHybridShadowRun(parsed.data);
 }
 
+export function parseHybridShadowRunV3(value: unknown): HybridShadowRunV3 {
+  const parsed = HybridShadowRunPayloadV3Schema.safeParse(value);
+  if (!parsed.success) {
+    throw new Error("Hybrid shadow-run payload does not match the supported contract.");
+  }
+
+  return validateHybridShadowRun(parsed.data);
+}
+
 function validateHybridShadowRun<T extends HybridShadowRun>(run: T): T {
   if (
     run.input.mode !== run.mode
@@ -586,6 +648,20 @@ function validateHybridShadowRun<T extends HybridShadowRun>(run: T): T {
     && run.input.ranking.result.queryBasis.queryHash !== run.basis.retrievalQueryHash
   ) {
     throw new Error("Ranking query identity does not match the shadow-run retrieval query.");
+  }
+
+  if ("applicability" in run.input) {
+    try {
+      validateApplicabilitySemanticInput(run.input.applicability);
+    } catch {
+      throw new Error("Hybrid shadow-run B5 semantic input is invalid.");
+    }
+    if (
+      run.input.applicability.lane !== "taxonomy-informed"
+      || run.input.applicabilityTaxonomyRevision !== run.basis.taxonomyRevision
+    ) {
+      throw new Error("Hybrid shadow-run taxonomy projection revision does not match its H4b basis.");
+    }
   }
 
   if (run.status === "completed") {

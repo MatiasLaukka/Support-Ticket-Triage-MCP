@@ -4,11 +4,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { CustomerReplyWatermark, TicketId } from "../src/domain.js";
+import type { DiagnosticTaxonomyContext } from "../src/diagnostic-taxonomy.js";
 import type {
   EvidenceAction,
   EvidenceActionId,
   EvidenceObservation,
   EvidenceObservationId,
+  HybridReasoningInputV2,
   HybridReasoningInput,
   HybridReasoningResult,
   ReasoningRankingExecution,
@@ -19,6 +21,7 @@ import {
   type HybridShadowExecutionKey,
   type HybridShadowRun,
   type HybridShadowRunV2,
+  type HybridShadowRunV3,
   type HybridShadowBasis,
 } from "../src/reasoning/shadow-run-types.js";
 import type { HybridShadowOpportunityId } from "../src/reasoning/hybrid-shadow-capture.js";
@@ -31,6 +34,7 @@ import type { RankingResult } from "../src/retrieval/ranking-types.js";
 import type { IndexMetadata, ResourceType } from "../src/retrieval/types.js";
 import { buildRetrievalQuery } from "../src/retrieval/stage.js";
 import type { EvidenceRequirementId } from "../src/evidence-catalog.js";
+import { APPLICABILITY_CONTRACT_VERSION } from "../src/retrieval/applicability-types.js";
 
 const ticketId = "TKT-0101" as TicketId;
 const runIds = {
@@ -148,11 +152,69 @@ function createLegacyV1Database(path: string, run: HybridShadowRun): string {
   return payloadJson;
 }
 
+function createV2Database(path: string, run: HybridShadowRunV2): string {
+  const database = new Database(path);
+  database.exec(`
+    CREATE TABLE hybrid_shadow_runs (
+      run_id TEXT PRIMARY KEY NOT NULL,
+      ticket_id TEXT NOT NULL,
+      mode TEXT NOT NULL CHECK (mode IN ('evaluation', 'diagnosis')),
+      provider_id TEXT NOT NULL CHECK (length(trim(provider_id)) > 0),
+      model_id TEXT NOT NULL CHECK (length(trim(model_id)) > 0),
+      status TEXT NOT NULL CHECK (status IN ('completed', 'failed')),
+      recorded_at TEXT NOT NULL,
+      payload_version INTEGER NOT NULL CHECK (payload_version IN (1, 2)),
+      payload_json TEXT NOT NULL CHECK (json_valid(payload_json) AND json_type(payload_json) = 'object'),
+      opportunity_id TEXT,
+      execution_key TEXT,
+      CHECK (
+        (payload_version = 1 AND opportunity_id IS NULL AND execution_key IS NULL)
+        OR (payload_version = 2 AND opportunity_id IS NOT NULL AND execution_key IS NOT NULL)
+      )
+    );
+    CREATE INDEX hybrid_shadow_runs_ticket_order_idx
+      ON hybrid_shadow_runs(ticket_id, recorded_at, run_id);
+    CREATE INDEX hybrid_shadow_runs_opportunity_order_idx
+      ON hybrid_shadow_runs(opportunity_id, recorded_at, run_id)
+      WHERE opportunity_id IS NOT NULL;
+    CREATE UNIQUE INDEX hybrid_shadow_runs_execution_key_unique_idx
+      ON hybrid_shadow_runs(execution_key)
+      WHERE execution_key IS NOT NULL;
+    CREATE TRIGGER hybrid_shadow_runs_no_update
+      BEFORE UPDATE ON hybrid_shadow_runs
+      BEGIN SELECT RAISE(ABORT, 'hybrid shadow runs are immutable'); END;
+    CREATE TRIGGER hybrid_shadow_runs_no_delete
+      BEFORE DELETE ON hybrid_shadow_runs
+      BEGIN SELECT RAISE(ABORT, 'hybrid shadow runs are append-only'); END;
+  `);
+  const payloadJson = JSON.stringify(run);
+  database.prepare(`
+    INSERT INTO hybrid_shadow_runs (
+      run_id, ticket_id, mode, provider_id, model_id, status, recorded_at,
+      payload_version, payload_json, opportunity_id, execution_key
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, 2, ?, ?, ?)
+  `).run(
+    run.runId,
+    run.ticketId,
+    run.mode,
+    run.provider.providerKind,
+    run.provider.model,
+    run.status,
+    run.recordedAt,
+    payloadJson,
+    run.opportunityId,
+    run.executionKey,
+  );
+  database.pragma("user_version = 2");
+  database.close();
+  return payloadJson;
+}
+
 function reasoningInput(
   mode: "evaluation" | "diagnosis",
   basisTicketId: TicketId,
   ranking: ReasoningRankingExecution = { status: "not-requested" },
-): HybridReasoningInput {
+): HybridReasoningInputV2 {
   return {
     mode,
     basis: {
@@ -172,7 +234,45 @@ function reasoningInput(
   };
 }
 
-function reasoningResult(input: HybridReasoningInput): HybridReasoningResult {
+const taxonomyContext: DiagnosticTaxonomyContext = {
+  primaryProductSurface: { domain: "messaging", area: "campaigns" },
+  secondaryProductSurfaces: [],
+  problemClasses: ["defect"],
+  support: { productSurface: "supported", problemClass: "tentative" },
+  basis: {
+    source: "initial-classification",
+    evidenceIds: [],
+    knowledgeArticleIds: [],
+    playbookIds: [],
+    knownCauseIds: [],
+    explanation: "The current taxonomy revision applies to this ticket.",
+  },
+};
+
+function reasoningInputV3(
+  mode: "evaluation" | "diagnosis",
+  basisTicketId: TicketId,
+  ranking: ReasoningRankingExecution = { status: "not-requested" },
+): HybridReasoningInput {
+  return {
+    ...reasoningInput(mode, basisTicketId, ranking),
+    applicability: {
+      contractVersion: APPLICABILITY_CONTRACT_VERSION,
+      lane: "taxonomy-informed",
+      case: {
+        problemStatement: "Webhook delivery is delayed.",
+        observedFacts: [{ id: "ticket.description", statement: "Delivery attempts arrive late." }],
+        conversationState: [],
+      },
+      candidates: [],
+      evidenceRegistry: [],
+      taxonomy: { case: structuredClone(taxonomyContext), candidateMetadata: [] },
+    },
+    applicabilityTaxonomyRevision: fullBasis.taxonomyRevision,
+  };
+}
+
+function reasoningResult(input: HybridReasoningInputV2): HybridReasoningResult {
   return {
     mode: input.mode,
     basis: structuredClone(input.basis),
@@ -271,6 +371,24 @@ function completedRunWithOpportunity(
   };
 }
 
+function completedRunV3WithOpportunity(
+  runId: string = runIds.evaluation,
+  options: { recordedAt?: string; opportunityId?: string; executionKey?: string } = {},
+): Extract<HybridShadowRunV3, { status: "completed" }> {
+  const base = completedRun(runId, { recordedAt: options.recordedAt });
+  const input = reasoningInputV3(base.mode, base.ticketId);
+  return {
+    ...base,
+    input,
+    result: reasoningResult(input),
+    opportunityId: (options.opportunityId ?? (
+      "hybrid-shadow-opportunity:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    )) as HybridShadowOpportunityId,
+    executionKey: (options.executionKey
+      ?? "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb") as HybridShadowExecutionKey,
+  };
+}
+
 function failedRun(): HybridShadowRun {
   const input = reasoningInput("diagnosis", ticketId, { status: "failed", durationMs: 12 });
   return {
@@ -314,7 +432,7 @@ describe("SQLite hybrid shadow-run persistence", () => {
     expect(reopened.getShadowRun(run.runId)).toEqual(run);
     const inspector = new Database(path, { readonly: true });
     try {
-        expect(inspector.pragma("user_version", { simple: true })).toBe(2);
+        expect(inspector.pragma("user_version", { simple: true })).toBe(3);
     } finally {
       inspector.close();
     }
@@ -334,9 +452,11 @@ describe("SQLite hybrid shadow-run persistence", () => {
     expect(repository.getShadowRun(legacy.runId)).toEqual(legacy);
     expect(repository.getShadowRun(legacy.runId)).not.toHaveProperty("opportunityId");
     expect(repository.getShadowRun(legacy.runId)).not.toHaveProperty("executionKey");
+    expect(repository.getShadowRun(legacy.runId)?.input).not.toHaveProperty("applicability");
+    expect(repository.getShadowRun(legacy.runId)?.input).not.toHaveProperty("applicabilityTaxonomyRevision");
     const inspector = new Database(path, { readonly: true });
     try {
-      expect(inspector.pragma("user_version", { simple: true })).toBe(2);
+      expect(inspector.pragma("user_version", { simple: true })).toBe(3);
       expect(inspector.prepare(`
         SELECT payload_version, opportunity_id, execution_key, payload_json
         FROM hybrid_shadow_runs WHERE run_id = ?
@@ -372,6 +492,70 @@ describe("SQLite hybrid shadow-run persistence", () => {
     } finally {
       inspector.close();
     }
+  });
+
+  it("migrates v2 storage to schema v3 without rewriting the v2 payload or adding semantic fields", () => {
+    const root = mkdtempSync(join(tmpdir(), "hybrid-shadow-run-v2-migration-"));
+    roots.push(root);
+    const path = join(root, "shadow-runs.sqlite");
+    const legacyV2 = completedRunWithOpportunity();
+    const legacyPayloadJson = createV2Database(path, legacyV2);
+
+    const repository = SqliteHybridShadowRunRepository.open(path);
+    repositories.push(repository);
+    repository.initialize();
+
+    expect(repository.getShadowRun(legacyV2.runId)).toEqual(legacyV2);
+    const decoded = repository.getShadowRun(legacyV2.runId)!;
+    expect(decoded.input).not.toHaveProperty("applicability");
+    expect(decoded.input).not.toHaveProperty("applicabilityTaxonomyRevision");
+    const inspector = new Database(path, { readonly: true });
+    try {
+      expect(inspector.pragma("user_version", { simple: true })).toBe(3);
+      expect(inspector.prepare(`
+        SELECT payload_version, opportunity_id, execution_key, payload_json
+        FROM hybrid_shadow_runs WHERE run_id = ?
+      `).get(legacyV2.runId)).toEqual({
+        payload_version: 2,
+        opportunity_id: legacyV2.opportunityId,
+        execution_key: legacyV2.executionKey,
+        payload_json: legacyPayloadJson,
+      });
+    } finally {
+      inspector.close();
+    }
+  });
+
+  it("round-trips the current v3 payload with its complete frozen B5 semantic input", () => {
+    const { repository, path } = openRepository();
+    const run = completedRunV3WithOpportunity();
+
+    expect(repository.recordOrReplayShadowRun(run)).toEqual({ outcome: "recorded", run });
+    expect(repository.getShadowRun(run.runId)).toEqual(run);
+    expect(repository.getShadowRun(run.runId)?.input).toMatchObject({
+      applicability: run.input.applicability,
+      applicabilityTaxonomyRevision: fullBasis.taxonomyRevision,
+    });
+    const inspector = new Database(path, { readonly: true });
+    try {
+      const row = inspector.prepare(`
+        SELECT payload_version, payload_json FROM hybrid_shadow_runs WHERE run_id = ?
+      `).get(run.runId) as { payload_version: number; payload_json: string };
+      expect(row.payload_version).toBe(3);
+      expect(JSON.parse(row.payload_json)).toEqual(run);
+    } finally {
+      inspector.close();
+    }
+  });
+
+  it("rejects a current B5 taxonomy projection revision that disagrees with the H4b basis", () => {
+    const { repository } = openRepository();
+    const run = completedRunV3WithOpportunity();
+    run.input.applicabilityTaxonomyRevision += 1;
+
+    expect(() => repository.recordOrReplayShadowRun(run)).toThrowError(
+      expect.objectContaining({ code: "INVALID_RUN" }),
+    );
   });
 
   it("records a new v2 execution and returns its stored run", () => {
@@ -446,7 +630,7 @@ describe("SQLite hybrid shadow-run persistence", () => {
     roots.push(root);
     const path = join(root, "shadow-runs.sqlite");
     const newerDatabase = new Database(path);
-    newerDatabase.pragma("user_version = 3");
+    newerDatabase.pragma("user_version = 4");
     newerDatabase.close();
     const repository = SqliteHybridShadowRunRepository.open(path);
     repositories.push(repository);

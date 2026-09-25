@@ -20,8 +20,9 @@ import {
 } from "../src/reasoning/hybrid-shadow-runner.js";
 import {
   HybridShadowRunIdSchema,
+  parseHybridShadowRunV3,
   type ReasoningProviderIdentity,
-  type HybridShadowRunV2,
+  type HybridShadowRunV3,
 } from "../src/reasoning/shadow-run-types.js";
 import type {
   EvidenceObservationId,
@@ -57,6 +58,21 @@ const timestamps = {
   retry: "2026-09-25T13:00:00.000Z",
   other: "2026-09-26T13:00:00.000Z",
 } as const;
+
+const taxonomyContext = {
+  primaryProductSurface: { domain: "messaging", area: "campaigns" },
+  secondaryProductSurfaces: [],
+  problemClasses: ["defect"],
+  support: { productSurface: "supported", problemClass: "tentative" },
+  basis: {
+    source: "initial-classification",
+    evidenceIds: [],
+    knowledgeArticleIds: [],
+    playbookIds: [],
+    knownCauseIds: [],
+    explanation: "The current taxonomy revision applies to this ticket.",
+  },
+};
 
 const rootDirectories: string[] = [];
 const repositories: SqliteHybridShadowRunRepository[] = [];
@@ -143,7 +159,7 @@ function context(mode: "evaluation" | "diagnosis" = "evaluation", generation = 8
       id: "taxonomy-1",
       ticketId: ticket.id,
       revision: 1,
-      context: {} as never,
+      context: structuredClone(taxonomyContext) as never,
       operationalEventId: taxonomyEvent.id,
       createdAt: taxonomyEvent.occurredAt,
     }],
@@ -167,6 +183,7 @@ function context(mode: "evaluation" | "diagnosis" = "evaluation", generation = 8
     snapshotThroughSequence: evaluationEvent.sequence,
     query,
     retrievalExecution,
+    resolvedRetrievalSnapshot: { metadata: structuredClone(index), sourceSnapshot: { resources: [], unavailableFamilies: [] } },
   });
 }
 
@@ -229,14 +246,22 @@ function metadata(runId: string, recordedAt: string = timestamps.initial) {
   };
 }
 
-function completedRunFrom(outcome: HybridShadowRunRecordResult): Extract<HybridShadowRunV2, { status: "completed" }> {
-  if (outcome.run.status !== "completed") throw new Error("Expected a completed shadow run in this test.");
-  return outcome.run;
+function completedRunFrom(outcome: HybridShadowRunRecordResult): Extract<HybridShadowRunV3, { status: "completed" }> {
+  if (outcome.run.status !== "completed" || !("applicability" in outcome.run.input)) {
+    throw new Error("Expected a completed v3 shadow run in this test.");
+  }
+  const parsed = parseHybridShadowRunV3(outcome.run);
+  if (parsed.status !== "completed") throw new Error("Expected a completed v3 shadow run in this test.");
+  return parsed;
 }
 
-function failedRunFrom(outcome: HybridShadowRunRecordResult): Extract<HybridShadowRunV2, { status: "failed" }> {
-  if (outcome.run.status !== "failed") throw new Error("Expected a failed shadow run in this test.");
-  return outcome.run;
+function failedRunFrom(outcome: HybridShadowRunRecordResult): Extract<HybridShadowRunV3, { status: "failed" }> {
+  if (outcome.run.status !== "failed" || !("applicability" in outcome.run.input)) {
+    throw new Error("Expected a failed v3 shadow run in this test.");
+  }
+  const parsed = parseHybridShadowRunV3(outcome.run);
+  if (parsed.status !== "failed") throw new Error("Expected a failed v3 shadow run in this test.");
+  return parsed;
 }
 
 function assertDeepFrozen(value: unknown): void {

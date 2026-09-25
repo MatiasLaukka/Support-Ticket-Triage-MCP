@@ -8,6 +8,7 @@ import { DiagnosticTaxonomyContextSchema } from "../diagnostic-taxonomy.js";
 import { IsoTimestampSchema } from "../domain.js";
 import type { RankingCapture } from "./ranking-capture.js";
 import type { ReadinessCase } from "./readiness-cases.js";
+import { assertSafeApplicabilityCaseProjection } from "./applicability-case-safety.js";
 import {
   APPLICABILITY_CONTRACT_VERSION,
   APPLICABILITY_PROMPT_VERSION,
@@ -203,28 +204,6 @@ function referenceIds(judgment: ApplicabilityOracleJudgment): EvidenceReference[
   ];
 }
 
-const leakagePatterns: readonly RegExp[] = [
-  /\bTKT-\d+\b/i,
-  /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/i,
-  /\b(?:customer|requester|account)\s*(?:id|identifier|name)?\s*[:=]/i,
-  /\b(?:system prompt|developer message|raw provider payload|api[-_ ]?key|access[-_ ]?token|password)\b/i,
-  /\bsk-[A-Za-z0-9_-]+\b/,
-  /(?:[A-Za-z]:[\\/]|(?:^|\s)(?:~?[\\/]|[\\/]{2})[A-Za-z0-9._-]+[\\/])/,
-  /\bwh_[A-Za-z0-9]+\b/,
-  /\bP-\d+\b/,
-];
-
-function assertSafeProjection(safeCase: SafeCaseProjection): void {
-  const serialized = JSON.stringify(safeCase);
-  if (leakagePatterns.some((pattern) => pattern.test(serialized))) {
-    throw new Error(`Applicability safe projection contains a forbidden identifier or payload in ${safeCase.caseId}.`);
-  }
-  assertUnique(
-    [...safeCase.observedFacts, ...safeCase.conversationState].map(({ id }) => id),
-    `Applicability safe projection has duplicate fact IDs in ${safeCase.caseId}.`,
-  );
-}
-
 export function validateApplicabilityDevelopment(
   manifest: ApplicabilityManifest,
   cases: readonly ApplicabilityDevelopmentCase[],
@@ -261,7 +240,7 @@ export function validateApplicabilityDevelopment(
   }
 
   for (const entry of parsedCases) {
-    assertSafeProjection(entry.safeCase);
+    assertSafeApplicabilityCaseProjection(entry.safeCase);
     if (entry.sourceReadinessCaseId !== entry.id) throw new Error(`B5 case ${entry.id} must bind the matching readiness case.`);
     const readiness = readinessById.get(entry.sourceReadinessCaseId);
     const captured = captureById.get(entry.id);

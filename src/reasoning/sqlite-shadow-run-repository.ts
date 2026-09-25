@@ -5,6 +5,7 @@ import { TicketIdSchema } from "../domain.js";
 import { canonicalJsonStringify } from "./canonical-json.js";
 import {
   HYBRID_SHADOW_RUN_PAYLOAD_VERSION,
+  HYBRID_SHADOW_RUN_V2_PAYLOAD_VERSION,
   LEGACY_HYBRID_SHADOW_RUN_PAYLOAD_VERSION,
   HybridShadowExecutionKeySchema,
   HybridShadowOpportunityIdSchema,
@@ -12,13 +13,16 @@ import {
   parseLegacyHybridShadowRun,
   parseHybridShadowRun,
   parseHybridShadowRunV2,
+  parseHybridShadowRunV3,
   type LegacyHybridShadowRun,
   type HybridShadowRunV2,
+  type HybridShadowRunV3,
+  type HybridShadowRunWithOpportunity,
   type HybridShadowRun,
   type HybridShadowRunId,
 } from "./shadow-run-types.js";
 
-const SHADOW_RUN_SCHEMA_VERSION = 2;
+const SHADOW_RUN_SCHEMA_VERSION = 3;
 const SHADOW_RUN_BUSY_TIMEOUT_MS = 250;
 const SHADOW_RUN_V1_COLUMNS = [
   { name: "run_id", type: "TEXT", notnull: 1, primaryKey: 1 },
@@ -81,22 +85,22 @@ export class HybridShadowRunStoreError extends Error {
 
 export interface HybridShadowRunRecordResult {
   outcome: "recorded" | "replayed";
-  run: HybridShadowRunV2;
+  run: HybridShadowRunWithOpportunity;
 }
 
 export interface HybridShadowRunRepository {
-  recordShadowRun(run: HybridShadowRunV2): HybridShadowRunRecordResult;
+  recordShadowRun(run: HybridShadowRunWithOpportunity): HybridShadowRunRecordResult;
   recordShadowRun(run: LegacyHybridShadowRun): void;
   recordShadowRun(run: HybridShadowRun): HybridShadowRunRecordResult | undefined;
-  recordOrReplayShadowRun(run: HybridShadowRunV2): HybridShadowRunRecordResult;
+  recordOrReplayShadowRun(run: HybridShadowRunWithOpportunity): HybridShadowRunRecordResult;
   getShadowRun(runId: HybridShadowRunId): HybridShadowRun | undefined;
   getShadowRunByExecutionKey(
     executionKey: HybridShadowRunV2["executionKey"],
-  ): HybridShadowRunV2 | undefined;
+  ): HybridShadowRunWithOpportunity | undefined;
   listShadowRunsForTicket(ticketId: HybridShadowRun["ticketId"]): readonly HybridShadowRun[];
   listShadowRunsForOpportunity(
     opportunityId: HybridShadowRunV2["opportunityId"],
-  ): readonly HybridShadowRunV2[];
+  ): readonly HybridShadowRunWithOpportunity[];
 }
 
 export class SqliteHybridShadowRunRepository implements HybridShadowRunRepository {
@@ -161,8 +165,9 @@ export class SqliteHybridShadowRunRepository implements HybridShadowRunRepositor
             { cause: error },
           );
         }
-      } else if (version === 1) {
-        this.migrateV1ToV2();
+      } else {
+        if (version === 1) this.migrateV1ToV2();
+        if (version <= 2) this.migrateV2ToV3();
       }
 
       this.validateCurrentSchema();
@@ -179,7 +184,7 @@ export class SqliteHybridShadowRunRepository implements HybridShadowRunRepositor
     }
   }
 
-  recordShadowRun(run: HybridShadowRunV2): HybridShadowRunRecordResult;
+  recordShadowRun(run: HybridShadowRunWithOpportunity): HybridShadowRunRecordResult;
   recordShadowRun(run: LegacyHybridShadowRun): void;
   recordShadowRun(run: HybridShadowRun): HybridShadowRunRecordResult | undefined;
   recordShadowRun(run: HybridShadowRun): HybridShadowRunRecordResult | undefined {
@@ -191,7 +196,9 @@ export class SqliteHybridShadowRunRepository implements HybridShadowRunRepositor
       validatedRun = parseHybridShadowRun(run);
       payloadJson = canonicalJsonStringify(validatedRun);
       payloadVersion = "opportunityId" in validatedRun
-        ? HYBRID_SHADOW_RUN_PAYLOAD_VERSION
+        ? "applicability" in validatedRun.input
+          ? HYBRID_SHADOW_RUN_PAYLOAD_VERSION
+          : HYBRID_SHADOW_RUN_V2_PAYLOAD_VERSION
         : LEGACY_HYBRID_SHADOW_RUN_PAYLOAD_VERSION;
     } catch (error) {
       throw new HybridShadowRunStoreError(
@@ -248,12 +255,14 @@ export class SqliteHybridShadowRunRepository implements HybridShadowRunRepositor
     }
   }
 
-  recordOrReplayShadowRun(run: HybridShadowRunV2): HybridShadowRunRecordResult {
+  recordOrReplayShadowRun(run: HybridShadowRunWithOpportunity): HybridShadowRunRecordResult {
     this.assertInitialized();
-    let validatedRun: HybridShadowRunV2;
+    let validatedRun: HybridShadowRunWithOpportunity;
     let payloadJson: string;
     try {
-      validatedRun = parseHybridShadowRunV2(run);
+      validatedRun = "applicability" in run.input
+        ? parseHybridShadowRunV3(run)
+        : parseHybridShadowRunV2(run);
       payloadJson = canonicalJsonStringify(validatedRun);
     } catch (error) {
       throw new HybridShadowRunStoreError(
@@ -269,7 +278,10 @@ export class SqliteHybridShadowRunRepository implements HybridShadowRunRepositor
         payload_version, payload_json, opportunity_id, execution_key
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
-    const transaction = this.database.transaction((snapshot: HybridShadowRunV2) => {
+    const payloadVersion = "applicability" in validatedRun.input
+      ? HYBRID_SHADOW_RUN_PAYLOAD_VERSION
+      : HYBRID_SHADOW_RUN_V2_PAYLOAD_VERSION;
+    const transaction = this.database.transaction((snapshot: HybridShadowRunWithOpportunity) => {
       insert.run(
         snapshot.runId,
         snapshot.ticketId,
@@ -278,7 +290,7 @@ export class SqliteHybridShadowRunRepository implements HybridShadowRunRepositor
         snapshot.provider.model,
         snapshot.status,
         snapshot.recordedAt,
-        HYBRID_SHADOW_RUN_PAYLOAD_VERSION,
+        payloadVersion,
         payloadJson,
         snapshot.opportunityId,
         snapshot.executionKey,
@@ -336,8 +348,8 @@ export class SqliteHybridShadowRunRepository implements HybridShadowRunRepositor
   }
 
   getShadowRunByExecutionKey(
-    executionKey: HybridShadowRunV2["executionKey"],
-  ): HybridShadowRunV2 | undefined {
+    executionKey: HybridShadowRunWithOpportunity["executionKey"],
+  ): HybridShadowRunWithOpportunity | undefined {
     this.assertInitialized();
     const parsedExecutionKey = HybridShadowExecutionKeySchema.safeParse(executionKey);
     if (!parsedExecutionKey.success) {
@@ -388,8 +400,8 @@ export class SqliteHybridShadowRunRepository implements HybridShadowRunRepositor
   }
 
   listShadowRunsForOpportunity(
-    opportunityId: HybridShadowRunV2["opportunityId"],
-  ): readonly HybridShadowRunV2[] {
+    opportunityId: HybridShadowRunWithOpportunity["opportunityId"],
+  ): readonly HybridShadowRunWithOpportunity[] {
     this.assertInitialized();
     const parsedOpportunityId = HybridShadowOpportunityIdSchema.safeParse(opportunityId);
     if (!parsedOpportunityId.success) {
@@ -428,8 +440,13 @@ export class SqliteHybridShadowRunRepository implements HybridShadowRunRepositor
       if (row.payload_version === LEGACY_HYBRID_SHADOW_RUN_PAYLOAD_VERSION) {
         run = parseLegacyHybridShadowRun(parsed);
         identityMismatch = row.opportunity_id !== null || row.execution_key !== null;
-      } else if (row.payload_version === HYBRID_SHADOW_RUN_PAYLOAD_VERSION) {
+      } else if (row.payload_version === HYBRID_SHADOW_RUN_V2_PAYLOAD_VERSION) {
         const currentRun = parseHybridShadowRunV2(parsed);
+        run = currentRun;
+        identityMismatch = currentRun.opportunityId !== row.opportunity_id
+          || currentRun.executionKey !== row.execution_key;
+      } else if (row.payload_version === HYBRID_SHADOW_RUN_PAYLOAD_VERSION) {
+        const currentRun = parseHybridShadowRunV3(parsed);
         run = currentRun;
         identityMismatch = currentRun.opportunityId !== row.opportunity_id
           || currentRun.executionKey !== row.execution_key;
@@ -568,7 +585,7 @@ export class SqliteHybridShadowRunRepository implements HybridShadowRunRepositor
           DROP TRIGGER hybrid_shadow_runs_no_delete;
           DROP INDEX hybrid_shadow_runs_ticket_order_idx;
           ALTER TABLE hybrid_shadow_runs RENAME TO hybrid_shadow_runs_v1;
-          ${SHADOW_RUN_TABLE_SQL}
+          ${SHADOW_RUN_TABLE_V2_SQL}
           INSERT INTO hybrid_shadow_runs (
             run_id, ticket_id, mode, provider_id, model_id, status, recorded_at,
             payload_version, payload_json, opportunity_id, execution_key
@@ -578,6 +595,42 @@ export class SqliteHybridShadowRunRepository implements HybridShadowRunRepositor
             payload_version, payload_json, NULL, NULL
           FROM hybrid_shadow_runs_v1;
           DROP TABLE hybrid_shadow_runs_v1;
+          ${SHADOW_RUN_INDEX_AND_TRIGGER_SQL}
+        `);
+        this.database.pragma("user_version = 2");
+      });
+      migrate.immediate();
+    } catch (error) {
+      if (isSqliteLockError(error)) throw error;
+      throw new HybridShadowRunStoreError(
+        "Hybrid shadow-run schema migration failed.",
+        "SCHEMA_ERROR",
+        { cause: error },
+      );
+    }
+  }
+
+  private migrateV2ToV3(): void {
+    this.validateV2Schema();
+    try {
+      const migrate = this.database.transaction(() => {
+        this.database.exec(`
+          DROP TRIGGER hybrid_shadow_runs_no_update;
+          DROP TRIGGER hybrid_shadow_runs_no_delete;
+          DROP INDEX hybrid_shadow_runs_ticket_order_idx;
+          DROP INDEX hybrid_shadow_runs_opportunity_order_idx;
+          DROP INDEX hybrid_shadow_runs_execution_key_unique_idx;
+          ALTER TABLE hybrid_shadow_runs RENAME TO hybrid_shadow_runs_v2;
+          ${SHADOW_RUN_TABLE_SQL}
+          INSERT INTO hybrid_shadow_runs (
+            run_id, ticket_id, mode, provider_id, model_id, status, recorded_at,
+            payload_version, payload_json, opportunity_id, execution_key
+          )
+          SELECT
+            run_id, ticket_id, mode, provider_id, model_id, status, recorded_at,
+            payload_version, payload_json, opportunity_id, execution_key
+          FROM hybrid_shadow_runs_v2;
+          DROP TABLE hybrid_shadow_runs_v2;
           ${SHADOW_RUN_INDEX_AND_TRIGGER_SQL}
         `);
         this.database.pragma(`user_version = ${SHADOW_RUN_SCHEMA_VERSION}`);
@@ -591,6 +644,11 @@ export class SqliteHybridShadowRunRepository implements HybridShadowRunRepositor
         { cause: error },
       );
     }
+  }
+
+  private validateV2Schema(): void {
+    this.validateSchema(SHADOW_RUN_COLUMNS, SHADOW_RUN_INDEXES);
+    this.validateExecutionKeyIndex();
   }
 
   private schemaObjectNames(): string[] {
@@ -618,6 +676,31 @@ export class SqliteHybridShadowRunRepository implements HybridShadowRunRepositor
   }
 }
 
+const SHADOW_RUN_TABLE_V2_SQL = `
+  CREATE TABLE hybrid_shadow_runs (
+    run_id TEXT PRIMARY KEY NOT NULL,
+    ticket_id TEXT NOT NULL,
+    mode TEXT NOT NULL CHECK (mode IN ('evaluation', 'diagnosis')),
+    provider_id TEXT NOT NULL CHECK (length(trim(provider_id)) > 0),
+    model_id TEXT NOT NULL CHECK (length(trim(model_id)) > 0),
+    status TEXT NOT NULL CHECK (status IN ('completed', 'failed')),
+    recorded_at TEXT NOT NULL,
+    payload_version INTEGER NOT NULL CHECK (payload_version IN (
+      ${LEGACY_HYBRID_SHADOW_RUN_PAYLOAD_VERSION}, ${HYBRID_SHADOW_RUN_V2_PAYLOAD_VERSION}
+    )),
+    payload_json TEXT NOT NULL CHECK (json_valid(payload_json) AND json_type(payload_json) = 'object'),
+    opportunity_id TEXT,
+    execution_key TEXT,
+    CHECK (
+      (payload_version = ${LEGACY_HYBRID_SHADOW_RUN_PAYLOAD_VERSION}
+        AND opportunity_id IS NULL AND execution_key IS NULL)
+      OR
+      (payload_version = ${HYBRID_SHADOW_RUN_V2_PAYLOAD_VERSION}
+        AND opportunity_id IS NOT NULL AND execution_key IS NOT NULL)
+    )
+  );
+`;
+
 const SHADOW_RUN_TABLE_SQL = `
   CREATE TABLE hybrid_shadow_runs (
     run_id TEXT PRIMARY KEY NOT NULL,
@@ -628,7 +711,7 @@ const SHADOW_RUN_TABLE_SQL = `
     status TEXT NOT NULL CHECK (status IN ('completed', 'failed')),
     recorded_at TEXT NOT NULL,
     payload_version INTEGER NOT NULL CHECK (payload_version IN (
-      ${LEGACY_HYBRID_SHADOW_RUN_PAYLOAD_VERSION}, ${HYBRID_SHADOW_RUN_PAYLOAD_VERSION}
+      ${LEGACY_HYBRID_SHADOW_RUN_PAYLOAD_VERSION}, ${HYBRID_SHADOW_RUN_V2_PAYLOAD_VERSION}, ${HYBRID_SHADOW_RUN_PAYLOAD_VERSION}
     )),
     payload_json TEXT NOT NULL CHECK (json_valid(payload_json) AND json_type(payload_json) = 'object'),
     opportunity_id TEXT,
@@ -637,7 +720,7 @@ const SHADOW_RUN_TABLE_SQL = `
       (payload_version = ${LEGACY_HYBRID_SHADOW_RUN_PAYLOAD_VERSION}
         AND opportunity_id IS NULL AND execution_key IS NULL)
       OR
-      (payload_version = ${HYBRID_SHADOW_RUN_PAYLOAD_VERSION}
+      (payload_version IN (${HYBRID_SHADOW_RUN_V2_PAYLOAD_VERSION}, ${HYBRID_SHADOW_RUN_PAYLOAD_VERSION})
         AND opportunity_id IS NOT NULL AND execution_key IS NOT NULL)
     )
   );
@@ -662,7 +745,7 @@ const SHADOW_RUN_INDEX_AND_TRIGGER_SQL = `
 
 const INITIAL_SCHEMA_SQL = `${SHADOW_RUN_TABLE_SQL}${SHADOW_RUN_INDEX_AND_TRIGGER_SQL}`;
 
-function semanticRunJson(run: HybridShadowRunV2): string {
+function semanticRunJson(run: HybridShadowRunWithOpportunity): string {
   const { runId: _runId, recordedAt: _recordedAt, ...semanticPayload } = run;
   return canonicalJsonStringify(semanticPayload);
 }

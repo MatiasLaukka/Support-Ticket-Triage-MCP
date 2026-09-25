@@ -8,10 +8,13 @@ import {
   APPLICABILITY_PROMPT_VERSION,
   hashCanonicalApplicabilityValue,
   validateApplicabilityInput,
+  validateApplicabilitySemanticInput,
   type ApplicabilityCandidateInput,
   type ApplicabilityInputIdentity,
   type ApplicabilityLane,
+  type ApplicabilityProviderInput,
   type ApplicabilityReasoningInput,
+  type ApplicabilityTaxonomyProjection,
   type ResolvedEvidenceRepresentation,
   type SafeCaseProjection,
 } from "./applicability-types.js";
@@ -46,6 +49,11 @@ export interface ApplicabilityInputMeasurement {
   fits: boolean | null;
 }
 
+export interface ResolvedApplicabilityEvidence {
+  candidates: readonly ApplicabilityCandidateInput[];
+  evidenceRegistry: readonly ResolvedEvidenceRepresentation[];
+}
+
 function compareOrdinal(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
 }
@@ -73,8 +81,12 @@ function sourceCorpusHash(sourceSnapshot: SourceSnapshot): string {
 function canonicalTaxonomy(taxonomy: DiagnosticTaxonomyContext): DiagnosticTaxonomyContext {
   return {
     ...taxonomy,
-    secondaryProductSurfaces: [...taxonomy.secondaryProductSurfaces].sort((left, right) => compareOrdinal(`${left.domain}/${left.area}`, `${right.domain}/${right.area}`)),
+    primaryProductSurface: taxonomy.primaryProductSurface === null ? null : { ...taxonomy.primaryProductSurface },
+    secondaryProductSurfaces: taxonomy.secondaryProductSurfaces
+      .map((surface) => ({ ...surface }))
+      .sort((left, right) => compareOrdinal(`${left.domain}/${left.area}`, `${right.domain}/${right.area}`)),
     problemClasses: [...taxonomy.problemClasses].sort(compareOrdinal),
+    support: { ...taxonomy.support },
     basis: {
       ...taxonomy.basis,
       evidenceIds: [...taxonomy.basis.evidenceIds].sort(compareOrdinal),
@@ -150,6 +162,29 @@ function currentCandidate(
   };
 }
 
+function resolveEvidence(
+  candidates: readonly Candidate[],
+  sourceSnapshot: SourceSnapshot,
+  sourceMatchesCapture: boolean,
+): ResolvedApplicabilityEvidence {
+  const evidence = new Map<string, ResolvedEvidenceRepresentation>();
+  const resolvedCandidates = candidates
+    .map((candidate) => currentCandidate(candidate, sourceSnapshot, sourceMatchesCapture, evidence))
+    .sort(compareCandidate);
+  return {
+    candidates: resolvedCandidates,
+    evidenceRegistry: [...evidence.values()].sort((left, right) => compareOrdinal(left.id, right.id)),
+  };
+}
+
+/** Resolve B5 evidence from an already-frozen retrieval source snapshot. */
+export function resolveApplicabilityEvidence(
+  candidates: readonly Candidate[],
+  sourceSnapshot: SourceSnapshot,
+): ResolvedApplicabilityEvidence {
+  return resolveEvidence(candidates, sourceSnapshot, true);
+}
+
 export function resolveApplicabilityBasis(input: {
   captureHash: string;
   captureCase: RankingCaptureCase;
@@ -169,11 +204,13 @@ export function resolveApplicabilityBasis(input: {
   deriveResourceRanks(rankingInput);
   const sourceMatchesCapture = sourceCorpusHash(input.sourceSnapshot) === input.captureCase.corpusHash
     && input.captureCase.representationVersion === input.captureCase.indexIdentity.representationVersion;
-  const evidence = new Map<string, ResolvedEvidenceRepresentation>();
-  const candidates = input.captureCase.retrieval.candidates
-    .map((candidate) => currentCandidate(candidate, input.sourceSnapshot, sourceMatchesCapture, evidence))
-    .sort(compareCandidate);
-  const evidenceRegistry = [...evidence.values()].sort((left, right) => compareOrdinal(left.id, right.id));
+  const resolvedEvidence = resolveEvidence(
+    input.captureCase.retrieval.candidates,
+    input.sourceSnapshot,
+    sourceMatchesCapture,
+  );
+  const candidates = resolvedEvidence.candidates;
+  const evidenceRegistry = resolvedEvidence.evidenceRegistry;
   const sharedIdentity: SharedIdentity = {
     contractVersion: APPLICABILITY_CONTRACT_VERSION,
     promptVersion: APPLICABILITY_PROMPT_VERSION,
@@ -229,10 +266,7 @@ export function buildApplicabilityInput(basis: ApplicabilityCaseBasis, lane: App
     candidates: basis.candidates,
     evidenceRegistry: basis.evidenceRegistry,
     ...(lane === "taxonomy-informed" ? {
-      taxonomy: {
-        case: basis.taxonomy!,
-        candidateMetadata: basis.candidateTaxonomy.map((metadata) => ({ ...metadata })),
-      },
+      taxonomy: buildApplicabilityTaxonomyProjection(basis.taxonomy!, basis.candidateTaxonomy),
     } : {}),
   };
   const input = {
@@ -241,6 +275,24 @@ export function buildApplicabilityInput(basis: ApplicabilityCaseBasis, lane: App
   } as ApplicabilityReasoningInput;
   validateApplicabilityInput(input);
   return input;
+}
+
+export function buildApplicabilityTaxonomyProjection(
+  taxonomy: DiagnosticTaxonomyContext,
+  candidateTaxonomy: readonly { resourceKey: string; taxonomy: TaxonomyMetadata | null }[],
+): ApplicabilityTaxonomyProjection {
+  return {
+    case: canonicalTaxonomy(taxonomy),
+    candidateMetadata: candidateTaxonomy
+      .map(({ resourceKey, taxonomy: metadata }) => ({
+        resourceKey,
+        taxonomy: metadata === null ? null : {
+          productSurfaces: [...metadata.productSurfaces].sort(compareOrdinal),
+          problemClasses: [...metadata.problemClasses].sort(compareOrdinal),
+        },
+      }))
+      .sort((left, right) => compareOrdinal(left.resourceKey, right.resourceKey)),
+  };
 }
 
 function canonicalJson(value: unknown): string {
@@ -253,10 +305,11 @@ function canonicalJson(value: unknown): string {
 }
 
 export function measureApplicabilityInput(
-  input: ApplicabilityReasoningInput,
+  input: ApplicabilityProviderInput,
   budget?: { contextLimitTokens: number; outputReserveTokens: number },
 ): ApplicabilityInputMeasurement {
-  validateApplicabilityInput(input);
+  if ("identity" in input) validateApplicabilityInput(input);
+  else validateApplicabilitySemanticInput(input);
   const serializedBytes = Buffer.byteLength(canonicalJson(input), "utf8");
   const estimatedInputTokens = Math.ceil(serializedBytes / 2);
   const outputReserveTokens = budget?.outputReserveTokens ?? 4_096;

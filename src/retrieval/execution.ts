@@ -9,9 +9,11 @@ import { retrieve } from "./search.js";
 import type { RetrievalStore } from "./sqlite-store.js";
 import type {
   EmbeddingProvider,
+  IndexMetadata,
   Limits,
   Query,
   RetrievalResult,
+  SourceSnapshot,
 } from "./types.js";
 
 export type RetrievalRankingExecution =
@@ -112,3 +114,9 @@ export async function executeRetrieval(
     };
   }
 }
+
+/** Lazy resolver keeps ordinary retrieval observers free of extra source reads. */
+export type RetrievalCandidateSourceResolver = () => {
+  metadata: IndexMetadata;
+  sourceSnapshot: SourceSnapshot;
+};

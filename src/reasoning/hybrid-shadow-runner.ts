@@ -8,9 +8,9 @@ import {
   HybridShadowRunIdSchema,
   HybridShadowRunFailureSchema,
   ReasoningProviderIdentitySchema,
-  parseHybridShadowRunV2,
+  parseHybridShadowRunV3,
   type HybridShadowRunFailure,
-  type HybridShadowRunV2,
+  type HybridShadowRunV3,
   type ReasoningProviderIdentity,
 } from "./shadow-run-types.js";
 import {
@@ -107,7 +107,7 @@ export async function runHybridShadowOpportunity(
     failure: providerFailure("PROVIDER_ERROR"),
   };
   try {
-    parseHybridShadowRunV2(baseline);
+    parseHybridShadowRunV3(baseline);
   } catch {
     throw new HybridShadowRunStoreError(
       "Hybrid shadow capture context cannot form a valid run.",
@@ -119,7 +119,7 @@ export async function runHybridShadowOpportunity(
   try {
     result = await provider.reason(frozenProviderInput);
   } catch (error) {
-    const failedRun = parseHybridShadowRunV2({
+    const failedRun = parseHybridShadowRunV3({
       ...base,
       status: "failed",
       failure: classifyProviderFailure(error),
@@ -127,11 +127,11 @@ export async function runHybridShadowOpportunity(
     return repository.recordOrReplayShadowRun(failedRun);
   }
 
-  let completedRun: HybridShadowRunV2;
+  let completedRun: HybridShadowRunV3;
   try {
-    completedRun = parseHybridShadowRunV2({ ...base, status: "completed", result });
+    completedRun = parseHybridShadowRunV3({ ...base, status: "completed", result });
   } catch {
-    const failedRun = parseHybridShadowRunV2({
+    const failedRun = parseHybridShadowRunV3({
       ...base,
       status: "failed",
       failure: providerFailure("INVALID_OUTPUT"),
@@ -190,7 +190,7 @@ function deepFreeze<T>(value: T, seen = new WeakSet<object>()): DeepReadonly<T> 
   return Object.freeze(value) as DeepReadonly<T>;
 }
 
-function parseRunId(value: unknown): HybridShadowRunV2["runId"] {
+function parseRunId(value: unknown): HybridShadowRunV3["runId"] {
   const parsed = HybridShadowRunIdSchema.safeParse(value);
   if (!parsed.success) {
     throw new HybridShadowRunStoreError("Hybrid shadow run ID source returned an invalid ID.", "INVALID_ID", {
@@ -200,7 +200,7 @@ function parseRunId(value: unknown): HybridShadowRunV2["runId"] {
   return parsed.data;
 }
 
-function parseRecordedAt(value: unknown): HybridShadowRunV2["recordedAt"] {
+function parseRecordedAt(value: unknown): HybridShadowRunV3["recordedAt"] {
   const parsed = IsoTimestampSchema.safeParse(value);
   if (!parsed.success) {
     throw new HybridShadowRunStoreError("Hybrid shadow clock returned an invalid timestamp.", "INVALID_RUN", {

@@ -3,7 +3,7 @@ import type {
   Ticket,
 } from "../domain.js";
 import type { RetrievalExecution } from "../retrieval/execution.js";
-import type { HybridReasoningInput, ReasoningMode } from "./types.js";
+import type { HybridReasoningInputV2, ReasoningMode } from "./types.js";
 
 export interface HybridReasoningInputAssemblySource {
   mode: ReasoningMode;
@@ -15,7 +15,7 @@ export interface HybridReasoningInputAssemblySource {
 /** Assemble provider-neutral reasoning input without interpreting or changing its evidence. */
 export function assembleHybridReasoningInput(
   source: HybridReasoningInputAssemblySource,
-): HybridReasoningInput {
+): HybridReasoningInputV2 {
   const retrieval = source.retrievalExecution.retrieval;
   const ranking = source.retrievalExecution.ranking;
 

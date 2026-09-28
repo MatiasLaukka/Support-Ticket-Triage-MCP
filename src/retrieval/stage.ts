@@ -1,13 +1,13 @@
 import { createHash } from "node:crypto";
 import type { Ticket } from "../domain.js";
 import type { CustomerReply } from "../approval-desk/ai-evaluation.js";
-import { retrieve } from "./search.js";
+import { executeRetrieval, type RetrievalCandidateSourceResolver, type RetrievalExecution } from "./execution.js";
 import type { IndexManager } from "./index-manager.js";
 import type { EmbeddingProvider, IndexMetadata, Limits, Query, Reference, RetrievalTrace } from "./types.js";
 import { RETRIEVAL_SCHEMA_VERSION, RetrievalIntegrityError, RetrievalRepresentationVersionError, type RetrievalStore } from "./sqlite-store.js";
 import { REPRESENTATION_VERSION } from "./representations.js";
-import { rankRetrieval, RESOURCE_TYPES } from "./ranking.js";
-import type { RankingOutputLimits, RankingPolicy, RankingResult } from "./ranking-types.js";
+import { RESOURCE_TYPES } from "./ranking.js";
+import type { RankingPolicy, RankingResult } from "./ranking-types.js";
 import type { RankingTraceProjection } from "./types.js";
 
 export const RETRIEVAL_QUERY_MAX_CHARS = 12_000;
@@ -35,7 +35,20 @@ export function buildRetrievalQuery(input: {
   return { queryText, queryHash, ticketId: input.ticket.id, sourceRevision: input.ticket.revision, customerReplyWatermark: input.customerReplyWatermark, queryTruncated, references: [...input.references], ...(input.taxonomy ? { taxonomy: input.taxonomy } : {}) };
 }
 
-export interface RetrievalObserver { observe(query: Query, commandId: string): Promise<void>; reportFailure?(commandId: string): void; recent(): readonly RetrievalTrace[]; close(): Promise<void> }
+export interface RetrievalObserver {
+  observe(
+    query: Query,
+    commandId: string,
+    onExecution?: (
+      query: Query,
+      execution: RetrievalExecution,
+      resolveCandidateSources?: RetrievalCandidateSourceResolver,
+    ) => void | Promise<void>,
+  ): Promise<void>;
+  reportFailure?(commandId: string, code?: string): void;
+  recent(): readonly RetrievalTrace[];
+  close(): Promise<void>;
+}
 
 export interface RetrievalRankingConfig {
   policy: RankingPolicy;
@@ -48,27 +61,34 @@ export function createRetrievalObserver(input: { manager: IndexManager; store: R
   const controller = new AbortController();
   const active = new Set<Promise<void>>();
   let closed = false;
-  const observe = (query: Query, commandId: string): Promise<void> => {
+  const observe = (
+    query: Query,
+    commandId: string,
+    onExecution?: (
+      query: Query,
+      execution: RetrievalExecution,
+      resolveCandidateSources?: RetrievalCandidateSourceResolver,
+    ) => void | Promise<void>,
+  ): Promise<void> => {
     if (closed) return Promise.resolve();
     const work = (async () => {
       try {
-        await input.manager.refresh(controller.signal);
-        const result = await retrieve({ query, store: input.store, provider: input.provider, limits: input.limits, signal: controller.signal });
+        const execution = await executeRetrieval({
+          manager: input.manager,
+          store: input.store,
+          provider: input.provider,
+          limits: input.limits,
+          query,
+          signal: controller.signal,
+          ...(input.ranking === undefined ? {} : { ranking: input.ranking }),
+        });
+        const result = execution.retrieval;
         let ranking: RankingTraceProjection | undefined;
-        if (input.ranking !== undefined) {
-          const rankingStarted = performance.now();
-          try {
-            const outputLimits = Object.fromEntries(RESOURCE_TYPES.map((resourceType) => [resourceType, input.ranking!.outputLimit])) as RankingOutputLimits;
-            ranking = compactRankingTrace(rankRetrieval({
-              contractVersion: 1,
-              queryBasis: { queryHash: query.queryHash, ticketId: query.ticketId, ticketRevision: query.sourceRevision, customerReplyWatermark: query.customerReplyWatermark },
-              retrieval: result,
-              outputLimits,
-            }, input.ranking.policy), performance.now() - rankingStarted);
-          } catch (error) {
-            ranking = failedRankingTrace(input.ranking.policy, performance.now() - rankingStarted, error);
-            reportRetrievalFailure(commandId, report, "B4_RANKING_FAILED");
-          }
+        if (execution.ranking.status === "succeeded") {
+          ranking = compactRankingTrace(execution.ranking.result, execution.ranking.durationMs);
+        } else if (execution.ranking.status === "failed") {
+          ranking = failedRankingTrace(input.ranking!.policy, execution.ranking.durationMs, execution.ranking.error);
+          reportRetrievalFailure(commandId, report, "B4_RANKING_FAILED");
         }
         const trace: RetrievalTrace = { commandId, queryHash: query.queryHash, ticketId: query.ticketId, sourceRevision: query.sourceRevision, customerReplyWatermark: query.customerReplyWatermark, queryTruncated: query.queryTruncated, result, candidateCount: result.candidates.length, truncated: query.queryTruncated, truncatedCount: query.queryTruncated ? 1 : 0, ...(ranking === undefined ? {} : { ranking }) };
         const serialized = JSON.stringify(trace);
@@ -78,6 +98,16 @@ export function createRetrievalObserver(input: { manager: IndexManager; store: R
           traces.push(trace);
         }
         while (traces.length > TRACE_LIMIT) traces.shift();
+        if (onExecution !== undefined) {
+          try {
+            await onExecution(query, execution, () => input.store.resolveCandidateSourceSnapshot(
+              execution.retrieval.metadata,
+              execution.retrieval.candidates,
+            ));
+          } catch {
+            reportRetrievalFailure(commandId, report, "RETRIEVAL_EXECUTION_CALLBACK_FAILED");
+          }
+        }
       } catch (error) {
         if (!controller.signal.aborted) {
           const code = error instanceof RetrievalRepresentationVersionError ? "INDEX_UPGRADE_REQUIRED" : error instanceof RetrievalIntegrityError ? "INDEX_INTEGRITY_ERROR" : "RETRIEVAL_OBSERVATION_FAILED";
@@ -92,7 +122,7 @@ export function createRetrievalObserver(input: { manager: IndexManager; store: R
   };
   return {
     observe,
-    reportFailure(commandId) { reportRetrievalFailure(commandId, report); },
+    reportFailure(commandId, code) { reportRetrievalFailure(commandId, report, code); },
     recent() { return traces.map((trace) => structuredClone(trace)); },
     async close() { if (closed) return; closed = true; controller.abort(); await Promise.allSettled([...active]); await input.manager.close(); input.store.close(); },
   };
@@ -161,7 +191,7 @@ export function createUnavailableRetrievalObserver(input: ((diagnostic: { code: 
       while (traces.length > TRACE_LIMIT) traces.shift();
       reportRetrievalFailure(commandId, report, failureCode ?? "RETRIEVAL_OBSERVATION_FAILED");
     },
-    reportFailure(commandId) { reportRetrievalFailure(commandId, report); },
+    reportFailure(commandId, code) { reportRetrievalFailure(commandId, report, code); },
     recent() { return traces.map((trace) => structuredClone(trace)); },
     async close() { /* no derived resources were opened */ },
   };

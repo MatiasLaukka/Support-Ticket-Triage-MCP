@@ -1,0 +1,509 @@
+import { createHash } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
+import type { CustomerReplyWatermark, TicketId } from "../domain.js";
+import type {
+  DiagnosticTaxonomyRevision,
+  OperationalEvent,
+  OperationalWorkflowSnapshot,
+  TicketRevision,
+} from "../operational/domain.js";
+import type { RetrievalExecution } from "../retrieval/execution.js";
+import type { CustomerReply } from "../approval-desk/ai-evaluation.js";
+import { DiagnosticTaxonomyContextSchema } from "../diagnostic-taxonomy.js";
+import { safeCaseText } from "../retrieval/representations.js";
+import {
+  APPLICABILITY_CONTRACT_VERSION,
+  validateApplicabilitySemanticInput,
+  type ApplicabilitySemanticReasoningInput,
+  type ApplicabilitySemanticCaseProjection,
+} from "../retrieval/applicability-types.js";
+import {
+  assertSafeApplicabilityCaseProjection,
+  type ApplicabilitySafeCaseContext,
+} from "../retrieval/applicability-case-safety.js";
+import {
+  buildApplicabilityTaxonomyProjection,
+  resolveApplicabilityEvidence,
+} from "../retrieval/applicability-evidence.js";
+import { buildRetrievalQuery } from "../retrieval/stage.js";
+import { deterministicRetrievalReferences } from "../retrieval/deterministic-references.js";
+import type { IndexMetadata, Query, SourceSnapshot } from "../retrieval/types.js";
+import { canonicalJsonStringify } from "./canonical-json.js";
+import { assembleHybridReasoningInput } from "./input-assembler.js";
+import { HybridShadowBasisSchema, type HybridShadowBasis } from "./shadow-run-types.js";
+import type { HybridReasoningInput, ReasoningMode } from "./types.js";
+
+declare const opportunityIdBrand: unique symbol;
+
+/** Stable identity of an authoritative reasoning opportunity, independent of provider runs. */
+export type HybridShadowOpportunityId = string & {
+  readonly [opportunityIdBrand]: true;
+};
+
+export interface HybridShadowCaptureContext {
+  opportunityId: HybridShadowOpportunityId;
+  mode: ReasoningMode;
+  ticketId: TicketId;
+  trigger: Pick<OperationalEvent, "id" | "sequence" | "action">;
+  basis: HybridShadowBasis;
+  query: Query;
+  retrievalExecution: RetrievalExecution;
+  input: HybridReasoningInput;
+}
+
+export type HybridShadowCaptureFailureCode =
+  | "HYBRID_SHADOW_CAPTURE_INCONSISTENT"
+  | "HYBRID_SHADOW_CAPTURE_FAILED";
+
+export class HybridShadowCaptureError extends Error {
+  readonly code: HybridShadowCaptureFailureCode = "HYBRID_SHADOW_CAPTURE_INCONSISTENT";
+
+  constructor(message: string) {
+    super(message);
+    this.name = "HybridShadowCaptureError";
+  }
+}
+
+export interface HybridShadowCaptureAssemblySource {
+  mode: ReasoningMode;
+  event: OperationalEvent;
+  snapshot: OperationalWorkflowSnapshot;
+  /** Highest event sequence committed by the triggering atomic operation. */
+  snapshotThroughSequence: OperationalEvent["sequence"];
+  query: Query;
+  retrievalExecution: RetrievalExecution;
+  /** Candidate content resolved from the same index identity as the execution. */
+  resolvedRetrievalSnapshot: {
+    metadata: IndexMetadata;
+    sourceSnapshot: SourceSnapshot;
+  };
+}
+
+/**
+ * Assemble a provider-neutral H5 input from one real committed event and the
+ * exact query/execution already produced by H1. No runtime source is mutated.
+ */
+export function assembleHybridShadowCaptureContext(
+  source: HybridShadowCaptureAssemblySource,
+): HybridShadowCaptureContext {
+  const { event, snapshot, query, retrievalExecution, snapshotThroughSequence } = source;
+  if (!Number.isInteger(snapshotThroughSequence) || snapshotThroughSequence < event.sequence) {
+    fail("Hybrid shadow committed snapshot boundary precedes its trigger event.");
+  }
+  const committedEvent = snapshot.events.find(({ id }) => id === event.id);
+  if (
+    committedEvent === undefined
+    || committedEvent.sequence !== event.sequence
+    || committedEvent.ticketId !== event.ticketId
+    || committedEvent.action !== event.action
+  ) {
+    fail("Hybrid shadow trigger does not match a committed operational event.");
+  }
+  if (event.ticketId !== snapshot.ticket.id || query.ticketId !== event.ticketId) {
+    fail("Hybrid shadow capture ticket identity does not match the query and committed event.");
+  }
+
+  const ticketAtEvent = ticketRevisionAt(snapshot, event, snapshotThroughSequence);
+  if (query.sourceRevision !== ticketAtEvent.revision) {
+    fail("Hybrid shadow query revision does not match the ticket revision at the committed event.");
+  }
+  const watermarkAtEvent = customerReplyWatermarkAt(snapshot, event, snapshotThroughSequence);
+  const encodedWatermark = JSON.stringify(watermarkAtEvent);
+  if (query.customerReplyWatermark !== encodedWatermark) {
+    fail("Hybrid shadow query watermark does not match the customer reply watermark at the committed event.");
+  }
+  assertQueryMatchesCommittedContext(
+    query,
+    ticketAtEvent,
+    customerRepliesAt(snapshot, event, snapshotThroughSequence),
+    watermarkAtEvent,
+  );
+
+  const taxonomyRevision = taxonomyRevisionAt(snapshot, event, snapshotThroughSequence);
+  if (taxonomyRevision === undefined) {
+    fail("No diagnostic taxonomy revision is causally applicable to the committed event.");
+  }
+  assertRankingConsistent(query, retrievalExecution);
+  assertResolvedRetrievalSnapshotConsistent(retrievalExecution, source.resolvedRetrievalSnapshot);
+
+  const customerReplies = customerRepliesAt(snapshot, event, snapshotThroughSequence);
+  const applicabilityCase = safeApplicabilityCase(ticketAtEvent, customerReplies);
+  const evidence = resolveApplicabilityEvidence(
+    retrievalExecution.retrieval.candidates,
+    source.resolvedRetrievalSnapshot.sourceSnapshot,
+  );
+  if (evidence.candidates.some((candidate) => candidate.evidence.status !== "available")) {
+    fail("A retrieved candidate could not be resolved to frozen evidence content.");
+  }
+  const taxonomyContext = DiagnosticTaxonomyContextSchema.parse(taxonomyRevision.context);
+  const applicability = {
+    contractVersion: APPLICABILITY_CONTRACT_VERSION,
+    lane: "taxonomy-informed",
+    case: {
+      ...applicabilityCase,
+      observedFacts: applicabilityCase.observedFacts.map((fact) => ({ ...fact })),
+      conversationState: applicabilityCase.conversationState.map((fact) => ({ ...fact })),
+    },
+    candidates: evidence.candidates.map((candidate) => structuredClone(candidate)),
+    evidenceRegistry: evidence.evidenceRegistry.map((representation) => ({
+      ...representation,
+      matchedChannels: [...representation.matchedChannels],
+    })),
+    taxonomy: buildApplicabilityTaxonomyProjection(
+      taxonomyContext,
+      retrievalExecution.retrieval.candidates.map((candidate) => ({
+        resourceKey: candidate.resourceKey,
+        taxonomy: candidate.taxonomy === undefined ? null : candidate.taxonomy,
+      })),
+    ),
+  } satisfies ApplicabilitySemanticReasoningInput;
+  try {
+    validateApplicabilitySemanticInput(applicability);
+  } catch {
+    fail("Hybrid shadow B5 semantic input failed its structural validation.");
+  }
+
+  const assembledInput = assembleHybridReasoningInput({
+    mode: source.mode,
+    ticket: { id: ticketAtEvent.id, revision: ticketAtEvent.revision },
+    customerReplyWatermark: watermarkAtEvent,
+    retrievalExecution,
+  });
+  const input: HybridReasoningInput = {
+    ...assembledInput,
+    applicability,
+    applicabilityTaxonomyRevision: taxonomyRevision.revision,
+  };
+  if (
+    input.basis.ticketId !== event.ticketId
+    || input.basis.ticketRevision !== ticketAtEvent.revision
+    || !isDeepStrictEqual(input.basis.customerReplyWatermark, watermarkAtEvent)
+    || !isDeepStrictEqual(input.basis.retrievalIndex, retrievalExecution.retrieval.metadata)
+  ) {
+    fail("Hybrid reasoning input basis disagrees with the committed capture basis.");
+  }
+
+  const basis: HybridShadowBasis = HybridShadowBasisSchema.parse({
+    operationalEventId: event.id,
+    eventSequence: event.sequence,
+    snapshotThroughSequence,
+    ticketRevision: ticketAtEvent.revision as TicketRevision["revision"],
+    customerReplyWatermark: structuredClone(watermarkAtEvent),
+    taxonomyRevision: taxonomyRevision.revision as DiagnosticTaxonomyRevision["revision"],
+    retrievalQueryHash: query.queryHash,
+  });
+  if (input.applicabilityTaxonomyRevision !== basis.taxonomyRevision) {
+    fail("Hybrid shadow taxonomy projection does not match the H4b taxonomy basis.");
+  }
+  return {
+    opportunityId: createOpportunityId({
+      ticketId: event.ticketId,
+      eventId: event.id,
+      eventSequence: event.sequence,
+      snapshotThroughSequence,
+      mode: source.mode,
+      queryHash: query.queryHash,
+      taxonomyRevision: taxonomyRevision.revision,
+      reasoningInput: input,
+    }),
+    mode: source.mode,
+    ticketId: event.ticketId,
+    trigger: { id: event.id, sequence: event.sequence, action: event.action },
+    basis,
+    query: structuredClone(query),
+    retrievalExecution: cloneRetrievalExecution(retrievalExecution),
+    input,
+  };
+}
+
+/** The only H1 query execution currently tied to a committed trigger is evaluation. */
+export function hybridShadowModeForEvent(
+  event: Pick<OperationalEvent, "action">,
+): ReasoningMode | undefined {
+  return event.action === "recommendation-submitted" ? "evaluation" : undefined;
+}
+
+export interface HybridShadowCaptureSink {
+  capture(context: HybridShadowCaptureContext): void | Promise<void>;
+  reportFailure?(failure: { code: HybridShadowCaptureFailureCode; commandId: string }): void;
+}
+
+function ticketRevisionAt(
+  snapshot: OperationalWorkflowSnapshot,
+  trigger: OperationalEvent,
+  snapshotThroughSequence: OperationalEvent["sequence"],
+): TicketRevision["ticket"] {
+  const sequences = eventSequences(snapshot.events);
+  const revision = snapshot.ticketRevisions
+    .filter((candidate) => candidate.ticketId === trigger.ticketId)
+    .map((candidate) => ({ candidate, sequence: sequences.get(candidate.operationalEventId) }))
+    .filter((entry): entry is { candidate: TicketRevision; sequence: number } =>
+      entry.sequence !== undefined && entry.sequence <= snapshotThroughSequence,
+    )
+    .sort((left, right) => left.sequence - right.sequence)
+    .at(-1)?.candidate;
+  if (revision !== undefined) return revision.ticket;
+
+  // A current ticket is safe only when its revision still equals the query basis.
+  // Otherwise this snapshot has no event-linked historical ticket to use.
+  if (snapshot.ticketRevisions.some((candidate) => {
+    const sequence = sequences.get(candidate.operationalEventId);
+    return candidate.ticketId === trigger.ticketId && sequence !== undefined && sequence > snapshotThroughSequence;
+  })) {
+    fail("The ticket revision at the committed event cannot be reconstructed without later-state leakage.");
+  }
+  return snapshot.ticket;
+}
+
+function customerReplyWatermarkAt(
+  snapshot: OperationalWorkflowSnapshot,
+  trigger: OperationalEvent,
+  snapshotThroughSequence: OperationalEvent["sequence"],
+): CustomerReplyWatermark {
+  const sequences = eventSequences(snapshot.events);
+  const latestReply = snapshot.messages
+    .filter((message) => message.ticketId === trigger.ticketId && message.kind === "customer")
+    .map((message) => ({ message, sequence: sequences.get(message.operationalEventId) }))
+    .filter((entry): entry is { message: typeof snapshot.messages[number]; sequence: number } =>
+      entry.sequence !== undefined && entry.sequence <= snapshotThroughSequence,
+    )
+    .sort((left, right) => left.sequence - right.sequence)
+    .at(-1)?.message;
+  return latestReply === undefined
+    ? { state: "none" }
+    : { state: "reply", timestamp: latestReply.createdAt, id: latestReply.id };
+}
+
+function customerRepliesAt(
+  snapshot: OperationalWorkflowSnapshot,
+  trigger: OperationalEvent,
+  snapshotThroughSequence: OperationalEvent["sequence"],
+): CustomerReply[] {
+  const sequences = eventSequences(snapshot.events);
+  return snapshot.messages
+    .filter((message) => message.ticketId === trigger.ticketId && message.kind === "customer")
+    .map((message) => ({ message, sequence: sequences.get(message.operationalEventId) }))
+    .filter((entry): entry is { message: typeof snapshot.messages[number]; sequence: number } =>
+      entry.sequence !== undefined && entry.sequence <= snapshotThroughSequence,
+    )
+    .sort((left, right) => left.sequence - right.sequence)
+    .map(({ message }) => ({
+      id: message.id,
+      ticketId: message.ticketId,
+      createdAt: message.createdAt,
+      body: message.body,
+    }));
+}
+
+function assertQueryMatchesCommittedContext(
+  query: Query,
+  ticket: TicketRevision["ticket"],
+  customerReplies: readonly CustomerReply[],
+  customerReplyWatermark: CustomerReplyWatermark,
+): void {
+  const expected = buildRetrievalQuery({
+    ticket,
+    customerReplies,
+    customerReplyWatermark: JSON.stringify(customerReplyWatermark),
+    references: deterministicRetrievalReferences({ ticket, customerReplies }),
+    ...(query.taxonomy === undefined ? {} : { taxonomy: query.taxonomy }),
+  });
+  if (
+    query.queryHash !== expected.queryHash
+    || query.queryText !== expected.queryText
+    || query.queryTruncated !== expected.queryTruncated
+    || !isDeepStrictEqual(query.references, expected.references)
+  ) {
+    fail("Hybrid shadow query content or references do not match committed ticket and customer evidence.");
+  }
+}
+
+function safeApplicabilityCase(
+  ticket: TicketRevision["ticket"],
+  customerReplies: readonly CustomerReply[],
+): ApplicabilitySemanticCaseProjection {
+  const identifiers = [ticket.id, ticket.customer.name, ticket.requester?.name]
+    .filter((value): value is string => value !== undefined);
+  const problemStatement = safeCaseText(ticket.subject, identifiers);
+  if (problemStatement === undefined) {
+    fail("Committed ticket subject cannot be safely projected for B5 reasoning.");
+  }
+  const description = safeCaseText(ticket.description, identifiers);
+  const observedFacts = description === undefined
+    ? []
+    : [{ id: "ticket.description", statement: description }];
+  if (customerReplies.length > 16) {
+    fail("Committed customer conversation exceeds the B5 safe projection limit.");
+  }
+  const conversationState = customerReplies.flatMap((reply, index) => {
+    const statement = safeCaseText(reply.body, identifiers);
+    return statement === undefined ? [] : [{ id: `conversation.reply.${index + 1}`, statement }];
+  });
+  const projection: ApplicabilitySemanticCaseProjection = {
+    problemStatement,
+    observedFacts,
+    conversationState,
+  };
+  try {
+    assertSafeApplicabilityCaseProjection(projection satisfies ApplicabilitySafeCaseContext);
+  } catch {
+    fail("Committed ticket or customer content failed the B5 safe projection check.");
+  }
+  return projection;
+}
+
+function assertResolvedRetrievalSnapshotConsistent(
+  execution: RetrievalExecution,
+  resolved: HybridShadowCaptureAssemblySource["resolvedRetrievalSnapshot"],
+): void {
+  if (!isDeepStrictEqual(execution.retrieval.metadata, resolved.metadata)) {
+    fail("Resolved evidence retrieval metadata does not match the executed retrieval snapshot.");
+  }
+  const candidateKeys = execution.retrieval.candidates.map(({ resourceKey }) => resourceKey);
+  const resolvedKeys = resolved.sourceSnapshot.resources.map(({ resource }) => resource.key);
+  if (
+    new Set(candidateKeys).size !== candidateKeys.length
+    || new Set(resolvedKeys).size !== resolvedKeys.length
+    || !isDeepStrictEqual([...candidateKeys].sort(), [...resolvedKeys].sort())
+  ) {
+    fail("Resolved evidence resources do not match the retrieval candidate identities.");
+  }
+}
+
+function taxonomyRevisionAt(
+  snapshot: OperationalWorkflowSnapshot,
+  trigger: OperationalEvent,
+  snapshotThroughSequence: OperationalEvent["sequence"],
+): DiagnosticTaxonomyRevision | undefined {
+  const sequences = eventSequences(snapshot.events);
+  return snapshot.diagnosticTaxonomyRevisions
+    .filter((revision) => revision.ticketId === trigger.ticketId)
+    .map((revision) => ({ revision, sequence: sequences.get(revision.operationalEventId) }))
+    .filter((entry): entry is { revision: DiagnosticTaxonomyRevision; sequence: number } =>
+      entry.sequence !== undefined && entry.sequence <= snapshotThroughSequence,
+    )
+    .sort((left, right) => left.sequence - right.sequence)
+    .at(-1)?.revision;
+}
+
+function eventSequences(events: readonly OperationalEvent[]): Map<string, number> {
+  return new Map(events.map(({ id, sequence }) => [id, sequence]));
+}
+
+function assertRankingConsistent(query: Query, execution: RetrievalExecution): void {
+  const ranking = execution.ranking;
+  if (ranking.status !== "succeeded") return;
+  const { queryBasis, retrievalIdentity } = ranking.result;
+  if (
+    queryBasis.queryHash !== query.queryHash
+    || queryBasis.ticketId !== query.ticketId
+    || queryBasis.ticketRevision !== query.sourceRevision
+    || queryBasis.customerReplyWatermark !== query.customerReplyWatermark
+  ) {
+    fail("Successful ranking query identity does not match the actual retrieval query.");
+  }
+  const metadata = execution.retrieval.metadata;
+  const expectedIdentity = {
+    schemaVersion: metadata.schemaVersion,
+    representationVersion: metadata.representationVersion,
+    generation: metadata.generation,
+    lexicalGeneration: metadata.lexicalGeneration,
+    semanticGeneration: metadata.semanticGeneration,
+    corpusHash: metadata.corpusHash,
+    model: metadata.model ?? null,
+    state: metadata.state,
+  };
+  if (!isDeepStrictEqual(retrievalIdentity, expectedIdentity)) {
+    fail("Successful ranking retrieval identity does not match the retrieval snapshot.");
+  }
+}
+
+function cloneRetrievalExecution(execution: RetrievalExecution): RetrievalExecution {
+  const retrieval = structuredClone(execution.retrieval);
+  if (execution.ranking.status === "not-requested") {
+    return { retrieval, ranking: { status: "not-requested" } };
+  }
+  if (execution.ranking.status === "succeeded") {
+    return {
+      retrieval,
+      ranking: {
+        status: "succeeded",
+        result: structuredClone(execution.ranking.result),
+        durationMs: execution.ranking.durationMs,
+      },
+    };
+  }
+  return {
+    retrieval,
+    ranking: {
+      status: "failed",
+      error: cloneFailure(execution.ranking.error),
+      durationMs: execution.ranking.durationMs,
+    },
+  };
+}
+
+function cloneFailure(value: unknown): unknown {
+  if (!(value instanceof Error)) return structuredClone(value);
+  const copy = new Error(value.message);
+  copy.name = value.name;
+  if (value.stack !== undefined) copy.stack = value.stack;
+  for (const [key, property] of Object.entries(value)) {
+    Object.defineProperty(copy, key, {
+      value: structuredClone(property),
+      enumerable: true,
+      configurable: true,
+      writable: true,
+    });
+  }
+  if ("cause" in value) {
+    Object.defineProperty(copy, "cause", {
+      value: cloneFailure((value as Error & { cause?: unknown }).cause),
+      configurable: true,
+    });
+  }
+  return copy;
+}
+
+function createOpportunityId(input: {
+  ticketId: TicketId;
+  eventId: OperationalEvent["id"];
+  eventSequence: OperationalEvent["sequence"];
+  snapshotThroughSequence: OperationalEvent["sequence"];
+  mode: ReasoningMode;
+  queryHash: Query["queryHash"];
+  taxonomyRevision: DiagnosticTaxonomyRevision["revision"];
+  reasoningInput: HybridReasoningInput;
+}): HybridShadowOpportunityId {
+  // Ranking duration telemetry, provider identity, run IDs, and capture time do
+  // not participate in a provider-neutral frozen-input identity.
+  const ranking = input.reasoningInput.ranking.status === "succeeded"
+    ? { status: "succeeded", result: input.reasoningInput.ranking.result }
+    : { status: input.reasoningInput.ranking.status };
+  const frozenInput = {
+    mode: input.reasoningInput.mode,
+    basis: input.reasoningInput.basis,
+    observations: input.reasoningInput.observations,
+    retrievalCandidates: input.reasoningInput.retrievalCandidates,
+    applicability: input.reasoningInput.applicability,
+    applicabilityTaxonomyRevision: input.reasoningInput.applicabilityTaxonomyRevision,
+    retrieval: input.reasoningInput.retrieval,
+    ranking,
+  };
+  const stableBasis = canonicalJsonStringify({
+    ticketId: input.ticketId,
+    eventId: input.eventId,
+    eventSequence: input.eventSequence,
+    snapshotThroughSequence: input.snapshotThroughSequence,
+    mode: input.mode,
+    queryHash: input.queryHash,
+    taxonomyRevision: input.taxonomyRevision,
+    frozenInput,
+  });
+  const digest = createHash("sha256").update(stableBasis).digest("hex");
+  return `hybrid-shadow-opportunity:${digest}` as HybridShadowOpportunityId;
+}
+
+function fail(message: string): never {
+  throw new HybridShadowCaptureError(message);
+}

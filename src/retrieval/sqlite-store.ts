@@ -1,8 +1,9 @@
 import Database from "better-sqlite3";
+import { isDeepStrictEqual } from "node:util";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { hashResourceForVersion, hashRepresentationForVersion, hashText, REPRESENTATION_VERSION } from "./representations.js";
-import type { IndexMetadata, ModelIdentity, Representation, Resource, ResourceKey, ResourceType, SearchSnapshot, SourceSnapshot, TaxonomyMetadata } from "./types.js";
+import type { Candidate, IndexMetadata, ModelIdentity, ProjectedResource, Representation, Resource, ResourceKey, ResourceType, SearchSnapshot, SourceSnapshot, TaxonomyMetadata } from "./types.js";
 
 export const RETRIEVAL_SCHEMA_VERSION = 2;
 const SCHEMA_VERSION = RETRIEVAL_SCHEMA_VERSION;
@@ -206,6 +207,106 @@ export class RetrievalStore {
         return [{ representationId: row.representation_id, resourceKey: row.resource_key, contentHash: row.content_hash, model: { id: row.model_id, revision: row.model_revision, dimensions: row.dimensions }, values }];
       });
       return { metadata, resources, lexical, lexicalMatches, vectors };
+    })();
+  }
+
+  /**
+   * Resolve candidate source text only while the index still has the exact
+   * metadata identity returned by retrieval. The transaction freezes all
+   * requested resources and representations from one SQLite read snapshot.
+   */
+  resolveCandidateSourceSnapshot(
+    expectedMetadata: IndexMetadata,
+    candidates: readonly Candidate[],
+  ): { metadata: IndexMetadata; sourceSnapshot: SourceSnapshot } {
+    this.assertReady();
+    this.validate();
+    const keys = candidates.map(({ resourceKey }) => resourceKey);
+    if (new Set(keys).size !== keys.length) {
+      throw new RetrievalIntegrityError("Retrieval candidates contain duplicate resource identities.");
+    }
+
+    return this.database.transaction(() => {
+      const metadata = this.metadata();
+      if (!isDeepStrictEqual(metadata, expectedMetadata)) {
+        throw new RetrievalIntegrityError("Retrieval index changed before candidate evidence could be frozen.");
+      }
+      if (keys.length === 0) {
+        return {
+          metadata,
+          sourceSnapshot: { resources: [], unavailableFamilies: [] },
+        };
+      }
+
+      const placeholders = keys.map(() => "?").join(",");
+      const resourceRows = this.database.prepare(`
+        SELECT resource_key,resource_type,source_id,source_version,content_hash,metadata_json
+        FROM retrieval_resources WHERE resource_key IN (${placeholders}) ORDER BY resource_key
+      `).all(...keys) as ResourceRow[];
+      if (resourceRows.length !== keys.length) {
+        throw new RetrievalIntegrityError("A retrieval candidate resource is missing from its captured index snapshot.");
+      }
+      const representationRows = this.database.prepare(`
+        SELECT representation_id,resource_key,kind,ordinal,title,heading,keywords_json,lexical_text,semantic_text,content_hash
+        FROM retrieval_representations WHERE resource_key IN (${placeholders}) ORDER BY resource_key,representation_id
+      `).all(...keys) as RepresentationRow[];
+      const byResource = new Map<string, Representation[]>();
+      for (const row of representationRows) {
+        const representation = representationFromRow(row);
+        const { contentHash, ...canonical } = representation;
+        if (contentHash !== hashRepresentationForVersion(canonical, metadata.representationVersion as 2 | 3)) {
+          throw new RetrievalIntegrityError("A retrieval candidate representation failed content integrity validation.");
+        }
+        const entries = byResource.get(row.resource_key) ?? [];
+        entries.push(representation);
+        byResource.set(row.resource_key, entries);
+      }
+
+      const resources: ProjectedResource[] = resourceRows.map((row) => {
+        const resourceMetadata = parseResourceMetadata(row.metadata_json);
+        if (!RESOURCE_TYPES.has(row.resource_type as ResourceType) || !isResourceKey(row.resource_key)) {
+          throw new RetrievalIntegrityError("A retrieval candidate resource identity is invalid.");
+        }
+        const resource: Resource = {
+          key: row.resource_key as ResourceKey,
+          type: row.resource_type as ResourceType,
+          sourceId: row.source_id,
+          ...(row.source_version === null ? {} : { sourceVersion: row.source_version }),
+          contentHash: row.content_hash,
+          family: resourceMetadata.family,
+          linkedResourceKeys: resourceMetadata.linkedResourceKeys,
+          ...(resourceMetadata.taxonomy === undefined ? {} : { taxonomy: resourceMetadata.taxonomy }),
+        };
+        const representations = byResource.get(resource.key) ?? [];
+        const { contentHash: resourceContentHash, ...canonicalResource } = resource;
+        if (representations.length === 0 || resourceContentHash !== hashResourceForVersion(
+          canonicalResource,
+          representations.map(({ id, contentHash }) => ({ id, contentHash })),
+          metadata.representationVersion as 2 | 3,
+        )) {
+          throw new RetrievalIntegrityError("A retrieval candidate resource failed content integrity validation.");
+        }
+        return { resource, representations };
+      });
+
+      const projectedByKey = new Map(resources.map((projected) => [projected.resource.key, projected]));
+      for (const candidate of candidates) {
+        const projected = projectedByKey.get(candidate.resourceKey);
+        if (projected === undefined || projected.resource.type !== candidate.resourceType
+          || !isDeepStrictEqual(projected.resource.taxonomy, candidate.taxonomy)) {
+          throw new RetrievalIntegrityError("Retrieval candidate metadata disagrees with its frozen source resource.");
+        }
+        const representationIds = new Set(projected.representations.map(({ id }) => id));
+        const matches = [candidate.lexical?.matches ?? [], candidate.semantic?.matches ?? []].flat();
+        if (matches.some((match) => match.resourceKey !== candidate.resourceKey || !representationIds.has(match.representationId))) {
+          throw new RetrievalIntegrityError("Retrieval candidate match identity is absent from its frozen source resource.");
+        }
+      }
+
+      return {
+        metadata,
+        sourceSnapshot: { resources, unavailableFamilies: [] },
+      };
     })();
   }
 

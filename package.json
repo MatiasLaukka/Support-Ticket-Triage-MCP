@@ -41,6 +41,7 @@
     ,"retrieval:index": "npm run build && node dist/scripts/retrieval-index.js"
     ,"evaluate:retrieval": "npm run build && node dist/scripts/evaluate-retrieval.js"
     ,"evaluate:ranking": "npm run build && node dist/scripts/evaluate-ranking.js"
+    ,"evaluate:applicability": "npm run build && node dist/scripts/evaluate-applicability.js"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",

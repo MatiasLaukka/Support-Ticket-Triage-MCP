@@ -57,6 +57,7 @@ import {
 } from "./retrieval/stage.js";
 import type { RankingPolicy } from "./retrieval/ranking-types.js";
 import { unavailableReusableKnowledge } from "./knowledge-evolution/reusable-context.js";
+import type { HybridShadowCaptureSink } from "./reasoning/hybrid-shadow-capture.js";
 
 const STARTUP_PATH_MESSAGES = {
   TRIAGE_DATA_ROOT: "TRIAGE_DATA_ROOT must not be blank.",
@@ -83,6 +84,8 @@ export interface RuntimeOptions {
   scheduler?: DeliveryScheduler;
   knowledgeCandidateDraftProvider?: CandidateDraftProvider;
   operationalStore?: OperationalCommandStore;
+  /** Optional deterministic capture sink; unset by default and never invokes a provider. */
+  hybridShadowCaptureSink?: HybridShadowCaptureSink;
   /** Explicit compatibility mode for focused legacy repository fixtures only. */
   legacyFixtureRepositories?: boolean;
 }
@@ -110,6 +113,7 @@ export interface RuntimeDependencies {
   operationalStore?: OperationalCommandStore;
   operationalCommandDispatcher?: OperationalCommandDispatcher;
   retrievalObserver?: RetrievalObserver;
+  hybridShadowCaptureSink?: HybridShadowCaptureSink;
   evaluationGuard?: TicketEvaluationGuard;
   learningOutbox?: LearningOutboxWorker;
   learningDeliveryRunner?: LearningDeliveryRunner;
@@ -444,6 +448,7 @@ export async function createRuntimeDependencies(
     ...(runtimeOperationalStore === undefined ? {} : { operationalStore: runtimeOperationalStore }),
     ...(operationalCommandDispatcher === undefined ? {} : { operationalCommandDispatcher }),
     ...(retrievalObserver === undefined ? {} : { retrievalObserver }),
+    ...(options.hybridShadowCaptureSink === undefined ? {} : { hybridShadowCaptureSink: options.hybridShadowCaptureSink }),
     evaluationGuard,
     ...(learningOutbox === undefined ? {} : { learningOutbox }),
     ...(learningDeliveryRunner === undefined ? {} : { learningDeliveryRunner }),

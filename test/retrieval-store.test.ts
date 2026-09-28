@@ -82,6 +82,50 @@ describe("retrieval store", () => {
     db.close();
   });
 
+  it("resolves candidate content only from the exact retrieval metadata identity", () => {
+    const db = RetrievalStore.open(":memory:");
+    db.initialize();
+    const article = projectArticle({
+      id: "frozen-source",
+      title: "Frozen source",
+      tags: ["delivery"],
+      body: "The captured representation content stays fixed for this opportunity.",
+    });
+    db.reconcile({ resources: [article], unavailableFamilies: [] });
+    const expectedMetadata = db.metadata();
+    const candidate = {
+      resourceKey: article.resource.key,
+      resourceType: article.resource.type,
+      lexical: {
+        bestRank: 1,
+        bestBm25Score: 0.1,
+        matches: [{
+          representationId: article.representations[0]!.id,
+          resourceKey: article.resource.key,
+          score: 0.1,
+          rank: 1,
+        }],
+      },
+      deterministicReferences: [],
+      knownCauseReferences: [],
+    } as const;
+
+    const resolved = db.resolveCandidateSourceSnapshot(expectedMetadata, [candidate]);
+    expect(resolved.metadata).toEqual(expectedMetadata);
+    expect(resolved.sourceSnapshot.resources).toEqual([article]);
+
+    const changedArticle = projectArticle({
+      id: "frozen-source",
+      title: "Frozen source",
+      tags: ["delivery"],
+      body: "A later retrieval reconciliation changes this content.",
+    });
+    db.reconcile({ resources: [changedArticle], unavailableFamilies: [] });
+    expect(() => db.resolveCandidateSourceSnapshot(expectedMetadata, [candidate]))
+      .toThrow(RetrievalIntegrityError);
+    db.close();
+  });
+
   it("retains unavailable-family projections while excluding them from active retrieval", () => {
     const db = RetrievalStore.open(":memory:");
     db.initialize();

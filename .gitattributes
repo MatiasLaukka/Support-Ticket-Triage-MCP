@@ -1,1 +1,2 @@
 /data/evaluation/knowledge-readiness/*.json text eol=lf
+/data/evaluation/applicability-v1/*.json text eol=lf

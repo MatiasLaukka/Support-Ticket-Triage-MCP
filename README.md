@@ -16,7 +16,7 @@ Knotty is an **experimental, local-first engineering project**, not a live help-
 
 The latest architectural milestone is the **Hybrid diagnostic reasoning system (H1–H5b)**. Its frozen-input, provider-neutral, replay-safe **shadow pipeline is implemented**, but it is **not fully integrated into the authoritative ticket workflow**.
 
-The **SIMPLE vs. HYBRID Home Assistant E1a study** compares Qwen, Luna, and Sol against historical public issue reports and time-eligible documentation. The local 24-case execution matrix has run, but **blinded human scoring and comparative analysis are not complete**. Preliminary output-validity totals are reported [below](#home-assistant-historical-case-evaluation-e1a--ongoing); no diagnostic-accuracy winner is established. Earlier Qwen *semantic retrieval* evaluations are separate experiments.
+The **SIMPLE vs. HYBRID Home Assistant E1a study** compares Qwen, Luna, and Sol against historical public issue reports and time-eligible documentation. The local 24-case execution matrix has run, but **blinded human scoring and comparative analysis are not complete**. Preliminary output-validity totals are reported [below](#home-assistant-historical-case-evaluation-e1a-ongoing); no diagnostic-accuracy winner is established. Earlier Qwen *semantic retrieval* evaluations are separate experiments.
 
 | Track | Current status |
 | :--- | :--- |
@@ -162,7 +162,7 @@ flowchart TB
     Simple -. "existing production path only" .-> Authority
 ~~~
 
-**Evaluation status:** The Home Assistant E1a SIMPLE-vs-HYBRID matrix has produced **preliminary technical output-validity data**, but the blinded semantic review is not finished. No diagnostic-accuracy comparison or winning model/architecture has been established. Earlier Qwen embedding/retrieval experiments and GPT drafting comparisons are separate evidence sets. H1–H5b remains shadow-only with **no operational authority cutover**. See [the Home Assistant evaluation status](#home-assistant-historical-case-evaluation-e1a--ongoing).
+**Evaluation status:** The Home Assistant E1a SIMPLE-vs-HYBRID matrix has produced **preliminary technical output-validity data**, but the blinded semantic review is not finished. No diagnostic-accuracy comparison or winning model/architecture has been established. Earlier Qwen embedding/retrieval experiments and GPT drafting comparisons are separate evidence sets. H1–H5b remains shadow-only with **no operational authority cutover**. See [the Home Assistant evaluation status](#home-assistant-historical-case-evaluation-e1a-ongoing).
 
 B3 indexes and discovers candidate resources; B4 evaluates ranking policies; B5 evaluates evidence applicability; H1–H5b assembles and runs frozen hybrid reasoning opportunities. Their shadow-only boundary remains intact despite the sophistication of the research system.
 
@@ -1084,7 +1084,7 @@ evidence reported in this README without enabling live GPT providers.
 
 ## Reproducible Evaluation
 
-### Home Assistant historical-case evaluation (E1a — ongoing)
+### Home Assistant historical-case evaluation: E1a ongoing
 
 Knotty is being tested beyond its **synthetic Northstar Marketing Cloud tickets** using **historical public Home Assistant GitHub issues and Home Assistant documentation**. This is a controlled external-case research dataset, **not** a live Home Assistant support integration or a benchmark endorsed by the Home Assistant project.
 

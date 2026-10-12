@@ -2,1626 +2,298 @@
 
 **Evidence-grounded support-ticket triage, diagnostics, and human-governed AI workflows.**
 
-Knotty began as a personal learning project to explore **AI agent Skills** and **Model Context Protocol (MCP) servers**. Connecting an assistant to a few local tools raised larger questions: How should an agent gather evidence? Who can approve changes? What happens when a diagnosis becomes stale or a provider fails? The experiment grew into a diagnostic engine with structured workflows, durable state, governed knowledge reuse, and a separate research track for hybrid retrieval and reasoning.
+Knotty began as a personal experiment with **AI agent Skills** and **Model Context Protocol (MCP) servers**. Connecting an assistant to a few local tools raised harder questions: How can an agent reason about incomplete evidence? What happens when an investigation changes? Who can authorize a fix? Can earlier decisions be replayed after a restart?
 
-Today, Knotty combines deterministic rules, optional LLM assistance, local knowledge retrieval, evidence-aware diagnostics, and human review across a ticket's lifecycle—from initial evaluation to diagnosis, fixes, verification, and closure. It is also a testbed for reproducible evaluation, causal constraints, replay, and failure recovery.
+What began as a tool-integration exercise evolved into a **local diagnostic and workflow engine**—and, more recently, an evaluation platform for hybrid retrieval, AI reasoning, and reliability engineering.
 
-The guiding question is:
+Knotty's central question is:
 
-> **How can AI systems go beyond generating plausible answers to support decisions that are traceable, testable, and grounded in evidence?**
+> **How do we build AI systems that do more than generate plausible answers—systems whose decisions are evidence-grounded, traceable, testable, and safe to act on?**
 
-Knotty is an **experimental, local-first engineering project**, not a live help-desk integration. It uses synthetic tickets and clean-room knowledge articles from **Northstar Marketing Cloud**, a fictional ecommerce marketing automation platform. There is no live Zendesk, Jira, email, paging, identity, or customer-data connection.
+Knotty is an **experimental engineering project**, not a deployed customer-support platform. The local application operates on synthetic tickets and clean-room knowledge articles from *Northstar Marketing Cloud*, a fictional ecommerce marketing platform. There is no live help-desk connection or outgoing customer email. Separately, the research harness evaluates historical public Home Assistant issues and documentation—not live Home Assistant tickets.
 
-### Current development status
+[Try the demo](#quick-start) · [Understand the architecture](#architecture-in-one-picture) · [Explore Hybrid research](#hybrid-diagnostic-reasoning) · [Read the evaluation evidence](#evaluation-and-current-results) · [Detailed engineering reference](docs/engineering-reference.md)
 
-The latest architectural milestone is the **Hybrid diagnostic reasoning system (H1–H5b)**. Its frozen-input, provider-neutral, replay-safe **shadow pipeline is implemented**, but it is **not fully integrated into the authoritative ticket workflow**.
+## Quick start
 
-The **SIMPLE vs. HYBRID Home Assistant E1a study** compares Qwen, Luna, and Sol against historical public issue reports and time-eligible documentation. The local 24-case execution matrix has run, but **blinded human scoring and comparative analysis are not complete**. Preliminary output-validity totals are reported [below](#home-assistant-historical-case-evaluation-e1a-ongoing); no diagnostic-accuracy winner is established. Earlier Qwen *semantic retrieval* evaluations are separate experiments.
+Run the local **Approval Desk** to see a ticket move through classification, evidence gathering, human approval, diagnosis, verification, and closure.
 
-| Track | Current status |
-| :--- | :--- |
-| Local MCP server, Codex Skill, and Approval Desk | **Implemented** for synthetic local tickets |
-| Deterministic diagnosis, evidence gates, ticket lifecycle, approval | **Operational authority** in the demo |
-| GPT classification, taxonomy, diagnosis advice, response drafting | **Optional advisory input**; deterministic guardrails remain final |
-| Governed knowledge discovery, promotion, and reuse | **Implemented**, with separate learning persistence |
-| B3 retrieval, B4 ranking, B5 applicability | **Retrieval / research / shadow lanes**, not automatic ticket authority |
-| H1–H5b Hybrid reasoning | **Latest implemented shadow architecture**; operational integration pending |
-| SIMPLE vs. HYBRID: Qwen / Luna / Sol | **Home Assistant E1a matrix executed locally**; blinded review and analysis pending |
+**Requirements:** Node.js `^20.19.0`, `^22.12.0` or `>=24.0.0`; npm; and a local clone. The commands below use PowerShell, but the npm commands work from other shells.
 
-### Start here
-
-- [60-second local Approval Desk demo](#demo-in-60-seconds) — see a ticket evolve through a human-reviewed workflow.
-- [Architecture](#architecture) and [hybrid research](#latest-architecture-hybrid-diagnostic-reasoning) — see authoritative and advisory paths.
-- [MCP interface](#mcp-interface) — tools, resources, prompts, and mutation contracts.
-- [Reproducible evaluation](#reproducible-evaluation) — what the existing tests do and *do not* establish.
-- [Detailed case study](docs/case-study.md) · [Threat model](SECURITY.md) · [Roadmap](docs/roadmap.md).
-
-## At A Glance
-
-- **Triage and diagnosis:** conversation-aware classification, evidence readiness, diagnostic playbooks, known-cause/event correlation, optional GPT reasoning, and grounded drafting.
-- **Workflow governance:** one service owns escalation, approvals, diagnosis review, fix gating, verification, closure, and causal audit history across MCP and the browser UI.
-- **Human control:** model proposals remain advisory; changing approved ticket fields and promoting reusable knowledge require explicit operator decisions.
-- **Reliability and research:** transactional SQLite, command replay, isolated learning delivery, controlled/local-vs-live evaluations, and newer shadow-only retrieval/reasoning experiments.
-
-The screenshots, runnable demos, diagrams, command reference, configuration details, and historical evaluation evidence below are intentionally preserved as technical documentation rather than reduced to marketing claims.
-
-## Safety Boundary
-
-- Ticket subjects and descriptions are untrusted data. Embedded instructions,
-  claimed approval, urgency, and policy-bypass language are evidence, not
-  authorization.
-- `submit_triage_recommendation` stores a pending proposal. It does not change
-  the ticket or an external system.
-- The Skill/Codex workflow requires presenting the recommendation before a
-  human explicitly approves named fields or explicitly rejects it with
-  feedback.
-- The MCP approval schema requires `confirm: true`, matching recommendation
-  and ticket IDs, the current ticket revision, an actor, and one or more
-  explicitly named fields. The service also enforces required security and
-  outage routing.
-- The MCP rejection schema requires a pending recommendation, matching
-  recommendation and ticket IDs, an actor, and nonblank feedback. It has no
-  revision check and cannot prove that a human intended the rejection.
-- Only `category`, `priority`, `team`, `assignee`, `status`, `tags`, and
-  `customerResponse` are approvable.
-- Security risk must route to `security`. A likely or confirmed outage must
-  route to `incident-response`, unless security takes precedence while the
-  outage reason remains visible.
-- Submission rejects a stale source revision. Approval rechecks the
-  recommendation source revision against the current expected ticket revision.
-  Both approval and rejection reject an already-resolved recommendation.
-- Successful commands commit their projection, revision, causal event, safe
-  trace, replay result, and learning-outbox intent atomically in operational
-  SQLite. The local operator can still edit local files, so this is not a
-  tamper-evident ledger.
-
-See [SECURITY.md](SECURITY.md) for the full threat model.
-
-## Architecture
-
-### Layers and decision authority
-
-| Layer | Role and authority |
-| :--- | :--- |
-| **Operator:** human, Codex Skill, Approval Desk | Initiates actions and explicitly approves named fields |
-| **Adapters:** MCP stdio / HTTP | Validate transport requests; share the same application service |
-| **Operational application:** TriageService and deterministic policy | **Authoritative** lifecycle, routing, evidence, revision, and approval rules |
-| **Operational SQLite** | Atomic ticket state, audits, causal events, command receipts, and learning-outbox intent |
-| **Advisory learning:** knowledge-evolution service and SQLite | Versioned, reviewed knowledge; cannot mutate operational decisions independently |
-| **Research:** retrieval and hybrid reasoning shadow runners | Capture, compare, and replay hypotheses **without operational authority** |
-
-The original dependency and shared execution-path diagrams are kept below.
-
-```mermaid
-flowchart TB
-    Experience["EXPERIENCE<br/>Human reviewer · Codex desktop · Approval Desk"]
-    Adapters["ADAPTERS<br/>Repository Skill · MCP stdio/JSON-RPC · HTTP"]
-    Application["SHARED APPLICATION<br/>TriageService · policy · read path · knowledge evolution"]
-    DataAccess["DATA ACCESS<br/>Repositories · read models"]
-    Persistence["PERSISTENCE<br/>Operational SQLite · advisory learning SQLite · Markdown catalog"]
-
-    Experience --> Adapters --> Application --> DataAccess --> Persistence
-```
-
-The overview intentionally shows one dependency spine. The companion view
-below expands only the three execution paths that matter for understanding
-runtime behavior.
-
-### Shared execution paths
-
-```mermaid
-flowchart TB
-    subgraph Commands["GOVERNED COMMAND PATH"]
-        direction LR
-        MCPCommand["MCP"] --> TriageCommand["TriageService"]
-        HTTPCommand["HTTP"] --> TriageCommand
-        TriageCommand --> OperationalCommand["Operational SQLite"]
-    end
-
-    subgraph Reads["READ PATH"]
-        direction LR
-        MCPRead["MCP"] --> ReadModels["Read models<br/>and repositories"]
-        HTTPRead["HTTP"] --> ReadModels
-        ReadModels --> OperationalRead["Operational SQLite"]
-        ReadModels --> Catalog["Markdown catalog"]
-    end
-
-    subgraph Learning["ADVISORY KNOWLEDGE PATH"]
-        direction LR
-        KnowledgeService["Knowledge evolution"] --> LearningStore["Learning SQLite"]
-        KnowledgeService --> CatalogLearning["Markdown catalog"]
-    end
-```
-
-## Latest Architecture: Hybrid Diagnostic Reasoning
-
-**This is the newest development, not a completed model-comparison result.** The implemented H1–H5b work introduces a provider-neutral shadow reasoning pipeline with frozen causally eligible inputs, validated contracts, replay/idempotency semantics, and immutable/versioned evaluation-side captures. A taxonomy-informed B5 reasoning adapter is available in that lane.
-
-The distinction between the paths matters:
-
-| Path | What it can do today |
-| :--- | :--- |
-| **SIMPLE / existing governed workflow** | Uses the deterministic and optional advisory components described below; the shared service controls actual ticket actions |
-| **HYBRID / shadow reasoning** | Evaluates frozen context and retrieval-derived evidence for research; **cannot** approve recommendations, change diagnoses, or move tickets |
-| **Ongoing SIMPLE vs. HYBRID comparison** | Home Assistant E1a local execution completed for **Qwen, Luna, and Sol**; blinded outcome scoring is pending |
-
-~~~mermaid
-flowchart TB
-    Inputs["Frozen, causally eligible case context"]
-    Simple["SIMPLE baseline evaluation"]
-    Retrieval["B3 resource discovery<br/>B4 ranking and B5 applicability research"]
-    Hybrid["HYBRID shadow reasoning<br/>H1–H5b"]
-    Evidence["Separate experiment outputs<br/>with provenance and replay checks"]
-    Authority["Existing TriageService<br/>authoritative workflow"]
-
-    Inputs --> Simple
-    Inputs --> Retrieval --> Hybrid
-    Inputs --> Hybrid
-    Simple -. "comparison lane" .-> Evidence
-    Hybrid -. "comparison lane" .-> Evidence
-    Simple -. "existing production path only" .-> Authority
-~~~
-
-**Evaluation status:** The Home Assistant E1a SIMPLE-vs-HYBRID matrix has produced **preliminary technical output-validity data**, but the blinded semantic review is not finished. No diagnostic-accuracy comparison or winning model/architecture has been established. Earlier Qwen embedding/retrieval experiments and GPT drafting comparisons are separate evidence sets. H1–H5b remains shadow-only with **no operational authority cutover**. See [the Home Assistant evaluation status](#home-assistant-historical-case-evaluation-e1a-ongoing).
-
-B3 indexes and discovers candidate resources; B4 evaluates ranking policies; B5 evaluates evidence applicability; H1–H5b assembles and runs frozen hybrid reasoning opportunities. Their shadow-only boundary remains intact despite the sophistication of the research system.
-
-Further documentation: [B3 design](docs/superpowers/plans/2026-09-12-hybrid-retrieval-b3-implementation-plan.md) · [B4 experiment](docs/superpowers/plans/2026-09-16-b4-ranking.md) · [B5 applicability](docs/superpowers/plans/2026-09-17-b5-applicability-evaluation.md) · [H5a shadow runner](docs/superpowers/plans/2026-09-24-h5a-hybrid-shadow-runner.md) · [Merged hybrid architecture PR #30](https://github.com/MatiasLaukka/Support-Ticket-Triage-MCP/pull/30).
-
-## Demo In 60 Seconds
-
-```powershell
+~~~powershell
 npm ci
 npm run build
+
+# Stop other Knotty runtime/MCP processes before resetting.
 npm run reset:demo
 npm run approval-desk
-```
+~~~
 
-Open the printed local URL. A good portfolio walkthrough is:
+Open the URL printed by the server (normally `http://127.0.0.1:5177`). **Use `TKT-1010` first:** a vague report becomes an evidence-based product-performance investigation after a customer reply. The local demonstration can add a controlled synthetic reply after you approve an outbound update. For an incident-routing example, try `TKT-1001`.
 
-1. Select `TKT-1010`, the intentionally vague "Problem / It does not work"
-   ticket.
-2. Create the first recommendation and review the generated customer-response
-   draft.
-3. Approve the named fields and click **Done**. The deterministic demo adds a
-   ticket-specific customer reply automatically after the response is marked
-   sent.
-4. Evaluate the ticket again and point out that the system reclassifies it
-   from a generic unclassified issue to a
-   product performance issue, recalculates the evidence checklist, avoids
-   asking for a screenshot of a blank page, and drafts a response that matches
-   the new lifecycle state.
-5. Use the conversation timeline and audit panel to show the ordered lifecycle.
+<details>
+<summary>What gets reset, and how do I keep the state?</summary>
 
-The action bar's collapsed **Advanced settings** includes a manual customer-reply
-composer, an automatic-reply toggle, and action-bar positioning for edge cases
-or screen recording. **Conversation Context is read-only** and has no
-customer-reply editor. For a manual test reply, expand **Advanced settings**,
-check **Disable automatic customer replies**, expand **Manual customer reply**,
-paste or choose the reply, and click **Add reply** before evaluating again.
-The toggle and composer apply to the current Approval Desk page session and
-reset on reload. The **Move action bar** selector offers bottom-right,
-bottom-left, bottom-center, top-left, top-center, and top-right positions; its
-selection also resets on reload. These controls are not needed for the normal
-showcase flow, which uses the automatic reply generated after **Done**.
+**`npm run reset:demo` is destructive to local demo runtime state.** Stop all MCP and Approval Desk processes first. The reset restores both the authoritative operational state and advisory learning state.
 
-The **Workflow Bar** owns evaluation, recommendation approval, diagnosis, Fix,
-verification, and close actions. The separate **Pattern Bar** appears only when
-knowledge discovery has an active candidate or is still running. An actionable
-diagnosis or pattern review is a hard workflow gate: **Done** changes to
-**Review**, focuses the relevant bar, and downstream Knotty actions remain
-hidden until the operator completes the required review.
+For narrower resets, use `npm run reset:operational-demo` (tickets and workflow history) or `npm run reset:learning-demo` (advisory learning data). To retain changes across restarts, stop the Approval Desk with Ctrl+C and rerun `npm run approval-desk` **without** a reset. The reset controller uses leases, validation, rollback, and backup checks; its complete behavior is documented in the [engineering reference](docs/engineering-reference.md#reset-the-local-demo-state).
 
-The alternate incident walkthrough still works well with `TKT-1001`, which
-shows correlated event-ingestion delay handling and incident-response routing.
+</details>
 
-## Resettable Codex Skill AI Showcase
+![Knotty Approval Desk overview showing local synthetic tickets and workflow controls](docs/assets/approval-desk-overview.png)
 
-The command-line showcase replays the synthetic `TKT-1010` lifecycle through
-the MCP interface in fresh temporary state. It follows each
-`operatorGuidance.nextAction`, reads the workflow again after every action, and
-cleans the temporary state when it exits. Every report names its selected safe
-mode and the classification, drafting, and network provenance used for that
-mode. The saved controlled transcript is in
-[docs/skill-showcase-example.md](docs/skill-showcase-example.md).
+The browser interface provides the conversation timeline, current recommendation, evidence checklist, human-review controls, and audit context. Other views: [conversation workspace](docs/assets/approval-desk-conversation.png) and [recommendation panel](docs/assets/approval-desk-recommendation.png).
 
-```powershell
-npm run build
-npm run demo:skill-showcase
-npm run demo:skill-showcase -- --deterministic
-```
+## What Knotty can do today
 
-The default `controlled` mode makes no network request and needs no configured
-external provider. Local controlled simulations exercise both optional AI
-roles: classification reasoning and customer-response drafting. The report
-labels both roles `controlled-local-simulation`, labels network access
-`disabled`, and never attributes their output to an external model adapter.
-Their auditable traces are `used` when their advice or draft is accepted;
-deterministic policy still owns routing, lifecycle, validation, and approval.
-All eight controlled drafting stages are reported as accepted local
-deterministic output with explicit simulation provenance.
+| Capability | Status and boundary |
+| :--- | :--- |
+| Local MCP server, Codex Skill, browser Approval Desk | **Implemented** for synthetic support tickets |
+| Conversation-aware classification and evidence checks | **Implemented**; deterministic safety policy has final authority |
+| Diagnostic lifecycle, diagnosis review, fixes, verification and closure | **Implemented** with explicit human gates |
+| Optional GPT classification, diagnosis advice and response drafting | **Advisory**, contract-checked, with local fallback |
+| Knowledge discovery, operator promotion and controlled reuse | **Implemented** with a separate advisory learning ledger |
+| B3 semantic/lexical retrieval, B4 ranking, B5 applicability | **Research or shadow paths**; no automatic operational cutover |
+| H1–H5b Hybrid reasoning | **Latest shadow architecture**, not fully integrated into the operational diagnosis path |
+| SIMPLE vs. HYBRID / Qwen vs. Luna vs. Sol | **Historical Home Assistant experiment ongoing**; no diagnostic-accuracy winner |
+| Live Zendesk/Jira/email integration, production identity boundary | **Not included** |
 
-The explicit `--deterministic` mode passes no providers and never makes a
-provider call. Its classification traces and normal drafting traces are
-`skipped`, including the valid customer-confirmed closure draft. Both modes
-traverse Diagnose, Fix, verification, ready-for-close, and closed stages.
-Every review step is an explicitly disclosed scripted
-`portfolio-reviewer` simulation using exactly the approval fields supplied by
-the workflow guidance.
+The application supports a ticket lifecycle rather than a one-shot classifier. A customer can provide new evidence, changing the classification, missing-evidence requirements, plausible diagnosis, or next permitted action. A failed fix or later reply can invalidate an earlier review. Neither a good-looking model explanation nor a retrieved article automatically proves a root cause.
 
-Live mode is optional and is never selected implicitly. It requires an API key
-set only in the shell:
+## Architecture in one picture
 
-```powershell
-$env:OPENAI_API_KEY = 'set-in-the-shell-only'
-npm run demo:skill-showcase -- --live
-```
+![Knotty architecture overview with human/agent interfaces, shared deterministic service, transactional operational state, governed knowledge and isolated Hybrid research](docs/assets/knotty-system-overview.svg)
 
-The recorded portfolio results cover controlled and deterministic modes only;
-no live showcase run is claimed. Unknown arguments and repeated or conflicting
-mode flags fail safely, so a typo cannot silently select controlled mode.
+**One shared `TriageService` is authoritative.** The browser UI and MCP tools are adapters to the same application rules—not separate sources of truth. Four boundaries organize the system:
 
-## Deterministic Lifecycle Replay
+1. **Operational:** deterministic policy, approval checks, ticket lifecycle, causal events, and transactional state.
+2. **Advisory AI:** optional model classification signals and drafts; outputs must pass validators and cannot authorize changes.
+3. **Governed learning:** reviewed knowledge candidates become usable only through explicit promotion and approved evidence policies.
+4. **Research/shadow:** retrieval, applicability and Hybrid reasoning experiments record observations without changing authoritative tickets.
 
-The chronological replay is the companion to the snapshot-based evaluation
-harness. It drives the existing MCP tools against fresh temporary state and
-verifies one complete, stateful journey:
+### How a recommendation is produced
 
-```text
-evidence → diagnosis → approval → response → mitigation/fix → verification → closure
-```
+![Knotty triage and recommendation flow, from untrusted ticket text and evidence to validated draft, human decision and audited local action](docs/assets/knotty-recommendation-architecture.svg)
 
-Run it locally without GPT or network access:
+- **Input remains untrusted.** Ticket text, customer replies, and embedded instructions are evidence—not policy or approval.
+- **Deterministic policy wins.** Security, outage, SLA, evidence-readiness, revision, and escalation rules cannot be overridden by an LLM.
+- **Drafting is bounded.** Optional model-generated customer text must satisfy local response contracts; unavailable or invalid provider output falls back to deterministic drafting.
+- **Nothing is automatically sent.** Approving a customer-response field records a local workflow event; the project has no external messaging integration.
 
-```powershell
+The full classifier, drafting and safety details are in the [technical reference](docs/engineering-reference.md#hybrid-recommendation-architecture) and [threat model](SECURITY.md).
+
+### Human approval and the ticket lifecycle
+
+![Human-governed ticket triage sequence: investigate, save a pending proposal, require explicit approval, validate and commit, then read back](docs/assets/knotty-approval-workflow.svg)
+
+A proposal is not a ticket change. The operator first reviews evidence, risks, citations, proposed fields, and the customer-facing response. The service checks explicit actor/field authorization, source revision, routing, and lifecycle state before committing approved mutations. Readback confirms what changed and what stayed unchanged.
+
+The lifecycle extends past this single approval:
+
+`evaluate → collect evidence → record diagnosis → human diagnosis review → customer update → fix or escalation → verification → ready-to-close → explicit closure`
+
+Exact actions vary by evidence and state. The system can **escalate unresolved ambiguity** instead of manufacturing a definitive answer. Fix approval is distinct from closure; new evidence can require review again.
+
+The Approval Desk's **Workflow Bar** manages the current action, and the separate **Pattern Bar** appears for governed knowledge discovery. Their blocking reviews are enforced through the same backend service.
+
+For a chronological MCP replay without network calls:
+
+~~~powershell
 npm run evaluate:lifecycle-replay
-```
+~~~
 
-The replay reads `get_ticket_workflow` before the first action and after every
-transition. Each read is validated to include the ticket, conversation history
-and timeline, recommendation history and summary, latest recommendation when
-present, and backend operator guidance. The report also proves that each MCP
-mutation follows a workflow read, records explicit approval, captures the
-customer reply, diagnosis and fix audits, and ends at `resolved`.
+[Detailed diagnosis-and-fix walkthrough](docs/diagnosis-review-example.md) · [Lifecycle replay guide](docs/lifecycle-replay.md) · [Full MCP action contracts](docs/engineering-reference.md#mcp-interface)
 
-The replay writes a sanitized report with the exact workflow-read and action
-counts for that run, plus the separate context-aware diagnostic scenario
-matrix. The matrix's bounded-ambiguity/escalation scenario remains a second
-illustrative example: it routes unresolved ambiguity toward specialist review
-rather than pretending that an unresolved hypothesis is a fix. Treat report
-counts as run evidence, not a versioned README constant.
+## Hybrid diagnostic reasoning
 
-This is a verification and portfolio showcase, not a second workflow engine.
-The same `TriageService`, operator guidance, evidence gates, audit repository,
-and MCP tools used by the Approval Desk perform the work.
+Hybrid is **the latest architectural expansion**, but it must not be mistaken for an operationally deployed replacement for the existing SIMPLE workflow.
 
-## Governed Diagnosis Review And Fixes
+![Knotty Hybrid diagnostic research architecture showing time-eligible historical evidence, B3/B4/B5 retrieval research, SIMPLE and HYBRID model lanes, blinded human review and no operational cutover](docs/assets/knotty-hybrid-research.svg)
 
-Once the required evidence is complete, an operator can record an immutable
-diagnosis and review it before it becomes authoritative. The Approval Desk and
-MCP tools call the same `TriageService` rules; neither duplicates diagnosis
-freshness, fix gating, or lifecycle transitions. The Approval Desk and MCP
-diagnosis reads present the live audit-backed history. Lifecycle Replay is a
-separate, read-only evaluation-report snapshot view; it does not read live
-audits or make lifecycle decisions.
+The research architecture keeps the following pieces separate:
 
-The normal operator journey is deliberately bounded:
+| Research component | What is implemented or being investigated |
+| :--- | :--- |
+| **B3 discovery** | Local-first lexical retrieval, optional semantic embeddings, and provenance-preserving candidate sets across articles, known causes, playbooks and eligible resolved cases |
+| **B4 ranking** | Offline lexical/semantic/reciprocal-rank-fusion comparisons; development evidence was **inconclusive**, so no ranking policy was promoted to authority |
+| **B5 applicability** | Research on whether evidence actually applies to a case, including abstention and negative controls |
+| **H1–H5b Hybrid reasoning** | Frozen, causally eligible inputs; provider-neutral contracts; immutable shadow runs; replay, idempotency and safe failure handling |
+| **Operational integration** | **Not completed**; shadow output cannot approve, diagnose authoritatively, fix or close tickets |
 
-1. Complete the evidence checklist and send the approved evidence update.
-2. Record the original diagnosis, then explicitly approve or revalidate it.
-   A review is a separate audit event; it never rewrites the original
-   diagnosis.
-3. Send the reviewed, customer-safe diagnosis response. Authorizing only that
-   outbound response does not change ticket revision or invalidate otherwise
-   current diagnostic evidence.
-4. Select every ticket that the approved diagnosis should affect and explain
-   why. A diagnosis-scoped fix writes a separate audit event for every
-   selected ticket; it does not resolve any ticket.
-5. Send a customer-safe verification request. A new customer reply or a real
-   ticket-field change makes the earlier review stale, so an operator must
-   revalidate before any later governed action can rely on it.
-6. Close only after the customer has confirmed the result, the configured
-   ready-to-close response has been approved and sent, and an operator takes
-   the explicit close action.
+The purpose is not merely to supply more context to an LLM. It's to ask whether combining **retrieval, structured evidence, diagnostic taxonomy, and model reasoning** produces better-supported hypotheses without encouraging unsupported certainty or leaking knowledge from the future.
 
-Customer-facing updates say what was investigated or corrected and what the
-customer should verify. They do not expose internal policy, detection,
-similarity, prompt, or secret-handling details. Optional GPT assistance can
-propose drafts, but deterministic checks and explicit human approval remain
-authoritative.
+The experiments include an existing **SIMPLE baseline** and a **HYBRID shadow lane**. Provider/model identity is kept separate from the case opportunity and the human review packet. A claim that Hybrid works better requires scored, comparable results—not just successful execution.
 
-See the detailed synthetic walkthrough in
-[docs/diagnosis-review-example.md](docs/diagnosis-review-example.md). The
-ordered regression is runnable locally:
+[Hybrid shadow runner design](docs/superpowers/plans/2026-09-24-h5a-hybrid-shadow-runner.md) · [B3 retrieval plan](docs/superpowers/plans/2026-09-12-hybrid-retrieval-b3-implementation-plan.md) · [B4 ranking](docs/superpowers/plans/2026-09-16-b4-ranking.md) · [B5 applicability](docs/superpowers/plans/2026-09-17-b5-applicability-evaluation.md) · [Hybrid implementation PR #30](https://github.com/MatiasLaukka/Support-Ticket-Triage-MCP/pull/30)
 
-```powershell
-npx vitest run test/approval-desk-diagnostic-workflow.test.ts test/demo-skill-showcase.test.ts
-```
+### Home Assistant historical-case experiment (E1a)
 
-This diagnosis-review slice does not add or re-prove the existing separately
-governed candidate discovery, optional GPT candidate drafting, or human
-promotion workflow. It also does not add revision-aware queue analysis,
-evidence-graph similarity, or executable/versioned workflow migration. Those
-capabilities remain separately governed and explicitly audited rather than
-being inferred from a reviewed diagnosis.
+Knotty's earlier demonstrations use fictional support tickets. The E1a research goes further by studying **historical public Home Assistant GitHub issues and time-eligible documentation**. This is a controlled, local historical-case experiment, **not** an integration with Home Assistant support or an endorsed benchmark.
 
-## Screenshots
+Every stage is limited by an `asOf` cutoff. A model should not see later GitHub comments, future solutions, or current documentation substituted for a missing historical version. Eligible documentation must have exact historical provenance and content hashes; otherwise it stays **unavailable**.
 
-The screenshots below are generated from local synthetic data.
+**Preliminary technical results — October 2026**
 
-![Approval Desk overview](docs/assets/approval-desk-overview.png)
+| Measure | Status |
+| :--- | ---: |
+| Public historical cases | **24** |
+| Time-scoped evidence checkpoints | **64** |
+| SIMPLE/HYBRID × Qwen/Luna/Sol attempts | **384** |
+| Structurally valid provider outputs | **341** |
+| Invalid provider outputs | **43** |
+| Valid-output packets prepared for blinded review | **341** |
+| Completed diagnostic-accuracy comparison | **Not yet available** |
 
-![Conversation workspace](docs/assets/approval-desk-conversation.png)
+**341/384 is an output-validity result, not diagnosis accuracy.** Malformed outputs remain reliability failures but do not receive invented human semantic ratings. Model and architecture identities remain concealed during blinded review; no provider ranking, Hybrid superiority claim, or winner is justified while adjudication and analysis are unfinished.
 
-![Recommendation panel](docs/assets/approval-desk-recommendation.png)
+The E1a harness and raw evaluation artifacts currently reside in a **separate local experimental worktree** rather than in a reproducible benchmark command on this repository's main branch. Earlier local Qwen semantic-retrieval metrics and other controlled GPT comparisons are **different experiments**.
 
-### Hybrid Recommendation Architecture
+## Governed knowledge evolution
 
-```mermaid
-flowchart LR
-    Ticket["Synthetic ticket and replies<br/>untrusted text"]
-    Context["Conversation context"]
-    KB["Retrieved local KB articles"]
-    Rules["Deterministic classifier<br/>and safety rules"]
-    GPTReasoning["Optional GPT advisory<br/>classification signals"]
-    Evidence["Evidence readiness<br/>and lifecycle"]
-    GPTDraft["Optional GPT draft provider"]
-    Validators["Deterministic draft validators"]
-    Fallback["Local deterministic fallback"]
-    Reviewer["Human reviewer"]
-    MCP["MCP tools and prompts"]
-    HTTP["Approval Desk HTTP API"]
-    Service["Shared TriageService"]
-    Audit["Operational audit trail"]
+![Knotty governed knowledge evolution: completed diagnoses, candidate discovery, human promotion, immutable versions, advisory learning ledger and future evidence-gated reuse](docs/assets/knotty-knowledge-evolution.svg)
 
-    Ticket --> Context
-    Context --> Rules
-    Context --> GPTReasoning
-    GPTReasoning --> Rules
-    Rules --> Evidence
-    KB --> GPTDraft
-    Evidence --> GPTDraft
-    Rules --> Fallback
-    GPTDraft --> Validators
-    Validators -->|pass| Reviewer
-    Validators -->|warn or provider error| Fallback
-    Fallback --> Reviewer
-    Reviewer -->|approve named fields| MCP
-    Reviewer -->|approve named fields| HTTP
-    MCP --> Service
-    HTTP --> Service
-    Service --> Audit
-```
+Knotty can suggest reusable knowledge after supported diagnoses, but it does **not** autonomously retrain a model or convert a discovered pattern into policy.
 
-The important boundary is that deterministic code remains the final authority
-for security, outage, SLA, approval, and audit behavior. GPT can help in two
-bounded ways: drafting customer-facing language and, when configured, proposing
-low-to-medium-weight advisory classification signals for ambiguous evolving
-conversations. Those signals are recorded as classifier evidence and cannot
-override hard safety rules.
+The sequence is: **observed evidence → completed diagnosis → deterministic candidate discovery → optional advisory drafting → human policy review → explicit promotion → versioned future reuse**. Candidates with incomplete or undecided evidence policies stay blocked. An approved known cause can still require new evidence in a later ticket; rejected, stale and contradicted objects do not silently become operational truth.
 
-### What This Demonstrates
+The durable advisory SQLite ledger records promotions, versions, outcomes, reuse, contradictions and history. Existing historical recommendations keep their original pinned knowledge version.
 
-- MCP tools can expose local business data and workflow actions to an AI
-  assistant without connecting to live customer systems.
-- Codex can operate the modern ticket workflow through MCP tools:
-  `get_ticket_workflow`, `add_customer_reply`, `evaluate_ticket`, and
-  `mark_response_done` mirror the Approval Desk lifecycle while preserving the
-  human approval boundary.
-- Deterministic policy can own routing, escalation, validation, approval, and
-  audit guarantees while GPT assists with bounded drafting and advisory
-  classification evidence.
-- Conversation-aware automation can re-evaluate a ticket after customer
-  replies, recalculate evidence requirements, and adapt the next draft.
-- Retrieved knowledge articles can ground a customer response without exposing
-  internal article IDs to the customer.
-- Human reviewers can edit and approve named fields, preserving accountability
-  instead of letting automation mutate tickets directly.
-- The same local demo can show success, fallback, stale-approval rejection, and
-  audit evidence in a repeatable way.
+~~~powershell
+npm run demo:knowledge-evolution
+npm run demo:learning-ledger
+npm run evaluate:knowledge-holdout
+~~~
 
-For a shorter narrative version, see [docs/case-study.md](docs/case-study.md).
-For sample outputs and demo talking points, see
-[docs/demo-results.md](docs/demo-results.md). For screenshot and GIF planning,
-see [docs/capture-guide.md](docs/capture-guide.md). For next build ideas, see
-[docs/roadmap.md](docs/roadmap.md).
+[Detailed evidence-policy rules](docs/knowledge-evolution.md) · [Learning and operational failure boundaries](docs/engineering-reference.md#governed-knowledge-evolution)
 
-The stdio entry point is `dist/src/index.js`. Runtime settings are grouped by purpose instead of mixing paths, governance, and optional provider controls in one table.
+## Persistence and reliability
 
-**Local data and operational defaults**
+![Knotty reliability architecture with command IDs, deterministic policy validation, atomic operational SQLite, isolated learning outbox and restart-safe readback](docs/assets/knotty-persistence-reliability.svg)
 
-| Setting | Default |
+The authoritative operational plane uses **transactional SQLite**, not a set of mutable JSON/JSONL ticket records. Governed commands commit the projection/revision, ticket-local causal event, safe trace, replay result and any learning-outbox intent together.
+
+| Problem | Design choice |
+| :--- | :--- |
+| Stale human decisions | Optimistic source-revision and approval-time checks |
+| Duplicate clicks or lost responses | Stable command IDs and persistent idempotent results |
+| Ordering and auditability | Causal ticket-local event sequences and safe read models |
+| Crash/restart uncertainty | Replayed command receipts; no reapplication of successful mutation |
+| Learning repository unavailable | Operational success is isolated; advisory delivery retries or reports unavailability |
+| Demo reset during a running process | Usage leases, guarded reset, verification and rollback |
+
+These are **local reliability guarantees**. SQLite files can still be modified by someone with filesystem access; this is neither a distributed multi-tenant help desk nor a cryptographically tamper-evident audit ledger.
+
+~~~powershell
+npm run demo:operational-persistence
+npm run evaluate:lifecycle-replay
+~~~
+
+For actual migration states, import contracts, reset safeguards, and crash/recovery restrictions, use the [engineering reference](docs/engineering-reference.md#operational-persistence-and-cutover).
+
+## Using the MCP server and Codex Skill
+
+The repository-local Skill teaches Codex to inspect the current workflow, gather evidence, propose the next action and **pause at the approval boundary**.
+
+1. Run `npm ci` and `npm run build` in the repository root.
+2. Open the root as a project in Codex desktop. Review and trust [`.codex/config.toml`](.codex/config.toml); it starts `node dist/src/index.js` using the project working directory.
+3. Start a new thread and invoke the [`triaging-support-tickets` Skill](.agents/skills/triaging-support-tickets/SKILL.md).
+
+~~~text
+Use $triaging-support-tickets to review TKT-1005.
+Show evidence, citations, escalation risks and proposed fields.
+Stop and wait for my explicit approval before changing anything.
+~~~
+
+The standalone `npm start` script runs the **stdio MCP server**, not an HTTP page. An idle terminal is expected while it waits for MCP messages.
+
+The server exposes **27 typed tools, 4 resources and 3 prompts** (at the documented implementation baseline). Useful starting points include `list_tickets`, `get_ticket_workflow`, `search_knowledge`, `evaluate_ticket`, `record_diagnosis`, `review_diagnosis`, `mark_response_done`, and `get_audit_events`. Every mutation has specific schema and policy constraints; use the [complete read, mutation, resource and prompt reference](docs/engineering-reference.md#mcp-interface).
+
+### Optional model assistance
+
+By default, the Approval Desk uses deterministic response drafting and needs **no API key**. Explicit opt-in example:
+
+~~~powershell
+$env:OPENAI_API_KEY = 'set-locally-do-not-commit'
+$env:APPROVAL_DRAFT_PROVIDER = 'openai'
+npm run approval-desk
+~~~
+
+Provider availability is not required for deterministic routing, lifecycle, audit, or approval checks. Don't put credentials in tickets, screenshots or committed configs.
+
+### Useful configuration defaults
+
+| Environment setting | Default |
 | :--- | :--- |
 | `TRIAGE_DATA_ROOT` | `data/runtime` |
 | `TRIAGE_SEED_FILE` | `data/seed/tickets.json` |
 | `TRIAGE_KNOWLEDGE_ROOT` | `data/knowledge` |
 | `OPERATIONAL_DB_PATH` | `data/runtime/operational.sqlite` |
 | `TRIAGE_LEARNING_LEDGER_PATH` | `data/runtime/knowledge-evolution/learning.sqlite` |
-| `TRIAGE_MINUTES_SAVED` | `8` (assumed minutes, not measured time) |
-
-**Governance and optional knowledge drafting**
-
-| Setting | Default |
-| :--- | :--- |
 | `TRIAGE_KNOWLEDGE_APPROVERS` | `support-lead,reviewer,approval-desk` |
-| `TRIAGE_KNOWLEDGE_CANDIDATE_PROVIDER` | Unset: deterministic discovery only. Use `controlled` for the local advisory demo. |
-| `TRIAGE_KNOWLEDGE_CANDIDATE_MODEL` | Unset: inherit `OPENAI_MODEL`, then `gpt-5.6-luna` |
-| `TRIAGE_KNOWLEDGE_CANDIDATE_TIMEOUT_MS` | `20000` |
+| `TRIAGE_MINUTES_SAVED` | `8` (an assumption, **not** measured labor time) |
 
-All relative paths are resolved from the process working directory.
+[Advanced environment/provider options](docs/engineering-reference.md#architecture) · [Safe reset guidance](docs/engineering-reference.md#reset-the-local-demo-state) · [Retrieval index controls](docs/engineering-reference.md#b3-retrieval-operations)
 
-### Operational persistence and cutover
+## Evaluation and current results
 
-Mutable runtime truth now lives in one operational SQLite database. Tickets,
-conversation messages, recommendation revisions, diagnoses, causal events,
-decision traces, idempotency results, and learning-delivery intents commit in
-explicit synchronous transactions. Each ticket receives its own contiguous
-event sequence, so the Decision Timeline follows causal order even when clocks
-or imported timestamps disagree. Static ticket fixtures and the Markdown
-knowledge catalog remain file-backed inputs; they are not runtime write
-fallbacks.
+Different harnesses answer different questions. **Fixture agreement**, **local controlled simulation**, **provider-output validity**, and **live-model diagnostic quality** are not interchangeable metrics.
 
-Every new operational database starts as `empty`. It permits inspection and
-import but rejects live mutations until one of these explicit cutovers:
-
-```powershell
-# Start a genuinely new deployment only when no legacy tickets.json exists.
-$env:OPERATIONAL_DB_PATH = "data/runtime/operational.sqlite"
-npm run initialize:operational-native
-
-# Or import a validated aggregate manifest supplied as JSON on stdin/file.
-$env:OPERATIONAL_DB_PATH = "data/runtime/operational.sqlite"
-$env:OPERATIONAL_IMPORT_FILE = "data/import/operational-aggregates.json"
-npm run import:operational-data
-```
-
-`import-in-progress` stays mutation-blocked until every discovered aggregate is
-imported or durably resolved. `imported` and `native` enable normal runtime
-commands. Startup fails closed for newer or structurally corrupt schemas and
-does not overwrite them. HTTP mutations require `Idempotency-Key`, MCP mutation
-tools require `commandId`, and the Approval Desk creates one UUID per user
-action so a transport retry reuses the same semantic command.
-
-The learning database is deliberately separate and advisory. An operational
-commit writes an immutable outbox envelope; learning delivery may retry or
-dead-letter without rolling back ticket truth. Stable delivery keys prevent a
-crash after learning-ledger commit from duplicating an event.
-
-If the learning SQLite file cannot be opened or initialized, startup reports
-`LEARNING_UNAVAILABLE` with a `TRIAGE_LEARNING_LEDGER_PATH` remediation hint
-but keeps the valid operational runtime online. Core ticket commands continue
-to commit and leave learning-outbox work pending; knowledge-specific HTTP/MCP
-operations return an actionable unavailable error until the path or permissions
-are repaired and the process is restarted. Operational database corruption or
-an incomplete cutover still fails closed as described above.
-
-The R1 reliability proof exercises these boundaries together: v3-to-v4
-operational migration preserves immutable history and receipt bytes, new v2
-commands replay after restart while legacy v1 keys fail explicitly without
-provider calls, and a restarted runtime delivers the original pending learning
-envelope once. The production knowledge-reuse path discovers, reviews, and
-promotes only evidence-backed diagnoses before a later recommendation can pin
-an approved version. Queue, UI/outbox presentation, taxonomy, semantic-search,
-and cryptographic-receipt work remain separately governed or deferred.
-
-Run the disposable import/restart/timeline demonstration with:
-
-```powershell
-npm run demo:operational-persistence
-```
-
-It reports the imported lifecycle milestones, causal sequences, current
-projection, separate learning-event count, and byte-identical reload after
-both SQLite handles are closed and reopened.
-
-Knowledge candidate drafting is explicitly opt-in. Set
-`TRIAGE_KNOWLEDGE_CANDIDATE_PROVIDER=openai` and provide `OPENAI_API_KEY` to
-enable the advisory Knowledge Engineer. It shares `OPENAI_MODEL` by default,
-with the knowledge-specific model override available above. Discovery remains
-deterministic, candidate output is contract- and guardrail-validated, and a
-human operator must still review and promote any candidate; GPT never changes a
-ticket or workflow directly. Without the selector, only deterministic discovery
-runs.
-
-## Codex Operator Layer
-
-The repository Skill is the operator layer for the MCP server. It teaches
-Codex to read the authoritative workflow projection, gather evidence, perform
-the next governed action, and pause whenever a human decision is required.
-The workflow tools are grouped by the operator stage they support. This is a quick index; the [MCP interface](#mcp-interface) below retains the tool-by-tool contracts and mutation guards.
-
-**Context and recommendations**
-
-| Tool | Operator action |
+| Command | What it proves (and what it does not) |
 | :--- | :--- |
-| `get_ticket_workflow` | Read the authoritative ticket, conversation, history, and next-action guidance |
-| `add_customer_reply` | Add a local reply before the next evaluation |
-| `evaluate_ticket` | Re-evaluate the full timeline and prepare a pending recommendation |
-| `submit_triage_recommendation` | Submit a manually assembled proposal without changing the ticket |
+| `npm test` | Build, typecheck and local Vitest regression tests |
+| `npm run evaluate` | Agreement between 30 **preconstructed** recommendations and expected outcomes; **not unseen-ticket accuracy** |
+| `npm run evaluate:diagnostics` | 11 controlled scenarios across 8 diagnostic families; nonmutating checks |
+| `npm run evaluate:lifecycle` | Deterministic audit across all 30 seeded tickets; not 30 full chronological replays |
+| `npm run evaluate:lifecycle-replay` | Real MCP lifecycle and read-before-action gates using temporary state |
+| `npm run evaluate:knowledge-holdout` | Controlled future-turn evidence and approved-knowledge reuse |
+| `npm run evaluate:ai-comparison` | Controlled local deterministic/advisory classifier and draft lanes; `--live` is explicitly opt-in |
+| `npm run evaluate:ai-diagnosis` | Article-backed diagnoses and controlled optional advisory providers |
+| `npm run evaluate:retrieval` | Local retrieval metrics; optional separately configured semantic experiments |
+| `npm run evaluate:ranking` / `npm run evaluate:applicability` | B4/B5 **development** research, not an authorized operational ranking policy |
 
-**Human decisions**
+To run the broad local verification (no live-model calls by default):
 
-| Tool | Operator action |
-| :--- | :--- |
-| `approve_triage_recommendation` / `reject_triage_recommendation` | Finalize a recommendation with explicit approval or feedback and guarded audit |
-| `mark_response_done` | Apply approved named fields and record the approved response as sent |
-| `record_diagnosis` / `review_diagnosis` | Record an immutable diagnosis, then separately review or revalidate it |
-
-**Fix, verification, and closure**
-
-| Tool | Operator action |
-| :--- | :--- |
-| `apply_diagnosis_fix` / `mark_fix_available` | Apply a reviewed fix to an explicit impact set or signal availability for verification |
-| `record_fix_ineffective` / `invalidate_diagnosis` | Record failed verification or remove authority from a diagnosis with explicit reason |
-| `close_ticket` | Close only after customer response, verification, and confirmation gates |
-
-
-The repository-local Skill at `.agents/skills/triaging-support-tickets` teaches
-Codex to use the operator tools, present evidence and drafts, wait for explicit
-human approval of named fields, and verify the resulting audit trail.
-
-## Approval Flow
-
-```mermaid
-sequenceDiagram
-    participant H as Human
-    participant C as Codex and Skill
-    participant M as MCP server
-    participant R as Local repositories
-
-    C->>M: get_ticket
-    C->>M: search_knowledge
-    C->>M: find_similar_tickets
-    C->>M: submit_triage_recommendation
-    M->>R: Store pending recommendation and submission audit
-    M-->>C: Recommendation, source revision, computed escalation
-    C-->>H: Evidence, citations, confidence, risks, proposed fields, response
-    Note over C,H: Stop before mutation
-    H->>C: Approve explicit named fields
-    C->>M: approve_triage_recommendation with confirm true
-    M->>M: Validate pending state, revision, fields, and required routing
-    M->>R: Update ticket, resolve recommendation, append approval audit
-    M-->>C: Updated ticket and audit event
-    C->>M: get_ticket and get_audit_events
-    C-->>H: Readback of changed and unchanged fields
-```
-
-The Skill/Codex workflow treats rejection as a human decision and requires
-explicit rejection wording plus concrete feedback. The MCP rejection action
-validates the pending recommendation, matching IDs, actor, and nonblank
-feedback, then records an audit without changing the ticket; it cannot verify
-who formed the intent and does not check a ticket revision.
-
-## Requirements
-
-- Node.js `^20.19.0`, `^22.12.0`, or `>=24.0.0`
-- npm
-- PowerShell for the commands below
-- Codex desktop when exercising the repository Skill and project MCP config
-
-## Setup And Verification
-
-From the repository root:
-
-```powershell
+~~~powershell
 npm ci
-npm run build
 npm test
-```
-
-`npm test` runs `pretest`, which rebuilds, type-checks, and then runs the Vitest
-suite in `test/`.
-
-Generate the deterministic synthetic fixtures and knowledge articles:
-
-```powershell
-npm run build
-npm run generate:fixtures
-git diff -- data/seed/tickets.json data/seed/expected-outcomes.json data/knowledge
-```
-
-Run the fixture evaluation:
-
-```powershell
-npm run build
-npm run evaluate
-```
-
-Run the compiled stdio server directly only when testing an MCP client or
-diagnosing startup:
-
-```powershell
-npm run build
-npm start
-```
-
-The server speaks MCP over standard input and output, so an idle terminal is
-normal. Diagnostics are written to standard error.
-
-### Reset The Local Demo State
-
-Reset is an explicit destructive administration action. **Stop the Approval
-Desk and every MCP/runtime process with `Ctrl+C` before running any reset
-command.** A runtime holds a shared usage lease before opening mutable state;
-reset must acquire the exclusive lease and refuses while that runtime is
-active. This closes the stop/reset startup race instead of relying on SQLite
-locks or rename failures.
-
-Choose the narrowest target:
-
-```powershell
-# Restore tickets only; preserve accumulated learning.
-npm run reset:operational-demo
-
-# Reset learned knowledge only; preserve tickets and workflow history.
-npm run reset:learning-demo
-
-# Restore both planes to the pristine demo baseline.
-npm run reset:demo
-```
-
-`reset:operational-demo` validates the complete `TRIAGE_SEED_FILE`, creates a
-fresh native operational database containing every seed ticket by ID, and
-verifies that recommendations, conversations, diagnoses, events, traces,
-idempotency records, and the learning outbox are empty. It is especially useful
-for knowledge-reuse tests: the tickets become fresh while the accumulated
-learning ledger and mutable learning repositories deliberately remain intact.
-
-`reset:learning-demo` recreates the learning SQLite database and only the
-whitelisted mutable `knowledge-evolution` directories (`diagnoses`,
-`candidates`, `approved`, and `audit`). It does not modify operational SQLite
-or the static `data/knowledge` catalog. `reset:demo` is the coordinated
-all-or-rollback operation: it prepares and verifies both replacements before
-replacing either side, retains backups through final-path verification, and
-restores an already replaced side if the other commit fails.
-
-All reset targets, temporary files, backups, SQLite sidecars, and mutable
-learning paths are canonicalized and contained under `TRIAGE_DATA_ROOT` by
-default. `TRIAGE_SEED_FILE` is read-only input, so it may be outside the data
-root and is never deleted or rewritten. Custom operational or learning SQLite
-paths outside the data root are refused unless the operator deliberately sets
-`ALLOW_DEMO_RESET_OUTSIDE_DATA_ROOT=true`; that opt-in does not relax the
-mutable learning-directory whitelist or protect fewer backup/rollback paths.
-
-Preparation builds fresh state rather than deleting rows from a live database.
-The reset validates the prepared state, moves the old database and SQLite
-sidecars to sibling backups, installs and reopens the replacement, verifies the
-final path, and only then removes backups. If rollback cannot finish, recovery
-backups are retained and reported by sanitized basename instead of being
-silently discarded.
-
-The normal persistence walkthrough is:
-
-```powershell
-npm run reset:demo
-npm run approval-desk
-# Perform the workflow, then press Ctrl+C.
-npm run approval-desk  # restart without resetting; the action persists
-# Press Ctrl+C when finished.
-npm run reset:demo
-```
-
-Automated evidence for exact ticket restoration, target isolation, pristine
-timelines, runtime/reset lease refusal, invalid-seed safety, sidecar recovery,
-cross-side rollback, and restart persistence is exercised with:
-
-```powershell
-npx vitest run test/demo-reset.test.ts test/demo-reset-cli.test.ts test/demo-reset-recovery.test.ts test/runtime.test.ts
 npm run verify:portfolio
-```
-
-## Use From Codex Desktop
-
-No separate `codex` command is required for this repository.
-
-1. Run `npm ci` and `npm run build` in PowerShell.
-2. Open the repository root as a local project in Codex desktop.
-3. Trust the project only after reviewing `.codex/config.toml`; it launches
-   `node dist/src/index.js` with the repository root as its working directory.
-4. Start a new thread after building or after changing the project MCP config.
-5. Trigger the repository Skill explicitly in the prompt:
-
-```text
-Use $triaging-support-tickets to triage TKT-1005 using the local MCP server.
-Present the recommendation and wait for my explicit approval of named fields.
-```
-
-The Skill lives at
-`.agents/skills/triaging-support-tickets/SKILL.md`. Its UI metadata is at
-`.agents/skills/triaging-support-tickets/agents/openai.yaml`, and its detailed
-classification and escalation tables are in
-`.agents/skills/triaging-support-tickets/references/policy.md`.
-
-## Use The Local Approval Desk
-
-The Approval Desk is a local browser UI for the human decision layer. It uses
-the same operational SQLite database and `TriageService` rules as the MCP
-server. The repeatable demo imports synthetic fixtures through the controlled
-import boundary before starting the application.
-
-```powershell
-npm ci
-npm run build
-npm run approval-desk
-```
-
-For a repeatable walkthrough, run:
-
-```powershell
-npm ci
-npm run build
-npm run reset:demo
-npm run approval-desk
-```
-
-`reset:demo` establishes the verified pristine operational and learning
-baseline; `approval-desk` then starts without resetting it. This separation is
-what makes the stop/restart persistence walkthrough meaningful. The Automation
-Evidence dashboard shows open
-tickets, recommendation counts, estimated minutes saved, audit events, safety
-blocks, and active guardrails.
-
-Open the printed `http://127.0.0.1:5177` URL. Select `TKT-1010` for the
-conversation-aware reclassification walkthrough, or `TKT-1001` for the incident
-routing walkthrough. The Recommendation panel shows classifier evidence,
-lifecycle state, evidence readiness, the customer draft, validator checks,
-retrieved context, and a compact **What changed** summary when a new
-recommendation differs from the previous one. Select named fields, enter an
-actor, check the explicit confirmation box, and approve. The UI then reads back
-the updated ticket revision and audit event.
-
-The app is local-only. It does not send customer responses, connect to external
-support-ticket systems, or authenticate multiple users.
-
-### GPT Drafting And Advisory Classification
-
-The Approval Desk can build draft customer responses in two modes:
-
-- default deterministic local drafting, which requires no network or API key;
-- optional OpenAI drafting, which uses the Responses API when
-  `APPROVAL_DRAFT_PROVIDER=openai` and `OPENAI_API_KEY` are set.
-
-Both modes keep the same approval and audit boundary. In OpenAI drafting mode:
-
-1. The app retrieves the selected ticket, conversation timeline, classifier
-   outcome, evidence readiness, lifecycle state, and cited local knowledge
-   articles.
-2. The OpenAI draft provider writes a customer response from that trusted
-   context.
-3. Deterministic validators check the draft for unsafe promises, internal-only
-   IDs, approval-bypass language, and missing human-review boundaries.
-4. If the provider fails or the draft fails validation, the app falls back to
-   the deterministic local response.
-5. The human reviewer still edits and approves the response before anything is
-   recorded in the audit trail.
-
-Run the optional OpenAI drafting mode from PowerShell:
-
-```powershell
-$env:OPENAI_API_KEY = 'sk-...'
-$env:APPROVAL_DRAFT_PROVIDER = 'openai'
-$env:OPENAI_MODEL = 'gpt-5.6-luna'
-$env:APPROVAL_RESPONSE_STYLE = 'balanced'
-npm run reset:demo
-npm run approval-desk
-```
-
-`OPENAI_MODEL` is optional; the app defaults to `gpt-5.6-luna`. The draft
-source and validation checks appear in the Recommendation panel so reviewers
-can see whether the response came from deterministic rules, OpenAI, or a local
-fallback.
-
-The Approval Desk also includes a **Draft style** selector. Supported styles are
-`balanced`, `concise`, `empathetic`, `technical`, and `executive-update`.
-`APPROVAL_RESPONSE_STYLE` is still available as the startup default and falls
-back to `balanced`. These settings change only the GPT draft tone.
-
-The current backend also has an injectable GPT reasoning lane for ambiguous
-conversation context. A `GptClassificationReasoningProvider` can return
-structured advisory output such as candidate category, team, priority,
-knowledge article IDs, evidence, and explanation. The app converts that output
-into `gpt-advisory-*` classification signals. Deterministic safety signals
-still win: security, outage, SLA, stale revision, approval requirements, and
-named-field mutation rules remain local code.
-
-Do not commit API keys, paste them into tickets, include them in screenshots, or
-store them in runtime audit data. The demo should remain usable without an API
-key by defaulting to the deterministic local provider.
-
-Other useful trigger examples:
-
-```text
-Use $triaging-support-tickets to review TKT-1004. Surface every escalation,
-cite the local policy articles, and stop before changing the ticket.
-```
-
-```text
-Use $triaging-support-tickets to triage TKT-1001, TKT-1002, and TKT-1003 as
-a correlated incident cluster. Prepare recommendations only.
-```
-
-## MCP Interface
-
-The local server exposes 27 typed tools, 4 resources, and 3 prompts. All
-schemas are defined at the MCP boundary and map into the same repositories,
-policy functions, and `TriageService` used by the Approval Desk. The server is
-closed-world: it reads and mutates only the local runtime configured by the
-environment variables above.
-
-### Read and context tools
-
-**Ticket and queue context**
-
-| Tool | Returns |
-| :--- | :--- |
-| `list_tickets` | Paged queue with status, risk, routing, SLA, and optional historical `asOf` view |
-| `get_ticket` | One ticket by ID |
-| `get_ticket_workflow` | Ticket, conversation, recommendations, evidence, diagnosis, fix, and lifecycle projection |
-| `get_ticket_diagnoses` | Immutable diagnoses, reviews, and freshness |
-| `get_queue_metrics` | Queue, escalation, approvals, SLAs, and estimated time savings |
-| `get_audit_events` | Global or per-ticket paged events |
-
-**Knowledge and similarity context**
-
-| Tool | Returns |
-| :--- | :--- |
-| `search_knowledge` | Matches from local Markdown articles |
-| `find_similar_tickets` | Deterministic text-similarity ranking |
-| `get_knowledge_candidate` | Candidate and sanitized supporting evidence |
-| `get_knowledge_learning` | Maturity, health, reuse, and ledger state |
-
-
-These tools are annotated read-only, non-destructive, idempotent, and
-closed-world. Inputs are bounded by strict Zod schemas; list and search limits
-are capped at 50 and ticket/knowledge identifiers are validated.
-
-### Recommendation and lifecycle tools
-
-All commands below use the **shared governed service**, not separate MCP-only lifecycle logic. To keep the matrix readable, actions are grouped by phase and their safety contracts are described in concise rows.
-
-**Evaluate and collect evidence**
-
-| Tool | Action and boundary |
-| :--- | :--- |
-| `submit_triage_recommendation` | Store a **pending** proposal; no ticket mutation. The server owns its timestamp and recomputes escalation. |
-| `add_customer_reply` | Append a local customer reply with a command ID; it becomes input to later evaluation. |
-| `evaluate_ticket` | Evaluate the whole ticket timeline and store a pending recommendation under current evidence gates. |
-
-**Diagnose and review**
-
-| Tool | Action and boundary |
-| :--- | :--- |
-| `record_diagnosis` | Record diagnosis for the latest evaluated context **only when diagnosis-ready**; original audit persists. |
-| `review_diagnosis` | Approve, reject, or revalidate. Review is separate and the diagnosis is **never rewritten**; freshness is checked. |
-
-**Fix, mitigation, and verification**
-
-| Tool | Action and boundary |
-| :--- | :--- |
-| `apply_diagnosis_fix` | Apply a reviewed diagnosis fix to a selected impact set; audit each ticket, but **do not close** it. |
-| `mark_fix_available` | Record a confirmed fix ready for verification; requires current approved diagnosis and response/verification gates. |
-| `record_fix_ineffective` | Record one failed fix attempt without automatically invalidating its diagnosis. |
-| `invalidate_diagnosis` | Remove authority explicitly, with current context and a reason; immutable history remains. |
-| `record_platform_mitigation` | Record a known-event mitigation; it is **not** a confirmed diagnosis fix. |
-
-**Send and close**
-
-| Tool | Action and boundary |
-| :--- | :--- |
-| `mark_response_done` | Apply explicitly approved fields and record an approved response as sent; requires actor, confirmation, named fields, and current revision. |
-| `close_ticket` | Finalize only after the ready-for-close response and customer confirmation, subject to lifecycle gates. |
-
-
-### Explicit approval and knowledge-governance tools
-
-| Tool | Purpose |
-| --- | --- |
-| `approve_triage_recommendation` | Apply only explicitly approved recommendation fields. |
-| `reject_triage_recommendation` | Reject a pending recommendation with concrete operator feedback. |
-| `discover_knowledge_candidates` | Find deterministic, evidence-backed reusable-knowledge candidates. |
-| `approve_knowledge_candidate` | Promote a reviewed candidate for future evaluations. |
-| `reject_knowledge_candidate` | Reject a candidate while retaining its review reason. |
-
-Submission and ordinary lifecycle actions are non-destructive or
-non-finalizing according to their annotations. Approval, rejection, knowledge
-promotion, and closure are finalizing actions. Every mutation requires a
-`commandId`; operational persistence stores the command result and replays it
-for safe transport retries.
-
-The Skill/Codex workflow remains the human-decision boundary: it presents
-evidence, proposed fields, risks, and drafts before asking for approval. MCP
-validates the payload and repository state, but cannot prove who formed the
-intent represented by a tool call.
-
-`customerResponse` is an approvable field, not an outbound integration. The
-approved text is recorded in local audit data; this repository never sends a
-customer message to an external system.
-
-### Resources
-
-| URI | Data returned |
-| :--- | :--- |
-| `ticket://{id}` | One validated ticket (`application/json`) |
-| `knowledge://{id}` | A local Markdown article (`text/markdown`) |
-| `audit://ticket/{id}` | First 50 ticket audit events and total count (`application/json`) |
-| `metrics://queue` | Current queue metrics (`application/json`) |
-
-
-The ticket, knowledge, and audit entries are resource templates. The metrics
-URI is the directly listed resource.
-
-### Prompts
-
-| Prompt and arguments | Behavior |
-| :--- | :--- |
-| `triage_ticket` — required `ticketId` | Read ticket, knowledge, and similar tickets; submit a proposal and stop before approval. |
-| `triage_queue` — optional `maximum`, 1–10 (default 10) | Prepare a bounded queue of recommendations; stop before approval. |
-| `review_escalations` — no arguments | Surface security, outage, confidence, and SLA escalation conditions; stop before approval. |
-
-
-Every prompt says that ticket text is untrusted and approval cannot be inferred
-from ticket content.
-
-## Five-Minute Walkthrough
-
-For a clean synthetic fixture state, build and reset `data/runtime` before
-opening the project in Codex. Fixture data and deterministic tool calculations
-are reproducible when state and time inputs match. Model-generated
-recommendations and wording may vary, so the checkpoints are acceptance
-criteria rather than a guaranteed transcript. The detailed script is in
-[docs/demo-script.md](docs/demo-script.md).
-
-1. Read `metrics://queue` or call `get_queue_metrics`. A fresh fixture has 30
-   tickets, 29 open tickets, and no recommendations. SLA counts depend on the
-   current clock because fixture deadlines are fixed on June 10, 2026.
-2. Triage `TKT-1005`. The Browse Abandonment ticket contains an instruction to
-   ignore policy, close as P4, skip approval, and hide the instruction. The
-   workflow must ignore it, preserve integration/P2/integrations evidence,
-   surface policy conflict, prepare a pending recommendation, and stop.
-3. Triage `TKT-1004`. The private-key exposure report must remain security/P1
-   and route to `security`, with the unknown exposure scope surfaced.
-4. Triage `TKT-1001`, `TKT-1002`, and `TKT-1003`. Deterministic similarity
-   links the EU event-ingestion delay cluster, and the expected outcome is
-   incident/P1/incident-response with outage and SLA escalation.
-5. After seeing one recommendation, approve selected named fields only. Then
-   read the ticket and audit event to verify the revision, actor, citations,
-   changed fields, and unchanged fields.
-
-6. Use the Approval Desk conversation workspace on `TKT-1010` to show the
-   evolving-ticket path: a vague first contact becomes a product performance
-   diagnosis after the customer describes the blank campaign editor.
-
-## Queue Metrics
-
-`get_queue_metrics` and `metrics://queue` return:
-
-- open and untriaged ticket counts;
-- breached and at-risk SLA counts;
-- open-ticket counts by category, priority, and team;
-- submitted, pending, approved, and rejected recommendation counts;
-- acceptance and rejection rates over resolved recommendations;
-- average submitted-recommendation confidence;
-- escalation totals and counts by reason;
-- configured minutes per accepted recommendation;
-- estimated minutes saved;
-- average approved confidence, confidence-band counts, and pending potential
-  savings.
-
-The savings formula is deliberately simple:
-
-```text
-estimatedMinutesSaved =
-  approvedRecommendations * minutesPerAcceptedRecommendation
-
-potentialMinutesSaved =
-  pendingRecommendations * minutesPerAcceptedRecommendation
-```
-
-`estimatedMinutesSaved` is a realized, approval-attributed estimate: it counts
-only approved recommendations. `potentialMinutesSaved` is a projection for
-pending recommendations. Neither value is measured stopwatch time, labor cost,
-customer outcome, or financial impact. The stdio process defaults to 8 minutes
-per accepted recommendation. Override
-the bookkeeping assumption before starting a manual server process:
-
-```powershell
-$env:TRIAGE_MINUTES_SAVED = '5'
-npm start
-```
-
-This value is a configured estimate, not measured labor, cost, response time,
-customer outcome, or financial impact. At a fresh runtime there are no
-approved recommendations, so the estimate is zero.
-
-### Uncertainty-aware classification confidence
-
-Classifier confidence is uncertainty-aware decision support, not a calibrated
-probability that the classification is true. The deterministic classifier
-uses the versioned `uncertainty-aware-v1` method, combining category support,
-the margin over the runner-up, independent signal diversity, and disagreement
-penalties. The resulting bands are `low` (<0.75), `medium` (0.75–<0.90), and
-`high` (>=0.90).
-
-Persisted provenance records bounded reason codes such as
-`weak-category-support`, `close-category-competition`, `low-signal-diversity`,
-`metadata-disagreement`, and `no-actionable-category`. Metadata, disagreement,
-known-cause/event, duplicate, and GPT-advisory emissions do not count as
-independent evidence diversity. GPT classification may suggest bounded
-advisory signals, but it cannot author trusted confidence provenance; the
-deterministic classifier and approval boundary remain authoritative.
-
-Older recommendations without optional provenance remain readable. Their
-numeric confidence is retained, and queue metrics can still place it in a
-band, but no retrospective reason codes are invented. Fixture/expected-outcome
-evaluation lanes likewise use the backward-compatible scalar-confidence path
-and do not author trusted provenance.
-
-For a deterministic, transport-consistent showcase run:
-
-```powershell
-npm run demo:metrics
-```
-
-The command reads the seed tickets and sample recommendations, emits stable
-JSON validated by `QueueMetricsSchema`, and uses the same fixed timestamp and
-8-minute default assumption as the metrics calculator. `get_queue_metrics`,
-`/api/metrics`, and `metrics://queue` all use that shared schema/calculator;
-the CLI output is a consistency check rather than a second metrics
-implementation.
-
-For a single release-readiness check covering the complete portfolio journey,
-run:
-
-```powershell
-npm run verify:portfolio
-```
-
-This runs the build, typecheck, full Vitest suite, diagnostic evaluation,
-stateful lifecycle replay, deterministic knowledge holdout, knowledge-evolution
-promotion/reuse showcase, and deterministic queue-metrics showcase in sequence.
-It stops at the first failure, so the command is suitable for reproducing the
-evidence reported in this README without enabling live GPT providers.
-
-## Reproducible Evaluation
-
-### Home Assistant historical-case evaluation: E1a ongoing
-
-Knotty is being tested beyond its **synthetic Northstar Marketing Cloud tickets** using **historical public Home Assistant GitHub issues and Home Assistant documentation**. This is a controlled external-case research dataset, **not** a live Home Assistant support integration or a benchmark endorsed by the Home Assistant project.
-
-The E1a experiment compares the **SIMPLE baseline** with the **HYBRID shadow reasoning architecture**, using **Qwen, Luna, and Sol**. Cases are divided into historical diagnostic checkpoints to evaluate how each approach handles uncertainty as evidence becomes available. Input assembly respects the case's `asOf` cutoff: later issue comments and future facts are not eligible. Historical documentation is included only when an exact, hashed version can be shown to have existed by that cutoff; missing eligible documentation is **marked unavailable**, never silently replaced by a current page.
-
-**Preliminary results: local E1a execution matrix, October 2026**
-
-| Measure | Observed status |
-| :--- | :--- |
-| Historical cases | **24** |
-| Time-scoped diagnostic checkpoints | **64** |
-| Model × architecture attempts | **384** across SIMPLE/HYBRID and Qwen/Luna/Sol |
-| Structurally valid provider outputs | **341 / 384** |
-| Invalid provider outputs | **43 / 384** — `invalid-provider-output` failures |
-| Blinded manual-review package | **341 valid-output packets** prepared for review |
-| Diagnostic accuracy / best model or architecture | **Not yet established**; full human scoring and comparative analysis remain unfinished |
-
-These counts measure **provider-output validity**, *not* whether a suggested root cause is correct, sufficiently supported, or appropriately uncertain. Invalid responses still count as reliability failures but retain **null semantic ratings** rather than being automatically scored as incorrect diagnoses. The reviewer workflow uses neutral IDs and keeps model/architecture identities and the sealed assignment mapping inaccessible to reviewers. Consequently, this README intentionally **does not publish provider- or architecture-specific rankings** before the blinded review and release checks are complete.
-
-The 24-case local run and review-material validation establish that an experiment was executed and review packets were generated, **not** that the proposed Hybrid design outperforms SIMPLE. Some case-specific scoring aids and full-matrix human adjudication are still under review. The E1a harness and raw artifacts are held in a **separate local experimental worktree**, not distributed as a finished reproducible benchmark by this repository's `main` branch. Do not confuse these provisional findings with the independently documented Qwen semantic-retrieval experiments or earlier controlled GPT comparisons.
-
-`npm run evaluate` compares
-`data/seed/sample-recommendations.json` with
-`data/seed/expected-outcomes.json`. The committed sample is intentionally
-constructed to match all 30 expected outcomes and prints:
-
-```json
-{
-  "ticketCount": 30,
-  "categoryAccuracy": 1,
-  "routingAccuracy": 1,
-  "priorityAgreement": 1,
-  "securityEscalationRecall": 1,
-  "outageEscalationRecall": 1,
-  "duplicatePrecision": 1,
-  "duplicateRecall": 1,
-  "knowledgeCitationCoverage": 1,
-  "approvalSafetyViolations": 0
-}
-```
-
-These are reproducible fixture results, not observations from real support
-work. The evaluator requires recommendation ticket IDs to match the expected
-outcome set exactly and counts any non-pending sample recommendation as an
-approval-safety violation.
-
-The focused diagnostic harness is intentionally a small scenario suite. To
-audit the live deterministic path against every seeded ticket, run:
-
-```powershell
-npm run evaluate:lifecycle
-```
-
-This 30-ticket audit reports each ticket's seed status, category/routing,
-known-cause and known-event matches, evidence gate, diagnosis confidence,
-operator next action, and the shared lifecycle invariants. It is a baseline
-lifecycle audit rather than a claim that every ticket has been replayed through
-every chronological customer turn; Lifecycle Replay remains a snapshot viewer
-for the separate diagnostic scenarios.
-The current seed audit reports 30/30 classification contracts, 28 tickets
-correctly waiting for evidence, 30/30 lifecycle invariants, 7 known-cause
-matches, 3 known-event matches, and one already-resolved ticket with zero
-evidence requests.
-
-### Deterministic knowledge holdout
-
-The governed-learning proof is a fixed, multi-turn holdout rather than a
-single snapshot or a live-model benchmark. Run it with:
-
-```powershell
-npm run evaluate:knowledge-holdout
-```
-
-The command evaluates baseline and learned lanes through the same
-`listReusableApproved({ asOf })` and `evaluateTicketWithAi` production path,
-then writes sanitized artifacts to
-`reports/knowledge-holdout/controlled-latest.json` and
-`reports/knowledge-holdout/controlled-latest.md`. The fixtures cover complete
-evidence, evidence arriving on a later customer turn, near misses, unrelated
-questions, stale and contradicted knowledge, an approved replacement, and an
-unapproved revision draft. Every turn is retained, and scoring verifies that
-the evaluator changed no ticket, recommendation, audit, learning, candidate,
-version, or head state.
-
-The report separates efficacy, governance safety, and exact-version scorecards.
-It is controlled synthetic evidence: it demonstrates governed reuse and
-historical/version isolation, but it makes no claim about human time saved or
-live GPT performance.
-
-The scorecard uses explicit ratios rather than a single blended quality number:
-exact-version precision is correct learned matches divided by all learned
-matches, recall is correct learned matches divided by expected matches, and
-evidence precision is necessary evidence requested divided by all requested
-evidence. Governance rates count stale or contradicted versions reused when
-they should be excluded; version rates count the expected exact version or
-approved replacement selected. Missing-evidence rate is missing necessary IDs
-divided by all expected IDs; zero-denominator rate metrics are reported as
-`null`, while count totals remain zero. Baseline-to-learned deltas are
-safety-first:
-new unsafe lifecycle codes, wrong-version reuse, or lost evidence are
-regressions even when a later turn recovers.
-
-#### Evidence-policy checkpoint
-
-Each generated case now exposes only an allowlisted evidence-policy summary:
-its catalog `requiredIds` and a stable reason code. It never emits the fixture
-rationale, customer reply text, prompts, drafts, or internal traces. A request
-is counted as unnecessary only when it falls outside the fixture's documented
-policy. A catalogued request is therefore not penalized merely because it is
-still missing. An approved known cause remains an explicit exception: it can
-narrow or waive requirements only through its approved policy; a `required`
-known-cause policy keeps the normal evidence gate in force.
-
-The evidence metrics have a deliberately traceable checkpoint. The original
-controlled report recorded learned evidence precision `0.286` and
-missing-evidence rate `0.333`. After correcting the fixture policy oracle, the
-same deterministic behavior records `1.000` and `0.000`, respectively. This
-is a scoring-ground-truth correction, **not** a claimed production improvement:
-no shared evidence matcher changed in this slice. A later behavior change, if
-one is proven by a shared matcher regression, will be recorded separately from
-this policy correction.
-
-If the learning ledger cannot be read, `listReusableApproved({ asOf })`
-returns `ledger-unavailable` with no reusable contexts. Deterministic triage
-continues without learned context, and it never silently falls back to an
-older version. Deprecated versions are excluded by the reusable-context
-boundary regression; the holdout provides end-to-end stale and contradicted
-version lanes.
-
-### Article-backed diagnosis and GPT advisory diagnosis
-
-The deterministic diagnostic workflow now has specific playbooks for the
-approved knowledge articles used by the seed set, including deliverability,
-audience rules, campaign preparation, catalog/coupon sync, profile sync,
-ecommerce integration, SMS compliance, and webhook validation. These
-playbooks produce a customer-safe narrowing diagnosis and next action; they
-never turn an article match into proof of a root cause. Missing evidence still
-forces a `likely` diagnosis and keeps the ticket in its evidence-gated state.
-
-Two deliberately vague tickets (`TKT-1010` and `TKT-1026`) have no meaningful
-article or playbook on purpose. They request basic problem evidence and the GPT
-diagnosis lane skips them rather than manufacturing a diagnosis. Resolved
-tickets and prompt-injection tickets are skipped for the same governance
-reason.
-
-To evaluate the optional GPT diagnosis lane across all 30 seed tickets, run:
-
-```powershell
-npm run evaluate:ai-diagnosis
-```
-
-The default run uses a controlled local adapter to exercise the same provider
-contract without network access. For an authenticated observation using real
-GPT, set `OPENAI_API_KEY` and opt in explicitly:
-
-```powershell
-npm run evaluate:ai-diagnosis -- --live
-```
-
-Each run saves sanitized output under `reports/ai-diagnosis/` as
-`controlled-latest.*` or `live-latest.*`.
-
-GPT returns an advisory candidate only. The deterministic diagnosis, evidence
-gate, prompt-injection preflight, lifecycle state, and human approval boundary
-remain authoritative. Invalid output, unavailable GPT, or stale/unsafe
-context falls back to the deterministic diagnosis without exposing provider
-payloads.
-
-### AI Comparison Evaluation
-
-`npm run evaluate:ai-comparison` adds a network-free, controlled-local
-comparison of deterministic classification/drafting, advisory classification,
-and drafting providers across the eleven diagnostic scenarios. Its four lanes
-are reproducible local simulations, not live-model observations. The report
-shows actual drafts, operator stage, baseline-versus-final classification,
-sanitized candidate/advisory signals, accepted and rejected advice,
-deterministic overrides, evidence recall and precision, hard-safety status,
-safe failure reasons, and provider provenance without recording API keys or
-raw provider payloads.
-
-For an explicit live OpenAI observation, set `OPENAI_API_KEY` in the shell and
-run:
-
-```powershell
-npm run evaluate:ai-comparison -- --live
-```
-
-Live mode runs only GPT-containing lanes, labels them
-`live-openai-adapter`, and records returned model/latency/token metadata. It
-is opt-in and non-reproducible; default tests and the default comparison
-command do not make network calls. Prompt-injection scenarios skip both GPT
-stages, while deterministic safety policy remains authoritative. Read the
-[AI comparison evaluation guide](docs/diagnostic-evaluation-harness.md#ai-comparison-evaluation)
-and its [sanitized controlled-local example](docs/ai-comparison-example.md)
-before interpreting results.
-
-The command also saves the full sanitized output under
-`reports/ai-comparison/controlled-latest.md` and
-`reports/ai-comparison/controlled-latest.json` (or the corresponding `live-`
-`latest` files for `--live`). These files contain the complete per-lane
-customer drafts, not just the shortened documentation example.
-
-Customer-response drafting is contract-first: the deterministic baseline and
-authoritative workflow state define customer-safe obligations before an
-optional GPT draft is considered. A GPT candidate must pass that local
-contract, may receive one bounded repair attempt, and otherwise falls back to
-the deterministic draft. The report records only the candidate/repair/fallback
-outcome and sanitized obligation identifiers; it never adds candidate model
-text to provenance.
-
-Controlled response-quality scorecard (local simulation, 2026-07-26):
-
-- 11/11 scenarios passed in each of the four lanes (44/44 lane/scenario runs).
-- Classification agreement is reported independently from drafting quality;
-  all 44 controlled final classifications matched their expected contracts.
-- All 44 final drafts passed hard safety and response-quality checks. Candidate
-  hard-safety violations, final-response hard-safety violations, and
-  deterministic fallbacks were all 0.
-- Candidate passes and repaired passes were both 0 because controlled drafting
-  reuses the deterministic baseline; these counters are not live-GPT claims.
-- Checks cover required concepts and evidence, evidence precision, forbidden
-  claims, unnecessary questions, tone, length, deterministic safety checks,
-  and contract repair/fallback provenance.
-- GPT-labelled lanes use the local controlled simulation; use the opt-in
-  `--live` run for a fresh live-model observation.
-
-Live response-quality scorecard (last authenticated run, 2026-07-27,
-`gpt-5.6-luna`):
-
-- GPT-assisted classification agreed with the expected classification contract
-  in 20/20 GPT classification evaluations.
-- The GPT-classification/deterministic-draft lane passed 11/11 scenarios.
-- The deterministic-classification/GPT-draft lane passed 8/11 scenarios; the
-  full GPT-classification/GPT-draft lane passed 6/11. Overall, GPT-containing
-  lanes passed 25/33 scenario runs.
-- GPT drafting produced 10/17 strict response-quality passes. The remaining
-  misses were wording/evidence-state and tight-length contract misses, not
-  unsafe customer claims. One stale-reply candidate was rejected and safely
-  fell back to the deterministic draft.
-- No forbidden customer-facing claims were detected. Three final response
-  quality gates still failed in the report (evidence-state, deterministic
-  safety-check, and/or length checks); candidate-level violations and fallback
-  reasons remain visible separately instead of being hidden behind the lane
-  score.
-
-These live numbers are an observation, not a reproducible guarantee: they
-depend on the selected model and prompt response. The controlled 44/44 result
-is the regression baseline. The live run is useful because it demonstrates the
-portfolio boundary in practice: GPT can improve classification evidence and
-wording, while deterministic contracts, safety gates, and fallback behavior
-remain authoritative. The two evaluator aliases added after that run cover
-the exact phrases `platform processing delay` and `source event creation time`
-seen in the live drafts; a new network run is not required to validate those
-local contract changes.
-
-### Governed Knowledge Evolution
-
-Completed diagnoses can deterministically surface a reusable knowledge
-candidate. GPT may optionally draft a strictly validated advisory version, but
-it cannot route tickets, promote knowledge, or change a customer response.
-An authorized operator reviews and may edit the evidence policy,
-customer-safe explanation, owner, triggers, time constraints, and declarative
-workflows before explicitly promoting the candidate. The promotion audit
-records the supporting diagnoses, deterministic provenance, reviewer, and
-version. Approval Desk candidate discovery is a `POST` action because it may
-persist a new candidate and its creation or rediscovery audit; plain reads use
-the candidate detail endpoint.
-
-Only approved objects affect later evaluations; candidates (including rejected
-candidates) have no routing effect, and promotion never rewrites earlier
-recommendations or audits. Defer is a resumable review pause, not approval or
-rejection: the candidate remains a hard gate until the operator explicitly
-approves or rejects it. Approval Desk and MCP use the same knowledge service,
-while lifecycle replay and AI comparison project the same approved object
-context through the shared evidence and diagnostic workflow.
-
-#### Durable learning ledger
-
-The knowledge-evolution learning plane now has a durable **SQLite learning
-ledger**. It records sanitized, append-oriented events for diagnosis support,
-verified outcomes, candidate review, immutable object versions, reuse, stale
-signals, contradictions, and evaluation evidence. Candidate/version/audit
-promotion is transaction-safe, and duplicate event IDs are idempotent.
-
-This is governed knowledge evolution, not autonomous model retraining. The
-operational plane remains authoritative for classification, evidence readiness,
-diagnosis, fixes, verification, lifecycle transitions, and customer drafts.
-The ledger only records verified outcomes and proposes reusable knowledge;
-GPT-generated fields remain advisory, and a named operator must approve a
-version before it can affect a future evaluation.
-
-Learning maturity and health are separate axes: `observed`,
-`diagnosis-supported`, `outcome-verified`, `reuse-validated`, and `promoted`
-describe the strength of evidence, while `active`, `stale`, `contradicted`,
-`deprecated`, and `superseded` describe whether that evidence is currently
-usable. Stale history remains queryable with decayed signal weight but cannot
-bypass an evidence gate. New evaluations use the latest active version;
-in-progress tickets remain pinned to their original version, so historical
-recommendations remain unchanged.
-
-Run the deterministic ledger showcase without an API key or network access:
-
-```powershell
-npm run demo:learning-ledger
-```
-
-The output demonstrates candidate creation, explicit human promotion, a
-verified outcome, successful and failed reuse signals, stale decay, and
-historical immutability. The learning ledger remains a separate advisory
-SQLite plane. Operational ticket, conversation, recommendation, diagnosis,
-lifecycle, trace, replay, and outbox state now lives in authoritative
-operational SQLite.
-
-#### Evidence provenance and policy boundaries
-
-Knowledge evolution keeps three related, but deliberately different, records:
-
-1. **Observed diagnosis evidence** is what was actually present when an
-   operator completed a diagnosis. `evidenceUsed` remains readable reasoning;
-   `evidenceReferences` contains catalog-backed IDs, the immutable label seen at
-   diagnosis time, and optional ticket/reply/knowledge/operator provenance.
-   References are created from recognized provided evidence only. The system
-   never turns an audit ID or free-form prose into a synthetic evidence ID.
-2. **Candidate evidence policy** is a reviewable proposal for future tickets.
-   Discovery deduplicates observed IDs for this proposal while preserving
-   duplicate observations and their provenance in diagnosis history. With
-   multiple supporting diagnoses, deterministic discovery uses the
-   intersection of catalog-backed IDs shared by every diagnosis; it never
-   unions divergent evidence or chooses the first diagnosis by order. A
-   candidate may be `required`, explicitly `none-required` with a rationale, or
-   `undecided` when no safe shared policy is available. An `undecided` candidate
-   stays visible for review but cannot be promoted.
-3. **Approved evidence policy** is the operator-approved contract used by later
-   evaluations. Promotion reloads the current candidate and catalog, then
-   accepts only a valid `required` policy or a justified `none-required`
-   policy. GPT can suggest fields, but it cannot select this policy or promote
-   it.
-
-This creates two important reuse paths. In the positive path, a diagnosis with
-real catalog references produces a candidate, an operator approves its policy,
-and a later matching ticket remains evidence-gated until required evidence is
-present; after reevaluation, the approved known cause can be selected through
-the same catalog. In the negative path, a diagnosis may still be valid and
-readable when it has no structured references, but its candidate is
-`undecided`, cannot affect routing, and is rejected until an operator supplies
-and approves a valid policy. An active outage or an open-ticket similarity
-signal does not bypass this gate by itself.
-
-Catalog entries are retained for compatibility. Existing approved objects that
-refer to a deprecated evidence ID remain readable and executable; new
-promotions containing that ID are blocked and must use its replacement when
-one is defined.
-
-In the Approval Desk, select a ticket and open **Advanced settings** in the
-Workflow Bar to run **Find pattern** explicitly. Discovery also runs after an
-authoritative diagnosis is available, but the manual trigger makes the boundary
-visible and reports when the current completed-diagnosis evidence does not meet
-the candidate threshold. When a candidate is found, the separate **Pattern
-Bar** shows the supporting evidence and compact declarative editor. The
-operator can inspect the evidence choices, edit the proposed object, and
-**Approve**, **Refresh**, **Defer**, or **Reject** it. The button never changes
-the ticket or promotes a candidate by itself.
-
-Evidence policy remains the gate. For example, an approved
-`none-required` known cause whose deterministic trigger matches may use its
-confirmed known-cause path without collecting extra customer evidence. An
-approved `required` cause still requests every listed evidence item before it
-can advance. Ordinary tickets and active outages remain evidence-gated.
-Customer drafts use only the approved customer-safe explanation and safe next
-step; candidate rationale, GPT advisory details, and internal detection stay
-in the operator review and audit surfaces. If a candidate is rejected, its
-reason remains audit provenance and future routing stays unchanged.
-
-Run the bounded portfolio showcase locally:
-
-```powershell
-npm run demo:knowledge-evolution
-npm run demo:knowledge-evolution -- --verbose
-```
-
-It uses the controlled provider, so it requires no API key or network access.
-The output shows deterministic discovery, an advisory candidate draft, the
-explicit human approval boundary, the promoted `v1` object, and the
-corresponding audit actions. It then evaluates a future matching ticket before
-promotion, after promotion while required evidence is still missing, and after
-that evidence arrives. The final line proves that the historical
-pre-promotion recommendation is byte-for-byte unchanged. Add `--verbose` to
-show the sanitized supporting diagnoses, tickets, evidence IDs, scores,
-provenance, similarity reasons, and per-action audit detail. The fixture
-includes two matching completed diagnoses, an unrelated completed diagnosis,
-and an open-ticket corroboration so the output shows the difference between
-confirmed support and an early signal. This is suitable for a repeatable
-recording or screenshot; a live OpenAI run remains an optional separate
-evaluation.
-
-### Lifecycle Replay Viewer
-
-The read-only Lifecycle Replay page makes evaluation output inspectable in the
-same customer context as the Approval Desk. Run an evaluation first, then
-start the local browser server:
-
-```powershell
-npm run evaluate:ai-comparison -- --live   # optional; controlled output also works
-npm run approval-desk
-```
-
-Open `/lifecycle-replay` on the printed local URL. The page groups snapshots by
-ticket, shows customer replies and previous support responses, and lets you
-compare deterministic and GPT-labelled lanes. Operator view includes
-classification agreement, quality breakdown, failure reasons, and sanitized
-provider provenance. Customer view shows only the draft that a customer would
-see and the explicit approval pause.
-
-Replay reads `reports/ai-comparison/live-latest.json` (and the controlled report
-when present); it makes no OpenAI calls, sends no responses, and never mutates
-ticket or audit state. Snapshots are labeled evaluation states rather than an
-invented chronological journey, so the viewer does not imply that unrelated
-scenario runs happened in a particular order. See
-[the replay viewer guide](docs/lifecycle-replay.md) for a portfolio walkthrough.
-
-## Extension To Zendesk Or Jira
-
-No live connector is included. A future adapter can preserve the current
-governance model by:
-
-1. Mapping external ticket fields into the validated `Ticket` contract while
-   retaining the external ID separately.
-2. Implementing read adapters for tickets and knowledge without exposing
-   credentials or raw provider errors through MCP.
-3. Keeping recommendations in a local or durable pending store separate from
-   provider mutation.
-4. Translating only explicitly approved named fields into provider updates
-   with revision or version checks and idempotency keys.
-5. Writing an audit event that records the external request identifier and
-   outcome without secrets or full customer content.
-6. Adding provider-specific authorization, rate limiting, retry, webhook
-   verification, and reconciliation tests.
-
-The approval gate should remain above the provider adapter. Ticket text,
-webhook payloads, provider comments, and imported macros remain untrusted.
-
-## Limitations And Residual Risks
-
-- Fixtures and knowledge are synthetic and local. The server has no network
-  integration or identity boundary.
-- Similarity is token-based Jaccard scoring, not semantic retrieval. It can
-  miss paraphrases and produce lexical false positives.
-- Policy is deterministic and intentionally narrow. Human review remains
-  necessary for ambiguous facts, conflicting policy, and customer messaging.
-- Operational tickets, conversations, recommendations, diagnoses, events, and
-  traces use transactional SQLite. The separate SQLite learning ledger owns
-  advisory knowledge candidates, immutable versions, audits, and reuse events.
-  Neither database is designed as a distributed multi-region system.
-- SQLite `BEGIN IMMEDIATE`, optimistic revision checks, persistent command
-  results, and unique causal sequences provide cross-process local correctness;
-  they do not replace external-provider reconciliation or distributed locks.
-- Local users with filesystem access can still edit or delete the SQLite files,
-  fixture inputs, and knowledge catalog; filesystem access remains a trust
-  boundary.
-- Linked-path checks reject symbolic links and multi-link files. Node pathname
-  APIs cannot fully prevent a hostile concurrent Windows parent-junction swap.
-- Directory `fsync` is best effort because it is not supported consistently
-  on Windows. Rename, hard-link publication, antivirus scanning, sync clients,
-  and filesystem behavior can affect durability and startup.
-- Unexpected tool errors are generic to the MCP client, while diagnostic
-  details are written to local standard error. Do not forward those logs to an
-  untrusted destination.
-- Fixture SLA deadlines are fixed on June 10, 2026. Runs after that date
-  classify due open tickets as breached unless an explicit historical `asOf`
-  value is used with `list_tickets`.
-- The official Python Skill validator was run in the current Skill evaluation
-  and reported `Skill is valid!`. `test/skill.test.ts` adds narrower
-  structural regression checks.
-
-## Repository Guide
-
-- [Case study](docs/case-study.md)
-- [Demo script](docs/demo-script.md)
-- [Demo results and examples](docs/demo-results.md)
-- [Portfolio video script](docs/video-script.md)
-- [AI comparison evaluation example](docs/ai-comparison-example.md)
-- [Screenshot and demo capture guide](docs/capture-guide.md)
-- [Project roadmap](docs/roadmap.md)
-- [Security policy](SECURITY.md)
-- `src/server.ts`: MCP tools, resources, prompts, annotations, and safe errors
-- `src/runtime.ts`: environment validation, repository wiring, and persistence cutover
-- `src/triage-service.ts`: transactional recommendation and lifecycle commands
-- `src/approval-desk/`: shared workflow, diagnosis, drafting, lifecycle, and HTTP adapters
-- `src/knowledge-evolution/`: governed candidate discovery, promotion, reuse, and learning ledger
-- `src/operational/`: SQLite event store, projections, command results, traces, and replay
-- `src/policy.ts`: escalation, evidence, and approved-field rules
-- `src/metrics.ts`: queue metrics and savings formula
-- `src/evaluation.ts`: deterministic evaluation metrics
-- `scripts/`: fixture generation, demos, evaluations, and portfolio verification commands
-- `data/seed/`: tickets, expected outcomes, and sample recommendations
-- `data/knowledge/`: local policy and troubleshooting articles
-- `.codex/config.toml`: project MCP launch configuration
-- `.agents/skills/triaging-support-tickets/`: Codex Skill, workflow, and policy reference
-## B3 Retrieval Operations
-
-The B3 path is a **derived, shadow-only retrieval projection**. It cannot change operational recommendations, lifecycle, or customer responses. B4 ranking and B5 applicability are separate experimental stages, not automatically installed B3 behavior.
-
-### Inspect or refresh the index
-
-~~~powershell
-npm run retrieval:index -- status
-npm run retrieval:index -- refresh
-npm run retrieval:index -- rebuild
-npm run retrieval:index -- validate
 ~~~
 
-The derived index is stored at `data/runtime/retrieval.sqlite`. Set `TRIAGE_RETRIEVAL_MODE=off` for an authority-parity comparison with retrieval disabled.
+The 30-ticket seeded `evaluate` sample is intentionally constructed to match its reference outcomes; a printed perfect accuracy from that sample is **not evidence of real-world diagnostic performance**. Likewise, older GPT response-quality figures represent specific dated controlled or authenticated runs with separately documented limitations. E1a human evaluation is **still in progress**.
 
-### Evaluate retrieval
+[Full metrics, historical scorecards and commands](docs/engineering-reference.md#reproducible-evaluation) · [Diagnostic harness methods](docs/diagnostic-evaluation-harness.md) · [AI comparison example](docs/ai-comparison-example.md) · [Retrieval reports](reports/retrieval/)
 
-~~~powershell
-npm run evaluate:retrieval
-~~~
+## Trust boundaries and limitations
 
-The evaluator uses an isolated lexical corpus and writes `reports/retrieval/evaluation.json` and `reports/retrieval/evaluation.md`. Reports freeze source/oracle/corpus hashes. When no configured semantic provider or cached vectors are available, that specific run must **report missing empirical semantic evidence**, not invent a semantic score.
+- **Synthetic local application:** No live customer data, messaging, Zendesk/Jira updates, paging, or identity-provider integration. Home Assistant issues are historical external research inputs only.
+- **Prompt injection:** Ticket text and retrieved content cannot authorize actions, rewrite policy, or approve fields.
+- **Explicit human intent:** Pending proposals need review; an MCP payload alone cannot establish that a human personally intended an approval.
+- **Causal time:** Historical research must exclude future comments and documentation versions unavailable by the case cutoff.
+- **Provider uncertainty:** Malformed, contradictory, or unsupported model output can fail, abstain or fall back. Research gains are not assumed.
+- **Audit and persistence:** Local SQLite transactions are durable within documented conditions but aren't distributed, authenticated, or tamper-proof.
+- **Reported savings:** Queue `estimatedMinutesSaved` uses a configured assumption per approved recommendation, not stopwatch measurements.
+- **Fixed fixtures:** Synthetic SLA deadlines use June 10, 2026; use historical `asOf` where time dependence matters.
 
-For explicitly configured Qwen3 semantic retrieval experiments, add `--live-embeddings --qwen3-retrieval-instruction --output-dir <isolated-report-directory>`. The Qwen query-only template and provider identity, timings, and provenance are recorded. Earlier committed local Qwen results are not the upcoming Qwen/Luna/Sol SIMPLE-vs-HYBRID comparison.
+See [SECURITY.md](SECURITY.md) for the full threat model and [limitations in the engineering reference](docs/engineering-reference.md#limitations-and-residual-risks).
 
-**Embedding-provider configuration**
+## Repository guide
 
-| Required setting | Purpose |
+| Where to look | Purpose |
 | :--- | :--- |
-| `TRIAGE_EMBEDDING_ENDPOINT` | Full service endpoint |
-| `TRIAGE_EMBEDDING_MODEL` | Embedding model identifier |
-| `TRIAGE_EMBEDDING_REVISION` | Exact embedding-space revision |
-| `TRIAGE_EMBEDDING_DIMENSIONS` | Vector dimensions |
+| [`src/triage-service.ts`](src/triage-service.ts) | Authoritative governed commands |
+| [`src/policy.ts`](src/policy.ts) | Escalation, validation and field rules |
+| [`src/server.ts`](src/server.ts) | MCP tools, resources, prompts and error boundaries |
+| [`src/approval-desk/`](src/approval-desk/) | Browser workflow, classification and drafting |
+| [`src/operational/`](src/operational/) | Transactional SQLite, event projections and replay |
+| [`src/knowledge-evolution/`](src/knowledge-evolution/) | Candidate governance, approved reuse and learning ledger |
+| [`src/retrieval/`](src/retrieval/) | Lexical/semantic retrieval, ranking, applicability |
+| [`src/reasoning/`](src/reasoning/) | Frozen-input Hybrid shadow reasoning |
+| [`data/seed/`](data/seed/) and [`data/knowledge/`](data/knowledge/) | Local synthetic fixtures and articles |
+| [`test/`](test/) and [`scripts/`](scripts/) | Regression tests, demos and evaluators |
+| [`.agents/skills/triaging-support-tickets/`](.agents/skills/triaging-support-tickets/) | Codex Skill and policy guidance |
 
-An API key and timeout are optional. Dimensions alone do **not** guarantee compatibility; a model revision change changes the embedding-space identity. Local HTTP endpoints are allowed, while remote endpoints require HTTPS. Provider failures are represented with bounded retrieval diagnostics.
+**Documentation:** [Engineering reference](docs/engineering-reference.md) · [Case study](docs/case-study.md) · [Demo walkthrough](docs/demo-script.md) · [Knowledge evolution](docs/knowledge-evolution.md) · [Lifecycle viewer](docs/lifecycle-replay.md) · [Evaluation guide](docs/diagnostic-evaluation-harness.md) · [Roadmap](docs/roadmap.md) · [Capture guide](docs/capture-guide.md).
 
-### Operational safeguards and provenance
+---
 
-- Process-lifetime trace ring: at most **100 traces**, each capped at **64 KiB**, with truncation counts.
-- Safe source projections exclude unsafe text. Diagnostic-playbook descriptors are searchable descriptions, **not executable authority**.
-- Only resolved and eligible case memories are indexed.
-- Candidate provenance remains visible. B3 candidate discovery does not silently choose B4 ranking policies or approve B5 applicability judgments.
+*Knotty is an ongoing personal engineering project. The implemented system is built around human oversight, deterministic policy and reproducible evidence; the Hybrid research asks how far that architecture can be improved without losing those boundaries.*

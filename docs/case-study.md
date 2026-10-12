@@ -33,32 +33,9 @@ support system immediately. This project shows a safer architecture:
 
 ## Architecture
 
-```mermaid
-flowchart LR
-    Ticket["Synthetic ticket"]
-    KB["Local knowledge base"]
-    MCP["MCP tools and resources"]
-    Context["Conversation context"]
-    Rules["Deterministic classifier and policy"]
-    GPTSignals["Optional GPT advisory signals"]
-    GPT["Optional GPT draft provider"]
-    Checks["Draft validators"]
-    Desk["Approval Desk"]
-    Audit["Audit log"]
+![Knotty triage architecture from ticket evidence and deterministic policy through reviewed recommendation, human authorization and audit](assets/knotty-recommendation-architecture.svg)
 
-    Ticket --> MCP
-    KB --> MCP
-    MCP --> Context
-    Context --> Rules
-    Context --> GPTSignals
-    GPTSignals --> Rules
-    Rules --> Desk
-    MCP --> GPT
-    GPT --> Checks
-    Checks --> Desk
-    Desk -->|approve named fields| Audit
-    Desk -->|reject with feedback| Audit
-```
+The graphic shows the simplified operator journey. Detailed constraints, fallback behavior, and the explicit approval protocol are available in the [main README](../README.md#human-approval-and-the-ticket-lifecycle).
 
 The key design choice is separation of responsibilities. The model may help
 interpret messy customer language and write the response, but it does not own

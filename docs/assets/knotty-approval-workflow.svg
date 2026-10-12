@@ -1,0 +1,130 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1850 960" width="1850" height="960" role="img" aria-labelledby="title desc">
+<title id="title">Human Approval: A Governed Sequence</title><desc id="desc">Four readable phases replace a dense lane-by-lane sequence diagram. Submitting a recommendation stores a pending proposal; only a separately authorized command can modify ticket state.</desc>
+<rect width="1850" height="960" fill="#ffffff"/>
+<text x="32" y="65" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="39" font-weight="750" fill="#142249" text-anchor="start">Human Approval: A Governed Sequence</text>
+<text x="32" y="108" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="21" font-weight="400" fill="#4b6183" text-anchor="start">Four readable phases replace a dense lane-by-lane sequence diagram.</text>
+<rect x="1408" y="28" width="410" height="40" rx="20" fill="#f1edff" stroke="#c6b8f6"/>
+<text x="1613" y="54" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="17" font-weight="650" fill="#423391" text-anchor="middle">Human approval is mandatory</text>
+<defs><marker id="arw" markerWidth="10" markerHeight="10" refX="6" refY="3" orient="auto"><path d="M0,0 L0,6 L7,3 z" fill="#20385c"/></marker></defs>
+<rect x="24.0" y="146" width="349.2" height="624" rx="16" fill="#eff8ff" stroke="#a3d6fc" stroke-width="1.5"/>
+<circle cx="54" cy="184" r="20" fill="#1269cc"/>
+<text x="54" y="191" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="22" font-weight="700" fill="#ffffff" text-anchor="middle">1</text>
+<text x="84" y="182" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="21" font-weight="730" fill="#17224b" text-anchor="start">Read context</text>
+<text x="42" y="256" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="17" font-weight="400" fill="#4e617f" text-anchor="start">The Skill gathers the current evidence.</text>
+<rect x="40.0" y="340" width="317.2" height="110" rx="11" fill="#ffffff" stroke="#a3d6fc" stroke-width="1.6"/>
+<circle cx="64" cy="367" r="12" fill="#dbeeff" stroke="#a3d6fc" />
+<text x="64" y="372" font-family="Arial,sans-serif" font-size="14" font-weight="700" text-anchor="middle" fill="#1269cc">1</text>
+<text x="86" y="366" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="17" font-weight="700" fill="#1b2b53" text-anchor="start">get_ticket</text>
+<text x="58" y="405" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="15" font-weight="400" fill="#4f6280" text-anchor="start">Load ticket and current revision.</text>
+<rect x="40.0" y="463" width="317.2" height="110" rx="11" fill="#ffffff" stroke="#a3d6fc" stroke-width="1.6"/>
+<circle cx="64" cy="490" r="12" fill="#dbeeff" stroke="#a3d6fc" />
+<text x="64" y="495" font-family="Arial,sans-serif" font-size="14" font-weight="700" text-anchor="middle" fill="#1269cc">2</text>
+<text x="86" y="489" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="17" font-weight="700" fill="#1b2b53" text-anchor="start">search_knowledge</text>
+<text x="58" y="528" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="15" font-weight="400" fill="#4f6280" text-anchor="start">Retrieve relevant local material.</text>
+<rect x="40.0" y="586" width="317.2" height="110" rx="11" fill="#ffffff" stroke="#a3d6fc" stroke-width="1.6"/>
+<circle cx="64" cy="613" r="12" fill="#dbeeff" stroke="#a3d6fc" />
+<text x="64" y="618" font-family="Arial,sans-serif" font-size="14" font-weight="700" text-anchor="middle" fill="#1269cc">3</text>
+<text x="86" y="612" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="17" font-weight="700" fill="#1b2b53" text-anchor="start">find_similar_tickets</text>
+<text x="58" y="651" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="15" font-weight="400" fill="#4f6280" text-anchor="start">Inspect similar synthetic cases.</text>
+<rect x="24.0" y="790" width="349.2" height="128" rx="13" fill="#eff8ff" stroke="#a3d6fc"/>
+<text x="42" y="817" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="19" font-weight="700" fill="#1269cc" text-anchor="start">1  Read context</text>
+<text x="42" y="854" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="17" font-weight="400" fill="#355071" text-anchor="start">Read context before forming a</text><text x="42" y="878" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="17" font-weight="400" fill="#355071" text-anchor="start">proposal.</text>
+<path d="M375.2 736 H385.2" stroke="#20385c" stroke-width="3" fill="none" marker-end="url(#arw)"/>
+<rect x="387.2" y="146" width="349.2" height="624" rx="16" fill="#f6f3ff" stroke="#c9bdf8" stroke-width="1.5"/>
+<circle cx="417.2" cy="184" r="20" fill="#6843cc"/>
+<text x="417.2" y="191" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="22" font-weight="700" fill="#ffffff" text-anchor="middle">2</text>
+<text x="447.2" y="182" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="21" font-weight="730" fill="#17224b" text-anchor="start">Prepare proposal</text>
+<text x="405.2" y="256" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="17" font-weight="400" fill="#4e617f" text-anchor="start">A recommendation is not a mutation.</text>
+<rect x="403.2" y="340" width="317.2" height="110" rx="11" fill="#ffffff" stroke="#c9bdf8" stroke-width="1.6"/>
+<circle cx="427.2" cy="367" r="12" fill="#ebe5ff" stroke="#c9bdf8" />
+<text x="427.2" y="372" font-family="Arial,sans-serif" font-size="14" font-weight="700" text-anchor="middle" fill="#6843cc">1</text>
+<text x="449.2" y="366" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="17" font-weight="700" fill="#1b2b53" text-anchor="start">submit_triage_recommendation</text>
+<text x="421.2" y="405" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="15" font-weight="400" fill="#4f6280" text-anchor="start">Save a pending review item.</text>
+<rect x="403.2" y="463" width="317.2" height="110" rx="11" fill="#ffffff" stroke="#c9bdf8" stroke-width="1.6"/>
+<circle cx="427.2" cy="490" r="12" fill="#ebe5ff" stroke="#c9bdf8" />
+<text x="427.2" y="495" font-family="Arial,sans-serif" font-size="14" font-weight="700" text-anchor="middle" fill="#6843cc">2</text>
+<text x="449.2" y="489" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="17" font-weight="700" fill="#1b2b53" text-anchor="start">Server recomputes safety</text>
+<text x="421.2" y="528" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="15" font-weight="400" fill="#4f6280" text-anchor="start">Escalation and source revision.</text>
+<rect x="403.2" y="586" width="317.2" height="110" rx="11" fill="#ffffff" stroke="#c9bdf8" stroke-width="1.6"/>
+<circle cx="427.2" cy="613" r="12" fill="#ebe5ff" stroke="#c9bdf8" />
+<text x="427.2" y="618" font-family="Arial,sans-serif" font-size="14" font-weight="700" text-anchor="middle" fill="#6843cc">3</text>
+<text x="449.2" y="612" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="17" font-weight="700" fill="#1b2b53" text-anchor="start">Present the evidence</text>
+<text x="421.2" y="651" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="15" font-weight="400" fill="#4f6280" text-anchor="start">Show risks, citations, draft and</text><text x="421.2" y="669" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="15" font-weight="400" fill="#4f6280" text-anchor="start">fields.</text>
+<rect x="387.2" y="790" width="349.2" height="128" rx="13" fill="#f6f3ff" stroke="#c9bdf8"/>
+<text x="405.2" y="817" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="19" font-weight="700" fill="#6843cc" text-anchor="start">2  Prepare proposal</text>
+<text x="405.2" y="854" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="17" font-weight="400" fill="#355071" text-anchor="start">STOP: no ticket change before</text><text x="405.2" y="878" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="17" font-weight="400" fill="#355071" text-anchor="start">approval.</text>
+<path d="M738.4 736 H748.4" stroke="#20385c" stroke-width="3" fill="none" marker-end="url(#arw)"/>
+<rect x="750.4" y="146" width="349.2" height="624" rx="16" fill="#eefaf4" stroke="#a9dbc8" stroke-width="1.5"/>
+<circle cx="780.4" cy="184" r="20" fill="#087c54"/>
+<text x="780.4" y="191" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="22" font-weight="700" fill="#ffffff" text-anchor="middle">3</text>
+<text x="810.4" y="182" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="21" font-weight="730" fill="#17224b" text-anchor="start">Human approval</text>
+<text x="768.4" y="256" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="17" font-weight="400" fill="#4e617f" text-anchor="start">Only named fields may be authorized.</text>
+<rect x="766.4" y="340" width="317.2" height="110" rx="11" fill="#ffffff" stroke="#a9dbc8" stroke-width="1.6"/>
+<circle cx="790.4" cy="367" r="12" fill="#dbf5e8" stroke="#a9dbc8" />
+<text x="790.4" y="372" font-family="Arial,sans-serif" font-size="14" font-weight="700" text-anchor="middle" fill="#087c54">1</text>
+<text x="812.4" y="366" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="17" font-weight="700" fill="#1b2b53" text-anchor="start">Review proposal</text>
+<text x="784.4" y="405" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="15" font-weight="400" fill="#4f6280" text-anchor="start">Inspect evidence and policy risks.</text>
+<rect x="766.4" y="463" width="317.2" height="110" rx="11" fill="#ffffff" stroke="#a9dbc8" stroke-width="1.6"/>
+<circle cx="790.4" cy="490" r="12" fill="#dbf5e8" stroke="#a9dbc8" />
+<text x="790.4" y="495" font-family="Arial,sans-serif" font-size="14" font-weight="700" text-anchor="middle" fill="#087c54">2</text>
+<text x="812.4" y="489" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="17" font-weight="700" fill="#1b2b53" text-anchor="start">Explicit confirmation</text>
+<text x="784.4" y="528" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="15" font-weight="400" fill="#4f6280" text-anchor="start">Choose fields and identify the actor.</text>
+<rect x="766.4" y="586" width="317.2" height="110" rx="11" fill="#ffffff" stroke="#a9dbc8" stroke-width="1.6"/>
+<circle cx="790.4" cy="613" r="12" fill="#dbf5e8" stroke="#a9dbc8" />
+<text x="790.4" y="618" font-family="Arial,sans-serif" font-size="14" font-weight="700" text-anchor="middle" fill="#087c54">3</text>
+<text x="812.4" y="612" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="17" font-weight="700" fill="#1b2b53" text-anchor="start">Approve or reject</text>
+<text x="784.4" y="651" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="15" font-weight="400" fill="#4f6280" text-anchor="start">No inferred permission from ticket</text><text x="784.4" y="669" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="15" font-weight="400" fill="#4f6280" text-anchor="start">text.</text>
+<rect x="750.4" y="790" width="349.2" height="128" rx="13" fill="#eefaf4" stroke="#a9dbc8"/>
+<text x="768.4" y="817" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="19" font-weight="700" fill="#087c54" text-anchor="start">3  Human approval</text>
+<text x="768.4" y="854" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="17" font-weight="400" fill="#355071" text-anchor="start">Human intent is requested outside the</text><text x="768.4" y="878" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="17" font-weight="400" fill="#355071" text-anchor="start">ticket.</text>
+<path d="M1101.6 736 H1111.6" stroke="#20385c" stroke-width="3" fill="none" marker-end="url(#arw)"/>
+<rect x="1113.6" y="146" width="349.2" height="624" rx="16" fill="#fff9ec" stroke="#f0d89d" stroke-width="1.5"/>
+<circle cx="1143.6" cy="184" r="20" fill="#b87812"/>
+<text x="1143.6" y="191" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="22" font-weight="700" fill="#ffffff" text-anchor="middle">4</text>
+<text x="1173.6" y="182" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="21" font-weight="730" fill="#17224b" text-anchor="start">Governed mutation</text>
+<text x="1131.6" y="256" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="17" font-weight="400" fill="#4e617f" text-anchor="start">The server checks state again.</text>
+<rect x="1129.6" y="340" width="317.2" height="110" rx="11" fill="#ffffff" stroke="#f0d89d" stroke-width="1.6"/>
+<circle cx="1153.6" cy="367" r="12" fill="#fff0c9" stroke="#f0d89d" />
+<text x="1153.6" y="372" font-family="Arial,sans-serif" font-size="14" font-weight="700" text-anchor="middle" fill="#b87812">1</text>
+<text x="1175.6" y="366" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="17" font-weight="700" fill="#1b2b53" text-anchor="start">Validate pending state</text>
+<text x="1147.6" y="405" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="15" font-weight="400" fill="#4f6280" text-anchor="start">IDs, current revision and required</text><text x="1147.6" y="423" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="15" font-weight="400" fill="#4f6280" text-anchor="start">routing.</text>
+<rect x="1129.6" y="463" width="317.2" height="110" rx="11" fill="#ffffff" stroke="#f0d89d" stroke-width="1.6"/>
+<circle cx="1153.6" cy="490" r="12" fill="#fff0c9" stroke="#f0d89d" />
+<text x="1153.6" y="495" font-family="Arial,sans-serif" font-size="14" font-weight="700" text-anchor="middle" fill="#b87812">2</text>
+<text x="1175.6" y="489" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="17" font-weight="700" fill="#1b2b53" text-anchor="start">Commit approved fields</text>
+<text x="1147.6" y="528" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="15" font-weight="400" fill="#4f6280" text-anchor="start">One atomic local state transition.</text>
+<rect x="1129.6" y="586" width="317.2" height="110" rx="11" fill="#ffffff" stroke="#f0d89d" stroke-width="1.6"/>
+<circle cx="1153.6" cy="613" r="12" fill="#fff0c9" stroke="#f0d89d" />
+<text x="1153.6" y="618" font-family="Arial,sans-serif" font-size="14" font-weight="700" text-anchor="middle" fill="#b87812">3</text>
+<text x="1175.6" y="612" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="17" font-weight="700" fill="#1b2b53" text-anchor="start">Record causal audit</text>
+<text x="1147.6" y="651" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="15" font-weight="400" fill="#4f6280" text-anchor="start">Receipt and approved response history.</text>
+<rect x="1113.6" y="790" width="349.2" height="128" rx="13" fill="#fff9ec" stroke="#f0d89d"/>
+<text x="1131.6" y="817" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="19" font-weight="700" fill="#b87812" text-anchor="start">4  Governed mutation</text>
+<text x="1131.6" y="854" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="17" font-weight="400" fill="#355071" text-anchor="start">Stale or unsafe requests fail without</text><text x="1131.6" y="878" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="17" font-weight="400" fill="#355071" text-anchor="start">mutation.</text>
+<path d="M1464.8 736 H1474.8" stroke="#20385c" stroke-width="3" fill="none" marker-end="url(#arw)"/>
+<rect x="1476.8" y="146" width="349.2" height="624" rx="16" fill="#f0f7ff" stroke="#a9cffa" stroke-width="1.5"/>
+<circle cx="1506.8" cy="184" r="20" fill="#1267ba"/>
+<text x="1506.8" y="191" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="22" font-weight="700" fill="#ffffff" text-anchor="middle">5</text>
+<text x="1536.8" y="182" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="21" font-weight="730" fill="#17224b" text-anchor="start">Readback</text>
+<text x="1494.8" y="256" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="17" font-weight="400" fill="#4e617f" text-anchor="start">Confirm the actual persisted result.</text>
+<rect x="1492.8" y="340" width="317.2" height="110" rx="11" fill="#ffffff" stroke="#a9cffa" stroke-width="1.6"/>
+<circle cx="1516.8" cy="367" r="12" fill="#e1efff" stroke="#a9cffa" />
+<text x="1516.8" y="372" font-family="Arial,sans-serif" font-size="14" font-weight="700" text-anchor="middle" fill="#1267ba">1</text>
+<text x="1538.8" y="366" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="17" font-weight="700" fill="#1b2b53" text-anchor="start">get_ticket</text>
+<text x="1510.8" y="405" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="15" font-weight="400" fill="#4f6280" text-anchor="start">Read updated ticket projection.</text>
+<rect x="1492.8" y="463" width="317.2" height="110" rx="11" fill="#ffffff" stroke="#a9cffa" stroke-width="1.6"/>
+<circle cx="1516.8" cy="490" r="12" fill="#e1efff" stroke="#a9cffa" />
+<text x="1516.8" y="495" font-family="Arial,sans-serif" font-size="14" font-weight="700" text-anchor="middle" fill="#1267ba">2</text>
+<text x="1538.8" y="489" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="17" font-weight="700" fill="#1b2b53" text-anchor="start">get_audit_events</text>
+<text x="1510.8" y="528" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="15" font-weight="400" fill="#4f6280" text-anchor="start">Read the corresponding causal history.</text>
+<rect x="1492.8" y="586" width="317.2" height="110" rx="11" fill="#ffffff" stroke="#a9cffa" stroke-width="1.6"/>
+<circle cx="1516.8" cy="613" r="12" fill="#e1efff" stroke="#a9cffa" />
+<text x="1516.8" y="618" font-family="Arial,sans-serif" font-size="14" font-weight="700" text-anchor="middle" fill="#1267ba">3</text>
+<text x="1538.8" y="612" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="17" font-weight="700" fill="#1b2b53" text-anchor="start">Report outcome</text>
+<text x="1510.8" y="651" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="15" font-weight="400" fill="#4f6280" text-anchor="start">Show changed and unchanged fields.</text>
+<rect x="1476.8" y="790" width="349.2" height="128" rx="13" fill="#f0f7ff" stroke="#a9cffa"/>
+<text x="1494.8" y="817" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="19" font-weight="700" fill="#1267ba" text-anchor="start">5  Readback</text>
+<text x="1494.8" y="854" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="17" font-weight="400" fill="#355071" text-anchor="start">The user sees what really happened.</text>
+<rect x="24" y="927" width="1800" height="21" fill="none"/>
+<text x="32" y="949" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="13" font-weight="400" fill="#566b8d" text-anchor="start">Submitting a recommendation stores a pending proposal; only a separately authorized command can modify ticket state.</text>
+</svg>

@@ -1,56 +1,49 @@
-## Knotty — The Journey
+# Knotty
 
-Knotty began as a personal learning project to explore AI agent Skills and Model Context Protocol (MCP) servers. What started as a relatively simple experiment in connecting AI agents to tools gradually evolved into a much larger exploration of AI-assisted diagnostics, workflow orchestration, and reliable decision-making.
+**Evidence-grounded support-ticket triage, diagnostics, and human-governed AI workflows.**
 
-Today, Knotty is an experimental support ticket triage and diagnostic system that combines deterministic logic with LLM-assisted reasoning, knowledge retrieval, evidence-based diagnostics, and structured, human-in-the-loop workflows. It manages tickets through a multi-stage lifecycle, from initial evaluation and diagnosis to proposed fixes, verification, and resolution.
+Knotty began as a personal learning project to explore **AI agent Skills** and **Model Context Protocol (MCP) servers**. Connecting an assistant to a few local tools raised larger questions: How should an agent gather evidence? Who can approve changes? What happens when a diagnosis becomes stale or a provider fails? The experiment grew into a diagnostic engine with structured workflows, durable state, governed knowledge reuse, and a separate research track for hybrid retrieval and reasoning.
 
-The project has also grown into a testbed for AI reliability and evaluation engineering, incorporating hybrid evaluation methods, historical evidence constraints, reproducible experiments, and safeguards against unsupported conclusions.
+Today, Knotty combines deterministic rules, optional LLM assistance, local knowledge retrieval, evidence-aware diagnostics, and human review across a ticket's lifecycle—from initial evaluation to diagnosis, fixes, verification, and closure. It is also a testbed for reproducible evaluation, causal constraints, replay, and failure recovery.
 
-At its core, Knotty explores a broader engineering question: **How can we build AI systems that go beyond generating plausible answers to making decisions that are traceable, testable, and grounded in evidence?**
+The guiding question is:
 
-## Knotty — AI-Powered Support Ticket Triage & Diagnostics
+> **How can AI systems go beyond generating plausible answers to support decisions that are traceable, testable, and grounded in evidence?**
 
-A local Model Context Protocol (MCP) server and repository-local Codex Skill
-for governed support-ticket triage. The system reads synthetic tickets and
-knowledge articles, prepares evidence-backed recommendations, and records
-local audit events. The Skill directs Codex to present each recommendation and
-wait for a human decision before finalizing action.
+Knotty is an **experimental, local-first engineering project**, not a live help-desk integration. It uses synthetic tickets and clean-room knowledge articles from **Northstar Marketing Cloud**, a fictional ecommerce marketing automation platform. There is no live Zendesk, Jira, email, paging, identity, or customer-data connection.
 
-The current demo also includes a browser-based **Approval Desk**. It lets a
-reviewer type customer replies into a conversation workspace, generate an
-updated recommendation from the full timeline, inspect classifier evidence,
-review a customer draft, and approve only named fields.
+### Current development status
 
-The repository is a safety and workflow demonstration. It contains only
-synthetic fixture data, writes only to a local runtime directory, and has no
-live Zendesk, Jira, email, paging, identity, or customer-data connection.
-The fixture domain is **Northstar Marketing Cloud**, a fictional ecommerce
-marketing automation platform with synthetic support cases for flows, events,
-campaigns, profiles, segments, deliverability, SMS compliance, webhooks,
-coupons, and catalog sync. The articles and tickets are clean-room examples;
-they are not copied from a real vendor.
+The latest architectural milestone is the **Hybrid diagnostic reasoning system (H1–H5b)**. Its frozen-input, provider-neutral, replay-safe **shadow pipeline is implemented**, but it is **not fully integrated into the authoritative ticket workflow**.
+
+A **SIMPLE vs. HYBRID evaluation involving Qwen, Luna, and Sol is being prepared**. Comparable cross-model results and conclusions are **not yet available**. Earlier Qwen *semantic retrieval* evaluations are separate experiments; they must not be presented as results of this pending comparison.
+
+| Track | Current status |
+| :--- | :--- |
+| Local MCP server, Codex Skill, and Approval Desk | **Implemented** for synthetic local tickets |
+| Deterministic diagnosis, evidence gates, ticket lifecycle, approval | **Operational authority** in the demo |
+| GPT classification, taxonomy, diagnosis advice, response drafting | **Optional advisory input**; deterministic guardrails remain final |
+| Governed knowledge discovery, promotion, and reuse | **Implemented**, with separate learning persistence |
+| B3 retrieval, B4 ranking, B5 applicability | **Retrieval / research / shadow lanes**, not automatic ticket authority |
+| H1–H5b Hybrid reasoning | **Latest implemented shadow architecture**; operational integration pending |
+| SIMPLE vs. HYBRID: Qwen / Luna / Sol | **Benchmark preparation in progress; no final results** |
+
+### Start here
+
+- [60-second local Approval Desk demo](#demo-in-60-seconds) — see a ticket evolve through a human-reviewed workflow.
+- [Architecture](#architecture) and [hybrid research](#latest-architecture-hybrid-diagnostic-reasoning) — see authoritative and advisory paths.
+- [MCP interface](#mcp-interface) — tools, resources, prompts, and mutation contracts.
+- [Reproducible evaluation](#reproducible-evaluation) — what the existing tests do and *do not* establish.
+- [Detailed case study](docs/case-study.md) · [Threat model](SECURITY.md) · [Roadmap](docs/roadmap.md).
 
 ## At A Glance
 
-This project demonstrates governed AI support automation end to end:
+- **Triage and diagnosis:** conversation-aware classification, evidence readiness, diagnostic playbooks, known-cause/event correlation, optional GPT reasoning, and grounded drafting.
+- **Workflow governance:** one service owns escalation, approvals, diagnosis review, fix gating, verification, closure, and causal audit history across MCP and the browser UI.
+- **Human control:** model proposals remain advisory; changing approved ticket fields and promoting reusable knowledge require explicit operator decisions.
+- **Reliability and research:** transactional SQLite, command replay, isolated learning delivery, controlled/local-vs-live evaluations, and newer shadow-only retrieval/reasoning experiments.
 
-- **Triage intelligence:** deterministic classification, evidence readiness,
-  optional GPT reasoning, and grounded customer-response drafting.
-- **Workflow governance:** one service owns lifecycle transitions, escalation,
-  diagnosis review, fix gating, closure, and audit invariants across the
-  Approval Desk and MCP tools.
-- **Human control:** recommendations and knowledge candidates remain pending
-  until an operator explicitly approves named fields or promotes a reviewed
-  object.
-- **Knowledge evolution:** completed diagnoses produce deterministic similarity
-  signals; optional advisory providers may draft reusable candidates, but only
-  human promotion can make a candidate available to future workflows.
-
-Start with the [60-second Approval Desk demo](#demo-in-60-seconds), then run the
-[knowledge-evolution showcase](#governed-knowledge-evolution) for the latest
-extension. The [architecture](#architecture), [safety boundary](#safety-boundary),
-and [limitations](#limitations-and-residual-risks) explain what the system can
-and cannot decide.
+The screenshots, runnable demos, diagrams, command reference, configuration details, and historical evaluation evidence below are intentionally preserved as technical documentation rather than reduced to marketing claims.
 
 ## Safety Boundary
 
@@ -85,6 +78,19 @@ and cannot decide.
 See [SECURITY.md](SECURITY.md) for the full threat model.
 
 ## Architecture
+
+### Layers and decision authority
+
+| Layer | Role and authority |
+| :--- | :--- |
+| **Operator:** human, Codex Skill, Approval Desk | Initiates actions and explicitly approves named fields |
+| **Adapters:** MCP stdio / HTTP | Validate transport requests; share the same application service |
+| **Operational application:** TriageService and deterministic policy | **Authoritative** lifecycle, routing, evidence, revision, and approval rules |
+| **Operational SQLite** | Atomic ticket state, audits, causal events, command receipts, and learning-outbox intent |
+| **Advisory learning:** knowledge-evolution service and SQLite | Versioned, reviewed knowledge; cannot mutate operational decisions independently |
+| **Research:** retrieval and hybrid reasoning shadow runners | Capture, compare, and replay hypotheses **without operational authority** |
+
+The original dependency and shared execution-path diagrams are kept below.
 
 ```mermaid
 flowchart TB
@@ -127,6 +133,41 @@ flowchart TB
     end
 ```
 
+## Latest Architecture: Hybrid Diagnostic Reasoning
+
+**This is the newest development, not a completed model-comparison result.** The implemented H1–H5b work introduces a provider-neutral shadow reasoning pipeline with frozen causally eligible inputs, validated contracts, replay/idempotency semantics, and immutable/versioned evaluation-side captures. A taxonomy-informed B5 reasoning adapter is available in that lane.
+
+The distinction between the paths matters:
+
+| Path | What it can do today |
+| :--- | :--- |
+| **SIMPLE / existing governed workflow** | Uses the deterministic and optional advisory components described below; the shared service controls actual ticket actions |
+| **HYBRID / shadow reasoning** | Evaluates frozen context and retrieval-derived evidence for research; **cannot** approve recommendations, change diagnoses, or move tickets |
+| **Planned SIMPLE vs. HYBRID comparison** | Evaluate **Qwen, Luna, and Sol** under a controlled comparison; **results still being prepared** |
+
+~~~mermaid
+flowchart TB
+    Inputs["Frozen, causally eligible case context"]
+    Simple["SIMPLE baseline evaluation"]
+    Retrieval["B3 resource discovery<br/>B4 ranking and B5 applicability research"]
+    Hybrid["HYBRID shadow reasoning<br/>H1–H5b"]
+    Evidence["Separate experiment outputs<br/>with provenance and replay checks"]
+    Authority["Existing TriageService<br/>authoritative workflow"]
+
+    Inputs --> Simple
+    Inputs --> Retrieval --> Hybrid
+    Inputs --> Hybrid
+    Simple -. "comparison lane" .-> Evidence
+    Hybrid -. "comparison lane" .-> Evidence
+    Simple -. "existing production path only" .-> Authority
+~~~
+
+**Evaluation status:** The Qwen-vs-Luna-vs-Sol, SIMPLE-vs-HYBRID benchmark is **not finished**, no comparable results have been published, and no model or architecture has been selected as a winner. Existing local Qwen *embedding/retrieval* results and prior GPT drafting comparisons are distinct evidence sets, not outcomes of this experiment. In particular, the H1–H5b implementation introduced **no live Luna/Qwen comparison and no operational cutover**.
+
+B3 indexes and discovers candidate resources; B4 evaluates ranking policies; B5 evaluates evidence applicability; H1–H5b assembles and runs frozen hybrid reasoning opportunities. Their shadow-only boundary remains intact despite the sophistication of the research system.
+
+Further documentation: [B3 design](docs/superpowers/plans/2026-09-12-hybrid-retrieval-b3-implementation-plan.md) · [B4 experiment](docs/superpowers/plans/2026-09-16-b4-ranking.md) · [B5 applicability](docs/superpowers/plans/2026-09-17-b5-applicability-evaluation.md) · [H5a shadow runner](docs/superpowers/plans/2026-09-24-h5a-hybrid-shadow-runner.md) · [Merged hybrid architecture PR #30](https://github.com/MatiasLaukka/Support-Ticket-Triage-MCP/pull/30).
+
 ## Demo In 60 Seconds
 
 ```powershell
@@ -146,7 +187,7 @@ Open the printed local URL. A good portfolio walkthrough is:
    ticket-specific customer reply automatically after the response is marked
    sent.
 4. Evaluate the ticket again and point out that the system reclassifies it
-   from generic Knotty to a
+   from a generic unclassified issue to a
    product performance issue, recalculates the evidence checklist, avoids
    asking for a screenshot of a blank page, and drafts a response that matches
    the new lifecycle state.
@@ -246,7 +287,7 @@ customer reply, diagnosis and fix audits, and ends at `resolved`.
 The replay writes a sanitized report with the exact workflow-read and action
 counts for that run, plus the separate context-aware diagnostic scenario
 matrix. The matrix's bounded-ambiguity/escalation scenario remains a second
-Knottying example: it routes unresolved ambiguity toward specialist review
+illustrative example: it routes unresolved ambiguity toward specialist review
 rather than pretending that an unresolved hypothesis is a fix. Treat report
 counts as run evidence, not a versioned README constant.
 
@@ -385,20 +426,27 @@ For sample outputs and demo talking points, see
 see [docs/capture-guide.md](docs/capture-guide.md). For next build ideas, see
 [docs/roadmap.md](docs/roadmap.md).
 
-The stdio entry point is `dist/src/index.js`. Its defaults are:
+The stdio entry point is `dist/src/index.js`. Runtime settings are grouped by purpose instead of mixing paths, governance, and optional provider controls in one table.
+
+**Local data and operational defaults**
 
 | Setting | Default |
-| --- | --- |
+| :--- | :--- |
 | `TRIAGE_DATA_ROOT` | `data/runtime` |
 | `TRIAGE_SEED_FILE` | `data/seed/tickets.json` |
 | `TRIAGE_KNOWLEDGE_ROOT` | `data/knowledge` |
-| `TRIAGE_MINUTES_SAVED` | `8` |
-| `TRIAGE_KNOWLEDGE_APPROVERS` | `Knotty-lead,reviewer,approval-desk` |
-| `TRIAGE_KNOWLEDGE_CANDIDATE_PROVIDER` | unset (deterministic discovery only); use `controlled` for the local advisory demo |
-| `TRIAGE_KNOWLEDGE_CANDIDATE_MODEL` | unset (inherits `OPENAI_MODEL`, then `gpt-5.6-luna`) |
-| `TRIAGE_KNOWLEDGE_CANDIDATE_TIMEOUT_MS` | `20000` |
 | `OPERATIONAL_DB_PATH` | `data/runtime/operational.sqlite` |
 | `TRIAGE_LEARNING_LEDGER_PATH` | `data/runtime/knowledge-evolution/learning.sqlite` |
+| `TRIAGE_MINUTES_SAVED` | `8` (assumed minutes, not measured time) |
+
+**Governance and optional knowledge drafting**
+
+| Setting | Default |
+| :--- | :--- |
+| `TRIAGE_KNOWLEDGE_APPROVERS` | `support-lead,reviewer,approval-desk` |
+| `TRIAGE_KNOWLEDGE_CANDIDATE_PROVIDER` | Unset: deterministic discovery only. Use `controlled` for the local advisory demo. |
+| `TRIAGE_KNOWLEDGE_CANDIDATE_MODEL` | Unset: inherit `OPENAI_MODEL`, then `gpt-5.6-luna` |
+| `TRIAGE_KNOWLEDGE_CANDIDATE_TIMEOUT_MS` | `20000` |
 
 All relative paths are resolved from the process working directory.
 
@@ -480,22 +528,35 @@ runs.
 The repository Skill is the operator layer for the MCP server. It teaches
 Codex to read the authoritative workflow projection, gather evidence, perform
 the next governed action, and pause whenever a human decision is required.
-The current workflow surface is:
+The workflow tools are grouped by the operator stage they support. This is a quick index; the [MCP interface](#mcp-interface) below retains the tool-by-tool contracts and mutation guards.
 
-| Tool | Purpose |
-| --- | --- |
-| `get_ticket_workflow` | Reads the ticket, conversation timeline, recommendation history, latest recommendation, and workflow state. |
-| `add_customer_reply` | Appends a customer reply to the local audit trail before re-evaluation. |
-| `evaluate_ticket` | Runs the current Approval Desk recommendation builder from the full timeline instead of asking Codex to hand-build recommendation JSON. |
-| `mark_response_done` | Applies only explicitly approved fields and records the approved customer response as sent. |
-| `submit_triage_recommendation` | Explicit lower-level proposal tool for integrations or manually assembled recommendations. |
-| `approve_triage_recommendation` / `reject_triage_recommendation` | Explicit finalization tools guarded by strict schemas and audit logging. |
-| `record_diagnosis` / `review_diagnosis` | Record and review an immutable diagnosis for the current evaluated context. |
-| `apply_diagnosis_fix` / `mark_fix_available` | Apply a reviewed fix to a selected impact set or record a fix ready for verification. |
-| `record_fix_ineffective` / `invalidate_diagnosis` | Record failed verification or explicitly invalidate diagnosis authority. |
-| `close_ticket` | Close only after the customer-safe response and confirmation gates are complete. |
+**Context and recommendations**
 
-The repository-local Skill at `.agents/skills/triaging-Knotty-tickets` teaches
+| Tool | Operator action |
+| :--- | :--- |
+| `get_ticket_workflow` | Read the authoritative ticket, conversation, history, and next-action guidance |
+| `add_customer_reply` | Add a local reply before the next evaluation |
+| `evaluate_ticket` | Re-evaluate the full timeline and prepare a pending recommendation |
+| `submit_triage_recommendation` | Submit a manually assembled proposal without changing the ticket |
+
+**Human decisions**
+
+| Tool | Operator action |
+| :--- | :--- |
+| `approve_triage_recommendation` / `reject_triage_recommendation` | Finalize a recommendation with explicit approval or feedback and guarded audit |
+| `mark_response_done` | Apply approved named fields and record the approved response as sent |
+| `record_diagnosis` / `review_diagnosis` | Record an immutable diagnosis, then separately review or revalidate it |
+
+**Fix, verification, and closure**
+
+| Tool | Operator action |
+| :--- | :--- |
+| `apply_diagnosis_fix` / `mark_fix_available` | Apply a reviewed fix to an explicit impact set or signal availability for verification |
+| `record_fix_ineffective` / `invalidate_diagnosis` | Record failed verification or remove authority from a diagnosis with explicit reason |
+| `close_ticket` | Close only after customer response, verification, and confirmation gates |
+
+
+The repository-local Skill at `.agents/skills/triaging-support-tickets` teaches
 Codex to use the operator tools, present evidence and drafts, wait for explicit
 human approval of named fields, and verify the resulting audit trail.
 
@@ -661,15 +722,15 @@ No separate `codex` command is required for this repository.
 5. Trigger the repository Skill explicitly in the prompt:
 
 ```text
-Use $triaging-Knotty-tickets to triage TKT-1005 using the local MCP server.
+Use $triaging-support-tickets to triage TKT-1005 using the local MCP server.
 Present the recommendation and wait for my explicit approval of named fields.
 ```
 
 The Skill lives at
-`.agents/skills/triaging-Knotty-tickets/SKILL.md`. Its UI metadata is at
-`.agents/skills/triaging-Knotty-tickets/agents/openai.yaml`, and its detailed
+`.agents/skills/triaging-support-tickets/SKILL.md`. Its UI metadata is at
+`.agents/skills/triaging-support-tickets/agents/openai.yaml`, and its detailed
 classification and escalation tables are in
-`.agents/skills/triaging-Knotty-tickets/references/policy.md`.
+`.agents/skills/triaging-support-tickets/references/policy.md`.
 
 ## Use The Local Approval Desk
 
@@ -710,7 +771,7 @@ actor, check the explicit confirmation box, and approve. The UI then reads back
 the updated ticket revision and audit event.
 
 The app is local-only. It does not send customer responses, connect to external
-Knotty systems, or authenticate multiple users.
+support-ticket systems, or authenticate multiple users.
 
 ### GPT Drafting And Advisory Classification
 
@@ -789,18 +850,26 @@ environment variables above.
 
 ### Read and context tools
 
-| Tool | Purpose |
-| --- | --- |
-| `list_tickets` | Filter and page the local queue, including status, routing, risk, SLA, and historical `asOf` views. |
-| `get_ticket` | Read one ticket by ID. |
-| `get_ticket_workflow` | Read the authoritative ticket, conversation, recommendation, evidence, diagnosis, fix, and lifecycle projection. |
-| `get_ticket_diagnoses` | Read immutable diagnosis history, review decisions, and freshness. |
-| `search_knowledge` | Search the local Markdown knowledge catalog. |
-| `find_similar_tickets` | Rank deterministic text-similarity candidates. |
-| `get_queue_metrics` | Calculate queue, SLA, escalation, recommendation, and minutes-saved metrics. |
-| `get_audit_events` | Page audit events globally or for one ticket. |
-| `get_knowledge_candidate` | Read one governed knowledge candidate and its sanitized evidence bundle. |
-| `get_knowledge_learning` | Read candidate maturity, health, reuse, and learning-ledger state. |
+**Ticket and queue context**
+
+| Tool | Returns |
+| :--- | :--- |
+| `list_tickets` | Paged queue with status, risk, routing, SLA, and optional historical `asOf` view |
+| `get_ticket` | One ticket by ID |
+| `get_ticket_workflow` | Ticket, conversation, recommendations, evidence, diagnosis, fix, and lifecycle projection |
+| `get_ticket_diagnoses` | Immutable diagnoses, reviews, and freshness |
+| `get_queue_metrics` | Queue, escalation, approvals, SLAs, and estimated time savings |
+| `get_audit_events` | Global or per-ticket paged events |
+
+**Knowledge and similarity context**
+
+| Tool | Returns |
+| :--- | :--- |
+| `search_knowledge` | Matches from local Markdown articles |
+| `find_similar_tickets` | Deterministic text-similarity ranking |
+| `get_knowledge_candidate` | Candidate and sanitized supporting evidence |
+| `get_knowledge_learning` | Maturity, health, reuse, and ledger state |
+
 
 These tools are annotated read-only, non-destructive, idempotent, and
 closed-world. Inputs are bounded by strict Zod schemas; list and search limits
@@ -808,20 +877,40 @@ are capped at 50 and ticket/knowledge identifiers are validated.
 
 ### Recommendation and lifecycle tools
 
-| Tool | Purpose | Governance boundary |
-| --- | --- | --- |
-| `submit_triage_recommendation` | Store a manually assembled pending recommendation. | Does not change the ticket; the server owns the timestamp and recomputes escalation. |
-| `add_customer_reply` | Append a customer reply to the local conversation audit trail. | Requires a command ID and feeds the next evaluation. |
-| `evaluate_ticket` | Evaluate the full ticket timeline and store a pending recommendation. | Uses the current deterministic workflow and evidence gates. |
-| `record_diagnosis` | Record a diagnosis for the latest evaluated context. | Requires a diagnosis-ready state and preserves the original audit. |
-| `review_diagnosis` | Approve, reject, or revalidate an immutable diagnosis review. | Reviews never rewrite the original diagnosis; freshness is rechecked. |
-| `apply_diagnosis_fix` | Apply a reviewed diagnosis fix to an explicit impact set. | Each selected ticket gets an audit event; the action does not close tickets. |
-| `mark_fix_available` | Record that a confirmed platform/integration fix is ready for verification. | Requires an approved current diagnosis and complete response/verification gates. |
-| `record_fix_ineffective` | Record failed verification for one persisted fix attempt. | Does not implicitly invalidate the diagnosis. |
-| `invalidate_diagnosis` | Explicitly remove authority from the current approved diagnosis. | Preserves immutable history and requires a reason and current context. |
-| `record_platform_mitigation` | Record a confirmed mitigation signal for a known platform event. | Does not pretend that a mitigation is a confirmed diagnosis fix. |
-| `mark_response_done` | Apply approved fields and record an approved customer response as sent. | Requires explicit named fields, confirmation, actor, and current revision. |
-| `close_ticket` | Close a ticket after the ready-for-close response and customer confirmation. | Finalizing action; lifecycle gates must be satisfied. |
+All commands below use the **shared governed service**, not separate MCP-only lifecycle logic. To keep the matrix readable, actions are grouped by phase and their safety contracts are described in concise rows.
+
+**Evaluate and collect evidence**
+
+| Tool | Action and boundary |
+| :--- | :--- |
+| `submit_triage_recommendation` | Store a **pending** proposal; no ticket mutation. The server owns its timestamp and recomputes escalation. |
+| `add_customer_reply` | Append a local customer reply with a command ID; it becomes input to later evaluation. |
+| `evaluate_ticket` | Evaluate the whole ticket timeline and store a pending recommendation under current evidence gates. |
+
+**Diagnose and review**
+
+| Tool | Action and boundary |
+| :--- | :--- |
+| `record_diagnosis` | Record diagnosis for the latest evaluated context **only when diagnosis-ready**; original audit persists. |
+| `review_diagnosis` | Approve, reject, or revalidate. Review is separate and the diagnosis is **never rewritten**; freshness is checked. |
+
+**Fix, mitigation, and verification**
+
+| Tool | Action and boundary |
+| :--- | :--- |
+| `apply_diagnosis_fix` | Apply a reviewed diagnosis fix to a selected impact set; audit each ticket, but **do not close** it. |
+| `mark_fix_available` | Record a confirmed fix ready for verification; requires current approved diagnosis and response/verification gates. |
+| `record_fix_ineffective` | Record one failed fix attempt without automatically invalidating its diagnosis. |
+| `invalidate_diagnosis` | Remove authority explicitly, with current context and a reason; immutable history remains. |
+| `record_platform_mitigation` | Record a known-event mitigation; it is **not** a confirmed diagnosis fix. |
+
+**Send and close**
+
+| Tool | Action and boundary |
+| :--- | :--- |
+| `mark_response_done` | Apply explicitly approved fields and record an approved response as sent; requires actor, confirmation, named fields, and current revision. |
+| `close_ticket` | Finalize only after the ready-for-close response and customer confirmation, subject to lifecycle gates. |
+
 
 ### Explicit approval and knowledge-governance tools
 
@@ -850,23 +939,25 @@ customer message to an external system.
 
 ### Resources
 
-| URI | MIME type | Content |
-| --- | --- | --- |
-| `ticket://{id}` | `application/json` | One validated ticket. |
-| `knowledge://{id}` | `text/markdown` | One local knowledge article. |
-| `audit://ticket/{id}` | `application/json` | The first 50 audit events for a ticket plus the total. |
-| `metrics://queue` | `application/json` | Current queue metrics. |
+| URI | Data returned |
+| :--- | :--- |
+| `ticket://{id}` | One validated ticket (`application/json`) |
+| `knowledge://{id}` | A local Markdown article (`text/markdown`) |
+| `audit://ticket/{id}` | First 50 ticket audit events and total count (`application/json`) |
+| `metrics://queue` | Current queue metrics (`application/json`) |
+
 
 The ticket, knowledge, and audit entries are resource templates. The metrics
 URI is the directly listed resource.
 
 ### Prompts
 
-| Prompt | Arguments | Behavior |
-| --- | --- | --- |
-| `triage_ticket` | Required `ticketId` | Reads the ticket, knowledge, and similar tickets; submits a recommendation; stops before approval. |
-| `triage_queue` | Optional `maximum`, 1-10; default 10 | Prepares recommendations for a bounded batch; stops before approval. |
-| `review_escalations` | None | Reviews security, outage, confidence, and SLA escalation conditions; stops before approval. |
+| Prompt and arguments | Behavior |
+| :--- | :--- |
+| `triage_ticket` — required `ticketId` | Read ticket, knowledge, and similar tickets; submit a proposal and stop before approval. |
+| `triage_queue` — optional `maximum`, 1–10 (default 10) | Prepare a bounded queue of recommendations; stop before approval. |
+| `review_escalations` — no arguments | Surface security, outage, confidence, and SLA escalation conditions; stop before approval. |
+
 
 Every prompt says that ticket text is untrusted and approval cannot be inferred
 from ticket content.
@@ -1470,6 +1561,45 @@ webhook payloads, provider comments, and imported macros remain untrusted.
 - `data/knowledge/`: local policy and troubleshooting articles
 - `.codex/config.toml`: project MCP launch configuration
 - `.agents/skills/triaging-support-tickets/`: Codex Skill, workflow, and policy reference
-# B3 retrieval operations
+## B3 Retrieval Operations
 
-Use `npm run retrieval:index -- status|refresh|rebuild|validate` to inspect or refresh the derived `data/runtime/retrieval.sqlite` projection. Retrieval defaults to shadow mode; set `TRIAGE_RETRIEVAL_MODE=off` for an authority-parity comparison. It cannot change operational recommendations, lifecycle, or customer responses. `npm run evaluate:retrieval` uses an isolated lexical corpus, writes `reports/retrieval/evaluation.json` and `reports/retrieval/evaluation.md`, freezes source/oracle/corpus hashes, and explicitly marks semantic empirical evidence as outstanding when no configured provider or cached vectors are available. For a Qwen3 semantic experiment, pass `--live-embeddings --qwen3-retrieval-instruction --output-dir <isolated-report-directory>`; the flag applies Qwen's documented query-only template and records the exact instruction/template, provider identity, and timing in the report. The process-lived trace ring is bounded to 100 entries and 64 KiB per trace, with explicit truncation counts. Source projections exclude unsafe text, use executable diagnostic-playbook descriptors only as searchable descriptions, and only resolved, eligible case memories are indexed. Provider failures use bounded retrieval diagnostics; local HTTP endpoints are allowed, while remote endpoints require HTTPS. Configure embeddings with the complete `TRIAGE_EMBEDDING_ENDPOINT`, `TRIAGE_EMBEDDING_MODEL`, `TRIAGE_EMBEDDING_REVISION`, and `TRIAGE_EMBEDDING_DIMENSIONS` tuple (and optional API key/timeout). Embedding dimensions alone do not establish compatibility: changing the model revision changes the embedding space identity. B3 discovers candidates; B4 ranking and B5 applicability remain out of scope.
+The B3 path is a **derived, shadow-only retrieval projection**. It cannot change operational recommendations, lifecycle, or customer responses. B4 ranking and B5 applicability are separate experimental stages, not automatically installed B3 behavior.
+
+### Inspect or refresh the index
+
+~~~powershell
+npm run retrieval:index -- status
+npm run retrieval:index -- refresh
+npm run retrieval:index -- rebuild
+npm run retrieval:index -- validate
+~~~
+
+The derived index is stored at `data/runtime/retrieval.sqlite`. Set `TRIAGE_RETRIEVAL_MODE=off` for an authority-parity comparison with retrieval disabled.
+
+### Evaluate retrieval
+
+~~~powershell
+npm run evaluate:retrieval
+~~~
+
+The evaluator uses an isolated lexical corpus and writes `reports/retrieval/evaluation.json` and `reports/retrieval/evaluation.md`. Reports freeze source/oracle/corpus hashes. When no configured semantic provider or cached vectors are available, that specific run must **report missing empirical semantic evidence**, not invent a semantic score.
+
+For explicitly configured Qwen3 semantic retrieval experiments, add `--live-embeddings --qwen3-retrieval-instruction --output-dir <isolated-report-directory>`. The Qwen query-only template and provider identity, timings, and provenance are recorded. Earlier committed local Qwen results are not the upcoming Qwen/Luna/Sol SIMPLE-vs-HYBRID comparison.
+
+**Embedding-provider configuration**
+
+| Required setting | Purpose |
+| :--- | :--- |
+| `TRIAGE_EMBEDDING_ENDPOINT` | Full service endpoint |
+| `TRIAGE_EMBEDDING_MODEL` | Embedding model identifier |
+| `TRIAGE_EMBEDDING_REVISION` | Exact embedding-space revision |
+| `TRIAGE_EMBEDDING_DIMENSIONS` | Vector dimensions |
+
+An API key and timeout are optional. Dimensions alone do **not** guarantee compatibility; a model revision change changes the embedding-space identity. Local HTTP endpoints are allowed, while remote endpoints require HTTPS. Provider failures are represented with bounded retrieval diagnostics.
+
+### Operational safeguards and provenance
+
+- Process-lifetime trace ring: at most **100 traces**, each capped at **64 KiB**, with truncation counts.
+- Safe source projections exclude unsafe text. Diagnostic-playbook descriptors are searchable descriptions, **not executable authority**.
+- Only resolved and eligible case memories are indexed.
+- Candidate provenance remains visible. B3 candidate discovery does not silently choose B4 ranking policies or approve B5 applicability judgments.

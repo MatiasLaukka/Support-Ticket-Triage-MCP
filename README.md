@@ -64,6 +64,8 @@ The application supports a ticket lifecycle rather than a one-shot classifier. A
 
 ![Knotty architecture overview with human/agent interfaces, shared deterministic service, transactional operational state, governed knowledge and isolated Hybrid research](docs/assets/knotty-system-overview.svg)
 
+[Open the system architecture at full size](docs/assets/knotty-system-overview.svg)
+
 **One shared `TriageService` is authoritative.** The browser UI and MCP tools are adapters to the same application rules—not separate sources of truth. Four boundaries organize the system:
 
 1. **Operational:** deterministic policy, approval checks, ticket lifecycle, causal events, and transactional state.
@@ -75,6 +77,8 @@ The application supports a ticket lifecycle rather than a one-shot classifier. A
 
 ![Knotty triage and recommendation flow, from untrusted ticket text and evidence to validated draft, human decision and audited local action](docs/assets/knotty-recommendation-architecture.svg)
 
+[Open the recommendation diagram at full size](docs/assets/knotty-recommendation-architecture.svg)
+
 - **Input remains untrusted.** Ticket text, customer replies, and embedded instructions are evidence—not policy or approval.
 - **Deterministic policy wins.** Security, outage, SLA, evidence-readiness, revision, and escalation rules cannot be overridden by an LLM.
 - **Drafting is bounded.** Optional model-generated customer text must satisfy local response contracts; unavailable or invalid provider output falls back to deterministic drafting.
@@ -85,6 +89,8 @@ The full classifier, drafting and safety details are in the [technical reference
 ### Human approval and the ticket lifecycle
 
 ![Human-governed ticket triage sequence: investigate, save a pending proposal, require explicit approval, validate and commit, then read back](docs/assets/knotty-approval-workflow.svg)
+
+[Open the approval sequence at full size](docs/assets/knotty-approval-workflow.svg)
 
 A proposal is not a ticket change. The operator first reviews evidence, risks, citations, proposed fields, and the customer-facing response. The service checks explicit actor/field authorization, source revision, routing, and lifecycle state before committing approved mutations. Readback confirms what changed and what stayed unchanged.
 
@@ -109,6 +115,8 @@ npm run evaluate:lifecycle-replay
 Hybrid is **the latest architectural expansion**, but it must not be mistaken for an operationally deployed replacement for the existing SIMPLE workflow.
 
 ![Knotty Hybrid diagnostic research architecture showing time-eligible historical evidence, B3/B4/B5 retrieval research, SIMPLE and HYBRID model lanes, blinded human review and no operational cutover](docs/assets/knotty-hybrid-research.svg)
+
+[Open the Hybrid architecture at full size](docs/assets/knotty-hybrid-research.svg)
 
 The research architecture keeps the following pieces separate:
 
@@ -152,6 +160,8 @@ The E1a harness and raw evaluation artifacts currently reside in a **separate lo
 
 ![Knotty governed knowledge evolution: completed diagnoses, candidate discovery, human promotion, immutable versions, advisory learning ledger and future evidence-gated reuse](docs/assets/knotty-knowledge-evolution.svg)
 
+[Open the knowledge evolution diagram at full size](docs/assets/knotty-knowledge-evolution.svg)
+
 Knotty can suggest reusable knowledge after supported diagnoses, but it does **not** autonomously retrain a model or convert a discovered pattern into policy.
 
 The sequence is: **observed evidence → completed diagnosis → deterministic candidate discovery → optional advisory drafting → human policy review → explicit promotion → versioned future reuse**. Candidates with incomplete or undecided evidence policies stay blocked. An approved known cause can still require new evidence in a later ticket; rejected, stale and contradicted objects do not silently become operational truth.
@@ -169,6 +179,8 @@ npm run evaluate:knowledge-holdout
 ## Persistence and reliability
 
 ![Knotty reliability architecture with command IDs, deterministic policy validation, atomic operational SQLite, isolated learning outbox and restart-safe readback](docs/assets/knotty-persistence-reliability.svg)
+
+[Open the persistence and reliability diagram at full size](docs/assets/knotty-persistence-reliability.svg)
 
 The authoritative operational plane uses **transactional SQLite**, not a set of mutable JSON/JSONL ticket records. Governed commands commit the projection/revision, ticket-local causal event, safe trace, replay result and any learning-outbox intent together.
 

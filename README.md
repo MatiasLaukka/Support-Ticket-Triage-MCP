@@ -1,4 +1,14 @@
-# Knotty
+## Knotty — The Journey
+
+Knotty began as a personal learning project to explore AI agent Skills and Model Context Protocol (MCP) servers. What started as a relatively simple experiment in connecting AI agents to tools gradually evolved into a much larger exploration of AI-assisted diagnostics, workflow orchestration, and reliable decision-making.
+
+Today, Knotty is an experimental support ticket triage and diagnostic system that combines deterministic logic with LLM-assisted reasoning, knowledge retrieval, evidence-based diagnostics, and structured, human-in-the-loop workflows. It manages tickets through a multi-stage lifecycle, from initial evaluation and diagnosis to proposed fixes, verification, and resolution.
+
+The project has also grown into a testbed for AI reliability and evaluation engineering, incorporating hybrid evaluation methods, historical evidence constraints, reproducible experiments, and safeguards against unsupported conclusions.
+
+At its core, Knotty explores a broader engineering question: **How can we build AI systems that go beyond generating plausible answers to making decisions that are traceable, testable, and grounded in evidence?**
+
+## Knotty — AI-Powered Support Ticket Triage & Diagnostics
 
 A local Model Context Protocol (MCP) server and repository-local Codex Skill
 for governed support-ticket triage. The system reads synthetic tickets and

@@ -162,11 +162,11 @@ The E1a harness and raw evaluation artifacts currently reside in a **separate lo
 
 [Open the knowledge evolution diagram at full size](docs/assets/knotty-knowledge-evolution.svg)
 
-Knotty can suggest reusable knowledge after supported diagnoses, but it does **not** autonomously retrain a model or convert a discovered pattern into policy.
+Knotty can suggest reusable knowledge after supported diagnoses, but this is **not autonomous model retraining**: no model can promote its own candidates or convert a discovered pattern into policy.
 
 The sequence is: **observed evidence → completed diagnosis → deterministic candidate discovery → optional advisory drafting → human policy review → explicit promotion → versioned future reuse**. Candidates with incomplete or undecided evidence policies stay blocked. An approved known cause can still require new evidence in a later ticket; rejected, stale and contradicted objects do not silently become operational truth.
 
-The durable advisory SQLite ledger records promotions, versions, outcomes, reuse, contradictions and history. Existing historical recommendations keep their original pinned knowledge version.
+The **SQLite learning ledger** tracks candidate **maturity and health**, explicit promotions, immutable versions, reuse events and contradictions. Previously evaluated tickets retain their original source versions, so **historical recommendations remain unchanged** even as the approved knowledge catalog evolves.
 
 ~~~powershell
 npm run demo:knowledge-evolution

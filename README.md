@@ -16,7 +16,7 @@ Knotty is an **experimental, local-first engineering project**, not a live help-
 
 The latest architectural milestone is the **Hybrid diagnostic reasoning system (H1–H5b)**. Its frozen-input, provider-neutral, replay-safe **shadow pipeline is implemented**, but it is **not fully integrated into the authoritative ticket workflow**.
 
-A **SIMPLE vs. HYBRID evaluation involving Qwen, Luna, and Sol is being prepared**. Comparable cross-model results and conclusions are **not yet available**. Earlier Qwen *semantic retrieval* evaluations are separate experiments; they must not be presented as results of this pending comparison.
+The **SIMPLE vs. HYBRID Home Assistant E1a study** compares Qwen, Luna, and Sol against historical public issue reports and time-eligible documentation. The local 24-case execution matrix has run, but **blinded human scoring and comparative analysis are not complete**. Preliminary output-validity totals are reported [below](#home-assistant-historical-case-evaluation-e1a--ongoing); no diagnostic-accuracy winner is established. Earlier Qwen *semantic retrieval* evaluations are separate experiments.
 
 | Track | Current status |
 | :--- | :--- |
@@ -26,7 +26,7 @@ A **SIMPLE vs. HYBRID evaluation involving Qwen, Luna, and Sol is being prepared
 | Governed knowledge discovery, promotion, and reuse | **Implemented**, with separate learning persistence |
 | B3 retrieval, B4 ranking, B5 applicability | **Retrieval / research / shadow lanes**, not automatic ticket authority |
 | H1–H5b Hybrid reasoning | **Latest implemented shadow architecture**; operational integration pending |
-| SIMPLE vs. HYBRID: Qwen / Luna / Sol | **Benchmark preparation in progress; no final results** |
+| SIMPLE vs. HYBRID: Qwen / Luna / Sol | **Home Assistant E1a matrix executed locally**; blinded review and analysis pending |
 
 ### Start here
 
@@ -143,7 +143,7 @@ The distinction between the paths matters:
 | :--- | :--- |
 | **SIMPLE / existing governed workflow** | Uses the deterministic and optional advisory components described below; the shared service controls actual ticket actions |
 | **HYBRID / shadow reasoning** | Evaluates frozen context and retrieval-derived evidence for research; **cannot** approve recommendations, change diagnoses, or move tickets |
-| **Planned SIMPLE vs. HYBRID comparison** | Evaluate **Qwen, Luna, and Sol** under a controlled comparison; **results still being prepared** |
+| **Ongoing SIMPLE vs. HYBRID comparison** | Home Assistant E1a local execution completed for **Qwen, Luna, and Sol**; blinded outcome scoring is pending |
 
 ~~~mermaid
 flowchart TB
@@ -162,7 +162,7 @@ flowchart TB
     Simple -. "existing production path only" .-> Authority
 ~~~
 
-**Evaluation status:** The Qwen-vs-Luna-vs-Sol, SIMPLE-vs-HYBRID benchmark is **not finished**, no comparable results have been published, and no model or architecture has been selected as a winner. Existing local Qwen *embedding/retrieval* results and prior GPT drafting comparisons are distinct evidence sets, not outcomes of this experiment. In particular, the H1–H5b implementation introduced **no live Luna/Qwen comparison and no operational cutover**.
+**Evaluation status:** The Home Assistant E1a SIMPLE-vs-HYBRID matrix has produced **preliminary technical output-validity data**, but the blinded semantic review is not finished. No diagnostic-accuracy comparison or winning model/architecture has been established. Earlier Qwen embedding/retrieval experiments and GPT drafting comparisons are separate evidence sets. H1–H5b remains shadow-only with **no operational authority cutover**. See [the Home Assistant evaluation status](#home-assistant-historical-case-evaluation-e1a--ongoing).
 
 B3 indexes and discovers candidate resources; B4 evaluates ranking policies; B5 evaluates evidence applicability; H1–H5b assembles and runs frozen hybrid reasoning opportunities. Their shadow-only boundary remains intact despite the sophistication of the research system.
 
@@ -1083,6 +1083,28 @@ It stops at the first failure, so the command is suitable for reproducing the
 evidence reported in this README without enabling live GPT providers.
 
 ## Reproducible Evaluation
+
+### Home Assistant historical-case evaluation (E1a — ongoing)
+
+Knotty is being tested beyond its **synthetic Northstar Marketing Cloud tickets** using **historical public Home Assistant GitHub issues and Home Assistant documentation**. This is a controlled external-case research dataset, **not** a live Home Assistant support integration or a benchmark endorsed by the Home Assistant project.
+
+The E1a experiment compares the **SIMPLE baseline** with the **HYBRID shadow reasoning architecture**, using **Qwen, Luna, and Sol**. Cases are divided into historical diagnostic checkpoints to evaluate how each approach handles uncertainty as evidence becomes available. Input assembly respects the case's `asOf` cutoff: later issue comments and future facts are not eligible. Historical documentation is included only when an exact, hashed version can be shown to have existed by that cutoff; missing eligible documentation is **marked unavailable**, never silently replaced by a current page.
+
+**Preliminary results: local E1a execution matrix, October 2026**
+
+| Measure | Observed status |
+| :--- | :--- |
+| Historical cases | **24** |
+| Time-scoped diagnostic checkpoints | **64** |
+| Model × architecture attempts | **384** across SIMPLE/HYBRID and Qwen/Luna/Sol |
+| Structurally valid provider outputs | **341 / 384** |
+| Invalid provider outputs | **43 / 384** — `invalid-provider-output` failures |
+| Blinded manual-review package | **341 valid-output packets** prepared for review |
+| Diagnostic accuracy / best model or architecture | **Not yet established**; full human scoring and comparative analysis remain unfinished |
+
+These counts measure **provider-output validity**, *not* whether a suggested root cause is correct, sufficiently supported, or appropriately uncertain. Invalid responses still count as reliability failures but retain **null semantic ratings** rather than being automatically scored as incorrect diagnoses. The reviewer workflow uses neutral IDs and keeps model/architecture identities and the sealed assignment mapping inaccessible to reviewers. Consequently, this README intentionally **does not publish provider- or architecture-specific rankings** before the blinded review and release checks are complete.
+
+The 24-case local run and review-material validation establish that an experiment was executed and review packets were generated, **not** that the proposed Hybrid design outperforms SIMPLE. Some case-specific scoring aids and full-matrix human adjudication are still under review. The E1a harness and raw artifacts are held in a **separate local experimental worktree**, not distributed as a finished reproducible benchmark by this repository's `main` branch. Do not confuse these provisional findings with the independently documented Qwen semantic-retrieval experiments or earlier controlled GPT comparisons.
 
 `npm run evaluate` compares
 `data/seed/sample-recommendations.json` with

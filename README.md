@@ -171,7 +171,9 @@ The retrieval work expands beyond simple similar-ticket matching:
 
 These components are valuable primarily as **research and evaluation infrastructure** at the current stage. Retrieval or model output must not be mistaken for a validated diagnosis. Shadow observations cannot approve recommendations, mutate the operational lifecycle, or bypass the human-review boundary.
 
-The optional semantic path has been evaluated locally using Qwen embeddings, with limitations recorded in the committed reports. The newest hybrid reasoning PR did **not** include live Luna/Qwen comparisons or an operational cutover.
+**Latest development — hybrid diagnostic reasoning.** The H1–H5b implementation is Knotty's newest architectural milestone. Its frozen-input, provider-neutral shadow pipeline exists, but **the Hybrid system is not yet fully integrated into the authoritative ticket workflow**. Its current role is to support controlled investigation, not to replace the SIMPLE workflow or decide ticket outcomes.
+
+The next evaluation is a **SIMPLE vs. HYBRID comparison involving Qwen, Luna, and Sol**. The benchmark and its results are **still being prepared**: no completed cross-model results, architecture-level conclusions, or winner can be reported yet. Existing local Qwen *retrieval* experiments are separate evidence and must not be confused with the upcoming SIMPLE-vs-HYBRID comparison.
 
 Explore [the B3 implementation plan](docs/superpowers/plans/2026-09-12-hybrid-retrieval-b3-implementation-plan.md), [B4 experiment](docs/superpowers/plans/2026-09-16-b4-ranking.md), [B5 applicability plan](docs/superpowers/plans/2026-09-17-b5-applicability-evaluation.md), and [hybrid reasoning PR #30](https://github.com/MatiasLaukka/Support-Ticket-Triage-MCP/pull/30).
 
@@ -195,7 +197,9 @@ npm run evaluate:lifecycle-replay
 | Optional LLM classification signals, taxonomy, diagnosis help, response drafts | **Advisory**, with validation and deterministic fallback |
 | Knowledge candidate creation, operator promotion, governed reuse | **Implemented** with separate learning authority |
 | B3 lexical/semantic resource discovery | **Implemented as a retrieval/shadow path**; no automatic operational promotion |
-| B4 ranking, B5 applicability, H-series hybrid reasoning | **Experimental, offline or shadow-only**; no policy/diagnostic authority cutover |
+| B4 ranking and B5 applicability | **Experimental**, offline or shadow-only; no policy/diagnostic authority cutover |
+| H1–H5b Hybrid reasoning — latest architectural update | **Shadow pipeline implemented**, not yet fully integrated into operational diagnosis or ticket decisions |
+| SIMPLE vs. HYBRID (Qwen / Luna / Sol) | **Comparison being prepared**; results and conclusions not yet available |
 | Live customer integrations, multi-user identity, external actions | **Not included** |
 
 This distinction matters: implementing a reasoning contract, collecting a trace, or improving a development metric is not the same as demonstrating better real-world ticket resolutions.
@@ -215,6 +219,8 @@ Knotty uses different evaluations for different questions. Keeping them separate
 | `npm run evaluate:ai-diagnosis` | Article-backed deterministic diagnoses and optional advisory diagnosis provider; local simulation by default. |
 | `npm run evaluate:retrieval` | Offline retrieval metrics and provenance, with opt-in embedding experiments. |
 | `npm run evaluate:ranking` / `npm run evaluate:applicability` | B4/B5 development evaluation and shadow-policy comparisons. |
+
+**Upcoming evaluation — SIMPLE vs. HYBRID:** Comparative testing involving **Qwen, Luna, and Sol** is in preparation. This is **not** the existing `evaluate:ai-comparison` command or the earlier Qwen semantic-retrieval evaluation. The work has not yet produced finalized, comparable benchmark results, so this README makes no claims about which model or architecture performs better.
 
 The diagnostic matrix covers **11 scenarios across eight families**; the seed corpus contains **30 synthetic tickets**. These are controlled test cases. In particular, perfect scores from the preconstructed `evaluate` fixture must **not** be advertised as accuracy on unseen customer data.
 

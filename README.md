@@ -2,6 +2,12 @@
 
 **Evidence-grounded support-ticket triage, diagnostics, and human-governed AI workflows.**
 
+Imagine a customer reporting, “The campaign editor does not work.” Knotty brings the conversation and available evidence together, identifies missing information, and can propose a diagnosis for human review. A later reply or failed fix can change that conclusion. The local workflow preserves decisions and their supporting history so they can be inspected, replayed and considered for reviewed reuse.
+
+This is an experimental project using controlled demonstration data, not a production customer-support platform.
+
+[View the Engineering Case Study (PDF)](docs/presentations/knotty-project-overview.pdf) for an illustrated overview of the architecture, engineering decisions, evaluation evidence and limitations.
+
 Knotty began as a personal experiment with **AI agent Skills** and **Model Context Protocol (MCP) servers**. Connecting an assistant to a few local tools raised harder questions: How can an agent reason about incomplete evidence? What happens when an investigation changes? Who can authorize a fix? Can earlier decisions be replayed after a restart?
 
 What began as a tool-integration exercise evolved into a **local diagnostic and workflow engine**—and, more recently, an evaluation platform for hybrid retrieval, AI reasoning, and reliability engineering.
@@ -131,6 +137,16 @@ The research architecture keeps the following pieces separate:
 The purpose is not merely to supply more context to an LLM. It's to ask whether combining **retrieval, structured evidence, diagnostic taxonomy, and model reasoning** produces better-supported hypotheses without encouraging unsupported certainty or leaking knowledge from the future.
 
 The experiments include an existing **SIMPLE baseline** and a **HYBRID shadow lane**. Provider/model identity is kept separate from the case opportunity and the human review packet. A claim that Hybrid works better requires scored, comparable results—not just successful execution.
+
+**Semantic retrieval is an optional research channel**, with working components and bounded development evaluations, rather than a proven production capability. RAG (retrieval-augmented generation) supplies retrieved material to a model; B5 applicability assessment investigates whether that material actually supports the current case. Neither retrieval nor a valid model response establishes a correct diagnosis.
+
+### Bounded Luna comparisons in the case study (29 October 2026)
+
+The presentation's fresh SIMPLE/Luna and B5/H5b HYBRID/Luna comparisons used **lexical retrieval, with semantic vectors inactive**. They ran against an isolated local evaluation revision, not an operational cutover on this repository's main branch.
+
+The separate ranking follow-up compared the full candidate pool with existing B4 lexical selection plus preserved references on **four paired synthetic cases (eight outputs)**. API-reported input tokens fell from **85,300 to 43,559**, a **48.9% reduction**, while **8/8 labeled relevant resource/case pairs were retained**. This is a bounded context-selection result. It does not establish improved diagnostic quality, semantic-retrieval benefit, or billing savings. Cache conditions differed between the two inputs, so fewer input tokens cannot be read as a measured cost saving.
+
+**Human quality review remained pending at the time of the presentation.** The PDF preserves that dated result and its limitations; it does not report a diagnostic-accuracy winner. These synthetic Luna experiments are separate from the historical Home Assistant E1a experiment below and the earlier Qwen retrieval study.
 
 [Hybrid shadow runner design](docs/superpowers/plans/2026-09-24-h5a-hybrid-shadow-runner.md) · [B3 retrieval plan](docs/superpowers/plans/2026-09-12-hybrid-retrieval-b3-implementation-plan.md) · [B4 ranking](docs/superpowers/plans/2026-09-16-b4-ranking.md) · [B5 applicability](docs/superpowers/plans/2026-09-17-b5-applicability-evaluation.md) · [Hybrid implementation PR #30](https://github.com/MatiasLaukka/Support-Ticket-Triage-MCP/pull/30)
 

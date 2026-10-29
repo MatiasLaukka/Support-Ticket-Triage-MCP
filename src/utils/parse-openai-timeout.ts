@@ -1,4 +1,4 @@
-import { StartupConfigError } from "../runtime.js";
+import { StartupConfigError } from "../errors.js";
 
 /**
  * Parses an OpenAI-compatible timeout value from environment configuration.

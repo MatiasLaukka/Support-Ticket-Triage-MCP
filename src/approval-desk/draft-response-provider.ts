@@ -28,7 +28,6 @@ import {
   buildCustomerServiceDraftingInstructions,
   buildCustomerServiceSkillContext,
 } from "./customer-service-drafting-skill.js";
-import { StartupConfigError } from "../runtime.js";
 import { parseApprovalDraftTimeoutMs } from "../utils/parse-openai-timeout.js";
 import { validateDraftQuality } from "./draft-quality-guardrails.js";
 import { buildDraftObligations, validateDraftContract } from "./draft-contract.js";

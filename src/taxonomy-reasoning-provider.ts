@@ -20,7 +20,7 @@ import {
 
 import { makeOpenAiResponsesUrl } from "./utils/normalize-url.js";
 import { parseOpenAiTimeoutMs } from "./utils/parse-openai-timeout.js";
-import { StartupConfigError } from "./runtime.js";
+import { StartupConfigError } from "./errors.js";
 
 import type {
   FetchLike,

@@ -20,3 +20,10 @@ export class DomainError extends Error {
     this.name = "DomainError";
   }
 }
+
+export class StartupConfigError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "StartupConfigError";
+  }
+}

@@ -58,6 +58,7 @@ import {
 import type { RankingPolicy } from "./retrieval/ranking-types.js";
 import { unavailableReusableKnowledge } from "./knowledge-evolution/reusable-context.js";
 import type { HybridShadowCaptureSink } from "./reasoning/hybrid-shadow-capture.js";
+import { StartupConfigError } from "./errors.js";
 
 const STARTUP_PATH_MESSAGES = {
   TRIAGE_DATA_ROOT: "TRIAGE_DATA_ROOT must not be blank.",
@@ -68,13 +69,7 @@ const STARTUP_PATH_MESSAGES = {
   OPERATIONAL_DB_PATH: "OPERATIONAL_DB_PATH must not be blank.",
 } as const;
 
-export class StartupConfigError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "StartupConfigError";
-  }
-}
-
+export { StartupConfigError } from "./errors.js";
 export type RuntimeEnvironment = NodeJS.ProcessEnv;
 
 export interface RuntimeOptions {

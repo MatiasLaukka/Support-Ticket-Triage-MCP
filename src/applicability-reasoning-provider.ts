@@ -17,7 +17,7 @@ import {
   type ApplicabilitySemanticReasoningInput,
   type ApplicabilitySemanticReasoningProvider,
 } from "./retrieval/applicability-types.js";
-import { StartupConfigError } from "./runtime.js";
+import { StartupConfigError } from "./errors.js";
 import { makeOpenAiResponsesUrl } from "./utils/normalize-url.js";
 
 export const APPLICABILITY_REASONING_INSTRUCTIONS = [

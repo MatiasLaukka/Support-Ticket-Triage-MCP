@@ -12,3 +12,28 @@ Baseline: main cc42b5c3d6e1f3f260005cd8966d006a7cc208c2. PR #35's S2/M2/M4 seque
 | Automatic reply enablement belongs to command intent; parent result records deterministic child intent and original basis. Facade runs the child after parent commit and replay can resume it. Direct markResponseSent does not itself run the child. | reliability-lifecycle-replay intent, tampering and recovery cases; lifecycle composed case. | Preserve post-command behavior and derived identity. |
 
 Implementation plan: (1) Run characterization on the unmodified implementation and commit it with this matrix. (2) Extract the operational family together with its commit/replay logic using the existing dispatcher and narrowly typed dependencies; leave facade orchestration and compatibility path intact. (3) Run targeted suites and CI-equivalent full validation, inspect dependency graph and request independent review. (4) Commit, push, and open a draft PR only after evidence is available.
+## Dependency comparison
+
+The PR #35 TypeScript AST import analysis was run against main `cc42b5c` and this extraction. It counts explicit static import/export declarations, distinguishes type-only edges, and excludes dynamic imports from strongly connected components. Source-to-source declaration edges changed from 667 to 691 as the family was separated. Both snapshots have zero static value-import strongly connected components. The pre-existing type-inclusive component containing `triage-service.ts` has the same 13 members; the new modules do not join it. The two automatic-reply dynamic imports moved with the command implementation and are outside that static SCC calculation.
+
+```mermaid
+flowchart LR
+  subgraph Before
+    BFacade[TriageService: family commands, replay, shared projections] --> BDispatcher[Shared dispatcher]
+    BDispatcher --> BUnit[Unit of work]
+    BFacade -. dynamic .-> BAuto[Automatic reply policy]
+  end
+  subgraph After
+    AFacade[TriageService facade and follow-up] --> AFamily[Recommendation lifecycle commands]
+    AFacade --> ASupport[Shared lifecycle projections]
+    AFamily --> ASupport
+    AFamily --> ADispatcher[Same shared dispatcher]
+    ADispatcher --> AUnit[Same unit of work]
+    AFamily -. dynamic .-> AAuto[Automatic reply policy]
+    AFamily -. type only .-> AContracts[Lifecycle input contracts]
+    ASupport -. type only .-> AContracts
+    AFacade -. type only .-> AContracts
+  end
+```
+
+The facade retains the legacy path and runs the automatic-reply child after its parent command. The family module owns operation identities, preparation, commit, immutable replay and transition choices. The neutral support module also serves other lifecycle families and preserves the existing facade re-exports.

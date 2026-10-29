@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   ApprovalSchema,
   TicketSchema,
@@ -10,6 +10,7 @@ import {
   type Ticket,
   type TriageRecommendation,
 } from "../src/domain.js";
+import { OperationalUnitOfWork } from "../src/operational/unit-of-work.js";
 import { OperationalSqliteStore } from "../src/operational/sqlite-store.js";
 import { hasCustomerReplyAfterRecommendation } from "../src/approval-desk/workflow-causal-context.js";
 import {
@@ -151,6 +152,57 @@ describe("transactional operational recommendation lifecycle", () => {
       await expect(testCase.invoke(harness.service, commandId)).resolves.toEqual(first);
       expect(harness.store.readWorkflowSnapshot(ticketId)).toEqual(afterLaterTicketState);
     } finally {
+      harness.store.close();
+    }
+  });
+
+  it("joins duplicate approvals and rejects conflicting reuse without another write set", async () => {
+    const harness = openHarness("pending");
+    try {
+      const commandId = command(81);
+      const input = approval({ approvedFields: ["priority"] });
+      const [first, duplicate] = await Promise.all([
+        harness.service.approve(input, { commandId }),
+        harness.service.approve(input, { commandId }),
+      ]);
+      expect(duplicate).toEqual(first);
+      const committed = harness.store.readWorkflowSnapshot(ticketId);
+      expect(committed.events.filter((event) => event.commandId === commandId)).toHaveLength(1);
+      expect(committed.ticketRevisions).toHaveLength(1);
+      expect(committed.recommendationRevisions).toHaveLength(2);
+      await expect(harness.service.approve(approval({ approvedFields: ["assignee"] }), { commandId }))
+        .rejects.toMatchObject({ code: "IDEMPOTENCY_CONFLICT" });
+      expect(harness.store.readWorkflowSnapshot(ticketId)).toEqual(committed);
+    } finally {
+      harness.store.close();
+    }
+  });
+
+  it("rolls back combined writes if result persistence fails and permits retry", async () => {
+    const harness = openHarness("pending");
+    const commandId = command(82);
+    const input = {
+      approval: approval({ approvedFields: ["customerResponse"], editedCustomerResponse: "The reviewed response is ready." }),
+      responseSent: { recommendationId, ticketId, actor: "reviewer", sentAt: "2026-08-11T12:31:00.000Z", customerResponse: "The reviewed response is ready." },
+    };
+    const before = harness.store.readWorkflowSnapshot(ticketId);
+    const persist = vi.spyOn(OperationalUnitOfWork.prototype, "persistCommandResult")
+      .mockImplementationOnce(() => { throw new Error("injected receipt failure"); });
+    try {
+      await expect(harness.service.approveAndMarkResponseSent(input, { commandId }))
+        .rejects.toThrow("injected receipt failure");
+      expect(harness.store.readWorkflowSnapshot(ticketId)).toEqual(before);
+      expect(harness.store.readCommandOutcome(commandId, () => true)).toBeUndefined();
+      persist.mockRestore();
+      const result = await harness.service.approveAndMarkResponseSent(input, { commandId });
+      const committed = harness.store.readWorkflowSnapshot(ticketId);
+      expect(committed.events.filter((event) => event.commandId === commandId).map(({ action }) => action))
+        .toEqual(["recommendation-approved", "customer-response-sent"]);
+      expect(committed.messages.filter(({ kind }) => kind === "support")).toHaveLength(1);
+      await expect(harness.service.approveAndMarkResponseSent(input, { commandId })).resolves.toEqual(result);
+      expect(harness.store.readWorkflowSnapshot(ticketId)).toEqual(committed);
+    } finally {
+      persist.mockRestore();
       harness.store.close();
     }
   });

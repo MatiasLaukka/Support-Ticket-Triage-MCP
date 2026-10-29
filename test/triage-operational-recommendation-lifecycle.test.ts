@@ -198,12 +198,56 @@ describe("transactional operational recommendation lifecycle", () => {
       const committed = harness.store.readWorkflowSnapshot(ticketId);
       expect(committed.events.filter((event) => event.commandId === commandId).map(({ action }) => action))
         .toEqual(["recommendation-approved", "customer-response-sent"]);
-      expect(committed.messages.filter(({ kind }) => kind === "support")).toHaveLength(1);
+      const events = committed.events.filter((event) => event.commandId === commandId);
+      const supportMessages = committed.messages.filter(({ kind }) => kind === "support");
+      expect(supportMessages).toHaveLength(1);
+      const receipt = harness.store.readCommandReceipt(commandId);
+      expect(receipt).toMatchObject({
+        operation: "approve-and-mark-response-sent",
+        requestHashVersion: 2,
+        result: {
+          operation: "approve-and-mark-response-sent",
+          recommendationId,
+          messageId: supportMessages[0]!.id,
+          ticketSnapshot: committed.ticket,
+          automaticCustomerReplyTicketSnapshot: before.ticket,
+          automaticCustomerReplyEnabled: true,
+          automaticCustomerReplyIntent: { kind: "none" },
+          tickets: [{ ticketId, operationalEventIds: events.map(({ id }) => id), resultingRevision: null }],
+          auditsBeforeSentEventIds: [seedEventId, events[0]!.id],
+        },
+      });
       await expect(harness.service.approveAndMarkResponseSent(input, { commandId })).resolves.toEqual(result);
       expect(harness.store.readWorkflowSnapshot(ticketId)).toEqual(committed);
     } finally {
       persist.mockRestore();
       harness.store.close();
+    }
+  });
+
+  it("recovers a lost approval response after reopening the store", async () => {
+    const harness = openHarness("pending");
+    const commandId = command(83);
+    const input = approval({ approvedFields: ["priority"] });
+    const original = await harness.service.approve(input, { commandId });
+    advanceTicket(harness.store);
+    const afterAdvance = harness.store.readWorkflowSnapshot(ticketId);
+    harness.store.close();
+
+    const reopened = OperationalSqliteStore.open(join(harness.root, "operational.sqlite"));
+    reopened.initialize();
+    try {
+      const service = new TriageService({
+        tickets: rejectingLegacyTicketStore(makeTicket()),
+        recommendations: rejectingLegacyRecommendationStore(),
+        audit: rejectingLegacyAuditStore(),
+        operationalStore: reopened,
+      });
+      await expect(service.approve(input, { commandId })).resolves.toEqual(original);
+      expect(reopened.readWorkflowSnapshot(ticketId)).toEqual(afterAdvance);
+      expect(reopened.readCommandReceipt(commandId)?.result.ticketSnapshot).toEqual(original.ticket);
+    } finally {
+      reopened.close();
     }
   });
 
@@ -642,7 +686,7 @@ function openHarness(
     uuid: () => `50000000-0000-4000-8000-${String(uuidCounter++).padStart(12, "0")}`,
     now: () => new Date("2026-08-11T12:00:00.000Z"),
   });
-  return { service, store };
+  return { service, store, root };
 }
 
 function approval(overrides: Partial<Approval> = {}): Approval {

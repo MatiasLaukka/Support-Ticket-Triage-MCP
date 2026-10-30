@@ -320,7 +320,7 @@ See [SECURITY.md](SECURITY.md) for the full threat model and [limitations in the
 | [`test/`](test/) and [`scripts/`](scripts/) | Regression tests, demos and evaluators |
 | [`.agents/skills/triaging-support-tickets/`](.agents/skills/triaging-support-tickets/) | Codex Skill and policy guidance |
 
-**Documentation:** [Engineering reference](docs/engineering-reference.md) · [Case study](docs/case-study.md) · [Demo walkthrough](docs/demo-script.md) · [Knowledge evolution](docs/knowledge-evolution.md) · [Lifecycle viewer](docs/lifecycle-replay.md) · [Evaluation guide](docs/diagnostic-evaluation-harness.md) · [Roadmap](docs/roadmap.md) · [Capture guide](docs/capture-guide.md).
+**Documentation:** [Architecture audit](docs/architecture-review/README.md) · [Engineering reference](docs/engineering-reference.md) · [Case study](docs/case-study.md) · [Demo walkthrough](docs/demo-script.md) · [Knowledge evolution](docs/knowledge-evolution.md) · [Lifecycle viewer](docs/lifecycle-replay.md) · [Evaluation guide](docs/diagnostic-evaluation-harness.md) · [Roadmap](docs/roadmap.md) · [Capture guide](docs/capture-guide.md).
 
 ---
 

@@ -1,0 +1,212 @@
+{
+  "date": "2026-10-29",
+  "baseline": "fe035ee383b6f9df1869104f8a623609d025023b",
+  "scope": "Temporary pinned public-main source snapshot; existing installed dependencies; no production source modifications",
+  "versions": {
+    "node": "24.15.0",
+    "typescript": "6.0.3",
+    "vitest": "4.1.8",
+    "betterSqlite3": "12.11.1"
+  },
+  "compiler": {
+    "noEmitTypecheck": {
+      "command": "node <existing-dependencies>/node_modules/typescript/bin/tsc -p <snapshot>/tsconfig.json --noEmit",
+      "exitCode": 0
+    },
+    "compile": {
+      "command": "node <existing-dependencies>/node_modules/typescript/bin/tsc -p <snapshot>/tsconfig.build.json",
+      "exitCode": 0
+    }
+  },
+  "focusedTests": {
+    "command": "node <existing-dependencies>/node_modules/vitest/vitest.mjs run --root <snapshot> --config <snapshot>/audit-vitest.config.ts <13 positional files below> --reporter=json --outputFile=<temp>/focused-tests.json",
+    "exitCode": 0,
+    "success": true,
+    "passed": 279,
+    "failed": 0,
+    "total": 279,
+    "files": [
+      {
+        "file": "test/b5-hybrid-reasoning-provider.test.ts",
+        "status": "passed",
+        "tests": 7
+      },
+      {
+        "file": "test/classifier.test.ts",
+        "status": "passed",
+        "tests": 60
+      },
+      {
+        "file": "test/hybrid-reasoning-input.test.ts",
+        "status": "passed",
+        "tests": 11
+      },
+      {
+        "file": "test/hybrid-shadow-capture.test.ts",
+        "status": "passed",
+        "tests": 20
+      },
+      {
+        "file": "test/hybrid-shadow-run-sqlite.test.ts",
+        "status": "passed",
+        "tests": 45
+      },
+      {
+        "file": "test/hybrid-shadow-runner.test.ts",
+        "status": "passed",
+        "tests": 15
+      },
+      {
+        "file": "test/operational-command-dispatch.test.ts",
+        "status": "passed",
+        "tests": 2
+      },
+      {
+        "file": "test/operational-unit-of-work.test.ts",
+        "status": "passed",
+        "tests": 4
+      },
+      {
+        "file": "test/policy.test.ts",
+        "status": "passed",
+        "tests": 31
+      },
+      {
+        "file": "test/reliability-command-replay.test.ts",
+        "status": "passed",
+        "tests": 19
+      },
+      {
+        "file": "test/retrieval-applicability.test.ts",
+        "status": "passed",
+        "tests": 31
+      },
+      {
+        "file": "test/retrieval-ranking.test.ts",
+        "status": "passed",
+        "tests": 24
+      },
+      {
+        "file": "test/triage-operational-evaluation.test.ts",
+        "status": "passed",
+        "tests": 10
+      }
+    ],
+    "harness": "maxWorkers=2, cache=false, cacheDir in temporary snapshot, default fetch blocked except loopback; provider transports mocked/injected"
+  },
+  "preservation": {
+    "passed": true,
+    "files": 2483,
+    "roots": [
+      {
+        "root": "delivery-checkout",
+        "headUnchanged": true,
+        "branchUnchanged": true,
+        "trackedDiffUnchanged": true,
+        "fingerprintedFiles": 289,
+        "sourceScriptTestDataBytesUnchanged": true,
+        "originalStatusEntriesPreserved": true,
+        "addedStatusOnlyAuditDocumentation": true,
+        "addedDocumentationFiles": 13
+      },
+      {
+        "root": "research/hybrid-reasoning-h2-h3",
+        "headUnchanged": true,
+        "branchUnchanged": true,
+        "trackedDiffUnchanged": true,
+        "fingerprintedFiles": 344,
+        "sourceScriptTestDataBytesUnchanged": true,
+        "originalStatusEntriesPreserved": true,
+        "addedStatusOnlyAuditDocumentation": true,
+        "addedDocumentationFiles": 0
+      },
+      {
+        "root": "research/home-assistant-e1a",
+        "headUnchanged": true,
+        "branchUnchanged": true,
+        "trackedDiffUnchanged": true,
+        "fingerprintedFiles": 410,
+        "sourceScriptTestDataBytesUnchanged": true,
+        "originalStatusEntriesPreserved": true,
+        "addedStatusOnlyAuditDocumentation": true,
+        "addedDocumentationFiles": 0
+      },
+      {
+        "root": "research/home-assistant-e0a",
+        "headUnchanged": true,
+        "branchUnchanged": true,
+        "trackedDiffUnchanged": true,
+        "fingerprintedFiles": 360,
+        "sourceScriptTestDataBytesUnchanged": true,
+        "originalStatusEntriesPreserved": true,
+        "addedStatusOnlyAuditDocumentation": true,
+        "addedDocumentationFiles": 0
+      },
+      {
+        "root": "research/e1a-matrix-review-ui-fix",
+        "headUnchanged": true,
+        "branchUnchanged": true,
+        "trackedDiffUnchanged": true,
+        "fingerprintedFiles": 427,
+        "sourceScriptTestDataBytesUnchanged": true,
+        "originalStatusEntriesPreserved": true,
+        "addedStatusOnlyAuditDocumentation": true,
+        "addedDocumentationFiles": 0
+      },
+      {
+        "root": "research/.worktrees",
+        "headUnchanged": true,
+        "branchUnchanged": true,
+        "trackedDiffUnchanged": true,
+        "fingerprintedFiles": 326,
+        "sourceScriptTestDataBytesUnchanged": true,
+        "originalStatusEntriesPreserved": true,
+        "addedStatusOnlyAuditDocumentation": true,
+        "addedDocumentationFiles": 0
+      },
+      {
+        "root": "research/.worktrees",
+        "headUnchanged": true,
+        "branchUnchanged": true,
+        "trackedDiffUnchanged": true,
+        "fingerprintedFiles": 327,
+        "sourceScriptTestDataBytesUnchanged": true,
+        "originalStatusEntriesPreserved": true,
+        "addedStatusOnlyAuditDocumentation": true,
+        "addedDocumentationFiles": 0
+      }
+    ],
+    "limitation": "Point-in-time file hashes, not a consistent SQLite backup; ignored artifacts outside src/scripts/test/data not exhaustively fingerprinted"
+  },
+  "documentation": {
+    "passed": true,
+    "markdownFiles": 6,
+    "pinnedSourceLinks": 353,
+    "localReportLinks": 39,
+    "mermaidDiagrams": 9,
+    "mermaidRenderOrParserExecuted": false,
+    "checks": [
+      "source paths and line bounds",
+      "relative report links and heading anchors",
+      "fence balance",
+      "JSON parsing",
+      "TSV counts versus static summary",
+      "Markdown trailing whitespace"
+    ],
+    "errors": []
+  },
+  "limitations": [
+    "Focused tests, not full suite or fresh CI",
+    "No real provider/model compatibility or diagnostic/comparative evaluation",
+    "No browser execution or Mermaid rendering",
+    "Selective research overlay inspection; no gold/results/reviewer changes",
+    "Three public research commit ancestry comparisons unresolved (404)"
+  ],
+  "staticHelperReproduction": {
+    "passed": true,
+    "scannedFiles": 315,
+    "explicitDeclarations": 2128,
+    "comparison": "Full generated raw analysis JSON identical on a second execution of the delivered helper"
+  },
+  "recordScope": "Original architecture-audit validation at the audited commit; publication checks are recorded separately in publication.json."
+}

@@ -1,0 +1,315 @@
+{
+  "date": "2026-10-29",
+  "recordScope": "Publication reconciliation and validation; original audit test results remain in validation.json",
+  "auditedBaseline": "fe035ee383b6f9df1869104f8a623609d025023b",
+  "verifiedRemoteMain": "fe035ee383b6f9df1869104f8a623609d025023b",
+  "comparison": {
+    "status": "identical",
+    "aheadBy": 0,
+    "behindBy": 0,
+    "changedFiles": []
+  },
+  "branch": "docs/architecture-audit-publication",
+  "sourceAuditFiles": [
+    {
+      "file": "evidence/baseline.json",
+      "sha256": "2f1851b084ac0be763252cbcddecee34f6824c80a69a69e159b82d046710045b"
+    },
+    {
+      "file": "evidence/imports.tsv",
+      "sha256": "71a5fde8f0ea52c126275202950e9954daef7dc303e51b2603941ecf74fd5cbf"
+    },
+    {
+      "file": "evidence/module-inventory.tsv",
+      "sha256": "5e07493c591588b74a28c4f87af2676b5d6652d0f75d7548f5ba24e5bac82990"
+    },
+    {
+      "file": "evidence/README.md",
+      "sha256": "20454838d05e38da2e7bac0f2676b61e990b37b98425c79b2ecdaa36da165bfb"
+    },
+    {
+      "file": "evidence/static-analysis.cjs",
+      "sha256": "b6ef064b473cc40218e176b01dc63458f04e1685a7298c562b9137f8c1b12af3"
+    },
+    {
+      "file": "evidence/static-summary.json",
+      "sha256": "70f49ecba4a99433042e0966e6143cb40d078c0279091c671ddd890ce09d63e9"
+    },
+    {
+      "file": "evidence/symbols.tsv",
+      "sha256": "75cca5bd2ece81442f9d86a43aa3412bd598543ae929be24e6ef05016f3749e5"
+    },
+    {
+      "file": "evidence/validation.json",
+      "sha256": "39dbf1cc4f5cd85c7f77ac5ebae9bc50a7a5636b1f72e3adc0e018444ce84a10"
+    },
+    {
+      "file": "execution-flows.md",
+      "sha256": "a5ed035a9ee6adb7d532a712dff6b69e27ab1cab275b7fbd8ecefcb5b87b9b56"
+    },
+    {
+      "file": "learning-guide.md",
+      "sha256": "5a80412948a12919ac6cf2660852b1608a8083a0ae59ab6e27991696dbf8ffea"
+    },
+    {
+      "file": "module-map.md",
+      "sha256": "6dcf5d4509b6f0602605e6c4f90b2dbe7544c28ddcbcafcfde7665890d0b0140"
+    },
+    {
+      "file": "README.md",
+      "sha256": "173a0fff53035e3b531793808a24272b1a86bf944daf170b2cd77d839122b770"
+    },
+    {
+      "file": "technical-debt.md",
+      "sha256": "86f5773aec8f457566e6c5056fc7d7ac0671643080666393deaf7b4d1bfcadd3"
+    }
+  ],
+  "redactions": {
+    "workstationPaths": "replaced with portable labels/placeholders",
+    "unrelatedWorktreeInventory": "omitted",
+    "nonportableResearchLinks": "replaced with retained file-hash/line/symbol provenance records"
+  },
+  "limits": [
+    "Original focused runtime tests were not re-run for this documentation-only publication",
+    "Research source files behind provenance records are not public; ancestry remains explicitly unresolved where observed"
+  ],
+  "validation": {
+    "passed": true,
+    "auditedBaseline": "fe035ee383b6f9df1869104f8a623609d025023b",
+    "markdownFiles": 8,
+    "pinnedSourceLinks": 353,
+    "reportLinks": 91,
+    "mermaidBlocks": 9,
+    "svgFiles": 9,
+    "renderer": {
+      "version": "11.12.2",
+      "rendered": 9,
+      "total": 9,
+      "browserErrors": 0
+    },
+    "privacy": {
+      "workstationPaths": 0,
+      "credentialSignatures": 0,
+      "reviewedScope": "All publication files; allowlisted document/evidence/SVG types; manual review of metadata and generated inventories"
+    },
+    "staticEvidenceReproduced": true,
+    "allowedChangesOnly": true,
+    "rootReadmeSingleLinkOnly": true,
+    "includedFiles": [
+      "README.md",
+      "docs/architecture-review/README.md",
+      "docs/architecture-review/diagrams/README.md",
+      "docs/architecture-review/diagrams/classification-preparation.svg",
+      "docs/architecture-review/diagrams/e1a-comparison.svg",
+      "docs/architecture-review/diagrams/human-approval.svg",
+      "docs/architecture-review/diagrams/hybrid-shadow-execution.svg",
+      "docs/architecture-review/diagrams/module-dependencies.svg",
+      "docs/architecture-review/diagrams/operational-evaluation.svg",
+      "docs/architecture-review/diagrams/retrieval-shadow-dependencies.svg",
+      "docs/architecture-review/diagrams/runtime-import-cycle.svg",
+      "docs/architecture-review/diagrams/state-ownership.svg",
+      "docs/architecture-review/evidence/README.md",
+      "docs/architecture-review/evidence/baseline.json",
+      "docs/architecture-review/evidence/imports.tsv",
+      "docs/architecture-review/evidence/module-inventory.tsv",
+      "docs/architecture-review/evidence/publication.json",
+      "docs/architecture-review/evidence/render-diagrams.cjs",
+      "docs/architecture-review/evidence/research-source-index.md",
+      "docs/architecture-review/evidence/static-analysis.cjs",
+      "docs/architecture-review/evidence/static-summary.json",
+      "docs/architecture-review/evidence/symbols.tsv",
+      "docs/architecture-review/evidence/validation.json",
+      "docs/architecture-review/evidence/verify-publication.cjs",
+      "docs/architecture-review/execution-flows.md",
+      "docs/architecture-review/learning-guide.md",
+      "docs/architecture-review/module-map.md",
+      "docs/architecture-review/technical-debt.md"
+    ],
+    "errors": []
+  },
+  "rendering": {
+    "renderer": "mermaid",
+    "version": "11.12.2",
+    "browser": "156.0.4314.50",
+    "mode": "Headless Microsoft Edge through existing Playwright; local renderer assets; neutral theme; strict security; htmlLabels disabled",
+    "rendered": 9,
+    "total": 9,
+    "browserErrors": [],
+    "diagrams": [
+      {
+        "id": "module-dependencies",
+        "source": "module-map.md",
+        "sourceLine": 11,
+        "sourceSha256": "ebb5225244d6f3b17d71e3de1d0a3d7a41ea20ac06714b28294046e101105450",
+        "svg": "diagrams/module-dependencies.svg",
+        "svgSha256": "66b6805f757e9d4673eb3c357289e0a7e4a6c9df72e27a516967011d63aee699",
+        "rendered": true,
+        "viewBox": "0 -24 1708.3203125 659",
+        "width": 1709,
+        "height": 659,
+        "textElements": 34
+      },
+      {
+        "id": "retrieval-shadow-dependencies",
+        "source": "module-map.md",
+        "sourceLine": 94,
+        "sourceSha256": "11d34406d0501a42349765571ee5fce235a976002d264dcc835350ce3267481a",
+        "svg": "diagrams/retrieval-shadow-dependencies.svg",
+        "svgSha256": "5f10e8011b225281e608864ed51e3f95ade9a85f486d5d0a564b75b92dfbf8bd",
+        "rendered": true,
+        "viewBox": "0 -24 1850.0703125 1074.5",
+        "width": 1851,
+        "height": 1075,
+        "textElements": 30
+      },
+      {
+        "id": "runtime-import-cycle",
+        "source": "module-map.md",
+        "sourceLine": 138,
+        "sourceSha256": "a22a08bfbcceb34b7712814aa3a94c11217d7d284ea73a2d22af59f983983503",
+        "svg": "diagrams/runtime-import-cycle.svg",
+        "svgSha256": "414624b9619da7a051c91e1d129a83c92c4528020934760b77369788baf6cf31",
+        "rendered": true,
+        "viewBox": "0 45.69999694824219 1603.96875 291.04998779296875",
+        "width": 1604,
+        "height": 292,
+        "textElements": 14
+      },
+      {
+        "id": "operational-evaluation",
+        "source": "execution-flows.md",
+        "sourceLine": 11,
+        "sourceSha256": "d0bc023dc45052cacb331e8fbad65995d9ee6851cf42bc754b74aa6739e24762",
+        "svg": "diagrams/operational-evaluation.svg",
+        "svgSha256": "9750878110972084ee3a6c94b31877274070c3d765fc5c7d374447ef583caa7b",
+        "rendered": true,
+        "viewBox": "-50 -10 1670 2018",
+        "width": 1670,
+        "height": 2018,
+        "textElements": 80
+      },
+      {
+        "id": "classification-preparation",
+        "source": "execution-flows.md",
+        "sourceLine": 65,
+        "sourceSha256": "f746818ad0c368c9cf10e7ec9a85e0e1f936a641e3ec1607be1277a9cd905772",
+        "svg": "diagrams/classification-preparation.svg",
+        "svgSha256": "a5d9ec7f6853ace2b9c39d771507b1cdef2738bb87025224da56cd57ca2149f4",
+        "rendered": true,
+        "viewBox": "0 24 785.703125 1391.114013671875",
+        "width": 786,
+        "height": 1392,
+        "textElements": 24
+      },
+      {
+        "id": "human-approval",
+        "source": "execution-flows.md",
+        "sourceLine": 89,
+        "sourceSha256": "ff659d5861c27238ad05f974fd13f62cb790343313721d7e8859f7fb8c00be9c",
+        "svg": "diagrams/human-approval.svg",
+        "svgSha256": "9b9b4624a2f89e160406e39cd7e60262b8305f83d0d1019e527b22b6cdcb02e3",
+        "rendered": true,
+        "viewBox": "-50 -10 1081 1291",
+        "width": 1081,
+        "height": 1291,
+        "textElements": 55
+      },
+      {
+        "id": "hybrid-shadow-execution",
+        "source": "execution-flows.md",
+        "sourceLine": 127,
+        "sourceSha256": "dbc61a1b656d1323d96d9a5e25ba6d0db7df32a6e8cac981b7e85c7cee2f6c36",
+        "svg": "diagrams/hybrid-shadow-execution.svg",
+        "svgSha256": "997176aeb7fb4f75fc5e37c4d6af633956725f9cb5614517782e0ba7040643ae",
+        "rendered": true,
+        "viewBox": "-53 -10 2079 2099",
+        "width": 2079,
+        "height": 2099,
+        "textElements": 100
+      },
+      {
+        "id": "e1a-comparison",
+        "source": "execution-flows.md",
+        "sourceLine": 190,
+        "sourceSha256": "640be5b888226521cba96f61961e3b3ee8a3442ab60b57a5589220d6a780fb88",
+        "svg": "diagrams/e1a-comparison.svg",
+        "svgSha256": "88a2b35d06331b9da9fad6ade943296082cd1cfa8fbea5d2ebc0b503e2695e3c",
+        "rendered": true,
+        "viewBox": "0 24 3328.90625 181.60000610351562",
+        "width": 3329,
+        "height": 182,
+        "textElements": 23
+      },
+      {
+        "id": "state-ownership",
+        "source": "execution-flows.md",
+        "sourceLine": 216,
+        "sourceSha256": "b7632d43bd55fd13bb57cc3cbfb8eb70cff19fb0154bb95a9d313975f90cb529",
+        "svg": "diagrams/state-ownership.svg",
+        "svgSha256": "fddc2652b0e0c2f6af4e4f69b4e8c0dedb307b0c6c634a68ab86dd69bc35bbd0",
+        "rendered": true,
+        "viewBox": "0 24 1565.822265625 1309.39990234375",
+        "width": 1566,
+        "height": 1310,
+        "textElements": 35
+      }
+    ],
+    "visuallyReviewed": true,
+    "additionalCompatibilityCheck": {
+      "renderer": "mermaid",
+      "version": "12.2.0",
+      "rendered": 9,
+      "total": 9,
+      "scope": "Same repaired Mermaid source blocks; SVG publication artifacts use 11.12.2"
+    }
+  },
+  "preservation": {
+    "passed": true,
+    "existingWorktrees": 40,
+    "existingFilesFingerprinted": 28669,
+    "mismatches": [],
+    "scope": "All tracked and nonignored untracked files plus data/experiments/reports in all pre-existing worktrees; original HEAD, branch, status and tracked diffs retained; private fingerprint manifest not published",
+    "limit": "Filesystem byte comparisons are not a transactionally consistent database backup; ignored files outside the named state directories were not exhaustively hashed"
+  },
+  "publicationScope": {
+    "allowedPaths": [
+      "README.md",
+      "docs/architecture-review/**"
+    ],
+    "rootReadme": "One navigation link; original CRLF bytes retained",
+    "runtimeTestsResearchApplicationStateChanged": false
+  },
+  "whitespaceCheck": "git -c core.whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol diff --cached --check (preserves existing README CRLF convention)",
+  "manualPrivacyReview": "Generated TSVs reproduced from public audited source; metadata reviewed and workstation paths/unrelated inventory removed; research provenance contains source file hashes and symbols only; no credentials or sensitive evaluation input/output bodies found",
+  "files": [
+    "README.md",
+    "docs/architecture-review/README.md",
+    "docs/architecture-review/diagrams/README.md",
+    "docs/architecture-review/diagrams/classification-preparation.svg",
+    "docs/architecture-review/diagrams/e1a-comparison.svg",
+    "docs/architecture-review/diagrams/human-approval.svg",
+    "docs/architecture-review/diagrams/hybrid-shadow-execution.svg",
+    "docs/architecture-review/diagrams/module-dependencies.svg",
+    "docs/architecture-review/diagrams/operational-evaluation.svg",
+    "docs/architecture-review/diagrams/retrieval-shadow-dependencies.svg",
+    "docs/architecture-review/diagrams/runtime-import-cycle.svg",
+    "docs/architecture-review/diagrams/state-ownership.svg",
+    "docs/architecture-review/evidence/README.md",
+    "docs/architecture-review/evidence/baseline.json",
+    "docs/architecture-review/evidence/imports.tsv",
+    "docs/architecture-review/evidence/module-inventory.tsv",
+    "docs/architecture-review/evidence/publication.json",
+    "docs/architecture-review/evidence/render-diagrams.cjs",
+    "docs/architecture-review/evidence/research-source-index.md",
+    "docs/architecture-review/evidence/static-analysis.cjs",
+    "docs/architecture-review/evidence/static-summary.json",
+    "docs/architecture-review/evidence/symbols.tsv",
+    "docs/architecture-review/evidence/validation.json",
+    "docs/architecture-review/evidence/verify-publication.cjs",
+    "docs/architecture-review/execution-flows.md",
+    "docs/architecture-review/learning-guide.md",
+    "docs/architecture-review/module-map.md",
+    "docs/architecture-review/technical-debt.md"
+  ],
+  "whitespaceCheckPassed": true
+}

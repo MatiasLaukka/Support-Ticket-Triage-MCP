@@ -1,0 +1,333 @@
+{
+  "date": "2026-10-29",
+  "deliveryHead": "f4df210443151f70d94f4e47efe65b18fce18e96",
+  "deliveryBranch": "main",
+  "cachedOriginMain": "9cbf07281d1160b4e804518e183caf6a6962b181",
+  "cachedBehindCount": 109,
+  "origin": "https://github.com/MatiasLaukka/Support-Ticket-Triage-MCP.git",
+  "publicDefaultBranch": "main",
+  "publicHead": "fe035ee383b6f9df1869104f8a623609d025023b",
+  "publicCommitTimeUtc": "2026-10-29T12:54:50Z",
+  "archiveSha256": "61732093d6ff0739106f02534f7e108a3259ebcc017852759abe820e98829c83",
+  "deliveryStatusSummary": "No tracked modifications initially; untracked work preserved",
+  "worktrees": [
+    {
+      "root": "delivery-checkout",
+      "head": "f4df210443151f70d94f4e47efe65b18fce18e96",
+      "branch": "main",
+      "trackedStatus": [],
+      "untrackedFiles": 5347,
+      "filesFingerprinted": 289,
+      "srcComparison": {
+        "method": "CRLF and LF normalized; compare each public-main src file against observed worktree contents; missing research-only files outside this set are not counted",
+        "identical": 102,
+        "changed": [
+          "src/approval-desk/http.ts",
+          "src/evaluation-command.ts",
+          "src/evaluation-oracle.ts",
+          "src/runtime.ts",
+          "src/server.ts"
+        ],
+        "missing": [
+          "src/applicability-reasoning-provider.ts",
+          "src/approval-desk/diagnostic-playbook-descriptors.ts",
+          "src/reasoning/b5-hybrid-reasoning-provider.ts",
+          "src/reasoning/canonical-json.ts",
+          "src/reasoning/hybrid-shadow-capture.ts",
+          "src/reasoning/hybrid-shadow-runner.ts",
+          "src/reasoning/input-assembler.ts",
+          "src/reasoning/shadow-run-types.ts",
+          "src/reasoning/sqlite-shadow-run-repository.ts",
+          "src/reasoning/types.ts",
+          "src/retrieval/applicability-artifact-path.ts",
+          "src/retrieval/applicability-capture.ts",
+          "src/retrieval/applicability-case-safety.ts",
+          "src/retrieval/applicability-cases.ts",
+          "src/retrieval/applicability-evaluation.ts",
+          "src/retrieval/applicability-evidence.ts",
+          "src/retrieval/applicability-types.ts",
+          "src/retrieval/applicability.ts",
+          "src/retrieval/deterministic-references.ts",
+          "src/retrieval/embedding-provider.ts",
+          "src/retrieval/evaluation-fixtures.ts",
+          "src/retrieval/evaluation.ts",
+          "src/retrieval/execution.ts",
+          "src/retrieval/index-manager.ts",
+          "src/retrieval/ranking-artifact-path.ts",
+          "src/retrieval/ranking-capture.ts",
+          "src/retrieval/ranking-types.ts",
+          "src/retrieval/ranking.ts",
+          "src/retrieval/readiness-cases.ts",
+          "src/retrieval/representations.ts",
+          "src/retrieval/search.ts",
+          "src/retrieval/section-evidence.ts",
+          "src/retrieval/sources.ts",
+          "src/retrieval/sqlite-store.ts",
+          "src/retrieval/stage.ts",
+          "src/retrieval/types.ts"
+        ]
+      },
+      "publicAncestry": {
+        "status": "not-requested"
+      },
+      "researchFileFingerprints": {}
+    },
+    {
+      "root": "research/hybrid-reasoning-h2-h3",
+      "head": "457fb2b60dc5e98de593edc7ee21fdb346929a58",
+      "branch": "codex/hybrid-reasoning-h2-h3",
+      "trackedStatus": [],
+      "untrackedFiles": 0,
+      "filesFingerprinted": 344,
+      "srcComparison": {
+        "method": "CRLF and LF normalized; compare each public-main src file against observed worktree contents; missing research-only files outside this set are not counted",
+        "identical": 143,
+        "changed": [],
+        "missing": []
+      },
+      "publicAncestry": {
+        "status": "behind",
+        "ahead": 0,
+        "mergeBase": "457fb2b60dc5e98de593edc7ee21fdb346929a58",
+        "head": "457fb2b60dc5e98de593edc7ee21fdb346929a58",
+        "behind": 26
+      },
+      "researchFileFingerprints": {}
+    },
+    {
+      "root": "research/home-assistant-e1a",
+      "head": "6a60fdd50bd96ac679366bac6b87f00c82d237cc",
+      "branch": "experiment/home-assistant-e1a-diagnostic-comparison",
+      "trackedStatus": [
+        " M docs/experiments/home-assistant-e1a-review-ui.md",
+        " M scripts/home-assistant-e1a.ts",
+        " M scripts/home-assistant-e1a/inputs.ts",
+        " M scripts/home-assistant-e1a/review-ui-page.ts",
+        " M scripts/home-assistant-e1a/runners.ts",
+        " M test/home-assistant-e1a-review-ui.test.ts"
+      ],
+      "untrackedFiles": 31,
+      "filesFingerprinted": 410,
+      "srcComparison": {
+        "method": "CRLF and LF normalized; compare each public-main src file against observed worktree contents; missing research-only files outside this set are not counted",
+        "identical": 137,
+        "changed": [
+          "src/applicability-reasoning-provider.ts",
+          "src/reasoning/b5-hybrid-reasoning-provider.ts",
+          "src/reasoning/shadow-run-types.ts",
+          "src/retrieval/applicability-types.ts",
+          "src/retrieval/applicability.ts",
+          "src/retrieval/stage.ts"
+        ],
+        "missing": []
+      },
+      "publicAncestry": {
+        "status": "unresolved",
+        "head": "6a60fdd50bd96ac679366bac6b87f00c82d237cc",
+        "http": 404
+      },
+      "researchFileFingerprints": {
+        "scripts/home-assistant-e1a/evaluation.ts": "ec40f2625b1b2c022622483b1488a83dddd117e9865567f139e8cd00d25a2a5e",
+        "scripts/home-assistant-e1a/inputs.ts": "88e313a01be128fb3a37be5dc9ef0a15abb830914a6d029d87cd146cda3f08c6",
+        "scripts/home-assistant-e1a/results.ts": "4fef5f4f2d3c4084abe1317c0b0b503f66a9c9a6d400e9da7c7e8e7698d9cda7",
+        "scripts/home-assistant-e1a/runners.ts": "8b812202dc849cb3ed4a95cfcd74100277c7bba7882ab2d9b78e2d4d449c8fb6"
+      }
+    },
+    {
+      "root": "research/home-assistant-e0a",
+      "head": "d424d2ade602e8273b47f2227655c021d74e2ea1",
+      "branch": "experiment/home-assistant-e0a",
+      "trackedStatus": [],
+      "untrackedFiles": 0,
+      "filesFingerprinted": 360,
+      "srcComparison": {
+        "method": "CRLF and LF normalized; compare each public-main src file against observed worktree contents; missing research-only files outside this set are not counted",
+        "identical": 143,
+        "changed": [],
+        "missing": []
+      },
+      "publicAncestry": {
+        "status": "unresolved",
+        "head": "d424d2ade602e8273b47f2227655c021d74e2ea1",
+        "http": 404
+      },
+      "researchFileFingerprints": {}
+    },
+    {
+      "root": "research/e1a-matrix-review-ui-fix",
+      "head": "6a60fdd50bd96ac679366bac6b87f00c82d237cc",
+      "branch": "",
+      "trackedStatus": [
+        " M scripts/home-assistant-e1a-review-ui.ts",
+        " M scripts/home-assistant-e1a/review-ui-page.ts",
+        " M scripts/home-assistant-e1a/review-ui.ts",
+        " M test/home-assistant-e1a-review-ui.test.ts"
+      ],
+      "untrackedFiles": 886,
+      "filesFingerprinted": 427,
+      "srcComparison": {
+        "method": "CRLF and LF normalized; compare each public-main src file against observed worktree contents; missing research-only files outside this set are not counted",
+        "identical": 137,
+        "changed": [
+          "src/applicability-reasoning-provider.ts",
+          "src/reasoning/b5-hybrid-reasoning-provider.ts",
+          "src/reasoning/shadow-run-types.ts",
+          "src/retrieval/applicability-types.ts",
+          "src/retrieval/applicability.ts",
+          "src/retrieval/stage.ts"
+        ],
+        "missing": []
+      },
+      "publicAncestry": {
+        "status": "unresolved",
+        "head": "6a60fdd50bd96ac679366bac6b87f00c82d237cc",
+        "http": 404
+      },
+      "researchFileFingerprints": {
+        "scripts/home-assistant-e1a/evaluation.ts": "ec40f2625b1b2c022622483b1488a83dddd117e9865567f139e8cd00d25a2a5e",
+        "scripts/home-assistant-e1a/inputs.ts": "7ec1dcbc83aa787ddd9001a6c0873f0043ec7e173482f2451c3bc22bf468c1a7",
+        "scripts/home-assistant-e1a/results.ts": "4fef5f4f2d3c4084abe1317c0b0b503f66a9c9a6d400e9da7c7e8e7698d9cda7",
+        "scripts/home-assistant-e1a/runners.ts": "318a9b2aec9c99268ac8198c63901c503d5b27e2d54201d67d9372ca3271d2d5"
+      }
+    },
+    {
+      "root": "research/.worktrees",
+      "head": "b346e04a8c49cea35ff471317a216857c4291ed4",
+      "branch": "codex/b5-applicability-implementation",
+      "trackedStatus": [],
+      "untrackedFiles": 30,
+      "filesFingerprinted": 326,
+      "srcComparison": {
+        "method": "CRLF and LF normalized; compare each public-main src file against observed worktree contents; missing research-only files outside this set are not counted",
+        "identical": 121,
+        "changed": [
+          "src/applicability-reasoning-provider.ts",
+          "src/approval-desk/http.ts",
+          "src/evaluation-command.ts",
+          "src/retrieval/applicability-cases.ts",
+          "src/retrieval/applicability-evidence.ts",
+          "src/retrieval/applicability-types.ts",
+          "src/retrieval/applicability.ts",
+          "src/retrieval/sqlite-store.ts",
+          "src/retrieval/stage.ts",
+          "src/runtime.ts",
+          "src/server.ts"
+        ],
+        "missing": [
+          "src/reasoning/b5-hybrid-reasoning-provider.ts",
+          "src/reasoning/canonical-json.ts",
+          "src/reasoning/hybrid-shadow-capture.ts",
+          "src/reasoning/hybrid-shadow-runner.ts",
+          "src/reasoning/input-assembler.ts",
+          "src/reasoning/shadow-run-types.ts",
+          "src/reasoning/sqlite-shadow-run-repository.ts",
+          "src/reasoning/types.ts",
+          "src/retrieval/applicability-case-safety.ts",
+          "src/retrieval/deterministic-references.ts",
+          "src/retrieval/execution.ts"
+        ]
+      },
+      "publicAncestry": {
+        "status": "behind",
+        "ahead": 0,
+        "mergeBase": "b346e04a8c49cea35ff471317a216857c4291ed4",
+        "head": "b346e04a8c49cea35ff471317a216857c4291ed4",
+        "behind": 38
+      },
+      "researchFileFingerprints": {}
+    },
+    {
+      "root": "research/.worktrees",
+      "head": "054bdb5c2e21b95a6777c811785a58af50472e25",
+      "branch": "qwen/h1-refresh-failure-test",
+      "trackedStatus": [],
+      "untrackedFiles": 0,
+      "filesFingerprinted": 327,
+      "srcComparison": {
+        "method": "CRLF and LF normalized; compare each public-main src file against observed worktree contents; missing research-only files outside this set are not counted",
+        "identical": 121,
+        "changed": [
+          "src/applicability-reasoning-provider.ts",
+          "src/approval-desk/http.ts",
+          "src/evaluation-command.ts",
+          "src/retrieval/applicability-cases.ts",
+          "src/retrieval/applicability-evidence.ts",
+          "src/retrieval/applicability-types.ts",
+          "src/retrieval/applicability.ts",
+          "src/retrieval/execution.ts",
+          "src/retrieval/sqlite-store.ts",
+          "src/retrieval/stage.ts",
+          "src/runtime.ts",
+          "src/server.ts"
+        ],
+        "missing": [
+          "src/reasoning/b5-hybrid-reasoning-provider.ts",
+          "src/reasoning/canonical-json.ts",
+          "src/reasoning/hybrid-shadow-capture.ts",
+          "src/reasoning/hybrid-shadow-runner.ts",
+          "src/reasoning/input-assembler.ts",
+          "src/reasoning/shadow-run-types.ts",
+          "src/reasoning/sqlite-shadow-run-repository.ts",
+          "src/reasoning/types.ts",
+          "src/retrieval/applicability-case-safety.ts",
+          "src/retrieval/deterministic-references.ts"
+        ]
+      },
+      "publicAncestry": {
+        "status": "unresolved",
+        "head": "054bdb5c2e21b95a6777c811785a58af50472e25",
+        "http": 404
+      },
+      "researchFileFingerprints": {}
+    }
+  ],
+  "additionalWorktreesMetadataOnly": [
+    {
+      "root": "research/.worktrees",
+      "head": "1c68906052106864aba97652e9bf70e02b257c96",
+      "status": [],
+      "branch": "codex/hybrid-retrieval-b3",
+      "ancestorOfCachedMain": true
+    },
+    {
+      "root": "research/.worktrees",
+      "head": "fc43aca3627c16fe383f084bc13fe9916ad8a13e",
+      "status": [],
+      "branch": "codex/b3-semantic-evaluation",
+      "ancestorOfCachedMain": true
+    },
+    {
+      "root": "research/.worktrees",
+      "head": "fe668e54c5a8bf26a1583138972ce12fdea29f37",
+      "status": [],
+      "branch": "codex/b4-ranking-implementation",
+      "ancestorOfCachedMain": true
+    },
+    {
+      "root": "research/.worktrees",
+      "head": "a6318f5047dab92ba42d06882766ba3c64dc5832",
+      "status": [],
+      "branch": "codex/knowledge-readiness-b4",
+      "ancestorOfCachedMain": true
+    },
+    {
+      "root": "research/.worktrees",
+      "head": "3f32faf9afb2f8a4f88a83e31f2934eb656645fc",
+      "status": [],
+      "branch": "feature/reliability-r1g-task-9",
+      "ancestorOfCachedMain": true
+    },
+    {
+      "root": "research/.worktrees",
+      "head": "e0db92ce363e7c01bcce2135ee1d87d3009a2947",
+      "status": [],
+      "branch": "feature/evaluation-oracle-foundation",
+      "ancestorOfCachedMain": true
+    }
+  ],
+  "inventoryScope": "Original audit-selected worktrees only. Workstation prefixes and unrelated raw worktree inventory omitted for publication; commit/branch/status/content comparison evidence retained.",
+  "publicationRedactions": [
+    "Absolute workstation paths replaced by portable location labels",
+    "Unrelated worktree names and raw inventory omitted"
+  ]
+}

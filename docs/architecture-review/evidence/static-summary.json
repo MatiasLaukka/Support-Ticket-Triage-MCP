@@ -1,0 +1,242 @@
+{
+  "baseline": "fe035ee383b6f9df1869104f8a623609d025023b",
+  "typescript": "6.0.3",
+  "method": "TypeScript createSourceFile AST; explicit import/export declarations only; relative .js -> .ts resolution; calls are syntax, not resolved runtime dispatch",
+  "counts": {
+    "scannedFiles": 315,
+    "srcFiles": 143,
+    "explicitDeclarations": 2128,
+    "srcToSrcDeclarations": 666
+  },
+  "sccIncludingTypes": [
+    [
+      "src/approval-desk/classifier.ts",
+      "src/approval-desk/conversation-context.ts",
+      "src/approval-desk/known-cause-catalog.ts",
+      "src/approval-desk/known-event-catalog.ts",
+      "src/classifier-confidence.ts",
+      "src/domain.ts",
+      "src/taxonomy-inference.ts"
+    ],
+    [
+      "src/retrieval/ranking-types.ts",
+      "src/retrieval/types.ts"
+    ],
+    [
+      "src/approval-desk/ai-evaluation.ts",
+      "src/approval-desk/classification-reasoning-provider.ts",
+      "src/approval-desk/controlled-evaluation-providers.ts",
+      "src/approval-desk/customer-service-drafting-skill.ts",
+      "src/approval-desk/diagnosis-reasoning-provider.ts",
+      "src/approval-desk/diagnosis-review.ts",
+      "src/approval-desk/draft-contract.ts",
+      "src/approval-desk/draft-quality-guardrails.ts",
+      "src/approval-desk/draft-response-provider.ts",
+      "src/approval-desk/evidence-readiness.ts",
+      "src/approval-desk/recommendation-builder.ts",
+      "src/knowledge-evolution/candidate-draft-provider.ts",
+      "src/knowledge-evolution/completed-diagnosis-source.ts",
+      "src/knowledge-evolution/knowledge-object-repository.ts",
+      "src/knowledge-evolution/knowledge-version-store.ts",
+      "src/knowledge-evolution/openai-candidate-draft-provider.ts",
+      "src/knowledge-evolution/reusable-context.ts",
+      "src/knowledge-evolution/service.ts",
+      "src/knowledge-evolution/sqlite-knowledge-evolution-store.ts",
+      "src/operational/import.ts",
+      "src/operational/runtime-repositories.ts",
+      "src/operational/sqlite-store.ts",
+      "src/reasoning/hybrid-shadow-capture.ts",
+      "src/reasoning/shadow-run-types.ts",
+      "src/retrieval/deterministic-references.ts",
+      "src/retrieval/sources.ts",
+      "src/retrieval/stage.ts",
+      "src/runtime.ts",
+      "src/taxonomy-reasoning-provider.ts",
+      "src/taxonomy-stage.ts",
+      "src/triage-service.ts",
+      "src/utils/parse-openai-timeout.ts"
+    ]
+  ],
+  "sccExcludingExplicitTypes": [
+    [
+      "src/approval-desk/controlled-evaluation-providers.ts",
+      "src/approval-desk/draft-response-provider.ts",
+      "src/knowledge-evolution/candidate-draft-provider.ts",
+      "src/knowledge-evolution/service.ts",
+      "src/runtime.ts",
+      "src/utils/parse-openai-timeout.ts"
+    ]
+  ],
+  "dynamicExpressions": [
+    {
+      "file": "src/triage-service.ts",
+      "expressions": [
+        {
+          "line": 1509,
+          "expression": "import(\n      \"./approval-desk/diagnosis-review.js\"\n    )"
+        },
+        {
+          "line": 2230,
+          "expression": "import(\n      \"./approval-desk/automatic-customer-replies.js\"\n    )"
+        },
+        {
+          "line": 2396,
+          "expression": "import(\n      \"./approval-desk/automatic-customer-replies.js\"\n    )"
+        },
+        {
+          "line": 2887,
+          "expression": "import(\"./approval-desk/diagnosis-review.js\")"
+        },
+        {
+          "line": 2888,
+          "expression": "import(\"./approval-desk/workflow-guidance.js\")"
+        },
+        {
+          "line": 2889,
+          "expression": "import(\"./approval-desk/workflow-read-model.js\")"
+        },
+        {
+          "line": 2890,
+          "expression": "import(\"./approval-desk/diagnostic-workflow.js\")"
+        },
+        {
+          "line": 3099,
+          "expression": "import(\"./approval-desk/diagnosis-review.js\")"
+        },
+        {
+          "line": 3100,
+          "expression": "import(\"./approval-desk/workflow-guidance.js\")"
+        },
+        {
+          "line": 3101,
+          "expression": "import(\"./approval-desk/workflow-read-model.js\")"
+        },
+        {
+          "line": 3193,
+          "expression": "import(\"./approval-desk/diagnosis-review.js\")"
+        },
+        {
+          "line": 3553,
+          "expression": "import(\"./approval-desk/diagnosis-review.js\")"
+        },
+        {
+          "line": 3554,
+          "expression": "import(\"./approval-desk/diagnostic-workflow.js\")"
+        },
+        {
+          "line": 3677,
+          "expression": "import(\n      \"./approval-desk/workflow-guidance.js\"\n    )"
+        },
+        {
+          "line": 3771,
+          "expression": "import(\n      \"./approval-desk/diagnosis-review.js\"\n    )"
+        },
+        {
+          "line": 3774,
+          "expression": "import(\n      \"./approval-desk/workflow-guidance.js\"\n    )"
+        },
+        {
+          "line": 3917,
+          "expression": "import(\n      \"./approval-desk/diagnosis-review.js\"\n    )"
+        },
+        {
+          "line": 3920,
+          "expression": "import(\n      \"./approval-desk/workflow-guidance.js\"\n    )"
+        },
+        {
+          "line": 4064,
+          "expression": "import(\n        \"./approval-desk/workflow-read-model.js\"\n      )"
+        },
+        {
+          "line": 4199,
+          "expression": "import(\n        \"./approval-desk/workflow-read-model.js\"\n      )"
+        },
+        {
+          "line": 4259,
+          "expression": "import(\"./approval-desk/workflow-guidance.js\")"
+        },
+        {
+          "line": 4260,
+          "expression": "import(\"./approval-desk/workflow-read-model.js\")"
+        },
+        {
+          "line": 4402,
+          "expression": "import(\"./approval-desk/workflow-guidance.js\")"
+        },
+        {
+          "line": 4403,
+          "expression": "import(\"./approval-desk/workflow-read-model.js\")"
+        },
+        {
+          "line": 4506,
+          "expression": "import(\n        \"./approval-desk/workflow-guidance.js\"\n      )"
+        },
+        {
+          "line": 4509,
+          "expression": "import(\n        \"./approval-desk/diagnostic-workflow.js\"\n      )"
+        },
+        {
+          "line": 4701,
+          "expression": "import(\n        \"./approval-desk/workflow-guidance.js\"\n      )"
+        },
+        {
+          "line": 4723,
+          "expression": "import(\n        \"./approval-desk/diagnostic-workflow.js\"\n      )"
+        }
+      ]
+    },
+    {
+      "file": "test/demo-metrics.test.ts",
+      "expressions": [
+        {
+          "line": 11,
+          "expression": "import(\"../package.json\", { with: { type: \"json\" } })"
+        }
+      ]
+    },
+    {
+      "file": "test/demo-reset-recovery.test.ts",
+      "expressions": [
+        {
+          "line": 51,
+          "expression": "import(\"../src/demo-reset.js\")"
+        },
+        {
+          "line": 92,
+          "expression": "import(\"node:fs\")"
+        },
+        {
+          "line": 99,
+          "expression": "import(\"../src/demo-reset.js\")"
+        },
+        {
+          "line": 132,
+          "expression": "import(\"node:fs\")"
+        }
+      ]
+    },
+    {
+      "file": "test/fixtures.test.ts",
+      "expressions": [
+        {
+          "line": 440,
+          "expression": "import(\"../src/approval-desk/classifier.js\")"
+        }
+      ]
+    },
+    {
+      "file": "test/operational-runtime-parity.test.ts",
+      "expressions": [
+        {
+          "line": 854,
+          "expression": "import(\"better-sqlite3\")"
+        }
+      ]
+    }
+  ],
+  "scope": [
+    "src",
+    "scripts",
+    "test"
+  ]
+}

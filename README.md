@@ -306,19 +306,10 @@ See [SECURITY.md](SECURITY.md) for the full threat model and [limitations in the
 
 ## Repository guide
 
-| Where to look | Purpose |
-| :--- | :--- |
-| [`src/triage-service.ts`](src/triage-service.ts) | Authoritative governed commands |
-| [`src/policy.ts`](src/policy.ts) | Escalation, validation and field rules |
-| [`src/server.ts`](src/server.ts) | MCP tools, resources, prompts and error boundaries |
-| [`src/approval-desk/`](src/approval-desk/) | Browser workflow, classification and drafting |
-| [`src/operational/`](src/operational/) | Transactional SQLite, event projections and replay |
-| [`src/knowledge-evolution/`](src/knowledge-evolution/) | Candidate governance, approved reuse and learning ledger |
-| [`src/retrieval/`](src/retrieval/) | Lexical/semantic retrieval, ranking, applicability |
-| [`src/reasoning/`](src/reasoning/) | Frozen-input Hybrid shadow reasoning |
-| [`data/seed/`](data/seed/) and [`data/knowledge/`](data/knowledge/) | Local synthetic fixtures and articles |
-| [`test/`](test/) and [`scripts/`](scripts/) | Regression tests, demos and evaluators |
-| [`.agents/skills/triaging-support-tickets/`](.agents/skills/triaging-support-tickets/) | Codex Skill and policy guidance |
+Start with the [current module map](docs/current-architecture.md) for source
+responsibilities, entry points, state ownership, execution paths, and test
+navigation. The [documentation index](docs/README.md) distinguishes current
+guides from historical audits and proposed work.
 
 **Documentation:** [Architecture audit](docs/architecture-review/README.md) · [Engineering reference](docs/engineering-reference.md) · [Case study](docs/case-study.md) · [Demo walkthrough](docs/demo-script.md) · [Knowledge evolution](docs/knowledge-evolution.md) · [Lifecycle viewer](docs/lifecycle-replay.md) · [Evaluation guide](docs/diagnostic-evaluation-harness.md) · [Roadmap](docs/roadmap.md) · [Capture guide](docs/capture-guide.md).
 

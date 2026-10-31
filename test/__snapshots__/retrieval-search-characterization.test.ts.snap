@@ -1,0 +1,285 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`characterizes complete retrieval results across channels and failures 1`] = `
+{
+  "cancelled": {
+    "candidates": [
+      {
+        "deterministicReferences": [],
+        "knownCauseReferences": [
+          {
+            "channel": "known-cause-reference",
+            "reason": "known-cause-link",
+            "resourceKey": "knowledge-article:a",
+            "sourceId": "cause",
+            "sourceVersion": "v1",
+          },
+        ],
+        "lexical": {
+          "bestBm25Score": -0.000001,
+          "bestRank": 1,
+          "matches": [
+            {
+              "rank": 1,
+              "representationId": "knowledge-article:a:section:0",
+              "resourceKey": "knowledge-article:a",
+              "score": -0.000001,
+            },
+          ],
+        },
+        "resourceKey": "knowledge-article:a",
+        "resourceType": "knowledge-article",
+      },
+      {
+        "deterministicReferences": [
+          {
+            "channel": "deterministic-reference",
+            "reason": "classifier-association",
+            "resourceKey": "known-cause:cause",
+            "sourceId": "classifier",
+          },
+        ],
+        "knownCauseReferences": [],
+        "lexical": {
+          "bestBm25Score": -0.000001,
+          "bestRank": 3,
+          "matches": [
+            {
+              "rank": 3,
+              "representationId": "known-cause:cause:section:0",
+              "resourceKey": "known-cause:cause",
+              "score": -0.000001,
+            },
+          ],
+        },
+        "resourceKey": "known-cause:cause",
+        "resourceType": "known-cause",
+      },
+    ],
+    "lexical": {
+      "status": "used",
+    },
+    "metadata": {
+      "corpusHash": "6ec889ca9988ed7f1d59557dbdbda007484b41656ea75d40605f1c9fc2f3430b",
+      "generation": 1,
+      "lexicalGeneration": 1,
+      "model": {
+        "dimensions": 2,
+        "id": "synthetic",
+        "revision": "1",
+      },
+      "representationVersion": 3,
+      "schemaVersion": 2,
+      "semanticGeneration": 0,
+      "state": "degraded",
+    },
+    "referenceDiagnostics": [
+      {
+        "channel": "deterministic-reference",
+        "reason": "missing-resource",
+        "resourceKey": "knowledge-article:missing",
+      },
+    ],
+    "semantic": {
+      "reason": "cancelled",
+      "status": "failed",
+    },
+  },
+  "combined": {
+    "candidates": [
+      {
+        "deterministicReferences": [],
+        "knownCauseReferences": [
+          {
+            "channel": "known-cause-reference",
+            "reason": "known-cause-link",
+            "resourceKey": "knowledge-article:a",
+            "sourceId": "cause",
+            "sourceVersion": "v1",
+          },
+        ],
+        "lexical": {
+          "bestBm25Score": -0.000001,
+          "bestRank": 1,
+          "matches": [
+            {
+              "rank": 1,
+              "representationId": "knowledge-article:a:section:0",
+              "resourceKey": "knowledge-article:a",
+              "score": -0.000001,
+            },
+          ],
+        },
+        "resourceKey": "knowledge-article:a",
+        "resourceType": "knowledge-article",
+        "semantic": {
+          "bestCosineSimilarity": 1,
+          "bestRank": 1,
+          "matches": [
+            {
+              "rank": 1,
+              "representationId": "knowledge-article:a:section:0",
+              "resourceKey": "knowledge-article:a",
+              "score": 1,
+            },
+          ],
+        },
+      },
+      {
+        "deterministicReferences": [],
+        "knownCauseReferences": [],
+        "resourceKey": "knowledge-article:b",
+        "resourceType": "knowledge-article",
+        "semantic": {
+          "bestCosineSimilarity": 1,
+          "bestRank": 2,
+          "matches": [
+            {
+              "rank": 2,
+              "representationId": "knowledge-article:b:section:0",
+              "resourceKey": "knowledge-article:b",
+              "score": 1,
+            },
+          ],
+        },
+      },
+      {
+        "deterministicReferences": [
+          {
+            "channel": "deterministic-reference",
+            "reason": "classifier-association",
+            "resourceKey": "known-cause:cause",
+            "sourceId": "classifier",
+          },
+        ],
+        "knownCauseReferences": [],
+        "lexical": {
+          "bestBm25Score": -0.000001,
+          "bestRank": 3,
+          "matches": [
+            {
+              "rank": 3,
+              "representationId": "known-cause:cause:section:0",
+              "resourceKey": "known-cause:cause",
+              "score": -0.000001,
+            },
+          ],
+        },
+        "resourceKey": "known-cause:cause",
+        "resourceType": "known-cause",
+      },
+    ],
+    "lexical": {
+      "status": "used",
+    },
+    "metadata": {
+      "corpusHash": "6ec889ca9988ed7f1d59557dbdbda007484b41656ea75d40605f1c9fc2f3430b",
+      "generation": 1,
+      "lexicalGeneration": 1,
+      "model": {
+        "dimensions": 2,
+        "id": "synthetic",
+        "revision": "1",
+      },
+      "representationVersion": 3,
+      "schemaVersion": 2,
+      "semanticGeneration": 0,
+      "state": "degraded",
+    },
+    "referenceDiagnostics": [
+      {
+        "channel": "deterministic-reference",
+        "reason": "missing-resource",
+        "resourceKey": "knowledge-article:missing",
+      },
+    ],
+    "semantic": {
+      "reason": "pending-vectors",
+      "status": "stale",
+    },
+  },
+  "failed": {
+    "candidates": [
+      {
+        "deterministicReferences": [],
+        "knownCauseReferences": [
+          {
+            "channel": "known-cause-reference",
+            "reason": "known-cause-link",
+            "resourceKey": "knowledge-article:a",
+            "sourceId": "cause",
+            "sourceVersion": "v1",
+          },
+        ],
+        "lexical": {
+          "bestBm25Score": -0.000001,
+          "bestRank": 1,
+          "matches": [
+            {
+              "rank": 1,
+              "representationId": "knowledge-article:a:section:0",
+              "resourceKey": "knowledge-article:a",
+              "score": -0.000001,
+            },
+          ],
+        },
+        "resourceKey": "knowledge-article:a",
+        "resourceType": "knowledge-article",
+      },
+      {
+        "deterministicReferences": [
+          {
+            "channel": "deterministic-reference",
+            "reason": "classifier-association",
+            "resourceKey": "known-cause:cause",
+            "sourceId": "classifier",
+          },
+        ],
+        "knownCauseReferences": [],
+        "lexical": {
+          "bestBm25Score": -0.000001,
+          "bestRank": 3,
+          "matches": [
+            {
+              "rank": 3,
+              "representationId": "known-cause:cause:section:0",
+              "resourceKey": "known-cause:cause",
+              "score": -0.000001,
+            },
+          ],
+        },
+        "resourceKey": "known-cause:cause",
+        "resourceType": "known-cause",
+      },
+    ],
+    "lexical": {
+      "status": "used",
+    },
+    "metadata": {
+      "corpusHash": "6ec889ca9988ed7f1d59557dbdbda007484b41656ea75d40605f1c9fc2f3430b",
+      "generation": 1,
+      "lexicalGeneration": 1,
+      "model": {
+        "dimensions": 2,
+        "id": "synthetic",
+        "revision": "1",
+      },
+      "representationVersion": 3,
+      "schemaVersion": 2,
+      "semanticGeneration": 0,
+      "state": "degraded",
+    },
+    "referenceDiagnostics": [
+      {
+        "channel": "deterministic-reference",
+        "reason": "missing-resource",
+        "resourceKey": "knowledge-article:missing",
+      },
+    ],
+    "semantic": {
+      "reason": "provider-http-error",
+      "status": "failed",
+    },
+  },
+}
+`;

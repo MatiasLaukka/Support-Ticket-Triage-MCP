@@ -1,3 +1,4 @@
+/** Operational recommendation commands: prepare semantic requests, validate transaction-local state, write through the dispatcher, and project persisted results on replay. TriageService owns public validation, compatibility paths, and post-commit automatic-reply execution. */
 import { z } from "zod";
 import {
   hasCustomerReplyAfterRecommendationFromSnapshot
@@ -71,12 +72,14 @@ export const MarkResponseSentInputSchema = z
 type OperationalMarkResponseSentInput = Omit<MarkResponseSentInput, "customerResponse"> & { customerResponse?: string };
 
 export class RecommendationLifecycleCommands {
+  /** Supplies the shared command boundary and deterministic time/ID sources used by writes. */
   constructor(
     private readonly dispatcher: OperationalCommandDispatcher,
     private readonly now: () => Date,
     private readonly uuid: () => string,
   ) {}
 
+  /** Prepares and commits an operational approval; the transaction rechecks freshness and replay projects the recorded immutable result. */
   async approveOperational(
     approval: Approval,
     commandContext: OperationalCommandContext,
@@ -187,6 +190,7 @@ export class RecommendationLifecycleCommands {
     );
   }
 
+  /** Rebuilds the approval audit from persisted event/revision references and returns the receipt's ticket snapshot. */
   private replayOperationalApproval(
     reader: OperationalResultReader,
     replay: CommandReplay,
@@ -227,6 +231,7 @@ export class RecommendationLifecycleCommands {
     };
   }
 
+  /** Runs the pending-to-rejected command through the shared dispatcher. */
   reject(input: RejectRecommendationInput, context: OperationalCommandContext): Promise<AuditEvent> {
     return this.transitionOperationalRecommendation(
       "reject-recommendation", input, "pending", "rejected",
@@ -234,6 +239,7 @@ export class RecommendationLifecycleCommands {
     );
   }
 
+  /** Runs the approved-to-canceled command through the shared dispatcher. */
   cancel(input: CancelApprovalInput, context: OperationalCommandContext): Promise<AuditEvent> {
     return this.transitionOperationalRecommendation(
       "cancel-recommendation-approval", input, "approved", "canceled",
@@ -241,6 +247,7 @@ export class RecommendationLifecycleCommands {
     );
   }
 
+  /** Runs the pending-to-superseded command through the shared dispatcher. */
   supersede(input: SupersedeRecommendationInput, context: OperationalCommandContext): Promise<AuditEvent> {
     return this.transitionOperationalRecommendation(
       "supersede-recommendation", input, "pending", "superseded",
@@ -248,6 +255,7 @@ export class RecommendationLifecycleCommands {
     );
   }
 
+  /** Validates a semantic lifecycle request, checks its expected resolution in the transaction, and records its event, revision, trace, and result reference together. */
   private async transitionOperationalRecommendation(
     operation: string,
     input: {
@@ -347,6 +355,7 @@ export class RecommendationLifecycleCommands {
     );
   }
 
+  /** Resolves a lifecycle audit from immutable receipt references; inconsistent history raises a persistence error. */
   private replayOperationalTransition(
     reader: OperationalResultReader,
     replay: CommandReplay,
@@ -383,6 +392,7 @@ export class RecommendationLifecycleCommands {
     );
   }
 
+  /** Records an approved response and deterministic automatic-reply intent; validation and writes occur through the dispatcher, while execution of the child reply stays with TriageService. */
   async markOperationalResponseSent(
     sent: OperationalMarkResponseSentInput,
     commandContext: OperationalCommandContext,
@@ -519,6 +529,7 @@ export class RecommendationLifecycleCommands {
     );
   }
 
+  /** Projects the sent-response audit and pre-send history from immutable persisted references. */
   private replayOperationalResponseSent(
     reader: OperationalResultReader,
     replay: CommandReplay,
@@ -548,6 +559,7 @@ export class RecommendationLifecycleCommands {
     return operationalSupportResponseAudit(event, message, recommendation);
   }
 
+  /** Commits approval and response-sent events/messages in one unit of work, retaining immutable replay data for the composite result. */
   async approveAndMarkOperationalResponseSent(
     approval: Approval,
     sent: MarkResponseSentInput,
@@ -807,6 +819,7 @@ export class RecommendationLifecycleCommands {
     };
   }
 
+  /** Builds the child-reply intent from the parent result and captured pre-send history without performing the reply. */
   private automaticCustomerReplyIntent(
     snapshot: OperationalWorkflowSnapshot,
     recommendation: TriageRecommendation,
@@ -847,6 +860,7 @@ export class RecommendationLifecycleCommands {
     });
   }
 
+  /** Rejects a parent command when its child identity or intent differs from the deterministic derivation. */
   private assertAutomaticCustomerReplyIntent(
     parentCommandId: string,
     intent: z.infer<typeof AutomaticCustomerReplyIntentSchema> | undefined,
@@ -870,6 +884,7 @@ export class RecommendationLifecycleCommands {
     }
   }
 
+  /** Recomputes child intent from persisted parent references and fails closed when replay data disagrees. */
   private assertPersistedAutomaticCustomerReplyIntent(
     parentCommandId: string,
     reader: OperationalResultReader,

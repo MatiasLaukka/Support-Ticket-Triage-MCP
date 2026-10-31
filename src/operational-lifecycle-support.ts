@@ -1,3 +1,4 @@
+/** Shared projections and guards for operational lifecycle commands. This module reads transaction/snapshot inputs and delegates writes to the supplied unit of work; it does not own a store or authorize commands. */
 import { createHash } from "node:crypto";
 import {
   ApprovedFieldSchema,
@@ -35,6 +36,7 @@ import type { MarkResponseSentInput } from "./recommendation-lifecycle-contracts
 
 type OperationalApprovalFactValue = string | number | boolean | OperationalApprovalFactValue[];
 
+/** Appends a lifecycle trace to the caller's transaction using its injected ID source. */
 export function appendLifecycleTrace(
   uuid: () => string,
   unit: OperationalUnitOfWork,
@@ -58,6 +60,7 @@ export function appendLifecycleTrace(
   });
 }
 
+/** Projects strict audit history using stored command results, translating diagnosis-audit integrity failures into persistence errors. */
 export function operationalAuditsFromSnapshot(
   unit: OperationalUnitOfWork,
   snapshot: OperationalWorkflowSnapshot,
@@ -87,10 +90,12 @@ export function operationalAuditsFromSnapshot(
   }
 }
 
+/** Creates the domain error used when transaction-local lifecycle state is stale or no longer eligible. */
 export function stale(message: string): DomainError {
   return new DomainError(message, "STALE_APPROVAL");
 }
 
+/** Applies approved-field and escalation policy checks before an approval write; invalid routing or fields fail with a domain error. */
 export function validateOperationalApproval(
   recommendation: TriageRecommendation,
   ticket: Ticket,
@@ -113,6 +118,7 @@ export function validateOperationalApproval(
   }
 }
 
+/** Resolves an approved field from a recommendation, honoring an explicit response or field override. */
 export function approvedFieldValue(
   recommendation: TriageRecommendation,
   approval: Approval,
@@ -150,6 +156,7 @@ function recommendationValue(
   }
 }
 
+/** Returns the validated recommendation projection produced by an approval. */
 export function recommendationAfterApproval(
   recommendation: TriageRecommendation,
   approval: Approval,
@@ -166,6 +173,7 @@ export function recommendationAfterApproval(
   });
 }
 
+/** Computes the approved ticket projection and increments revision only when ticket fields change. */
 export function approvedTicketProjection(
   ticket: Ticket,
   recommendation: TriageRecommendation,
@@ -183,6 +191,7 @@ export function approvedTicketProjection(
   });
 }
 
+/** Produces before/after values for the fields selected by an approval. */
 export function approvedValues(
   ticket: Ticket,
   recommendation: TriageRecommendation,
@@ -217,10 +226,12 @@ function ticketValue(ticket: Ticket, field: ApprovedField): unknown {
   }
 }
 
+/** Compares persisted JSON-shaped values using the module's structural serialization convention. */
 export function sameStructuredValue(left: unknown, right: unknown): boolean {
   return JSON.stringify(left) === JSON.stringify(right);
 }
 
+/** Copies approved recommendation values into a ticket projection without mutating the supplied ticket. */
 export function applyApprovedFields(
   ticket: Ticket,
   recommendation: TriageRecommendation,
@@ -287,6 +298,7 @@ export function applyApprovedFields(
   return updated;
 }
 
+/** Encodes approved before/after facts for durable event storage; unsupported values fail validation. */
 export function operationalApprovalFacts(
   ticket: Ticket,
   recommendation: TriageRecommendation,
@@ -311,10 +323,12 @@ function encodeApprovalFact(value: unknown): OperationalApprovalFactValue {
   throw new DomainError("Approved field value cannot be persisted safely.", "INVALID_APPROVAL_FIELDS");
 }
 
+/** Creates a persistence error for missing or inconsistent immutable replay references. */
 export function replayIntegrity(message: string): OperationalStoreError {
   return new OperationalStoreError(message, "PERSISTENCE_ERROR");
 }
 
+/** Reads replay history and converts a missing ticket into an integrity failure; other store errors propagate. */
 export function readReplayWorkflowSnapshot(
   reader: OperationalResultReader,
   ticketId: string,
@@ -329,6 +343,7 @@ export function readReplayWorkflowSnapshot(
   }
 }
 
+/** Projects a lifecycle audit from its event and recommendation revision, using recorded approval facts when present. */
 export function operationalRecommendationLifecycleAudit(
   event: OperationalWorkflowSnapshot["events"][number],
   recommendation: TriageRecommendation,
@@ -393,6 +408,7 @@ function decodeApprovalFact(value: unknown): unknown {
   return value;
 }
 
+/** Selects the established stale-state message for a recommendation transition action. */
 export function operationalTransitionStaleMessage(
   action: "recommendation-rejected" | "recommendation-canceled" | "recommendation-superseded",
 ): string {
@@ -401,12 +417,14 @@ export function operationalTransitionStaleMessage(
   return "Pending recommendation cannot be superseded.";
 }
 
+/** Returns the resolution expected before a lifecycle action for replay projection. */
 export function operationalExpectedResolution(
   action: "recommendation-rejected" | "recommendation-canceled" | "recommendation-superseded",
 ): TriageRecommendation["resolution"] {
   return action === "recommendation-canceled" ? "approved" : "pending";
 }
 
+/** Requires a matching approved recommendation and response body before a send event can be written. */
 export function assertOperationalResponseMayBeSent(
   recommendation: TriageRecommendation | undefined,
   sent: MarkResponseSentInput,
@@ -426,6 +444,7 @@ export function assertOperationalResponseMayBeSent(
   }
 }
 
+/** Rejects a second support message for the same recommendation in the supplied workflow snapshot. */
 export function assertOperationalResponseNotAlreadySent(
   snapshot: OperationalWorkflowSnapshot,
   recommendationId: string,
@@ -438,6 +457,7 @@ export function assertOperationalResponseNotAlreadySent(
   }
 }
 
+/** Finds the latest recommendation revision whose event precedes the requested causal boundary. */
 export function latestRecommendationBeforeEvent(
   snapshot: OperationalWorkflowSnapshot,
   recommendationId: string,
@@ -457,6 +477,7 @@ export function latestRecommendationBeforeEvent(
   return revisions[0]?.revision.recommendation;
 }
 
+/** Projects the audit view for a persisted support-response event and canonical message. */
 export function operationalSupportResponseAudit(
   event: OperationalWorkflowSnapshot["events"][number],
   message: ConversationMessage,
@@ -480,6 +501,7 @@ export function operationalSupportResponseAudit(
   });
 }
 
+/** Projects audits for an ordered set of causal events, requiring immutable recommendation references when requested. */
 export function operationalConversationAuditsForEventIds(
   snapshot: OperationalWorkflowSnapshot,
   eventIds: readonly string[],
@@ -571,6 +593,7 @@ export function operationalConversationAuditsForEventIds(
   });
 }
 
+/** Projects the canonical customer message as a customer-reply audit event. */
 export function operationalCustomerReplyAudit(
   message: ConversationMessage,
   ticket: Ticket,
@@ -592,6 +615,7 @@ export function operationalCustomerReplyAudit(
   });
 }
 
+/** Projects the initial submitted-recommendation audit from its persisted event and revision. */
 function operationalSubmittedRecommendationAudit(
   event: OperationalWorkflowSnapshot["events"][number],
   recommendation: TriageRecommendation,
@@ -624,6 +648,7 @@ function operationalExpectedResolutionForAnyLifecycle(
   return action === "recommendation-canceled" ? "approved" : "pending";
 }
 
+/** Derives a stable child command identity from a parent identity and action name. */
 export function derivedOperationalCommandContext(
   parentCommandId: string,
   action: string,
@@ -634,10 +659,12 @@ export function derivedOperationalCommandContext(
   };
 }
 
+/** Returns an ISO timestamp offset by the requested duration. */
 export function plusMilliseconds(timestamp: string, milliseconds: number): string {
   return new Date(new Date(timestamp).getTime() + milliseconds).toISOString();
 }
 
+/** Checks whether a receipt's source ticket matches the approval event and immutable ticket revision history. */
 export function compositeAutomaticReplySourceTicketMatchesHistory(
   snapshot: OperationalWorkflowSnapshot,
   result: OperationalResultReference,
@@ -680,12 +707,14 @@ export function compositeAutomaticReplySourceTicketMatchesHistory(
   return sameStructuredValue(sourceWithoutUpdatedAt, reconstructedWithoutUpdatedAt);
 }
 
+/** Narrows an unknown persisted value to a nonnegative integer. */
 export function readNonnegativeInteger(value: unknown): number | undefined {
   return typeof value === "number" && Number.isInteger(value) && value >= 0
     ? value
     : undefined;
 }
 
+/** Projects lifecycle audits for every event in a workflow snapshot. */
 export function operationalAuditEventsFromSnapshot(
   snapshot: OperationalWorkflowSnapshot,
 ): AuditEvent[] {

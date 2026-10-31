@@ -8,15 +8,21 @@ comments beside the code and do not replace the implementation or its tests.
 
 ## Coverage
 
-Source baseline: `cc42b5c3d6e1f3f260005cd8966d006a7cc208c2`, checked 2026-10-31.
-Coverage is intentionally partial; no exhaustive codebase-wide symbol/call audit
-is claimed.
+The baseline maps were added against `cc42b5c3d6e1f3f260005cd8966d006a7cc208c2`.
+The extracted lifecycle maps were reconciled to PR #38 source head
+`cbcc590f843621b78918fc878a4594bf25caede3`, checked 2026-10-31. PR #38 remains
+an open draft, so its implementation is branch-current and not represented as
+merged `main` behavior. Coverage is intentionally partial; no exhaustive
+codebase-wide symbol/call audit is claimed.
 
 | Source | Detailed map | Coverage |
 | --- | --- | --- |
 | `src/errors.ts` | [Foundational errors](errors.md) | Both classes, constructors, error fields, and direct configuration callers |
 | `src/utils/parse-openai-timeout.ts` | [Timeout parsing](utils/parse-openai-timeout.md) | All three exported functions and their throw/fallback behavior |
-| Pending PR #38 modules | Not yet part of this main baseline | Its remediation must map the command family, shared support, input contracts, and facade boundary on that branch |
+| `src/recommendation-lifecycle.ts` | [Recommendation lifecycle commands](recommendation-lifecycle.md) | Command preparation/commit/replay methods, key dependencies, and failures; dynamic automatic-reply import is called out |
+| `src/operational-lifecycle-support.ts` | [Operational lifecycle support](operational-lifecycle-support.md) | Exported projections/guards and significant private audit helpers; consumers beyond the scoped family are partial |
+| `src/recommendation-lifecycle-contracts.ts` | [Lifecycle input contracts](recommendation-lifecycle-contracts.md) | All four input interfaces and their facade/runtime-validation boundary |
+| `src/triage-service.ts` | [Affected TriageService boundary](triage-service-lifecycle-boundary.md) | Scoped to lifecycle construction, validation, dispatch, compatibility paths, and post-commit automatic replies; the rest of this large service is not mapped |
 
 ## Standard for a module map
 

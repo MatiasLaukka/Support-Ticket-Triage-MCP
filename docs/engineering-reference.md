@@ -1470,7 +1470,9 @@ The maintained source/module inventory has moved to the
 contracts, dependencies, principal execution paths, state boundaries, and tests.
 Use that map for current branch architecture and the
 [documentation index](README.md) to distinguish current guides from historical
-audits. Maintain the inventory there rather than duplicating it in this section.
+audits. The [detailed module-map index](modules/README.md) links scoped symbol
+maps, including the PR #38 lifecycle boundary. Maintain the inventory there
+rather than duplicating it in this section.
 
 ## B3 Retrieval Operations
 

@@ -2,15 +2,19 @@
 
 [Documentation index](README.md) · [Detailed module maps](modules/README.md) · [Progress](progress.md) · [Engineering reference](engineering-reference.md)
 
-Last reconciled: **2026-10-31**. Runtime source inspected:
-[`cc42b5c`](https://github.com/MatiasLaukka/Support-Ticket-Triage-MCP/tree/cc42b5c3d6e1f3f260005cd8966d006a7cc208c2),
-the current GitHub `main` at inspection. This maintained map describes the major
-module boundaries and execution paths, not every function or a fresh behavioral
-audit. Relative source links refer to this documentation's checkout.
+Last reconciled: **2026-10-31**. Runtime source inspected at the starting PR #38
+head [`cbcc590`](https://github.com/MatiasLaukka/Support-Ticket-Triage-MCP/tree/cbcc590f843621b78918fc878a4594bf25caede3).
+The documentation baseline commit is based on `cc42b5c`; this map follows the
+implementation on PR #38, not GitHub `main`. The current documentation commits
+do not change runtime source. This is a maintained map of major boundaries and
+execution paths, not every function or a fresh behavioral audit. Relative source
+links refer to this checkout.
 
 This is the codebase-wide connection map. Detailed function, important-state, and
-call/data-flow maps live in `docs/modules/`. Initial detailed coverage is limited
-to the foundational error/timeout boundary; the module-map index identifies gaps.
+call/data-flow maps live in `docs/modules/`. Detailed coverage includes the
+extracted recommendation lifecycle family and the affected TriageService
+boundary, plus the foundational error/timeout boundary. Other modules remain
+partially mapped as listed in the module-map index.
 
 This is the current successor to the source inventory in the engineering
 reference and the
@@ -23,7 +27,7 @@ The audit remains pinned to `fe035ee`; its evidence and diagrams are not rewritt
 | --- | --- |
 | How is the application assembled? | [runtime](../src/runtime.ts), then the [MCP entry point](../src/index.ts) or [Approval Desk entry point](../src/approval-desk.ts) |
 | How does an evaluation become a pending recommendation? | [evaluation command](../src/evaluation-command.ts), [AI evaluation](../src/approval-desk/ai-evaluation.ts), then [TriageService](../src/triage-service.ts) |
-| Who permits and records a lifecycle change? | [policy](../src/policy.ts), [TriageService](../src/triage-service.ts), [dispatcher](../src/operational-command-dispatch.ts), [unit of work](../src/operational/unit-of-work.ts) |
+| Who permits and records a lifecycle change? | [policy](../src/policy.ts), [TriageService facade](../src/triage-service.ts), [recommendation command family](../src/recommendation-lifecycle.ts), [dispatcher](../src/operational-command-dispatch.ts), [unit of work](../src/operational/unit-of-work.ts), [lifecycle contract](ar-02-lifecycle-contract.md) |
 | What does the operator see? | [workflow read model](../src/approval-desk/workflow-read-model.ts), [workflow guidance](../src/approval-desk/workflow-guidance.ts), [HTTP adapter](../src/approval-desk/http.ts) |
 | How are retrieval and Hybrid reasoning isolated? | [retrieval observer](../src/retrieval/stage.ts), [capture boundary](../src/reasoning/hybrid-shadow-capture.ts), [shadow runner](../src/reasoning/hybrid-shadow-runner.ts) |
 
@@ -37,7 +41,9 @@ The audit remains pinned to `fe035ee`; its evidence and diagrams are not rewritt
 | [server.ts](../src/server.ts), [http.ts](../src/approval-desk/http.ts) | Validate transport input, call shared application commands, translate errors, and assemble responses. They do not independently authorize state changes. |
 | [ui.ts](../src/approval-desk/ui.ts), [lifecycle-replay-ui.ts](../src/approval-desk/lifecycle-replay-ui.ts) | Embedded browser programs for the operator and replay views. Browser fetch/event relationships are not TypeScript import edges. |
 | [evaluation-command.ts](../src/evaluation-command.ts) | Define evaluation request identity, prepare provider-assisted work outside the transaction, delegate authoritative commit/replay, and schedule optional post-commit observation. |
-| [triage-service.ts](../src/triage-service.ts) | At this main baseline, owns recommendation and diagnosis/fix/close command families, validation, write-set construction, and immutable replay projections. Retains a separate file-backed compatibility path. |
+| [triage-service.ts](../src/triage-service.ts) | Facade owns public input validation, command-context requirements, legacy file-backed lifecycle behavior, and post-commit automatic-reply execution. Diagnosis/fix/close and evaluation families remain here. For the extracted recommendation boundary, see the [scoped map](modules/triage-service-lifecycle-boundary.md). |
+| [recommendation-lifecycle.ts](../src/recommendation-lifecycle.ts), [lifecycle input contracts](../src/recommendation-lifecycle-contracts.ts) | Operational approval, reject, cancel, supersede, response-send, and combined approval/send definitions. Each command parses semantic intent, prepares inputs, validates transaction-local state in its commit callback, and projects immutable stored results on replay. The facade still validates public inputs and selects operational versus compatibility routes. |
+| [operational-lifecycle-support.ts](../src/operational-lifecycle-support.ts) | Shared lifecycle policy projections, audit reconstruction, stale guards, and replay-integrity helpers used by recommendation commands and other operational lifecycle code. It owns no store or transaction. |
 | [operational-command-dispatch.ts](../src/operational-command-dispatch.ts), [idempotency.ts](../src/operational/idempotency.ts) | Parse/hash semantic requests, join in-flight duplicates within a dispatcher instance, reject identity conflicts, prepare work, and transact or recover committed results. |
 | [operational/sqlite-store.ts](../src/operational/sqlite-store.ts), [unit-of-work.ts](../src/operational/unit-of-work.ts), [domain.ts](../src/operational/domain.ts) | Own operational SQLite, transaction-local writes, causal events, revisions, canonical messages, traces, command receipts, and result-reference integrity. |
 | [runtime-repositories.ts](../src/operational/runtime-repositories.ts), [diagnosis-audit.ts](../src/operational/diagnosis-audit.ts), [timeline.ts](../src/operational/timeline.ts) | Adapt operational reads and reconstruct audit/timeline views. Operational read adapters reject direct legacy mutation methods. |
@@ -62,20 +68,31 @@ The audit remains pinned to `fe035ee`; its evidence and diagrams are not rewritt
 
 ## Execution and state ownership
 
-The following is a simplified execution/ownership diagram, not an exhaustive
-static import graph. Dashed arrows denote optional post-commit observation.
+The following is a simplified call/data-flow diagram, not an exhaustive import
+graph. Solid arrows show principal calls, dotted arrows show imports or injected
+dependencies, and dashed arrows show conceptual state/data flow. Dynamic imports
+and browser behavior are not fully represented.
 
 ```mermaid
 flowchart TD
   MCP["MCP adapter"] --> Eval["Evaluation command"]
   HTTP["HTTP adapter"] --> Eval
-  MCP --> Service["TriageService lifecycle commands"]
+  MCP --> Service["TriageService facade"]
   HTTP --> Service
   Eval --> Prepare["Deterministic evaluation and optional advisory providers"]
   Eval --> Dispatch["Dispatcher protocol"]
   Dispatch --> Unit["Operational transaction and receipts"]
   Eval --> Service
-  Service --> Dispatch
+  Service --> Family["RecommendationLifecycleCommands"]
+  Service --> Legacy["Legacy compatibility path"]
+  Family --> Dispatch
+  Family -. "imports shared projections" .-> Projections["operational-lifecycle-support"]
+  Family -. "type imports" .-> Contracts["recommendation-lifecycle-contracts"]
+  Service -. "type imports" .-> Contracts
+  Dispatch --> Prepare["Parse semantic intent and prepare command"]
+  Prepare --> Commit["Transaction: unit of work"]
+  Commit --> Receipt["Persist receipt and immutable result references"]
+  Receipt -. "replay reads" .-> Family
   Unit --> Op["Operational SQLite"]
   Op --> Outbox["Learning outbox and delivery"]
   Outbox --> Learning["Separate learning storage"]
@@ -94,6 +111,20 @@ flowchart TD
   enforce approved fields, revision/reply freshness, and workflow gates. Combined
   approval/send writes ordered events and a canonical support message atomically.
   Sending is a recorded local workflow action, not an external email integration.
+- **Extracted family on PR #38:** `TriageService` retains public schemas and
+  command-context checks, then delegates operational approval/reject/cancel/
+  supersede/send operations to `RecommendationLifecycleCommands`. Each prepared
+  definition carries its operation identity, parser, prepare callback, transaction
+  commit, and replay projection. Shared ticket/recommendation/audit projections
+  live in `operational-lifecycle-support.ts`; typed lifecycle inputs live in
+  `recommendation-lifecycle-contracts.ts`. The dispatcher owns request hashing,
+  in-flight duplicate joining for its instance, receipt checks, and transaction
+  entry. The unit of work owns atomic operational writes and immutable receipts.
+- **Facade follow-up:** combined approval/send is one operational command. The
+  facade executes any persisted automatic-reply child intent after the parent
+  command returns and remains the recovery/orchestration boundary. The family
+  dynamically imports automatic-reply policy code; the family map labels this
+  lazy dependency. Legacy repository-backed routes remain in the facade.
 - **Dispatcher scope:** runtime supplies an evaluation dispatcher, and
   `TriageService` retains its own lifecycle dispatcher. They use the operational
   store; an in-memory in-flight map is per instance, not a process-wide or
@@ -140,12 +171,7 @@ this section; it is not a permanent claim about these PRs.
 | --- | --- |
 | [PR #35: historical audit](https://github.com/MatiasLaukka/Support-Ticket-Triage-MCP/pull/35), open at `dcd8656` | Adds the detailed pinned audit and reproduction evidence. Keep its historical baseline separate from this maintained map. |
 | [PR #37: retrieval readability](https://github.com/MatiasLaukka/Support-Ticket-Triage-MCP/pull/37), open at `931e7b8` | Clarifies `retrieval/search.ts` without intended ownership or behavior changes. Reconcile the status after review/merge. |
-| [PR #38: lifecycle extraction](https://github.com/MatiasLaukka/Support-Ticket-Triage-MCP/pull/38), open at `cbcc590` | Moves operational recommendation commands and replay into `recommendation-lifecycle.ts`, shared projections into `operational-lifecycle-support.ts`, and input contracts into `recommendation-lifecycle-contracts.ts`. The facade retains public validation, legacy paths, and post-commit automatic-reply execution. Those modules are not yet in the main baseline described above. |
-
-On a branch that includes PR #38, update the responsibility table, execution
-description, source/test links, and inspected source identity to describe that
-branch's actual implementation. Link its lifecycle contract document. A status
-note alone is not sufficient once the owning code exists in the checkout.
+| [PR #38: lifecycle extraction](https://github.com/MatiasLaukka/Support-Ticket-Triage-MCP/pull/38), open draft at source head `cbcc590` when checked | The extracted modules and facade boundary described above are implemented on this branch and mapped in `docs/modules/`. PR #38 remains unmerged; this branch map does not claim they are in `main`. See the [lifecycle contract and verification matrix](ar-02-lifecycle-contract.md). |
 
 ## Maintenance convention
 

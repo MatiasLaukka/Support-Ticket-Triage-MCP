@@ -9,6 +9,8 @@
   maintained module inventory; its baseline and pending changes are explicit.
 - [Detailed module maps](modules/README.md): functions, important state, and
   internal/external connections for covered modules, with coverage limits.
+- [AR-02 lifecycle contract](ar-02-lifecycle-contract.md): preserved lifecycle
+  invariants, characterization evidence, and the extraction verification matrix.
 - [Progress](progress.md): current objectives, PR status, acceptance criteria,
   verification, and next actions.
 - [Engineering reference](engineering-reference.md): configuration, interfaces,

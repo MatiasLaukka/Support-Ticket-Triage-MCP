@@ -1464,20 +1464,16 @@ webhook payloads, provider comments, and imported macros remain untrusted.
 - [Screenshot and demo capture guide](capture-guide.md)
 - [Project roadmap](roadmap.md)
 - [Security policy](../SECURITY.md)
-- `src/server.ts`: MCP tools, resources, prompts, annotations, and safe errors
-- `src/runtime.ts`: environment validation, repository wiring, and persistence cutover
-- `src/triage-service.ts`: transactional recommendation and lifecycle commands
-- `src/approval-desk/`: shared workflow, diagnosis, drafting, lifecycle, and HTTP adapters
-- `src/knowledge-evolution/`: governed candidate discovery, promotion, reuse, and learning ledger
-- `src/operational/`: SQLite event store, projections, command results, traces, and replay
-- `src/policy.ts`: escalation, evidence, and approved-field rules
-- `src/metrics.ts`: queue metrics and savings formula
-- `src/evaluation.ts`: deterministic evaluation metrics
-- `scripts/`: fixture generation, demos, evaluations, and portfolio verification commands
-- `data/seed/`: tickets, expected outcomes, and sample recommendations
-- `data/knowledge/`: local policy and troubleshooting articles
-- `.codex/config.toml`: project MCP launch configuration
-- `.agents/skills/triaging-support-tickets/`: Codex Skill, workflow, and policy reference
+
+The maintained source/module inventory has moved to the
+[current module map](current-architecture.md). It identifies module ownership,
+contracts, dependencies, principal execution paths, state boundaries, and tests.
+Use that map for current branch architecture and the
+[documentation index](README.md) to distinguish current guides from historical
+audits. The [detailed module-map index](modules/README.md) links scoped symbol
+maps, including the PR #38 lifecycle boundary. Maintain the inventory there
+rather than duplicating it in this section.
+
 ## B3 Retrieval Operations
 
 The B3 path is a **derived, shadow-only retrieval projection**. It cannot change operational recommendations, lifecycle, or customer responses. B4 ranking and B5 applicability are separate experimental stages, not automatically installed B3 behavior.

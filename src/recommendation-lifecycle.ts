@@ -529,7 +529,12 @@ export class RecommendationLifecycleCommands {
     );
   }
 
-  /** Projects the sent-response audit and pre-send history from immutable persisted references. */
+  /**
+   * Projects the sent-response audit from persisted event, message, and preceding
+   * recommendation references. Composite replay and child-intent validation
+   * reconstruct pre-send history separately; missing audit references fail as
+   * replay-integrity errors.
+   */
   private replayOperationalResponseSent(
     reader: OperationalResultReader,
     replay: CommandReplay,

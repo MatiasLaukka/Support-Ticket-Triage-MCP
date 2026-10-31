@@ -50,7 +50,7 @@ listed for this boundary, not treated as module-wide inventory.
 | `markResponseSentFromWorkflow` | Builds timestamped operational input and workflow semantic identity, delegates send, then executes child intent after parent completion. |
 | `approveAndMarkResponseSent` | Validates approval and response inputs, delegates one operational composite command when a store is configured, then runs automatic-reply intent after commit; the compatibility route keeps its own orchestration. |
 | `supersedeRecommendation` | Parses its request and performs operational supersession through the extracted family, or uses the legacy serialized transition. |
-| `runAutomaticCustomerReply` | Owns post-parent execution of a persisted child intent; failures occur after the parent command and do not roll it back. |
+| `runAutomaticCustomerReply` | Owns post-parent execution of a persisted child intent by mapping it to `addCustomerReply`; failures occur after the parent command and do not roll it back. |
 
 Other service methods can call lifecycle helpers (for example evaluation reply
 handling and newer-reply supersession), but those wider paths are outside this
@@ -68,16 +68,22 @@ flowchart TD
   Facade -->|compatibility route| Legacy["legacy repositories and serialization maps"]
   Family -->|dispatcher.run| Dispatcher["OperationalCommandDispatcher"]
   Dispatcher -->|unit of work transaction| Store["operational store"]
-  Family -. "dynamic import; returns child intent" .-> Auto["automatic-reply policy"]
-  Facade -->|post-commit execution/recovery| Auto
+  Family -->|dynamic import and invoke policy to compute and replay-validate intent| Auto["automatic-reply policy"]
+  Family -->|computes and persists with parent result| Intent["automatic-reply child intent"]
+  Family -->|returns after parent command completes| Facade
+  Intent -. "included in returned result" .-> Facade
+  Facade -->|runAutomaticCustomerReply after parent completion| AddReply["TriageService.addCustomerReply"]
   Legacy -. "conceptual compatibility state" .-> Repos["file-backed stores"]
 ```
 
-The diagram is scoped and not a static whole-service graph. Automatic-reply code
-is dynamically imported by lifecycle command paths; TriageService executes the
-returned child intent after the parent command. Operational writes are delegated
-through dispatcher and unit-of-work interfaces. Legacy locks/maps are process
-local and are distinct from durable operational command receipts.
+The diagram is scoped and not a static whole-service graph. The lifecycle
+command module dynamically imports and invokes automatic-reply policy while
+computing and validating the persisted child intent. It returns the intent with
+the completed parent result. TriageService then executes that intent through
+`addCustomerReply`; the facade does not call the policy directly. Operational
+writes are delegated through dispatcher and unit-of-work interfaces. Legacy
+locks/maps are process local and are distinct from durable operational command
+receipts.
 
 ## Related checks and documents
 

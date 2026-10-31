@@ -32,7 +32,7 @@ legacy repository-backed behavior, and post-commit automatic-reply execution.
 | `transitionOperationalRecommendation` | Parses UUID/ticket/actor/reason, prepares event time, checks expected resolution against the transaction snapshot, and appends event/revision/trace plus result reference. Store transaction rollback governs partial writes. |
 | `replayOperationalTransition` | Reads the command's event/revision references and projects an audit. Missing or mismatched references fail closed as replay-integrity errors. |
 | `markOperationalResponseSent` | Dynamically imports automatic-reply policy, parses semantic intent without event time, checks approved text, newer replies, and duplicate sends in the transaction, then stores event/message/trace and a snapshot-backed reply intent. It returns intent for the facade; it does not itself run the child reply. |
-| `replayOperationalResponseSent` | Resolves the immutable sent event/message and pre-send audit references for the original result. Missing references are persistence-integrity failures. |
+| `replayOperationalResponseSent` | Resolves the persisted sent event, message, and preceding recommendation revision to project the sent-response audit. It does not reconstruct pre-send history; `replayOperationalApprovalAndSend` reconstructs that history for the composite result, while `assertPersistedAutomaticCustomerReplyIntent` independently rebuilds it to validate the stored child intent. Missing sent-audit references fail as persistence-integrity errors. |
 | `approveAndMarkOperationalResponseSent` | Prepares one composite command and writes approval and send records in one unit of work; commit enforces pending status, source revision, causal freshness, and response match. |
 | `replayOperationalApprovalAndSend` | Reconstructs the composite response from the receipt's approval, send, message, and pre-send references; inconsistent references fail as persistence errors. |
 | `automaticCustomerReplyIntent` | Derives a child command intent from the committed parent basis, eligibility, and existing audit history; the result is persisted with the parent receipt. |
@@ -57,15 +57,21 @@ flowchart LR
   Dispatcher -->|prepare then transaction callback| Uow["OperationalUnitOfWork"]
   Uow -. "reads/writes" .-> Store["Operational store state"]
   Dispatcher -. "replay passes result references" .-> Command
-  Command -. "dynamic import in response-send paths" .-> Auto["Automatic reply policy"]
-  Command -. "returns persisted child intent" .-> Facade
-  Facade -->|after parent commit| Auto
+  Command -->|dynamic import and invoke to derive or validate intent| Auto["Automatic reply policy"]
+  Command -->|computes and validates persisted child intent| Intent["Automatic-reply child intent"]
+  Intent -. "stored in parent command result" .-> Dispatcher
+  Command -->|returns result after parent command completes| Facade
+  Intent -. "included in returned result" .-> Facade
+  Facade -->|runAutomaticCustomerReply after parent completion| AddReply["TriageService.addCustomerReply"]
 ```
 
 The arrows distinguish calls from type/import and data relationships. The
-automatic-reply policy has lazy imports; a static import inventory alone will
-not show the complete runtime dependency. The actual facade behavior is scoped in
-the [TriageService map](triage-service-lifecycle-boundary.md).
+command module lazily imports and invokes the automatic-reply policy while
+computing or replay-validating the child intent. It returns the persisted intent
+with the parent result. After that command completes, TriageService executes the
+intent by calling `addCustomerReply`; the facade does not invoke the policy.
+The full facade boundary is scoped in the
+[TriageService map](triage-service-lifecycle-boundary.md).
 
 ## Related evidence
 

@@ -18,6 +18,7 @@ import {
   type OperationalResultReference,
   type OperationalWorkflowSnapshot,
 } from "../src/operational/domain.js";
+import { OperationalSqliteStore } from "../src/operational/sqlite-store.js";
 import { OperationalUnitOfWork } from "../src/operational/unit-of-work.js";
 import { createRuntimeDependencies, type RuntimeDependencies } from "../src/runtime.js";
 import { createTriageServer } from "../src/server.js";
@@ -411,12 +412,33 @@ describe("operational knowledge discovery", () => {
       TRIAGE_KNOWLEDGE_ROOT: resolve("data", "knowledge"),
       TRIAGE_LEARNING_LEDGER_PATH: join(root, "knowledge-evolution", "learning.sqlite"),
       OPERATIONAL_DB_PATH: operationalDatabase,
+      TRIAGE_RETRIEVAL_MODE: "shadow",
     };
     resetOperationalDemoState({ operationalDatabase, seedFile: env.TRIAGE_SEED_FILE, dataRoot: root });
 
     let currentTime = Date.parse("2026-08-13T10:00:00.000Z");
     const now = () => new Date(currentTime);
     const runtime = await createRuntimeDependencies({ env, now });
+    if (runtime.retrievalObserver === undefined) throw new Error("Expected shadow retrieval.");
+    const observer = runtime.retrievalObserver;
+    const observe = observer.observe.bind(observer);
+    let releaseObserver!: () => void;
+    let observerArrived!: () => void;
+    const observerGate = new Promise<void>((resolve) => { releaseObserver = resolve; });
+    const observerWaiting = new Promise<void>((resolve) => { observerArrived = resolve; });
+    let observerWork: Promise<void> | undefined;
+    const otherObserverWork: Promise<void>[] = [];
+    const observerSpy = vi.spyOn(observer, "observe").mockImplementation((query, commandId, onExecution) => {
+      if (commandId !== commandHeaders(5)["Idempotency-Key"]) {
+        const work = observe(query, commandId, onExecution);
+        otherObserverWork.push(work);
+        return work;
+      }
+      observerArrived();
+      observerWork = observerGate.then(() => observe(query, commandId, onExecution));
+      return observerWork;
+    });
+    let releaseDiscovery: (() => void) | undefined;
     const server = createApprovalDeskHttpServer(runtime);
     const baseUrl = await listen(server);
 
@@ -511,16 +533,52 @@ describe("operational knowledge discovery", () => {
       const diagnosisEvent = operationalStore(runtime).readWorkflowSnapshot(ticketId).events
         .find(({ id }) => id === recorded.auditEvent.id);
       expect(diagnosisEvent).toBeDefined();
+      const discoveryStore = runtime.operationalStore;
+      if (!(discoveryStore instanceof OperationalSqliteStore)) throw new Error("Expected an operational SQLite store.");
+      // The store read is synchronous, so background observer work cannot enter this spy window.
       const bulkReceiptRead = vi.spyOn(OperationalUnitOfWork.prototype, "readCommandResults");
       try {
-        await runtime.knowledgeEvolution.service.discover({
-          includeGpt: false,
-          actorId: "support-lead",
-        });
+        const snapshots = discoveryStore.readCompletedDiagnosisSnapshots();
+        expect(snapshots.flatMap(({ diagnoses }) => diagnoses).map(({ diagnosis }) => diagnosis.id))
+          .toContain(`diagnosis-${recorded.auditEvent.id}`);
         expect(bulkReceiptRead).toHaveBeenCalledTimes(1);
         expect(bulkReceiptRead.mock.calls[0]?.[0]).toEqual([diagnosisEvent!.commandId]);
       } finally {
         bulkReceiptRead.mockRestore();
+      }
+
+      // Hold discovery open while a real previously scheduled shadow refresh completes.
+      // A prototype spy across this await would also count the refresh's receipt read.
+      await observerWaiting;
+      await Promise.all(otherObserverWork);
+      const snapshot = runtime.tickets.snapshot.bind(runtime.tickets);
+      const discoveryGate = new Promise<void>((resolve) => { releaseDiscovery = resolve; });
+      const ticketSnapshotSpy = vi.spyOn(runtime.tickets, "snapshot").mockImplementationOnce(async () => {
+        await discoveryGate;
+        return snapshot();
+      });
+      try {
+        const discovery = runtime.knowledgeEvolution.service.discover({ includeGpt: false, actorId: "support-lead" });
+        const refreshRead = vi.spyOn(discoveryStore, "readCompletedDiagnosisSnapshots");
+        try {
+          releaseObserver();
+          await observerWork;
+          expect(refreshRead).toHaveBeenCalledOnce();
+          const refreshedSnapshots = refreshRead.mock.results[0]?.value as ReturnType<OperationalSqliteStore["readCompletedDiagnosisSnapshots"]> | undefined;
+          expect(refreshedSnapshots?.flatMap(({ diagnoses }) => diagnoses).map(({ diagnosis }) => diagnosis.id))
+            .toContain(`diagnosis-${recorded.auditEvent.id}`);
+          expect(observer.recent().some(({ commandId }) => commandId === commandHeaders(5)["Idempotency-Key"])).toBe(true);
+        } finally {
+          refreshRead.mockRestore();
+        }
+        releaseDiscovery!();
+        const overlappingResult = await discovery;
+        expect(overlappingResult.candidates).toHaveLength(1);
+        expect(overlappingResult.candidates[0]?.support.map(({ diagnosisId }) => diagnosisId))
+          .toContain(`diagnosis-${recorded.auditEvent.id}`);
+      } finally {
+        releaseDiscovery?.();
+        ticketSnapshotSpy.mockRestore();
       }
       const database = new Database(operationalDatabase);
       try {
@@ -575,6 +633,9 @@ describe("operational knowledge discovery", () => {
         actorId: "support-lead",
       })).rejects.toMatchObject({ code: "PERSISTENCE_ERROR" });
     } finally {
+      releaseObserver();
+      releaseDiscovery?.();
+      observerSpy.mockRestore();
       await closeServer(server);
       await runtime.close();
     }

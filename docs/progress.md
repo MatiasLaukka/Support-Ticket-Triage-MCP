@@ -7,6 +7,17 @@ head `cbcc590`; main was `cc42b5c` at the time checked.
 This is a short delivery view; linked PRs and commits own detailed history.
 Local completion, open review, and merged delivery are distinct states.
 
+## Receipt-read test isolation — 2026-11-01
+
+Branch [codex/receipt-read-test-isolation](https://github.com/MatiasLaukka/Support-Ticket-Triage-MCP/compare/main...codex/receipt-read-test-isolation) is local work pending draft review and CI; it is not merged. Base: `2628f65481054dae0f79f5c569f654912ffc5de9`.
+
+- Objective: preserve exact bulk-receipt batching and runtime discovery/integrity checks while allowing shadow refresh to run concurrently.
+- Evidence: a controlled Windows/Node 24 probe reproduced a one-versus-two global spy count, with separate discovery and shadow-refresh stacks. The original CI failure has no call stacks, so its attribution remains unconfirmed.
+- Change: measure the synchronous SQLite discovery read separately; a gated runtime test verifies the real refresh and discovery with shadow retrieval enabled. No production scheduling changes.
+- Validation: Windows/Node 24: focused discovery tests passed (27); `npm test -- --maxWorkers=2` passed build, typecheck, and 2,500 tests in 149 files. Linux/Node 22 CI remains to be checked against the pushed revision.
+- Next: review the draft and its exact-head CI results before any merge decision.
+- Isolated worktree: `D:/Development/Worktrees/knotty-receipt-read-isolation`; owner: Codex task; branch and base above; created 2026-11-01 for this change. Retain for review; do not remove without owner authorization.
+
 ## Current objective
 
 Make the existing architecture easier to navigate while preserving approval,

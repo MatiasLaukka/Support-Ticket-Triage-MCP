@@ -9,14 +9,14 @@ Local completion, open review, and merged delivery are distinct states.
 
 ## Receipt-read test isolation — 2026-11-01
 
-Branch [codex/receipt-read-test-isolation](https://github.com/MatiasLaukka/Support-Ticket-Triage-MCP/compare/main...codex/receipt-read-test-isolation) is local work pending draft review and CI; it is not merged. Base: `2628f65481054dae0f79f5c569f654912ffc5de9`.
+[PR #39](https://github.com/MatiasLaukka/Support-Ticket-Triage-MCP/pull/39) merged on 2026-11-01 as `08e9ed68b0389aa44a540df0aaf01dd7dce90436`. Its preparation base was `2628f65481054dae0f79f5c569f654912ffc5de9`.
 
 - Objective: preserve exact bulk-receipt batching and runtime discovery/integrity checks while allowing shadow refresh to run concurrently.
 - Evidence: a controlled Windows/Node 24 probe reproduced a one-versus-two global spy count, with separate discovery and shadow-refresh stacks. The original CI failure has no call stacks, so its attribution remains unconfirmed.
 - Change: measure the synchronous SQLite discovery read separately; a gated runtime test verifies the real refresh and discovery with shadow retrieval enabled. No production scheduling changes.
-- Validation: Windows/Node 24: focused discovery tests passed (27); `npm test -- --maxWorkers=2` passed build, typecheck, and 2,500 tests in 149 files. Linux/Node 22 CI remains to be checked against the pushed revision.
-- Next: review the draft and its exact-head CI results before any merge decision.
-- Isolated worktree: `D:/Development/Worktrees/knotty-receipt-read-isolation`; owner: Codex task; branch and base above; created 2026-11-01 for this change. Retain for review; do not remove without owner authorization.
+- Validation: Windows/Node 24: focused discovery tests passed (27); `npm test -- --maxWorkers=2` passed build, typecheck, and 2,500 tests in 149 files. [PR-head Linux/Node 22 CI](https://github.com/MatiasLaukka/Support-Ticket-Triage-MCP/actions/runs/41322895236) passed on `7c172be287c5875cf578657417874678ec3f29b6`; [post-merge main CI](https://github.com/MatiasLaukka/Support-Ticket-Triage-MCP/actions/runs/41323850912) passed on `08e9ed68b0389aa44a540df0aaf01dd7dce90436`.
+- Next: retain the distinction between the demonstrated spy overlap and the unconfirmed attribution of the original CI failure.
+- Isolated worktree: `D:/Development/Worktrees/knotty-receipt-read-isolation`; owner: Codex task; branch `codex/receipt-read-test-isolation`; preparation base above; created 2026-11-01 for this change. Retain for review; do not remove without owner authorization.
 
 ## Current objective
 
